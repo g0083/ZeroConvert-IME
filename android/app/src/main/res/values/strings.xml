@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZeroCon Keyboard</string>
+    <string name="ime_name">AI ZeroCon Keyboard</string>
+    <string name="subtype_ja">日本語</string>
+    <string name="enable_ime">ZeroCon Keyboardを有効にする</string>
+    <string name="select_ime">入力方法を選択する</string>
+    <string name="status_ready">推論エンジン (ZeroCon AI): 準備完了</string>
+    <string name="status_loading">ZeroCon Model をロード中…</string>
+</resources>

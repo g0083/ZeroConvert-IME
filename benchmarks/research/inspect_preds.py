@@ -1,0 +1,41 @@
+# -*- coding: utf-8 -*-
+import json
+import urllib.request
+import subprocess
+import time
+
+SERVER_EXE = 'ZeroConvertIME-windows/llama_cuda/llama-server.exe'
+
+with open("data/typo_benchmark_300.jsonl", "r", encoding="utf-8") as f:
+    cases = [json.loads(line) for line in f if line.strip()][:10]
+
+cmd = [
+    SERVER_EXE,
+    "-m", 'artifacts/models/typo-corrector-q4km.gguf',
+    "--port", "8095",
+    "-ngl", "99",
+    "-c", "1024",
+    "--temp", "0.0"
+]
+proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(2)
+
+try:
+    for c in cases:
+        url = "http://127.0.0.1:8095/completion"
+        data = json.dumps({
+            "prompt": c["prompt"],
+            "n_predict": 16,
+            "temperature": 0.0,
+            "stop": ["\uEE00", "\uEE01", "\uEE02", "\n", "</s>"]
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            pred = res.get("content", "").strip()
+        print(f"[{c['typo_type']}] Context: '{c['context']}' Input: '{c['input_reading']}'")
+        print(f"  Target expected: '{c['expected']}'")
+        print(f"  Model output:    '{pred}'")
+        print()
+finally:
+    proc.terminate()

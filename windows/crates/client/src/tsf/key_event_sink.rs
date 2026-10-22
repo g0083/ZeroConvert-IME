@@ -1,0 +1,267 @@
+use crate::globals::GUID_PRESERVED_KEY_EISU_CAPSLOCK_ANY_MODIFIER;
+
+use windows::{
+    core::GUID,
+    Win32::{
+        Foundation::{BOOL, LPARAM, WPARAM},
+        UI::TextServices::{ITfContext, ITfKeyEventSink_Impl},
+    },
+};
+
+use anyhow::Result;
+
+use crate::engine::composition::{KeyEventPhase, ReconversionKeyTestResult};
+
+use super::factory::{TextServiceFactory, TextServiceFactory_Impl};
+
+fn resolve_reconversion_key_handling(
+    tested_as_owned: bool,
+    handling_result: Option<bool>,
+) -> Option<bool> {
+    tested_as_owned.then_some(true).or(handling_result)
+}
+
+fn should_probe_reconversion_on_key(tested_selection: Option<bool>) -> bool {
+    tested_selection != Some(false)
+}
+
+// sink (aka event listener) for key events
+impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
+    #[macros::anyhow]
+    #[tracing::instrument]
+    fn OnTestKeyDown(
+        &self,
+        pic: Option<&ITfContext>,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Result<BOOL> {
+        self.update_shift_key_state(wparam, true);
+
+        if self.observe_disabled_key_test_context(pic)? {
+            self.clear_reconversion_test_result();
+            return Ok(false.into());
+        }
+        if self.borrow()?.disabled_context_observed || self.deferred_input_ready()? {
+            self.remember_reconversion_test_result(wparam, None);
+            return Ok(true.into());
+        }
+
+        match self.test_reconversion_key(pic, wparam) {
+            Ok(ReconversionKeyTestResult::Owned) => {
+                self.remember_reconversion_test_result(wparam, Some(true));
+                return Ok(true.into());
+            }
+            Ok(ReconversionKeyTestResult::MatchedEmpty) => {
+                self.remember_reconversion_test_result(wparam, Some(false));
+            }
+            Ok(ReconversionKeyTestResult::NotHandled) => {
+                self.remember_reconversion_test_result(wparam, None);
+                return Ok(false.into());
+            }
+            Ok(ReconversionKeyTestResult::Unrelated) => {
+                self.remember_reconversion_test_result(wparam, None);
+            }
+            Err(error) => {
+                self.remember_reconversion_test_result(wparam, None);
+                tracing::warn!(
+                    ?error,
+                    "Reconversion selection probe failed; passing key through"
+                );
+                return Ok(false.into());
+            }
+        }
+
+        // Test ownership without executing actions, queueing input, or recovering IPC.
+        let result = self
+            .process_key(pic, wparam, lparam, KeyEventPhase::Test)?
+            .is_some();
+
+        Ok(result.into())
+    }
+
+    #[macros::anyhow]
+    #[tracing::instrument]
+    fn OnKeyDown(&self, pic: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        self.update_shift_key_state(wparam, true);
+        self.cleanup_observed_disabled_context()?;
+        if self.has_deferred_input()? {
+            self.clear_reconversion_test_result();
+            return Ok(self.handle_key(pic, wparam, lparam)?.into());
+        }
+        let tested_selection = self.take_reconversion_test_result(wparam);
+
+        // If OnTest already matched Space with an empty selection, do not take a second
+        // synchronous edit-session lock. Continue directly through the normal Space path.
+        if should_probe_reconversion_on_key(tested_selection) {
+            let tested_as_owned = tested_selection == Some(true);
+            match self.handle_reconversion_key(pic, wparam) {
+                Ok(result) => {
+                    if let Some(handled) =
+                        resolve_reconversion_key_handling(tested_as_owned, result)
+                    {
+                        return Ok(handled.into());
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        tested_as_owned,
+                        "Reconversion key handling failed; preserving prior test ownership"
+                    );
+                    return Ok(tested_as_owned.into());
+                }
+            }
+        }
+
+        // this function is called when a key is pressed
+        // we can handle key events here
+        let result = self.handle_key(pic, wparam, lparam)?;
+
+        Ok(result.into())
+    }
+
+    #[macros::anyhow]
+    fn OnTestKeyUp(
+        &self,
+        pic: Option<&ITfContext>,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Result<BOOL> {
+        // Release the tracked modifier before fallible composition work so an
+        // error cannot leave later ordinary keys looking Shift-modified.
+        self.update_shift_key_state(wparam, false);
+        if self.observe_disabled_key_test_context(pic)? {
+            return Ok(false.into());
+        }
+        if self.borrow()?.disabled_context_observed {
+            return Ok(true.into());
+        }
+        let result = self
+            .process_key_up(pic, wparam, lparam, KeyEventPhase::Test)?
+            .is_some();
+        Ok(result.into())
+    }
+
+    #[macros::anyhow]
+    fn OnKeyUp(&self, pic: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        self.update_shift_key_state(wparam, false);
+        let result = self.handle_key_up(pic, wparam, lparam)?;
+        Ok(result.into())
+    }
+
+    #[macros::anyhow]
+    fn OnPreservedKey(&self, pic: Option<&ITfContext>, rguid: *const GUID) -> Result<BOOL> {
+        let Some(rguid) = (unsafe { rguid.as_ref() }) else {
+            return Ok(false.into());
+        };
+
+        if *rguid != GUID_PRESERVED_KEY_EISU_CAPSLOCK_ANY_MODIFIER {
+            return Ok(false.into());
+        }
+
+        let handled = self.handle_preserved_eisu_shortcut(pic)?;
+        Ok(handled.into())
+    }
+
+    #[macros::anyhow]
+    fn OnSetFocus(&self, fforeground: BOOL) -> Result<()> {
+        if !fforeground.as_bool() {
+            self.clear_tracked_modifier_key_state();
+            self.clear_reconversion_test_result();
+            self.end_composition_for_tsf_event();
+            self.set_keyboard_disabled_state(true)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl TextServiceFactory_Impl {
+    fn observe_disabled_key_test_context(&self, context: Option<&ITfContext>) -> Result<bool> {
+        let Some(context) = context else {
+            return Ok(true);
+        };
+        let disabled = crate::engine::state::keyboard_disabled_from_context(context);
+        if disabled {
+            // A rejected Test has no Handle callback. Record invalidation without
+            // modifying composition or doing TSF/IPC cleanup in the test path.
+            self.borrow_mut()?.disabled_context_observed = true;
+        }
+        Ok(disabled)
+    }
+
+    fn remember_reconversion_test_result(&self, wparam: WPARAM, selected: Option<bool>) {
+        if let Ok(mut text_service) = self.borrow_mut() {
+            text_service.reconversion_test_result = selected.map(|selected| (wparam.0, selected));
+        }
+    }
+
+    fn take_reconversion_test_result(&self, wparam: WPARAM) -> Option<bool> {
+        let Ok(mut text_service) = self.borrow_mut() else {
+            return None;
+        };
+        let result = text_service
+            .reconversion_test_result
+            .filter(|(key, _)| *key == wparam.0)
+            .map(|(_, selected)| selected);
+        text_service.reconversion_test_result = None;
+        result
+    }
+
+    fn clear_reconversion_test_result(&self) {
+        if let Ok(mut text_service) = self.borrow_mut() {
+            text_service.reconversion_test_result = None;
+        }
+    }
+
+    fn update_shift_key_state(&self, wparam: WPARAM, is_down: bool) {
+        if !TextServiceFactory::is_shift_key(wparam) {
+            if is_down {
+                if let Ok(mut text_service) = self.borrow_mut() {
+                    text_service.shift_key_used_in_chord = true;
+                }
+            }
+            return;
+        }
+
+        if let Ok(mut text_service) = self.borrow_mut() {
+            if is_down && !text_service.shift_key_down {
+                text_service.shift_key_used_in_chord = false;
+            }
+            text_service.shift_key_down = is_down;
+        }
+    }
+
+    pub(crate) fn clear_tracked_modifier_key_state(&self) {
+        if let Ok(mut text_service) = self.borrow_mut() {
+            text_service.shift_key_down = false;
+            text_service.shift_key_used_in_chord = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_reconversion_key_handling, should_probe_reconversion_on_key};
+
+    #[test]
+    fn key_claimed_after_selection_probe_is_consumed_on_later_failure() {
+        assert_eq!(resolve_reconversion_key_handling(true, None), Some(true));
+        assert_eq!(
+            resolve_reconversion_key_handling(true, Some(false)),
+            Some(true)
+        );
+        assert_eq!(resolve_reconversion_key_handling(false, None), None);
+        assert_eq!(
+            resolve_reconversion_key_handling(false, Some(false)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn matched_empty_space_skips_the_second_selection_probe() {
+        assert!(!should_probe_reconversion_on_key(Some(false)));
+        assert!(should_probe_reconversion_on_key(Some(true)));
+        assert!(should_probe_reconversion_on_key(None));
+    }
+}

@@ -1,0 +1,2352 @@
+[
+  {
+    "id": 1,
+    "category": "文脈依存・同音異義語",
+    "left_context": "新聞社の仕事について話している。",
+    "target": "きしゃがしゅざいする",
+    "expected": "記者が取材する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きしゃ"
+  },
+  {
+    "id": 2,
+    "category": "文脈依存・同音異義語",
+    "left_context": "鉄道の旅について話している。",
+    "target": "きしゃがしゅっぱつする",
+    "expected": "汽車が出発する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きしゃ"
+  },
+  {
+    "id": 3,
+    "category": "文脈依存・同音異義語",
+    "left_context": "取引先へのメールを書いている。",
+    "target": "きしゃにていあんする",
+    "expected": "貴社に提案する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きしゃ"
+  },
+  {
+    "id": 4,
+    "category": "文脈依存・同音異義語",
+    "left_context": "事件報道について話している。",
+    "target": "きしゃにしつもんする",
+    "expected": "記者に質問する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きしゃ"
+  },
+  {
+    "id": 5,
+    "category": "文脈依存・同音異義語",
+    "left_context": "川の向こう側へ移動する。",
+    "target": "はしをわたる",
+    "expected": "橋を渡る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はし"
+  },
+  {
+    "id": 6,
+    "category": "文脈依存・同音異義語",
+    "left_context": "食事を始める。",
+    "target": "はしをもつ",
+    "expected": "箸を持つ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はし"
+  },
+  {
+    "id": 7,
+    "category": "文脈依存・同音異義語",
+    "left_context": "机の中央を空けたい。",
+    "target": "はしによせる",
+    "expected": "端に寄せる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はし"
+  },
+  {
+    "id": 8,
+    "category": "文脈依存・同音異義語",
+    "left_context": "道路工事について話している。",
+    "target": "はしをなおす",
+    "expected": "橋を直す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はし"
+  },
+  {
+    "id": 9,
+    "category": "文脈依存・同音異義語",
+    "left_context": "空が暗く雷が鳴った。",
+    "target": "あめがふる",
+    "expected": "雨が降る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "あめ"
+  },
+  {
+    "id": 10,
+    "category": "文脈依存・同音異義語",
+    "left_context": "甘い菓子を選んでいる。",
+    "target": "あめをなめる",
+    "expected": "飴をなめる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "あめ"
+  },
+  {
+    "id": 11,
+    "category": "文脈依存・同音異義語",
+    "left_context": "病気の治療について相談している。",
+    "target": "きょうはいしゃにいく",
+    "expected": "今日は医者に行く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "いしゃ/はいしゃ"
+  },
+  {
+    "id": 12,
+    "category": "文脈依存・同音異義語",
+    "left_context": "奥歯の治療について相談している。",
+    "target": "きょうはいしゃにいく",
+    "expected": "今日歯医者に行く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "いしゃ/はいしゃ"
+  },
+  {
+    "id": 13,
+    "category": "文脈依存・同音異義語",
+    "left_context": "結婚式の進行役を決める。",
+    "target": "しかいをたのむ",
+    "expected": "司会を頼む",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しかい"
+  },
+  {
+    "id": 14,
+    "category": "文脈依存・同音異義語",
+    "left_context": "歯の痛みを診てもらう。",
+    "target": "しかいにみてもらう",
+    "expected": "歯科医に診てもらう",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しかい"
+  },
+  {
+    "id": 15,
+    "category": "文脈依存・同音異義語",
+    "left_context": "イベントの開催場所を探す。",
+    "target": "かいじょうをよやくする",
+    "expected": "会場を予約する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "かいじょう"
+  },
+  {
+    "id": 16,
+    "category": "文脈依存・同音異義語",
+    "left_context": "船で沖へ出た。",
+    "target": "かいじょうをすすむ",
+    "expected": "海上を進む",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "かいじょう"
+  },
+  {
+    "id": 17,
+    "category": "文脈依存・同音異義語",
+    "left_context": "コンサートの入場時刻を案内する。",
+    "target": "ごじにかいじょうする",
+    "expected": "5時に開場する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "かいじょう"
+  },
+  {
+    "id": 18,
+    "category": "文脈依存・同音異義語",
+    "left_context": "暗証番号で鍵を開ける。",
+    "target": "どあをかいじょうする",
+    "expected": "ドアを解錠する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "かいじょう"
+  },
+  {
+    "id": 19,
+    "category": "文脈依存・同音異義語",
+    "left_context": "文章全体の組み立てを考える。",
+    "target": "こうせいをみなおす",
+    "expected": "構成を見直す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうせい"
+  },
+  {
+    "id": 20,
+    "category": "文脈依存・同音異義語",
+    "left_context": "原稿の誤字を直す。",
+    "target": "こうせいをおこなう",
+    "expected": "校正を行う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうせい"
+  },
+  {
+    "id": 21,
+    "category": "文脈依存・同音異義語",
+    "left_context": "金属製品の材質を説明する。",
+    "target": "こうせいのぶひんをつかう",
+    "expected": "鋼製の部品を使う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうせい"
+  },
+  {
+    "id": 22,
+    "category": "文脈依存・同音異義語",
+    "left_context": "未来の人々への影響を述べる。",
+    "target": "こうせいにのこす",
+    "expected": "後世に残す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうせい"
+  },
+  {
+    "id": 23,
+    "category": "文脈依存・同音異義語",
+    "left_context": "制度を社会へ広める。",
+    "target": "ふきゅうをめざす",
+    "expected": "普及を目指す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ふきゅう"
+  },
+  {
+    "id": 24,
+    "category": "文脈依存・同音異義語",
+    "left_context": "壊れた設備を元へ戻す。",
+    "target": "ふっきゅうをいそぐ",
+    "expected": "復旧を急ぐ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ふきゅう"
+  },
+  {
+    "id": 25,
+    "category": "文脈依存・同音異義語",
+    "left_context": "会社の支払いを処理する。",
+    "target": "さがくをせいさんする",
+    "expected": "差額を精算する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "せいせい"
+  },
+  {
+    "id": 26,
+    "category": "文脈依存・同音異義語",
+    "left_context": "工場で純度を高める。",
+    "target": "げんりょうをせいせいする",
+    "expected": "原料を精製する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "せいせい"
+  },
+  {
+    "id": 27,
+    "category": "文脈依存・同音異義語",
+    "left_context": "製品を客へ説明する。",
+    "target": "しょうひんをしょうかいする",
+    "expected": "商品を紹介する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しょうひん"
+  },
+  {
+    "id": 28,
+    "category": "文脈依存・同音異義語",
+    "left_context": "大会の勝者へ渡す。",
+    "target": "しょうひんをじゅよする",
+    "expected": "賞品を授与する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しょうひん"
+  },
+  {
+    "id": 29,
+    "category": "文脈依存・同音異義語",
+    "left_context": "夏に実家へ戻る。",
+    "target": "きせいらっしゅをさける",
+    "expected": "帰省ラッシュを避ける",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きせい"
+  },
+  {
+    "id": 30,
+    "category": "文脈依存・同音異義語",
+    "left_context": "法律による制限を変える。",
+    "target": "きせいをみなおす",
+    "expected": "規制を見直す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きせい"
+  },
+  {
+    "id": 31,
+    "category": "文脈依存・同音異義語",
+    "left_context": "設計上の条件を決める。",
+    "target": "しようをかくていする",
+    "expected": "仕様を確定する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しよう"
+  },
+  {
+    "id": 32,
+    "category": "文脈依存・同音異義語",
+    "left_context": "道具を実際に使う。",
+    "target": "しようをかいしする",
+    "expected": "使用を開始する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しよう"
+  },
+  {
+    "id": 33,
+    "category": "文脈依存・同音異義語",
+    "left_context": "歴史研究の文献を読む。",
+    "target": "しりょうをよみとく",
+    "expected": "史料を読み解く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しりょう"
+  },
+  {
+    "id": 34,
+    "category": "文脈依存・同音異義語",
+    "left_context": "会議で配る文書を作る。",
+    "target": "しりょうをはいふする",
+    "expected": "資料を配布する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しりょう"
+  },
+  {
+    "id": 35,
+    "category": "文脈依存・同音異義語",
+    "left_context": "薬が効いたか調べる。",
+    "target": "こうかをけんしょうする",
+    "expected": "効果を検証する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうか"
+  },
+  {
+    "id": 36,
+    "category": "文脈依存・同音異義語",
+    "left_context": "値段が非常に高い。",
+    "target": "こうかでかえない",
+    "expected": "高価で買えない",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうか"
+  },
+  {
+    "id": 37,
+    "category": "文脈依存・同音異義語",
+    "left_context": "財布から小銭を出す。",
+    "target": "こうかをいちまいだす",
+    "expected": "硬貨を1枚出す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうか/こうそく"
+  },
+  {
+    "id": 38,
+    "category": "文脈依存・同音異義語",
+    "left_context": "学校の規則を変える。",
+    "target": "こうそくをかえる",
+    "expected": "校則を変える",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうか/こうそく"
+  },
+  {
+    "id": 39,
+    "category": "文脈依存・同音異義語",
+    "left_context": "自動車専用道路を走る。",
+    "target": "こうそくにのる",
+    "expected": "高速に乗る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうそく"
+  },
+  {
+    "id": 40,
+    "category": "文脈依存・同音異義語",
+    "left_context": "容疑者の自由を制限する。",
+    "target": "こうそくをつづける",
+    "expected": "拘束を続ける",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうそく"
+  },
+  {
+    "id": 41,
+    "category": "文脈依存・同音異義語",
+    "left_context": "工場の装置を調べる。",
+    "target": "きかいをてんけんする",
+    "expected": "機械を点検する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きかい"
+  },
+  {
+    "id": 42,
+    "category": "文脈依存・同音異義語",
+    "left_context": "好機が来るのを待つ。",
+    "target": "きかいをまつ",
+    "expected": "機会を待つ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きかい"
+  },
+  {
+    "id": 43,
+    "category": "文脈依存・同音異義語",
+    "left_context": "取引で双方の意思が一致した。",
+    "target": "ごういにいたる",
+    "expected": "合意に至る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "あう"
+  },
+  {
+    "id": 44,
+    "category": "文脈依存・同音異義語",
+    "left_context": "服の大きさを体へ合わせる。",
+    "target": "からだにあう",
+    "expected": "体に合う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "あう"
+  },
+  {
+    "id": 45,
+    "category": "文脈依存・同音異義語",
+    "left_context": "提案を正式に認めてもらう。",
+    "target": "しょうにんをえる",
+    "expected": "承認を得る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しょうにん/にんしょう"
+  },
+  {
+    "id": 46,
+    "category": "文脈依存・同音異義語",
+    "left_context": "本人確認を行う。",
+    "target": "にんしょうにせいこうする",
+    "expected": "認証に成功する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しょうにん/にんしょう"
+  },
+  {
+    "id": 47,
+    "category": "文脈依存・同音異義語",
+    "left_context": "映画館で作品を楽しむ。",
+    "target": "えいがをみる",
+    "expected": "映画を観る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "みる"
+  },
+  {
+    "id": 48,
+    "category": "文脈依存・同音異義語",
+    "left_context": "医師が患者を診察する。",
+    "target": "かんじゃをみる",
+    "expected": "患者を診る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "みる"
+  },
+  {
+    "id": 49,
+    "category": "文脈依存・同音異義語",
+    "left_context": "現在時刻を確認する。",
+    "target": "じかんをみる",
+    "expected": "時間を見る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "みる"
+  },
+  {
+    "id": 50,
+    "category": "文脈依存・同音異義語",
+    "left_context": "子供の世話をする。",
+    "target": "こどものめんどうをみる",
+    "expected": "子供の面倒を見る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "みる"
+  },
+  {
+    "id": 51,
+    "category": "文脈依存・同音異義語",
+    "left_context": "山の高さを調べる。",
+    "target": "ひょうこうをはかる",
+    "expected": "標高を測る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ひょう"
+  },
+  {
+    "id": 52,
+    "category": "文脈依存・同音異義語",
+    "left_context": "選挙結果を数える。",
+    "target": "ひょうをかぞえる",
+    "expected": "票を数える",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ひょう"
+  },
+  {
+    "id": 53,
+    "category": "文脈依存・同音異義語",
+    "left_context": "木から色づいた葉が落ちる。",
+    "target": "こうようをみる",
+    "expected": "紅葉を見る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうよう/こよう"
+  },
+  {
+    "id": 54,
+    "category": "文脈依存・同音異義語",
+    "left_context": "会社が人を雇う。",
+    "target": "こようけいやくをむすぶ",
+    "expected": "雇用契約を結ぶ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "こうよう/こよう"
+  },
+  {
+    "id": 55,
+    "category": "文脈依存・同音異義語",
+    "left_context": "荷物が目的地へ着く。",
+    "target": "はいたつがかんりょうする",
+    "expected": "配達が完了する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はいたつ/せいさく"
+  },
+  {
+    "id": 56,
+    "category": "文脈依存・同音異義語",
+    "left_context": "政策の効果を測る。",
+    "target": "せいさくをひょうかする",
+    "expected": "政策を評価する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はいたつ/せいさく"
+  },
+  {
+    "id": 57,
+    "category": "文脈依存・同音異義語",
+    "left_context": "データを別形式へ変える。",
+    "target": "けいしきをへんかんする",
+    "expected": "形式を変換する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "へんかん/のりかえ"
+  },
+  {
+    "id": 58,
+    "category": "文脈依存・同音異義語",
+    "left_context": "駅で別路線へ移る。",
+    "target": "でんしゃをのりかえる",
+    "expected": "電車を乗り換える",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "へんかん/のりかえ"
+  },
+  {
+    "id": 59,
+    "category": "文脈依存・同音異義語",
+    "left_context": "商品の品質を約束する。",
+    "target": "ひんしつをほしょうする",
+    "expected": "品質を保証する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ほしょう"
+  },
+  {
+    "id": 60,
+    "category": "文脈依存・同音異義語",
+    "left_context": "事故の損害を埋め合わせる。",
+    "target": "そんがいをほしょうする",
+    "expected": "損害を補償する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ほしょう"
+  },
+  {
+    "id": 61,
+    "category": "文脈依存・同音異義語",
+    "left_context": "目的地までの道筋を調べる。",
+    "target": "けいろをかくにんする",
+    "expected": "経路を確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "けいろ/けいり"
+  },
+  {
+    "id": 62,
+    "category": "文脈依存・同音異義語",
+    "left_context": "会社のお金を管理する。",
+    "target": "けいりにかくにんする",
+    "expected": "経理に確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "けいろ/けいり"
+  },
+  {
+    "id": 63,
+    "category": "文脈依存・同音異義語",
+    "left_context": "会議の中心問題を整理する。",
+    "target": "ろんてんをまとめる",
+    "expected": "論点をまとめる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ろんてん/ろんそう"
+  },
+  {
+    "id": 64,
+    "category": "文脈依存・同音異義語",
+    "left_context": "争いについて意見を述べる。",
+    "target": "ろんそうにさんかする",
+    "expected": "論争に参加する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ろんてん/ろんそう"
+  },
+  {
+    "id": 65,
+    "category": "文脈依存・同音異義語",
+    "left_context": "新しい材料の特徴を調べる。",
+    "target": "せいしつをぶんせきする",
+    "expected": "性質を分析する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "せいしつ/せいそう"
+  },
+  {
+    "id": 66,
+    "category": "文脈依存・同音異義語",
+    "left_context": "庭をきれいに保つ。",
+    "target": "せいそうをおこなう",
+    "expected": "清掃を行う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "せいしつ/せいそう"
+  },
+  {
+    "id": 67,
+    "category": "文脈依存・同音異義語",
+    "left_context": "文章の誤りを直す。",
+    "target": "しゅうせいばんをほぞんする",
+    "expected": "修正版を保存する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうせい/しゅうし"
+  },
+  {
+    "id": 68,
+    "category": "文脈依存・同音異義語",
+    "left_context": "大学で専門知識を学ぶ。",
+    "target": "しゅうしをしゅとくする",
+    "expected": "修士を取得する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうせい/しゅうし"
+  },
+  {
+    "id": 69,
+    "category": "文脈依存・同音異義語",
+    "left_context": "果物を畑から集める。",
+    "target": "しゅうかくがふえる",
+    "expected": "収穫が増える",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうかく/しゅうがく"
+  },
+  {
+    "id": 70,
+    "category": "文脈依存・同音異義語",
+    "left_context": "学校で学ぶ期間を終える。",
+    "target": "しゅうがくきかんをおえる",
+    "expected": "修学期間を終える",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうかく/しゅうがく"
+  },
+  {
+    "id": 71,
+    "category": "文脈依存・同音異義語",
+    "left_context": "仕事を探して会社へ入る。",
+    "target": "しゅうしょくさきをさがす",
+    "expected": "就職先を探す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうしょく/しゅうぜん"
+  },
+  {
+    "id": 72,
+    "category": "文脈依存・同音異義語",
+    "left_context": "服の傷んだ部分を直す。",
+    "target": "ふくをしゅうぜんする",
+    "expected": "服を修繕する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうしょく/しゅうぜん"
+  },
+  {
+    "id": 73,
+    "category": "文脈依存・同音異義語",
+    "left_context": "音の振動数を測る。",
+    "target": "しゅうはすうをはかる",
+    "expected": "周波数を測る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうは"
+  },
+  {
+    "id": 74,
+    "category": "文脈依存・同音異義語",
+    "left_context": "宗教上の集団を調べる。",
+    "target": "しゅうはのちがいをまなぶ",
+    "expected": "宗派の違いを学ぶ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうは"
+  },
+  {
+    "id": 75,
+    "category": "文脈依存・同音異義語",
+    "left_context": "予算として使う金額を決める。",
+    "target": "がくをきめる",
+    "expected": "額を決める",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "がく"
+  },
+  {
+    "id": 76,
+    "category": "文脈依存・同音異義語",
+    "left_context": "絵を入れる枠を選ぶ。",
+    "target": "がくをえらぶ",
+    "expected": "額を選ぶ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "がく"
+  },
+  {
+    "id": 77,
+    "category": "文脈依存・同音異義語",
+    "left_context": "複数案の違いを数値で調べる。",
+    "target": "ひかくしたけっかをしめす",
+    "expected": "比較した結果を示す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ひかく/ひふか"
+  },
+  {
+    "id": 78,
+    "category": "文脈依存・同音異義語",
+    "left_context": "皮膚の症状を医師に見せる。",
+    "target": "ひふかをじゅしんする",
+    "expected": "皮膚科を受診する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ひかく/ひふか"
+  },
+  {
+    "id": 79,
+    "category": "文脈依存・同音異義語",
+    "left_context": "契約の内容を確かめる。",
+    "target": "けいやくじょうけんをかくにんする",
+    "expected": "契約条件を確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "じょうけん/しょうじょう"
+  },
+  {
+    "id": 80,
+    "category": "文脈依存・同音異義語",
+    "left_context": "体の調子を医師へ伝える。",
+    "target": "しょうじょうをせつめいする",
+    "expected": "症状を説明する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "じょうけん/しょうじょう"
+  },
+  {
+    "id": 81,
+    "category": "文脈依存・同音異義語",
+    "left_context": "道具を前もって準備する。",
+    "target": "ひつようなものをよういする",
+    "expected": "必要な物を用意する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ようい/ゆうい"
+  },
+  {
+    "id": 82,
+    "category": "文脈依存・同音異義語",
+    "left_context": "他社より優れている点を示す。",
+    "target": "ゆういせいをしめす",
+    "expected": "優位性を示す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ようい/ゆうい"
+  },
+  {
+    "id": 83,
+    "category": "文脈依存・同音異義語",
+    "left_context": "意見の違いを確かめる。",
+    "target": "そういをかくにんする",
+    "expected": "相違を確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "そうい"
+  },
+  {
+    "id": 84,
+    "category": "文脈依存・同音異義語",
+    "left_context": "立体的に見せる工夫をする。",
+    "target": "そういこうふうする",
+    "expected": "創意工夫する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "そうい"
+  },
+  {
+    "id": 85,
+    "category": "文脈依存・同音異義語",
+    "left_context": "電気を使う量を減らす。",
+    "target": "しょうひでんりょくをへらす",
+    "expected": "消費電力を減らす",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しょうひ/しょうしつ"
+  },
+  {
+    "id": 86,
+    "category": "文脈依存・同音異義語",
+    "left_context": "火事で建物がなくなる。",
+    "target": "たてものがしょうしつする",
+    "expected": "建物が焼失する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しょうひ/しょうしつ"
+  },
+  {
+    "id": 87,
+    "category": "文脈依存・同音異義語",
+    "left_context": "多くの人が一か所へ集まる。",
+    "target": "ぐんしゅうをゆうどうする",
+    "expected": "群衆を誘導する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ぐんしゅう"
+  },
+  {
+    "id": 88,
+    "category": "文脈依存・同音異義語",
+    "left_context": "軍隊が訓練を行う。",
+    "target": "ぐんしゅうをおこなう",
+    "expected": "軍習を行う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "ぐんしゅう"
+  },
+  {
+    "id": 89,
+    "category": "文脈依存・同音異義語",
+    "left_context": "選択肢の中から答えを決める。",
+    "target": "けつをとる",
+    "expected": "決を採る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "けつ"
+  },
+  {
+    "id": 90,
+    "category": "文脈依存・同音異義語",
+    "left_context": "体内の血液を調べる。",
+    "target": "けつをけんさする",
+    "expected": "血を検査する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "けつ"
+  },
+  {
+    "id": 91,
+    "category": "文脈依存・同音異義語",
+    "left_context": "植物の一部を切る。",
+    "target": "えだをきる",
+    "expected": "枝を切る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きる"
+  },
+  {
+    "id": 92,
+    "category": "文脈依存・同音異義語",
+    "left_context": "通信が突然止まる。",
+    "target": "せつぞくがきれる",
+    "expected": "接続が切れる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "きる"
+  },
+  {
+    "id": 93,
+    "category": "文脈依存・同音異義語",
+    "left_context": "鼻炎で呼吸しづらい。",
+    "target": "はながつまる",
+    "expected": "鼻が詰まる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はな"
+  },
+  {
+    "id": 94,
+    "category": "文脈依存・同音異義語",
+    "left_context": "庭の植物が開く。",
+    "target": "はながさく",
+    "expected": "花が咲く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はな"
+  },
+  {
+    "id": 95,
+    "category": "文脈依存・同音異義語",
+    "left_context": "会話の内容を伝える。",
+    "target": "はなしをする",
+    "expected": "話をする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はな"
+  },
+  {
+    "id": 96,
+    "category": "文脈依存・同音異義語",
+    "left_context": "植物を贈り物にする。",
+    "target": "はなをおくる",
+    "expected": "花を贈る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "はな"
+  },
+  {
+    "id": 97,
+    "category": "文脈依存・同音異義語",
+    "left_context": "風邪で声帯を傷める。",
+    "target": "のどをいためる",
+    "expected": "喉を痛める",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "のど/みち"
+  },
+  {
+    "id": 98,
+    "category": "文脈依存・同音異義語",
+    "left_context": "道幅を大きくする。",
+    "target": "みちをひろげる",
+    "expected": "道を広げる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "のど/みち"
+  },
+  {
+    "id": 99,
+    "category": "文脈依存・同音異義語",
+    "left_context": "古い建物を直す。",
+    "target": "しゅうぜんけいかくをたてる",
+    "expected": "修繕計画を立てる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうぜん/しゅうれん"
+  },
+  {
+    "id": 100,
+    "category": "文脈依存・同音異義語",
+    "left_context": "訓練で技術を身につける。",
+    "target": "しゅうれんをつむ",
+    "expected": "修練を積む",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "しゅうぜん/しゅうれん"
+  },
+  {
+    "id": 101,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "きょうはてんきがいい",
+    "expected": "今日は天気がいい",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 102,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "あしたはとうきょうえきでまちあわせる",
+    "expected": "明日は東京駅で待ち合わせる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 103,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "しりょうをかくにんしてへんしんする",
+    "expected": "資料を確認して返信する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 104,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "でんしゃがおくれている",
+    "expected": "電車が遅れている",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 105,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "にほんごにゅうりょくをかいぜんする",
+    "expected": "日本語入力を改善する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 106,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "ごごさんじにかいぎをはじめる",
+    "expected": "午後3時に会議を始める",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 107,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "らいしゅうのよていをかくにんする",
+    "expected": "来週の予定を確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 108,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "ひつようなしょるいをじゅんびする",
+    "expected": "必要な書類を準備する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 109,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "えきまであるいてじゅっぷんかかる",
+    "expected": "駅まで歩いて10分かかる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 110,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "あさごはんをたべてからでかける",
+    "expected": "朝ご飯を食べてから出かける",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 111,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "あたらしいぱそこんをせっていする",
+    "expected": "新しいパソコンを設定する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 112,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "しゃしんをふぉるだにほぞんする",
+    "expected": "写真をフォルダに保存する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 113,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "せつぞくがきれたのでさいせつぞくする",
+    "expected": "接続が切れたので再接続する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 114,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "でんげんをいれてきどうをまつ",
+    "expected": "電源を入れて起動を待つ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 115,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "せっていがめんをひらいてへんこうする",
+    "expected": "設定画面を開いて変更する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 116,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "けんさくけっかをひづけじゅんにならべる",
+    "expected": "検索結果を日付順に並べる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 117,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "おんせいにゅうりょくをゆうこうにする",
+    "expected": "音声入力を有効にする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 118,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "かんじへんかんのせいどをはかる",
+    "expected": "漢字変換の精度を測る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 119,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "へんかんけっかをふぁいるにきろくする",
+    "expected": "変換結果をファイルに記録する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 120,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "まちがえたぶぶんだけをしゅうせいする",
+    "expected": "間違えた部分だけを修正する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 121,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "こうほをみっつひょうじする",
+    "expected": "候補を3つ表示する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 122,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "もっともたかいすこあをえらぶ",
+    "expected": "最も高いスコアを選ぶ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 123,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "にゅうりょくりれきをろーかるにほぞんする",
+    "expected": "入力履歴をローカルに保存する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 124,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "つうしんをつかわずにしょりする",
+    "expected": "通信を使わずに処理する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 125,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "へいきんおうとうじかんをけいそくする",
+    "expected": "平均応答時間を計測する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 126,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "おなじてすとをさんかいじっこうする",
+    "expected": "同じテストを3回実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 127,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "けっかのばらつきをかくにんする",
+    "expected": "結果のばらつきを確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 128,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "にゅうりょくにないことばをついかしない",
+    "expected": "入力にない言葉を追加しない",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 129,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "じょしやごじゅんをかえない",
+    "expected": "助詞や語順を変えない",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 130,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "ふめいなことばはひらがなのままのこす",
+    "expected": "不明な言葉はひらがなのまま残す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 131,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "かくていずみのぶぶんはへんこうしない",
+    "expected": "確定済みの部分は変更しない",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 132,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "かーそるしゅうへんだけをさいへんかんする",
+    "expected": "カーソル周辺だけを再変換する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 133,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "うぇぶさいとをひらいてないようをかくにんする",
+    "expected": "ウェブサイトを開いて内容を確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 134,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "くらうどではなくたんまつないでじっこうする",
+    "expected": "クラウドではなく端末内で実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 135,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "もでるのめもりしようりょうをしらべる",
+    "expected": "モデルのメモリ使用量を調べる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 136,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "おもみをじーぴーゆーによみこむ",
+    "expected": "重みをGPUに読み込む",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 137,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "しょりがおわるまでにびょうまつ",
+    "expected": "処理が終わるまで2秒待つ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 138,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "あぷりをさいきどうしてためす",
+    "expected": "アプリを再起動して試す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 139,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "えらーろぐをかくにんする",
+    "expected": "エラーログを確認する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 140,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "もんだいをさいげんするてじゅんをまとめる",
+    "expected": "問題を再現する手順をまとめる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 141,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "へんこうまえのせっていにもどす",
+    "expected": "変更前の設定に戻す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 142,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "よみとしゅつりょくがいっちするかたしかめる",
+    "expected": "読みと出力が一致するか確かめる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 143,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "どうおんいぎごをぶんみゃくでえらぶ",
+    "expected": "同音異義語を文脈で選ぶ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 144,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "ひだりぶんみゃくをにひゃくもじわたす",
+    "expected": "左文脈を200文字渡す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 145,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "みじかいぶんとちょうぶんをべつべつにためす",
+    "expected": "短い文と長文を別々に試す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 146,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "てすとのせいかいりつをけいさんする",
+    "expected": "テストの正解率を計算する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 147,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "じゅうだいいはんをべつにしゅうけいする",
+    "expected": "重大違反を別に集計する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 148,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "もでるごとのけっかをひかくする",
+    "expected": "モデルごとの結果を比較する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 149,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "おんどをぜろにこていする",
+    "expected": "温度を0に固定する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 150,
+    "category": "基本変換",
+    "left_context": "なし",
+    "target": "しゅつりょくはへんかんけっかだけにする",
+    "expected": "出力は変換結果だけにする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "一般変換"
+  },
+  {
+    "id": 151,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "LM Studioでさーばーをきどうする",
+    "expected": "LM Studioでサーバーを起動する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 152,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "VRAM12GBでもでるをじっこうする",
+    "expected": "VRAM12GBでモデルを実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 153,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "ESP32をWi-Fiにせつぞくする",
+    "expected": "ESP32をWi-Fiに接続する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 154,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "http://192.168.68.68:1234/v1/modelsにあくせすする",
+    "expected": "http://192.168.68.68:1234/v1/modelsにアクセスする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 155,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "Qwen3.5-4BをGPUにろーどする",
+    "expected": "Qwen3.5-4BをGPUにロードする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 156,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "Python3.13でてすとする",
+    "expected": "Python3.13でテストする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 157,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "CUDA12.8をいんすとーるする",
+    "expected": "CUDA12.8をインストールする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 158,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "RTX 5070 Tiをつかう",
+    "expected": "RTX 5070 Tiを使う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 159,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "localhost:1234へそうしんする",
+    "expected": "localhost:1234へ送信する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 160,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "C:\\Users\\Tomoki\\Modelsをひらく",
+    "expected": "C:\\Users\\Tomoki\\Modelsを開く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 161,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "/home/user/modelsにほぞんする",
+    "expected": "/home/user/modelsに保存する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 162,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "test@example.comへおくる",
+    "expected": "test@example.comへ送る",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 163,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "Bluetooth 5.4をゆうこうにする",
+    "expected": "Bluetooth 5.4を有効にする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 164,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "USB4 Gen 3x2でせつぞくする",
+    "expected": "USB4 Gen 3x2で接続する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 165,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "temperature=0.0にせっていする",
+    "expected": "temperature=0.0に設定する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 166,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "top_pを0.95にする",
+    "expected": "top_pを0.95にする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 167,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "max_tokensは256にする",
+    "expected": "max_tokensは256にする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 168,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "Q4_K_Mばんをだうんろーどする",
+    "expected": "Q4_K_M版をダウンロードする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 169,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "GGUFふぁいるをよみこむ",
+    "expected": "GGUFファイルを読み込む",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 170,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "llama.cppをびるどする",
+    "expected": "llama.cppをビルドする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 171,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "CMakeLists.txtをへんしゅうする",
+    "expected": "CMakeLists.txtを編集する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 172,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "docker compose up -dをじっこうする",
+    "expected": "docker compose up -dを実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 173,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "git checkout mainをじっこうする",
+    "expected": "git checkout mainを実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 174,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "npm run devでさーばーをきどうする",
+    "expected": "npm run devでサーバーを起動する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 175,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "SELECT * FROM usersをじっこうする",
+    "expected": "SELECT * FROM usersを実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 176,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "API_KEY=abc-123をせっていする",
+    "expected": "API_KEY=abc-123を設定する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 177,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "SHA-256ではっしゅをけいさんする",
+    "expected": "SHA-256でハッシュを計算する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 178,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "UTF-8でえんこーどする",
+    "expected": "UTF-8でエンコードする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 179,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "README.mdにせつめいをかく",
+    "expected": "README.mdに説明を書く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 180,
+    "category": "英数字・保護文字列",
+    "left_context": "なし",
+    "target": "@tomokiにへんしんする",
+    "expected": "@tomokiに返信する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "リテラル保持"
+  },
+  {
+    "id": 181,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "あしたいく",
+    "expected": "明日行く",
+    "acceptable": [],
+    "forbidden_examples": [
+      "明日行く予定です"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 182,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "しりょうおくって",
+    "expected": "資料送って",
+    "acceptable": [],
+    "forbidden_examples": [
+      "資料を送ってください"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 183,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "あとでれんらくする",
+    "expected": "後で連絡する",
+    "acceptable": [],
+    "forbidden_examples": [
+      "後ほどご連絡いたします"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 184,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "それでだいじょうぶ",
+    "expected": "それで大丈夫",
+    "acceptable": [],
+    "forbidden_examples": [
+      "それで大丈夫です"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 185,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "わからない",
+    "expected": "分からない",
+    "acceptable": [],
+    "forbidden_examples": [
+      "申し訳ありませんが、分かりません"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 186,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "わたしはきのうとうきょうにいきます",
+    "expected": "私は昨日東京に行きます",
+    "acceptable": [],
+    "forbidden_examples": [
+      "私は昨日東京に行きました"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 187,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "かれがわたしをいった",
+    "expected": "彼が私を言った",
+    "acceptable": [],
+    "forbidden_examples": [
+      "彼が私に言った"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 188,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "このほんはおもしろいでした",
+    "expected": "この本は面白いでした",
+    "acceptable": [],
+    "forbidden_examples": [
+      "この本は面白かったです"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 189,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "おれきのういく",
+    "expected": "俺昨日行く",
+    "acceptable": [],
+    "forbidden_examples": [
+      "俺は昨日行った"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 190,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "これたぶんむり",
+    "expected": "これ多分無理",
+    "acceptable": [],
+    "forbidden_examples": [
+      "これは多分無理です"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 191,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "あとごふんまって",
+    "expected": "あと5分待って",
+    "acceptable": [],
+    "forbidden_examples": [
+      "あと5分ほどお待ちください"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 192,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "それしらない",
+    "expected": "それ知らない",
+    "acceptable": [],
+    "forbidden_examples": [
+      "それは知りません"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 193,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "なんでそうなる",
+    "expected": "何でそうなる",
+    "acceptable": [],
+    "forbidden_examples": [
+      "なぜそうなるのですか"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 194,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "きょうむりかも",
+    "expected": "今日無理かも",
+    "acceptable": [],
+    "forbidden_examples": [
+      "今日は無理かもしれません"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 195,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "かれはきのうくる",
+    "expected": "彼は昨日来る",
+    "acceptable": [],
+    "forbidden_examples": [
+      "彼は昨日来た"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 196,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "それはたかいくない",
+    "expected": "それは高いくない",
+    "acceptable": [],
+    "forbidden_examples": [
+      "それは高くない"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 197,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "しりょうだけ",
+    "expected": "資料だけ",
+    "acceptable": [],
+    "forbidden_examples": [
+      "資料だけ送ってください"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 198,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "あとで",
+    "expected": "後で",
+    "acceptable": [],
+    "forbidden_examples": [
+      "後で連絡します"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 199,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "たぶんそう",
+    "expected": "多分そう",
+    "acceptable": [],
+    "forbidden_examples": [
+      "多分そうだと思います"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 200,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "むり",
+    "expected": "無理",
+    "acceptable": [],
+    "forbidden_examples": [
+      "対応できません"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 201,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "ちがう",
+    "expected": "違う",
+    "acceptable": [],
+    "forbidden_examples": [
+      "それは違います"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 202,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "しらん",
+    "expected": "知らん",
+    "acceptable": [],
+    "forbidden_examples": [
+      "知りません"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 203,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "やばい",
+    "expected": "やばい",
+    "acceptable": [],
+    "forbidden_examples": [
+      "大変です"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 204,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "それな",
+    "expected": "それな",
+    "acceptable": [],
+    "forbidden_examples": [
+      "その通りです"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 205,
+    "category": "校正・補完禁止",
+    "left_context": "なし",
+    "target": "りょ",
+    "expected": "りょ",
+    "acceptable": [],
+    "forbidden_examples": [
+      "了解しました"
+    ],
+    "focus": "余計な改変禁止"
+  },
+  {
+    "id": 206,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ぬるぽんえっくすをきどうする",
+    "expected": "ぬるぽんえっくすを起動する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 207,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "るきあんとあう",
+    "expected": "るきあんと会う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 208,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ふらみどーるにろぐいんする",
+    "expected": "ふらみどーるにログインする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 209,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ねふぃらにれんらくする",
+    "expected": "ねふぃらに連絡する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 210,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ぞるてぃあをしょうたいする",
+    "expected": "ぞるてぃあを招待する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 211,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "かふぇるのあでまつ",
+    "expected": "かふぇるのあで待つ",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 212,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ねくさりおをきどうする",
+    "expected": "ねくさりおを起動する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 213,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ほしみるをこうかいする",
+    "expected": "ほしみるを公開する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 214,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "るなせとへいく",
+    "expected": "るなせとへ行く",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 215,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "くろのしずくをつかう",
+    "expected": "くろのしずくを使う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 216,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "SoraNeko-2Bをろーどする",
+    "expected": "SoraNeko-2Bをロードする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 217,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "exp_kana_v7をじっこうする",
+    "expected": "exp_kana_v7を実行する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 218,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "みらいそうぞうしつにそうだんする",
+    "expected": "みらいそうぞうしつに相談する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 219,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "とわちゃんにあう",
+    "expected": "トワちゃんに会う",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 220,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "もちまるにえさをあげる",
+    "expected": "もちまるに餌をあげる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 221,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "かぶしきがいしゃるみなすとけいやくする",
+    "expected": "株式会社るみなすと契約する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 222,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "Project KUMOをさいかいする",
+    "expected": "Project KUMOを再開する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 223,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "しろかぜえきでおりる",
+    "expected": "しろかぜ駅で降りる",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 224,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ぬめぴょんかする",
+    "expected": "ぬめぴょん化する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 225,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "じぇぶるをためす",
+    "expected": "じぇぶるを試す",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 226,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "すらりんぐをゆうこうにする",
+    "expected": "すらりんぐを有効にする",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 227,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "sample.nyaをよみこむ",
+    "expected": "sample.nyaを読み込む",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 228,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "あずれいとうをたんけんする",
+    "expected": "あずれいとうを探検する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 229,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "ほしのこーどをにゅうりょくする",
+    "expected": "ほしのこーどを入力する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  },
+  {
+    "id": 230,
+    "category": "未知語・固有名詞",
+    "left_context": "架空の名称を含む。",
+    "target": "みるふぁんぐをさいきどうする",
+    "expected": "みるふぁんぐを再起動する",
+    "acceptable": [],
+    "forbidden_examples": [],
+    "focus": "未知部分保持"
+  }
+]

@@ -1,0 +1,36 @@
+# Third-Party Open Source Licenses — ZeroCon Keyboard
+
+ZeroCon Keyboard incorporates the following open-source software, dictionaries, and neural network models. We gratefully acknowledge the authors and contributors of these projects.
+
+---
+
+## 1. azooKey / AzooKeyKanaKanjiConverter
+- **Copyright**: Copyright (c) 2023-2026 Miwa (ensan-hcl) and contributors
+- **License**: MIT License
+- **Repository**: https://github.com/ensan-hcl/AzooKeyKanaKanjiConverter
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+---
+
+## 2. Zenz / zenz-v3.2 Neural Kana-Kanji Conversion Models
+- **Author**: Miwa Keita (ensan-hcl)
+- **License**: Apache License 2.0
+- **URL**: https://huggingface.co/Miwa-Keita/zenz-v3.2-xsmall-gguf
+- **License Terms**: http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+## 3. LOUDS System Dictionary & Emoji Dictionary
+- **Authors**: Miwa (ensan-hcl) / azooKey Project (derived from Mozc & Unicode Emoji Annotations)
+- **License**: Apache License 2.0
+- **License Terms**: http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+## 4. llama.cpp
+- **Copyright**: Copyright (c) 2023-2026 Georgi Gerganov and contributors
+- **License**: MIT License
+- **Repository**: https://github.com/ggerganov/llama.cpp

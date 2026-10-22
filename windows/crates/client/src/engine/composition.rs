@@ -1,0 +1,9628 @@
+use std::{
+    collections::{HashSet, VecDeque},
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use crate::tsf::edit_session::SelectedText;
+use crate::tsf::edit_session::{
+    is_edit_session_error, is_non_destructive_edit_session_error, read_edit_session,
+};
+use crate::{
+    engine::user_action::UserAction,
+    extension::VKeyExt as _,
+    trace::{diagnostic_log, diagnostic_log_enabled, diagnostic_log_lazy},
+    tsf::factory::{TextServiceFactory, TextServiceFactory_Impl},
+};
+
+use super::{
+    client_action::{
+        ClientAction, LearningCommitKind, LearningCommitScope, SetSelectionType, SetTextType,
+    },
+    full_width::{convert_kana_symbol, to_fullwidth, to_halfwidth},
+    input_mode::InputMode,
+    ipc_service::{
+        client_performance_log_enabled, current_input_trace_request_id, is_ipc_permission_denied,
+        is_non_destructive_ipc_error, requires_ipc_recovery, Candidates, ClauseSnapshotOperation,
+        ClientInputTraceGuard, IPCService, WindowRpcDelivery,
+    },
+    romaji_lookup::RomajiLookup,
+    state::{keyboard_disabled_from_context, AppConfigSnapshot, IMEState},
+    text_util::{to_half_katakana, to_katakana},
+    user_action::{Function, Navigation},
+};
+#[cfg(test)]
+use shared::RomajiRule;
+use shared::{
+    zenzai_cpu_backend_supported, AppConfig, NumpadInputMode, ReconversionKey, SpaceInputMode,
+    LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MAX,
+    LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MIN,
+};
+use windows::core::{w, AsImpl as _, IUnknown, Interface as _, PCWSTR};
+use windows::Win32::{
+    Foundation::{LPARAM, WPARAM},
+    System::Com::CoTaskMemFree,
+    System::Registry::{RegGetValueW, HKEY, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ},
+    UI::{
+        Input::KeyboardAndMouse::{
+            GetAsyncKeyState, GetKeyboardType, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT,
+            VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+        },
+        TextServices::{
+            ITfComposition, ITfCompositionSink_Impl, ITfContext, ITfInputScope, ITfRange,
+            ITfTextInputProcessor, InputScope, GUID_PROP_INPUTSCOPE, IS_ALPHANUMERIC_PIN,
+            IS_ALPHANUMERIC_PIN_SET, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, IS_PRIVATE,
+            TF_DEFAULT_SELECTION, TF_SELECTION,
+        },
+    },
+};
+
+use anyhow::{Context, Result};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClauseBoundarySync {
+    Synchronized,
+    Unavailable,
+    BackendDesynchronized,
+}
+
+const VK_CAPITAL_KEY_CODE: usize = 0x14;
+const VK_TRANSLATED_CAPSLOCK_KEY_CODE: usize = 0xF0;
+const CAPSLOCK_SCAN_CODE: isize = 0x3A;
+const KEYBOARD_TYPE_ENHANCED_101_OR_102: i32 = 0x4;
+const KEYBOARD_TYPE_JAPANESE: i32 = 0x7;
+const VK_CONVERT_KEY_CODE: usize = 0x1C;
+const VK_SPACE_KEY_CODE: usize = 0x20;
+const VK_OEM_SLASH_KEY_CODE: usize = 0xBF;
+const MAX_RECONVERSION_SURFACE_COUNT: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModifierState {
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    win: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShiftKeyState {
+    physical: bool,
+    tracked: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyEventPhase {
+    Test,
+    Handle,
+}
+
+impl ShiftKeyState {
+    #[inline]
+    fn for_regular_key(self) -> bool {
+        self.physical
+    }
+
+    #[inline]
+    fn for_eisu_shortcut(self) -> bool {
+        self.physical || self.tracked
+    }
+}
+
+fn reconversion_shortcut_matches(
+    preset: ReconversionKey,
+    key_code: usize,
+    modifiers: ModifierState,
+) -> bool {
+    match preset {
+        ReconversionKey::Convert => {
+            key_code == VK_CONVERT_KEY_CODE
+                && modifiers
+                    == (ModifierState {
+                        shift: false,
+                        ctrl: false,
+                        alt: false,
+                        win: false,
+                    })
+        }
+        ReconversionKey::ShiftConvert => {
+            key_code == VK_CONVERT_KEY_CODE
+                && modifiers
+                    == (ModifierState {
+                        shift: true,
+                        ctrl: false,
+                        alt: false,
+                        win: false,
+                    })
+        }
+        ReconversionKey::Space => {
+            key_code == VK_SPACE_KEY_CODE
+                && modifiers
+                    == (ModifierState {
+                        shift: false,
+                        ctrl: false,
+                        alt: false,
+                        win: false,
+                    })
+        }
+        ReconversionKey::WinSlash => {
+            key_code == VK_OEM_SLASH_KEY_CODE
+                && modifiers
+                    == (ModifierState {
+                        shift: false,
+                        ctrl: false,
+                        alt: false,
+                        win: true,
+                    })
+        }
+        ReconversionKey::Disabled => false,
+    }
+}
+
+fn standard_reconversion_available(preset: ReconversionKey, state: &CompositionState) -> bool {
+    preset == ReconversionKey::WinSlash && *state == CompositionState::None
+}
+
+fn reconversion_action_requires_reading_state(action: &UserAction) -> bool {
+    matches!(
+        action,
+        UserAction::Backspace
+            | UserAction::Delete
+            | UserAction::CommitAndNextClause
+            | UserAction::CommitFirstClause
+            | UserAction::AdjustClauseBoundary(_)
+            | UserAction::Navigation(Navigation::Left | Navigation::Right)
+            | UserAction::Function(_)
+    )
+}
+
+fn deferred_action_suffix(
+    actions: &[DeferredClientAction],
+    failed_index: usize,
+) -> Vec<DeferredClientAction> {
+    actions.get(failed_index..).unwrap_or_default().to_vec()
+}
+
+fn requires_action_recovery(error: &anyhow::Error) -> bool {
+    requires_ipc_recovery(error) || is_ipc_permission_denied(error) || is_edit_session_error(error)
+}
+
+fn requires_server_resynchronization(error: &anyhow::Error) -> bool {
+    is_edit_session_error(error)
+}
+
+fn language_bar_toggle_requires_deferred_replay(composition: &Composition) -> bool {
+    !composition.deferred_actions.is_empty() || !composition.deferred_inputs.is_empty()
+}
+
+fn language_bar_deferred_action(
+    mode: &InputMode,
+    replaces_pending_mode_switch: bool,
+) -> UserAction {
+    if replaces_pending_mode_switch {
+        match mode {
+            InputMode::Kana => UserAction::InputModeOn,
+            InputMode::Latin => UserAction::InputModeOff,
+        }
+    } else {
+        UserAction::ToggleInputMode
+    }
+}
+
+fn mode_switch_request_is_current(
+    requested_generation: u64,
+    current_generation: u64,
+    context_matches: bool,
+    composition_matches: bool,
+) -> bool {
+    requested_generation == current_generation && context_matches && composition_matches
+}
+
+fn idle_mode_switch_request_is_current(
+    requested_generation: u64,
+    current_generation: u64,
+    context_matches: bool,
+    composition_is_empty: bool,
+) -> bool {
+    requested_generation == current_generation && context_matches && composition_is_empty
+}
+
+fn has_same_com_identity<I: windows::core::Interface>(left: &I, right: &I) -> bool {
+    match (left.cast::<IUnknown>(), right.cast::<IUnknown>()) {
+        (Ok(left), Ok(right)) => left.as_raw() == right.as_raw(),
+        (Err(left_error), Err(right_error)) => {
+            tracing::warn!(?left_error, ?right_error, "Failed to query COM identities");
+            false
+        }
+        (Err(error), _) | (_, Err(error)) => {
+            tracing::warn!(?error, "Failed to query COM identity");
+            false
+        }
+    }
+}
+
+mod clause_state;
+pub(super) use clause_state::{
+    CandidateSelection, ClauseActionBackend, ClauseActionEffect, ClauseActionStateMut,
+    ClauseAdvance, ClauseAdvanceRawInput, ClauseBoundaryAdjustment, ClauseCommand, ClauseState,
+    ClauseTransitionInput,
+};
+
+struct PreparedClauseBackend {
+    advances: VecDeque<ClauseAdvance>,
+}
+
+impl ClauseActionBackend for PreparedClauseBackend {
+    fn move_cursor(&mut self, _offset: i32) -> Result<Candidates> {
+        anyhow::bail!("prepared clause navigation unexpectedly requested move_cursor")
+    }
+
+    fn shrink_text(&mut self, _offset: i32) -> Result<Candidates> {
+        anyhow::bail!("prepared clause navigation unexpectedly requested shrink_text")
+    }
+
+    fn advance_clause(
+        &mut self,
+        _offset: i32,
+        _previous_candidates: &Candidates,
+        _selected_candidate_id: u64,
+    ) -> Result<ClauseAdvance> {
+        self.advances
+            .pop_front()
+            .context("prepared clause navigation response was exhausted")
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct CompositionReducer;
+
+#[cfg(test)]
+impl CompositionReducer {
+    pub(crate) fn plan_actions_for_user_action(
+        composition: &Composition,
+        action: &UserAction,
+        mode: &InputMode,
+        is_shift_pressed: bool,
+        app_config: &AppConfig,
+        start_temporary_latin: bool,
+    ) -> Option<(CompositionState, Vec<ClientAction>)> {
+        let romaji_lookup = RomajiLookup::from_rows(&app_config.romaji_table.rows);
+        TextServiceFactory::plan_actions_for_user_action_with_lookup(
+            composition,
+            action,
+            mode,
+            is_shift_pressed,
+            app_config,
+            &romaji_lookup,
+            start_temporary_latin,
+        )
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Debug)]
+pub enum CompositionState {
+    #[default]
+    None,
+    Composing,
+    Previewing,
+    Selecting,
+}
+
+pub(crate) type ProcessKeyResult = Option<(Vec<ClientAction>, CompositionState, AppConfigSnapshot)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReconversionKeyTestResult {
+    Unrelated,
+    Owned,
+    MatchedEmpty,
+    NotHandled,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Composition {
+    pub preview: String, // text to be previewed
+    pub suffix: String,  // text to be appended after preview
+    pub raw_input: String,
+    pub raw_hiragana: String,
+    pub fixed_prefix: String,
+
+    pub corresponding_count: i32, // corresponding count of the preview
+
+    pub selection_index: i32,
+    pub candidates: Candidates,
+    pub clause_snapshots: Vec<ClauseSnapshot>,
+    pub future_clause_snapshots: Vec<FutureClauseSnapshot>,
+    pub current_clause_is_split_derived: bool,
+    pub current_clause_is_direct_split_remainder: bool,
+    current_clause_is_pending_remainder: bool,
+    pub current_clause_has_split_left_neighbor: bool,
+    pub current_clause_right_boundary_displacement: i32,
+    current_clause_right_boundary_origin: Option<Arc<FutureClauseSnapshot>>,
+    pub current_clause_split_group_id: Option<u64>,
+    current_clause_consumed_prefix_restore: Option<ConsumedPrefixRestore>,
+    current_clause_remainder_origin: Option<Arc<str>>,
+    pub next_split_group_id: u64,
+
+    pub state: CompositionState,
+    pub temporary_latin: bool,
+    pub temporary_latin_shift_pending: bool,
+    pub reconversion_original: Option<String>,
+    pub tip_composition: Option<ITfComposition>,
+    deferred_actions: Vec<DeferredClientAction>,
+    deferred_inputs: VecDeque<DeferredInputEvent>,
+    deferred_projection: Option<DeferredProjection>,
+    pub live_conversion_snapshots: Vec<LiveConversionPrefixSnapshot>,
+    pub live_conversion_history: VecDeque<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveConversionPrefixSnapshot {
+    pub raw_input_len: usize,
+    pub hiragana_len: usize,
+    pub preview: String,
+}
+
+const LIVE_CONVERSION_AUTO_COMMIT_MIN_TOTAL_HIRAGANA: usize = 16;
+const LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA: usize = 8;
+const LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA: usize = 7;
+const LIVE_CONVERSION_AUTO_COMMIT_MIN_PREFIX_CHARS: usize = 4;
+const LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS: usize = 5;
+
+#[derive(Clone, Debug, PartialEq)]
+struct DeferredClientAction {
+    action: ClientAction,
+    transition: CompositionState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DeferredUserAction {
+    action: UserAction,
+    is_shift_pressed: bool,
+    is_shift_key: bool,
+    shift_alphabet_shortcut: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DeferredInputEvent {
+    User {
+        input: DeferredUserAction,
+        fallback: Vec<DeferredClientAction>,
+    },
+    Actions(Vec<DeferredClientAction>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DeferredProjection {
+    mode: InputMode,
+    state: CompositionState,
+    raw_input: String,
+    temporary_latin: bool,
+    temporary_latin_shift_pending: bool,
+    reliable: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CapsLockKeyboardLayout {
+    Japanese,
+    English,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClauseSnapshot {
+    preview: String,
+    suffix: String,
+    raw_input: String,
+    raw_hiragana: String,
+    fixed_prefix: String,
+    corresponding_count: i32,
+    selection_index: i32,
+    is_split_derived: bool,
+    is_direct_split_remainder: bool,
+    is_pending_remainder: bool,
+    has_split_left_neighbor: bool,
+    right_boundary_displacement: i32,
+    right_boundary_origin: Option<Arc<FutureClauseSnapshot>>,
+    split_group_id: Option<u64>,
+    candidates: Candidates,
+    consumed_prefix_restore: Option<ConsumedPrefixRestore>,
+    remainder_origin: Option<Arc<str>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConsumedPrefixRestore {
+    snapshot: Arc<FutureClauseSnapshot>,
+    was_fully_consumed: bool,
+}
+
+impl std::ops::Deref for ConsumedPrefixRestore {
+    type Target = FutureClauseSnapshot;
+
+    fn deref(&self) -> &Self::Target {
+        self.snapshot.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FutureClauseSnapshot {
+    clause_preview: String,
+    suffix: String,
+    raw_input: String,
+    raw_hiragana: String,
+    is_conservative: bool,
+    corresponding_count: i32,
+    selection_index: i32,
+    is_split_derived: bool,
+    is_direct_split_remainder: bool,
+    is_pending_remainder: bool,
+    has_split_left_neighbor: bool,
+    right_boundary_displacement: i32,
+    right_boundary_origin: Option<Arc<FutureClauseSnapshot>>,
+    split_group_id: Option<u64>,
+    selected_text: String,
+    selected_sub_text: String,
+    candidates: Candidates,
+    consumed_prefix_restore: Option<ConsumedPrefixRestore>,
+    remainder_origin: Option<Arc<str>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingLearningCommit {
+    candidate_id: u64,
+    kind: LearningCommitKind,
+    /// 確定された文字列。AI アシスト候補 (999xxx) では候補の表層、
+    /// 変換エンジンの候補では空文字列。
+    surface: String,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct ClauseNavigationReadyUiSync {
+    update_pos: bool,
+    visible: Option<bool>,
+}
+
+impl ITfCompositionSink_Impl for TextServiceFactory_Impl {
+    #[macros::anyhow]
+    fn OnCompositionTerminated(
+        &self,
+        _ecwrite: u32,
+        pcomposition: Option<&ITfComposition>,
+    ) -> Result<()> {
+        // if user clicked outside the composition, the composition will be terminated
+        tracing::debug!("OnCompositionTerminated");
+
+        self.handle_external_composition_terminated(pcomposition);
+
+        Ok(())
+    }
+}
+
+impl TextServiceFactory {
+    const MOVE_CLAUSE_TO_LAST: i32 = i32::MAX;
+
+    fn log_client_performance(
+        request_id: u64,
+        operation: &str,
+        stage: &str,
+        elapsed: Duration,
+        details: impl Into<String>,
+    ) {
+        if !client_performance_log_enabled() {
+            return;
+        }
+
+        if let Ok(Some(ipc_service)) = IMEState::ipc_service() {
+            ipc_service.log_client_performance(
+                request_id,
+                operation,
+                stage,
+                elapsed,
+                details.into(),
+            );
+        }
+    }
+
+    fn ensure_ipc_service_for_key_event(operation: &str) -> bool {
+        match IMEState::ensure_ipc_service() {
+            Ok(true) => {
+                tracing::debug!(operation, "Initialized IPC service during key event");
+                true
+            }
+            Ok(false) => true,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    operation,
+                    "IPC service is unavailable during key event"
+                );
+                false
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_ctrl_pressed() -> bool {
+        VK_CONTROL.is_pressed() || VK_LCONTROL.is_pressed() || VK_RCONTROL.is_pressed()
+    }
+
+    #[inline]
+    pub(crate) fn is_alt_pressed() -> bool {
+        VK_MENU.is_pressed() || VK_LMENU.is_pressed() || VK_RMENU.is_pressed()
+    }
+
+    #[inline]
+    pub(crate) fn is_win_pressed() -> bool {
+        VK_LWIN.is_pressed()
+            || VK_RWIN.is_pressed()
+            || unsafe {
+                [VK_LWIN, VK_RWIN]
+                    .iter()
+                    .any(|key| GetAsyncKeyState(key.0 as i32) as u16 & 0x8000 != 0)
+            }
+    }
+
+    #[inline]
+    pub(crate) fn is_shift_pressed() -> bool {
+        VK_SHIFT.is_pressed()
+            || VK_LSHIFT.is_pressed()
+            || VK_RSHIFT.is_pressed()
+            || unsafe {
+                [VK_SHIFT, VK_LSHIFT, VK_RSHIFT]
+                    .iter()
+                    .any(|key| GetAsyncKeyState(key.0 as i32) as u16 & 0x8000 != 0)
+            }
+    }
+
+    #[inline]
+    fn shift_key_state(&self) -> ShiftKeyState {
+        let tracked = self
+            .borrow()
+            .map(|text_service| text_service.shift_key_down)
+            .unwrap_or(false);
+        ShiftKeyState {
+            physical: Self::is_shift_pressed(),
+            tracked,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_shift_key(wparam: WPARAM) -> bool {
+        matches!(wparam.0, 0x10 | 0xA0 | 0xA1)
+    }
+
+    #[inline]
+    fn is_shift_alphabet_shortcut(wparam: WPARAM, is_shift_pressed: bool) -> bool {
+        is_shift_pressed && (0x41..=0x5A).contains(&wparam.0)
+    }
+
+    #[inline]
+    fn is_eisu_shortcut(
+        key_code: usize,
+        lparam: LPARAM,
+        is_shift_pressed: bool,
+        is_ctrl_pressed: bool,
+        is_alt_pressed: bool,
+        keyboard_layout: CapsLockKeyboardLayout,
+    ) -> bool {
+        if is_ctrl_pressed || is_alt_pressed {
+            return false;
+        }
+
+        match keyboard_layout {
+            CapsLockKeyboardLayout::Japanese => {
+                !is_shift_pressed
+                    && (key_code == VK_CAPITAL_KEY_CODE
+                        || Self::is_translated_capslock_key(key_code, lparam))
+            }
+            CapsLockKeyboardLayout::English => {
+                is_shift_pressed
+                    && (key_code == VK_CAPITAL_KEY_CODE
+                        || Self::is_translated_capslock_key(key_code, lparam))
+            }
+        }
+    }
+
+    #[inline]
+    fn is_translated_capslock_key(key_code: usize, lparam: LPARAM) -> bool {
+        key_code == VK_TRANSLATED_CAPSLOCK_KEY_CODE
+            && ((lparam.0 >> 16) & 0xff) == CAPSLOCK_SCAN_CODE
+    }
+
+    #[inline]
+    fn caps_lock_keyboard_layout_from_keyboard_type(
+        keyboard_type: Option<i32>,
+    ) -> Option<CapsLockKeyboardLayout> {
+        match keyboard_type {
+            Some(KEYBOARD_TYPE_ENHANCED_101_OR_102) => Some(CapsLockKeyboardLayout::English),
+            Some(KEYBOARD_TYPE_JAPANESE) => Some(CapsLockKeyboardLayout::Japanese),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn caps_lock_keyboard_layout_from_hardware_registry(
+        layer_driver: Option<&str>,
+        keyboard_identifier: Option<&str>,
+    ) -> CapsLockKeyboardLayout {
+        if let Some(layer_driver) = layer_driver.map(str::trim) {
+            if layer_driver.eq_ignore_ascii_case("kbd101.dll") {
+                return CapsLockKeyboardLayout::English;
+            }
+
+            if layer_driver.eq_ignore_ascii_case("kbd106.dll") {
+                return CapsLockKeyboardLayout::Japanese;
+            }
+        }
+
+        if let Some(keyboard_identifier) = keyboard_identifier.map(str::trim) {
+            if keyboard_identifier.contains("101") {
+                return CapsLockKeyboardLayout::English;
+            }
+
+            if keyboard_identifier.contains("106") {
+                return CapsLockKeyboardLayout::Japanese;
+            }
+        }
+
+        CapsLockKeyboardLayout::Japanese
+    }
+
+    #[inline]
+    fn caps_lock_keyboard_layout_from_sources(
+        keyboard_type: Option<i32>,
+        layer_driver: Option<&str>,
+        keyboard_identifier: Option<&str>,
+    ) -> CapsLockKeyboardLayout {
+        if let Some(layout) = Self::caps_lock_keyboard_layout_from_keyboard_type(keyboard_type) {
+            return layout;
+        }
+
+        Self::caps_lock_keyboard_layout_from_hardware_registry(layer_driver, keyboard_identifier)
+    }
+
+    fn registry_string_value(root: HKEY, sub_key: PCWSTR, value: PCWSTR) -> Option<String> {
+        let mut byte_len = 0u32;
+        let result = unsafe {
+            RegGetValueW(
+                root,
+                sub_key,
+                value,
+                RRF_RT_REG_SZ,
+                None,
+                None,
+                Some(&mut byte_len),
+            )
+        };
+        if !result.is_ok() || byte_len == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; (byte_len as usize).div_ceil(2)];
+        let result = unsafe {
+            RegGetValueW(
+                root,
+                sub_key,
+                value,
+                RRF_RT_REG_SZ,
+                None,
+                Some(buffer.as_mut_ptr().cast()),
+                Some(&mut byte_len),
+            )
+        };
+        if !result.is_ok() {
+            return None;
+        }
+
+        let end = buffer
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(buffer.len());
+        Some(String::from_utf16_lossy(&buffer[..end]))
+    }
+
+    pub(crate) fn current_caps_lock_keyboard_layout() -> CapsLockKeyboardLayout {
+        let keyboard_type = unsafe { GetKeyboardType(0) };
+        let layer_driver = Self::registry_string_value(
+            HKEY_LOCAL_MACHINE,
+            w!("SYSTEM\\CurrentControlSet\\Services\\i8042prt\\Parameters"),
+            w!("LayerDriver JPN"),
+        );
+        let keyboard_identifier = Self::registry_string_value(
+            HKEY_LOCAL_MACHINE,
+            w!("SYSTEM\\CurrentControlSet\\Services\\i8042prt\\Parameters"),
+            w!("OverrideKeyboardIdentifier"),
+        );
+
+        Self::caps_lock_keyboard_layout_from_sources(
+            Some(keyboard_type),
+            layer_driver.as_deref(),
+            keyboard_identifier.as_deref(),
+        )
+    }
+
+    #[inline]
+    fn input_text_for_mode(input_char: char, mode: &InputMode) -> String {
+        match mode {
+            InputMode::Kana if input_char.is_ascii_uppercase() => {
+                input_char.to_ascii_lowercase().to_string()
+            }
+            _ => input_char.to_string(),
+        }
+    }
+
+    #[inline]
+    fn ctrl_conversion_shortcut_function(
+        key_code: usize,
+        is_ctrl_pressed: bool,
+        is_alt_pressed: bool,
+    ) -> Option<Function> {
+        if is_ctrl_pressed && !is_alt_pressed {
+            Function::from_ctrl_shortcut_key_code(key_code)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn set_text_type_for_function(function: Function) -> SetTextType {
+        match function {
+            Function::Six => SetTextType::Hiragana,
+            Function::Seven => SetTextType::Katakana,
+            Function::Eight => SetTextType::HalfKatakana,
+            Function::Nine => SetTextType::FullLatin,
+            Function::Ten => SetTextType::HalfLatin,
+        }
+    }
+
+    #[inline]
+    fn direct_text_for_action(action: &UserAction) -> Option<String> {
+        match action {
+            UserAction::Input(input_char) => {
+                Some(Self::normalize_direct_symbol_char(*input_char).to_string())
+            }
+            UserAction::Space => Some(" ".to_string()),
+            UserAction::NumpadSymbol(symbol) => Some(symbol.to_string()),
+            UserAction::Number { value, .. } => {
+                let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
+                Some(digit.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn should_shrink_before_direct_append(
+        composition: &Composition,
+        start_temporary_latin: bool,
+    ) -> bool {
+        start_temporary_latin
+            && composition.raw_input.ends_with('n')
+            && composition.raw_hiragana.ends_with('ん')
+            && Self::current_raw_input_suffix(
+                &composition.raw_input,
+                composition.corresponding_count,
+            )
+            .is_empty()
+    }
+
+    #[inline]
+    fn normalize_direct_symbol_char(c: char) -> char {
+        let halfwidth_ascii = Self::to_halfwidth_ascii_char(c);
+        if halfwidth_ascii.is_ascii_graphic() || halfwidth_ascii == ' ' {
+            return halfwidth_ascii;
+        }
+
+        if c.is_ascii_graphic() || c == ' ' {
+            return c;
+        }
+
+        let converted = to_halfwidth(&c.to_string());
+        let mut converted_chars = converted.chars();
+        match (converted_chars.next(), converted_chars.next()) {
+            (Some(converted_char), None) if converted_char.is_ascii_punctuation() => converted_char,
+            _ => c,
+        }
+    }
+
+    #[inline]
+    fn is_alt_backquote(wparam: WPARAM, lparam: LPARAM) -> bool {
+        const VK_OEM_3: usize = 0xC0;
+        const SCAN_CODE_BACKQUOTE: usize = 0x29;
+        const ALT_CONTEXT_BIT: usize = 0x2000_0000;
+        let is_alt_pressed = VK_MENU.is_pressed()
+            || VK_LMENU.is_pressed()
+            || VK_RMENU.is_pressed()
+            || ((lparam.0 as usize) & ALT_CONTEXT_BIT) != 0;
+        let scan_code = ((lparam.0 as usize) >> 16) & 0xFF;
+        let is_backquote_key = wparam.0 == VK_OEM_3 || scan_code == SCAN_CODE_BACKQUOTE;
+
+        is_alt_pressed && is_backquote_key
+    }
+
+    #[inline]
+    fn to_fullwidth_ascii_char(c: char) -> char {
+        if c == ' ' {
+            return '　';
+        }
+
+        if c.is_ascii_punctuation() || c.is_ascii_digit() {
+            return char::from_u32(c as u32 + 0xFEE0).unwrap_or(c);
+        }
+
+        c
+    }
+
+    #[inline]
+    fn to_halfwidth_ascii_char(c: char) -> char {
+        if c == '　' {
+            return ' ';
+        }
+
+        if ('！'..='～').contains(&c) {
+            return char::from_u32(c as u32 - 0xFEE0).unwrap_or(c);
+        }
+
+        c
+    }
+
+    #[inline]
+    fn numpad_text_for_mode(
+        c: char,
+        mode: NumpadInputMode,
+        allow_direct_passthrough: bool,
+    ) -> Option<String> {
+        match mode {
+            NumpadInputMode::DirectInput if allow_direct_passthrough => None,
+            NumpadInputMode::DirectInput | NumpadInputMode::AlwaysHalf => {
+                Some(Self::to_halfwidth_ascii_char(c).to_string())
+            }
+            NumpadInputMode::FollowInputMode => Some(Self::to_fullwidth_ascii_char(c).to_string()),
+        }
+    }
+
+    #[inline]
+    fn normalize_symbol_variant(c: char) -> Option<char> {
+        match c {
+            'ˆ' | '＾' => Some('^'),
+            '〜' | '～' => Some('~'),
+            '＼' | '￥' | '¥' => Some('\\'),
+            '，' => Some(','),
+            '．' => Some('.'),
+            '”' => Some('"'),
+            '’' => Some('\''),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn single_symbol_candidates(input: &str) -> Option<Vec<char>> {
+        let mut chars = input.chars();
+        let ch = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+
+        let mut candidates = Vec::with_capacity(4);
+        let mut push_unique = |candidate: char| {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        };
+
+        if ch.is_ascii_punctuation() || ch.is_ascii_digit() {
+            push_unique(ch);
+        }
+
+        let halfwidth = Self::to_halfwidth_ascii_char(ch);
+        if halfwidth.is_ascii_punctuation() || halfwidth.is_ascii_digit() {
+            push_unique(ch);
+            push_unique(halfwidth);
+        }
+
+        if let Some(mapped) = Self::normalize_symbol_variant(ch) {
+            push_unique(ch);
+            push_unique(mapped);
+        }
+
+        let converted = to_halfwidth(&ch.to_string());
+        let mut converted_chars = converted.chars();
+        if let (Some(converted_char), None) = (converted_chars.next(), converted_chars.next()) {
+            if converted_char.is_ascii_punctuation() || converted_char.is_ascii_digit() {
+                push_unique(ch);
+                push_unique(converted_char);
+            }
+        }
+
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(candidates)
+        }
+    }
+
+    #[inline]
+    fn has_romaji_table_context_with_lookup(
+        raw_input_before: &str,
+        symbol: char,
+        romaji_lookup: &RomajiLookup,
+    ) -> bool {
+        romaji_lookup.has_romaji_table_context(raw_input_before, symbol)
+    }
+
+    #[inline]
+    #[cfg(test)]
+    fn should_apply_symbol_fallback(
+        raw_input_before: &str,
+        input: &str,
+        romaji_rows: &[RomajiRule],
+    ) -> bool {
+        let romaji_lookup = RomajiLookup::from_rows(romaji_rows);
+        Self::should_apply_symbol_fallback_with_lookup(raw_input_before, input, &romaji_lookup)
+    }
+
+    #[inline]
+    fn should_apply_symbol_fallback_with_lookup(
+        raw_input_before: &str,
+        input: &str,
+        romaji_lookup: &RomajiLookup,
+    ) -> bool {
+        let Some(symbols) = Self::single_symbol_candidates(input) else {
+            return false;
+        };
+
+        !symbols.iter().any(|symbol| {
+            Self::has_romaji_table_context_with_lookup(raw_input_before, *symbol, romaji_lookup)
+        })
+    }
+
+    #[inline]
+    fn has_multi_character_romaji_context_with_lookup(
+        raw_input_before: &str,
+        symbol: char,
+        romaji_lookup: &RomajiLookup,
+    ) -> bool {
+        romaji_lookup.has_multi_character_romaji_context(raw_input_before, symbol)
+    }
+
+    #[inline]
+    fn effective_zenzai_runtime_enabled(app_config: &AppConfig) -> bool {
+        if !app_config.zenzai.enable {
+            return false;
+        }
+
+        let backend = app_config.zenzai.backend.trim().to_ascii_lowercase();
+        if backend.is_empty() || backend == "cpu" {
+            return zenzai_cpu_backend_supported();
+        }
+
+        true
+    }
+
+    #[inline]
+    #[cfg(test)]
+    fn single_symbol_romaji_output(input: &str, romaji_rows: &[RomajiRule]) -> Option<String> {
+        let romaji_lookup = RomajiLookup::from_rows(romaji_rows);
+        Self::single_symbol_romaji_output_with_lookup(input, &romaji_lookup)
+    }
+
+    #[inline]
+    fn single_symbol_romaji_output_with_lookup(
+        input: &str,
+        romaji_lookup: &RomajiLookup,
+    ) -> Option<String> {
+        let symbols = Self::single_symbol_candidates(input)?;
+        romaji_lookup.single_symbol_output(&symbols)
+    }
+
+    #[inline]
+    #[cfg(test)]
+    fn resolve_symbol_input_text(
+        raw_input_before: &str,
+        input: &str,
+        app_config: &AppConfig,
+    ) -> Option<String> {
+        let romaji_lookup = RomajiLookup::from_rows(&app_config.romaji_table.rows);
+        Self::resolve_symbol_input_text_with_lookup(
+            raw_input_before,
+            input,
+            app_config,
+            &romaji_lookup,
+        )
+    }
+
+    #[inline]
+    fn resolve_symbol_input_text_with_lookup(
+        raw_input_before: &str,
+        input: &str,
+        app_config: &AppConfig,
+        romaji_lookup: &RomajiLookup,
+    ) -> Option<String> {
+        let symbols = Self::single_symbol_candidates(input)?;
+        let is_zenzai_enabled = Self::effective_zenzai_runtime_enabled(app_config);
+        if is_zenzai_enabled {
+            if symbols.iter().any(|symbol| {
+                Self::has_multi_character_romaji_context_with_lookup(
+                    raw_input_before,
+                    *symbol,
+                    romaji_lookup,
+                )
+            }) {
+                return None;
+            }
+
+            if let Some(mapped) =
+                Self::single_symbol_romaji_output_with_lookup(input, romaji_lookup)
+            {
+                return Some(mapped);
+            }
+
+            return Some(convert_kana_symbol(
+                input,
+                &app_config.general,
+                &app_config.character_width,
+                &app_config.romaji_table.rows,
+            ));
+        }
+
+        if Self::should_apply_symbol_fallback_with_lookup(raw_input_before, input, romaji_lookup) {
+            return Some(convert_kana_symbol(
+                input,
+                &app_config.general,
+                &app_config.character_width,
+                &app_config.romaji_table.rows,
+            ));
+        }
+
+        None
+    }
+
+    #[inline]
+    fn clear_temporary_latin_shift_pending_if_needed(
+        &self,
+        should_clear_shift_pending: bool,
+    ) -> Result<()> {
+        if !should_clear_shift_pending {
+            return Ok(());
+        }
+
+        let text_service = self.borrow()?;
+        let mut composition = text_service.borrow_mut_composition()?;
+        composition.temporary_latin_shift_pending = false;
+        Ok(())
+    }
+
+    #[inline]
+    fn select_candidate(candidates: &Candidates, desired_index: i32) -> Option<CandidateSelection> {
+        if candidates.texts.is_empty() {
+            return None;
+        }
+
+        let max_index = candidates.texts.len().saturating_sub(1);
+        let index = desired_index.max(0) as usize;
+        let index = index.min(max_index);
+
+        let raw_text = candidates.texts.get(index).cloned().unwrap_or_default();
+        let clean_text = if let Some(stripped) = raw_text.strip_suffix(" [💡もしかして]") {
+            stripped.to_string()
+        } else if let Some(stripped) = raw_text.strip_suffix(" [🔮先読み]") {
+            stripped.to_string()
+        } else {
+            raw_text
+        };
+
+        Some(CandidateSelection {
+            index: index as i32,
+            text: clean_text,
+            sub_text: candidates.sub_texts.get(index).cloned().unwrap_or_default(),
+            hiragana: candidates.hiragana.clone(),
+            corresponding_count: candidates
+                .corresponding_count
+                .get(index)
+                .copied()
+                .unwrap_or(0),
+            candidate_id: candidates.candidate_ids.get(index).copied().unwrap_or(0),
+        })
+    }
+
+    #[inline]
+    fn select_candidate_for_remove_text_transition(
+        candidates: &Candidates,
+        desired_index: i32,
+        transition: &CompositionState,
+    ) -> Option<CandidateSelection> {
+        if *transition == CompositionState::None {
+            None
+        } else {
+            Self::select_candidate(candidates, desired_index)
+        }
+    }
+
+    #[inline]
+    fn followup_owns_terminal_end(actions: &[DeferredClientAction], action_index: usize) -> bool {
+        actions.get(action_index + 1).is_some_and(|next| {
+            next.transition == CompositionState::None
+                && matches!(next.action, ClientAction::EndComposition)
+        })
+    }
+
+    #[inline]
+    fn followup_owns_partial_commit_ui(
+        actions: &[DeferredClientAction],
+        action_index: usize,
+    ) -> bool {
+        let Some((commit, moves)) = actions
+            .get(action_index..)
+            .and_then(|tail| tail.split_last())
+        else {
+            return false;
+        };
+        !moves.is_empty()
+            && matches!(commit.action, ClientAction::ShrinkText(_))
+            && moves
+                .iter()
+                .all(|step| matches!(step.action, ClientAction::MoveClause(-1)))
+    }
+
+    #[inline]
+    fn preceding_action_sent_terminal_ui_cleanup(
+        terminal_ui_cleanup_sent_at: Option<usize>,
+        action_index: usize,
+    ) -> bool {
+        action_index.checked_sub(1) == terminal_ui_cleanup_sent_at
+    }
+
+    #[inline]
+    fn followup_owns_terminal_ui_cleanup(
+        actions: &[DeferredClientAction],
+        action_index: usize,
+    ) -> bool {
+        actions.get(action_index + 1).is_some_and(|next| {
+            next.transition == CompositionState::None
+                && matches!(next.action, ClientAction::CommitTextDirect(_))
+        })
+    }
+
+    #[inline]
+    fn run_terminal_action_cleanup<T>(
+        skip_ui_cleanup: bool,
+        terminal_action: impl FnOnce() -> Result<()>,
+        hide_candidate_window: impl FnOnce() -> Result<T>,
+    ) -> Result<()> {
+        let terminal_result = terminal_action();
+        if !skip_ui_cleanup {
+            if let Err(error) = hide_candidate_window() {
+                tracing::warn!(
+                    ?error,
+                    "Failed to hide the candidate window after terminal composition cleanup"
+                );
+            }
+        }
+
+        // A terminal TSF edit is irreversible once it succeeds. UI cleanup remains
+        // best-effort so a transient window RPC failure cannot replay the action
+        // over the next composition.
+        terminal_result
+    }
+
+    #[inline]
+    fn terminal_ui_cleanup_required_after_failure(
+        requested_transition: &CompositionState,
+        delegated_to_followup: bool,
+    ) -> bool {
+        *requested_transition == CompositionState::None || delegated_to_followup
+    }
+
+    #[inline]
+    fn select_navigation_candidate_for_current_preview(
+        navigation_candidates: &Candidates,
+        current_preview: &str,
+        fixed_prefix: &str,
+        selection_index: i32,
+    ) -> Option<CandidateSelection> {
+        let target_clause_preview = current_preview
+            .strip_prefix(fixed_prefix)
+            .unwrap_or(current_preview);
+
+        if let Some(index) = (0..navigation_candidates.texts.len()).find(|index| {
+            let text = navigation_candidates
+                .texts
+                .get(*index)
+                .map(String::as_str)
+                .unwrap_or_default();
+            let sub_text = navigation_candidates
+                .sub_texts
+                .get(*index)
+                .map(String::as_str)
+                .unwrap_or_default();
+
+            target_clause_preview.strip_prefix(text) == Some(sub_text)
+        }) {
+            return Self::select_candidate(navigation_candidates, index as i32);
+        }
+
+        if let Some(index) = navigation_candidates
+            .texts
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| !text.is_empty() && target_clause_preview.starts_with(*text))
+            .max_by_key(|(index, text)| {
+                (
+                    navigation_candidates
+                        .corresponding_count
+                        .get(*index)
+                        .copied()
+                        .unwrap_or(0),
+                    text.len(),
+                )
+            })
+            .map(|(index, _)| index)
+        {
+            return Self::select_candidate(navigation_candidates, index as i32);
+        }
+
+        Self::select_candidate(navigation_candidates, selection_index)
+    }
+
+    #[inline]
+    fn split_at_char_count(value: &str, char_count: i32) -> (String, String) {
+        let split_at = char_count.max(0) as usize;
+        let mut prefix = String::new();
+        let mut suffix = String::new();
+
+        for (index, ch) in value.chars().enumerate() {
+            if index < split_at {
+                prefix.push(ch);
+            } else {
+                suffix.push(ch);
+            }
+        }
+
+        (prefix, suffix)
+    }
+
+    #[inline]
+    fn display_override_set_type(
+        current_preview: &str,
+        fixed_prefix: &str,
+        raw_input: &str,
+        raw_hiragana: &str,
+    ) -> Option<SetTextType> {
+        let target_clause_preview = current_preview
+            .strip_prefix(fixed_prefix)
+            .unwrap_or(current_preview);
+        let set_types = [
+            SetTextType::Hiragana,
+            SetTextType::Katakana,
+            SetTextType::HalfKatakana,
+            SetTextType::FullLatin,
+            SetTextType::HalfLatin,
+        ];
+
+        for set_type in set_types {
+            if Self::converted_clause_preview_text(&set_type, raw_input, raw_hiragana)
+                != target_clause_preview
+            {
+                continue;
+            }
+
+            return Some(set_type);
+        }
+
+        None
+    }
+
+    #[inline]
+    fn display_override_split_for_selected_candidate(
+        set_type: &SetTextType,
+        raw_input: &str,
+        raw_hiragana: &str,
+        selected: &CandidateSelection,
+        suffix_raw_input: Option<&str>,
+        suffix_raw_hiragana: Option<&str>,
+    ) -> (String, String) {
+        let (clause_raw_input, suffix_raw_input) = suffix_raw_input
+            .and_then(|suffix| {
+                raw_input
+                    .strip_suffix(suffix)
+                    .map(|prefix| (prefix, suffix))
+            })
+            .map(|(prefix, suffix)| (prefix.to_string(), suffix.to_string()))
+            .unwrap_or_else(|| Self::split_at_char_count(raw_input, selected.corresponding_count));
+        let (clause_raw_hiragana, suffix_raw_hiragana) = suffix_raw_hiragana
+            .and_then(|suffix| {
+                raw_hiragana
+                    .strip_suffix(suffix)
+                    .map(|prefix| (prefix, suffix))
+            })
+            .map(|(prefix, suffix)| (prefix.to_string(), suffix.to_string()))
+            .unwrap_or_else(|| {
+                Self::split_at_char_count(raw_hiragana, selected.corresponding_count)
+            });
+
+        (
+            Self::converted_clause_preview_text(set_type, &clause_raw_input, &clause_raw_hiragana),
+            Self::converted_clause_preview_text(set_type, &suffix_raw_input, &suffix_raw_hiragana),
+        )
+    }
+
+    #[inline]
+    fn candidate_splits_raw_input(selected: &CandidateSelection, raw_input: &str) -> bool {
+        selected.corresponding_count > 0
+            && selected.corresponding_count < raw_input.chars().count() as i32
+            && !selected.sub_text.is_empty()
+    }
+
+    #[inline]
+    fn display_suffix_after_selected_clause(
+        preview: &str,
+        fixed_prefix: &str,
+        current_suffix: &str,
+        selected: &CandidateSelection,
+    ) -> String {
+        let current_preview = Self::current_clause_preview(preview, fixed_prefix);
+        current_preview
+            .strip_prefix(&selected.text)
+            .or_else(|| current_suffix.strip_prefix(&selected.text))
+            .map(str::to_string)
+            .unwrap_or_else(|| selected.sub_text.clone())
+    }
+
+    #[inline]
+    fn merge_preview_with_prefix(fixed_prefix: &str, clause_preview: &str) -> String {
+        if fixed_prefix.is_empty() {
+            clause_preview.to_string()
+        } else {
+            format!("{fixed_prefix}{clause_preview}")
+        }
+    }
+
+    #[inline]
+    fn current_clause_preview(preview: &str, fixed_prefix: &str) -> String {
+        preview
+            .strip_prefix(fixed_prefix)
+            .unwrap_or(preview)
+            .to_string()
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn build_clause_snapshot(
+        preview: &str,
+        suffix: &str,
+        raw_input: &str,
+        raw_hiragana: &str,
+        fixed_prefix: &str,
+        corresponding_count: i32,
+        selection_index: i32,
+        is_split_derived: bool,
+        has_split_left_neighbor: bool,
+        right_boundary_displacement: i32,
+        right_boundary_origin: Option<Arc<FutureClauseSnapshot>>,
+        candidates: &Candidates,
+    ) -> ClauseSnapshot {
+        ClauseSnapshot {
+            preview: preview.to_string(),
+            suffix: suffix.to_string(),
+            raw_input: raw_input.to_string(),
+            raw_hiragana: raw_hiragana.to_string(),
+            fixed_prefix: fixed_prefix.to_string(),
+            corresponding_count,
+            selection_index,
+            is_split_derived,
+            is_direct_split_remainder: false,
+            is_pending_remainder: false,
+            has_split_left_neighbor,
+            right_boundary_displacement,
+            right_boundary_origin,
+            split_group_id: None,
+            candidates: candidates.clone(),
+            consumed_prefix_restore: None,
+            remainder_origin: None,
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn build_future_clause_snapshot(
+        preview: &str,
+        suffix: &str,
+        raw_input: &str,
+        raw_hiragana: &str,
+        fixed_prefix: &str,
+        corresponding_count: i32,
+        selection_index: i32,
+        candidates: &Candidates,
+    ) -> FutureClauseSnapshot {
+        let selected =
+            Self::select_candidate(candidates, selection_index).unwrap_or(CandidateSelection {
+                index: selection_index.max(0),
+                text: Self::current_clause_preview(preview, fixed_prefix),
+                sub_text: suffix.to_string(),
+                hiragana: raw_hiragana.to_string(),
+                corresponding_count,
+                candidate_id: 0,
+            });
+
+        FutureClauseSnapshot {
+            clause_preview: Self::current_clause_preview(preview, fixed_prefix),
+            suffix: suffix.to_string(),
+            raw_input: raw_input.to_string(),
+            raw_hiragana: raw_hiragana.to_string(),
+            is_conservative: false,
+            corresponding_count,
+            selection_index: selected.index,
+            is_split_derived: false,
+            is_direct_split_remainder: false,
+            is_pending_remainder: false,
+            has_split_left_neighbor: false,
+            right_boundary_displacement: 0,
+            right_boundary_origin: None,
+            split_group_id: None,
+            selected_text: selected.text.clone(),
+            selected_sub_text: selected.sub_text.clone(),
+            candidates: candidates.clone(),
+            consumed_prefix_restore: None,
+            remainder_origin: None,
+        }
+    }
+
+    #[inline]
+    fn build_conservative_future_clause_snapshot(
+        clause_preview: &str,
+        suffix: &str,
+        raw_input: &str,
+        raw_hiragana: &str,
+        corresponding_count: i32,
+    ) -> FutureClauseSnapshot {
+        let candidates = Candidates {
+            texts: vec![clause_preview.to_string()],
+            sub_texts: vec![suffix.to_string()],
+            hiragana: raw_hiragana.to_string(),
+            corresponding_count: vec![corresponding_count],
+            candidate_ids: vec![0],
+        };
+        FutureClauseSnapshot {
+            clause_preview: clause_preview.to_string(),
+            suffix: suffix.to_string(),
+            raw_input: raw_input.to_string(),
+            raw_hiragana: raw_hiragana.to_string(),
+            is_conservative: true,
+            corresponding_count,
+            selection_index: 0,
+            is_split_derived: true,
+            is_direct_split_remainder: true,
+            is_pending_remainder: false,
+            has_split_left_neighbor: true,
+            right_boundary_displacement: 0,
+            right_boundary_origin: None,
+            split_group_id: None,
+            selected_text: clause_preview.to_string(),
+            selected_sub_text: suffix.to_string(),
+            candidates,
+            consumed_prefix_restore: None,
+            remainder_origin: None,
+        }
+    }
+
+    #[inline]
+    fn future_clause_display(snapshot: &FutureClauseSnapshot) -> String {
+        format!("{}{}", snapshot.clause_preview, snapshot.suffix)
+    }
+
+    #[inline]
+    fn future_snapshot_origin(snapshot: &FutureClauseSnapshot) -> Arc<str> {
+        snapshot
+            .remainder_origin
+            .clone()
+            .or_else(|| {
+                snapshot
+                    .consumed_prefix_restore
+                    .as_deref()
+                    .map(Self::future_snapshot_origin)
+            })
+            .or_else(|| {
+                snapshot
+                    .right_boundary_origin
+                    .as_deref()
+                    .map(Self::future_snapshot_origin)
+            })
+            .unwrap_or_else(|| Arc::from(snapshot.raw_input.as_str()))
+    }
+
+    #[inline]
+    fn clause_texts_for_log(
+        preview: &str,
+        fixed_prefix: &str,
+        clause_snapshots: &[ClauseSnapshot],
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) -> String {
+        let mut clauses = clause_snapshots
+            .iter()
+            .map(|snapshot| Self::current_clause_preview(&snapshot.preview, &snapshot.fixed_prefix))
+            .collect::<Vec<_>>();
+
+        if !preview.is_empty() {
+            clauses.push(Self::current_clause_preview(preview, fixed_prefix));
+        }
+
+        clauses.extend(
+            future_clause_snapshots
+                .iter()
+                .rev()
+                .map(|snapshot| snapshot.clause_preview.clone()),
+        );
+
+        clauses.join(" / ")
+    }
+
+    #[inline]
+    fn clause_raw_preview(
+        raw_hiragana: &str,
+        next_raw_hiragana: Option<&str>,
+        corresponding_count: i32,
+    ) -> String {
+        next_raw_hiragana
+            .and_then(|next_raw| raw_hiragana.strip_suffix(next_raw))
+            .filter(|prefix| !prefix.is_empty())
+            .map(|prefix| prefix.to_string())
+            .unwrap_or_else(|| {
+                raw_hiragana
+                    .chars()
+                    .take(corresponding_count.max(0) as usize)
+                    .collect()
+            })
+    }
+
+    #[inline]
+    fn clause_raw_input_preview(
+        raw_input: &str,
+        next_raw_input: Option<&str>,
+        corresponding_count: i32,
+    ) -> String {
+        next_raw_input
+            .and_then(|next_raw| raw_input.strip_suffix(next_raw))
+            .filter(|prefix| !prefix.is_empty())
+            .map(|prefix| prefix.to_string())
+            .unwrap_or_else(|| {
+                raw_input
+                    .chars()
+                    .take(corresponding_count.max(0) as usize)
+                    .collect()
+            })
+    }
+
+    #[inline]
+    fn current_clause_raw_input_preview(
+        raw_input: &str,
+        corresponding_count: i32,
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) -> String {
+        Self::clause_raw_input_preview(
+            raw_input,
+            future_clause_snapshots
+                .last()
+                .map(|snapshot| snapshot.raw_input.as_str()),
+            corresponding_count,
+        )
+    }
+
+    #[inline]
+    fn current_clause_raw_hiragana_preview(
+        raw_hiragana: &str,
+        corresponding_count: i32,
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) -> String {
+        Self::clause_raw_preview(
+            raw_hiragana,
+            future_clause_snapshots
+                .last()
+                .map(|snapshot| snapshot.raw_hiragana.as_str()),
+            corresponding_count,
+        )
+    }
+
+    #[inline]
+    fn converted_clause_preview_text(
+        set_type: &SetTextType,
+        raw_input: &str,
+        raw_hiragana: &str,
+    ) -> String {
+        match set_type {
+            SetTextType::Hiragana => raw_hiragana.to_string(),
+            SetTextType::Katakana => to_katakana(raw_hiragana),
+            SetTextType::HalfKatakana => to_half_katakana(raw_hiragana),
+            SetTextType::FullLatin => to_fullwidth(raw_input, true),
+            SetTextType::HalfLatin => to_halfwidth(raw_input),
+        }
+    }
+
+    #[inline]
+    fn clause_raw_texts_for_log(
+        raw_hiragana: &str,
+        corresponding_count: i32,
+        clause_snapshots: &[ClauseSnapshot],
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) -> String {
+        let mut clauses = Vec::new();
+
+        for (index, snapshot) in clause_snapshots.iter().enumerate() {
+            let next_raw_hiragana = clause_snapshots
+                .get(index + 1)
+                .map(|next| next.raw_hiragana.as_str())
+                .or_else(|| (!raw_hiragana.is_empty()).then_some(raw_hiragana));
+            clauses.push(Self::clause_raw_preview(
+                &snapshot.raw_hiragana,
+                next_raw_hiragana,
+                snapshot.corresponding_count,
+            ));
+        }
+
+        if !raw_hiragana.is_empty() {
+            clauses.push(Self::clause_raw_preview(
+                raw_hiragana,
+                future_clause_snapshots
+                    .last()
+                    .map(|snapshot| snapshot.raw_hiragana.as_str()),
+                corresponding_count,
+            ));
+        }
+
+        let ordered_future = future_clause_snapshots.iter().rev().collect::<Vec<_>>();
+        for (index, snapshot) in ordered_future.iter().enumerate() {
+            let next_raw_hiragana = ordered_future
+                .get(index + 1)
+                .map(|next| next.raw_hiragana.as_str());
+            clauses.push(Self::clause_raw_preview(
+                &snapshot.raw_hiragana,
+                next_raw_hiragana,
+                snapshot.corresponding_count,
+            ));
+        }
+
+        clauses.join(" / ")
+    }
+
+    #[inline]
+    fn clause_input_lengths_for_log(
+        corresponding_count: i32,
+        clause_snapshots: &[ClauseSnapshot],
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) -> String {
+        let mut clause_lengths = clause_snapshots
+            .iter()
+            .map(|snapshot| snapshot.corresponding_count.to_string())
+            .collect::<Vec<_>>();
+
+        if corresponding_count > 0 {
+            clause_lengths.push(corresponding_count.to_string());
+        }
+
+        clause_lengths.extend(
+            future_clause_snapshots
+                .iter()
+                .rev()
+                .map(|snapshot| snapshot.corresponding_count.to_string()),
+        );
+
+        clause_lengths.join(" / ")
+    }
+
+    #[inline]
+    fn sanitize_log_field(value: &str) -> String {
+        value.replace(['\t', '\r', '\n'], " ")
+    }
+
+    #[inline]
+    fn debug_candidates(candidates: &Candidates, selection_index: i32) -> String {
+        candidates
+            .texts
+            .iter()
+            .zip(candidates.sub_texts.iter())
+            .zip(candidates.corresponding_count.iter())
+            .enumerate()
+            .map(|(index, ((text, sub_text), corresponding_count))| {
+                let selected = if index as i32 == selection_index {
+                    "*"
+                } else {
+                    ""
+                };
+                format!(
+                    "{}{}|{}|{}",
+                    selected,
+                    Self::sanitize_log_field(text),
+                    Self::sanitize_log_field(sub_text),
+                    corresponding_count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    }
+
+    #[inline]
+    fn debug_clause_snapshots(clause_snapshots: &[ClauseSnapshot]) -> String {
+        clause_snapshots
+            .iter()
+            .map(|snapshot| {
+                format!(
+                    "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                    Self::sanitize_log_field(&Self::current_clause_preview(
+                        &snapshot.preview,
+                        &snapshot.fixed_prefix,
+                    )),
+                    Self::sanitize_log_field(&snapshot.suffix),
+                    Self::sanitize_log_field(&snapshot.raw_hiragana),
+                    snapshot.corresponding_count,
+                    if snapshot.is_split_derived {
+                        "split"
+                    } else {
+                        "base"
+                    },
+                    if snapshot.is_direct_split_remainder {
+                        "direct"
+                    } else {
+                        "-"
+                    },
+                    if snapshot.is_pending_remainder {
+                        "pending"
+                    } else {
+                        "-"
+                    },
+                    snapshot
+                        .split_group_id
+                        .map(|group_id| group_id.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    snapshot.right_boundary_displacement,
+                    Self::sanitize_log_field(&Self::debug_right_boundary_origin(
+                        snapshot.right_boundary_origin.as_ref(),
+                    )),
+                    Self::sanitize_log_field(&Self::debug_consumed_prefix_restore(
+                        snapshot.consumed_prefix_restore.as_ref(),
+                    )),
+                    snapshot.remainder_origin.as_deref().unwrap_or("-"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    }
+
+    #[inline]
+    fn debug_consumed_prefix_restore(restore: Option<&ConsumedPrefixRestore>) -> String {
+        let mut restore = restore;
+        let mut chain = Vec::new();
+        while let Some(edge) = restore {
+            let snapshot = edge.snapshot.as_ref();
+            chain.push(format!(
+                "{}|{}|{}|{}|{}|{}|{}|{}:{}",
+                snapshot.clause_preview,
+                snapshot.raw_hiragana,
+                snapshot.corresponding_count,
+                snapshot
+                    .split_group_id
+                    .map(|group_id| group_id.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                snapshot.right_boundary_displacement,
+                snapshot.remainder_origin.as_deref().unwrap_or("-"),
+                snapshot.is_pending_remainder,
+                Self::debug_right_boundary_origin(snapshot.right_boundary_origin.as_ref()),
+                if edge.was_fully_consumed {
+                    "full"
+                } else {
+                    "partial"
+                }
+            ));
+            restore = snapshot.consumed_prefix_restore.as_ref();
+        }
+        chain.join(">")
+    }
+
+    #[inline]
+    fn debug_right_boundary_origin(origin: Option<&Arc<FutureClauseSnapshot>>) -> String {
+        origin
+            .map(|snapshot| {
+                format!(
+                    "{}|{}|{}|{}",
+                    snapshot.clause_preview,
+                    snapshot.raw_hiragana,
+                    snapshot.corresponding_count,
+                    snapshot.right_boundary_displacement,
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    #[inline]
+    fn debug_future_clause_snapshots(future_clause_snapshots: &[FutureClauseSnapshot]) -> String {
+        future_clause_snapshots
+            .iter()
+            .map(|snapshot| {
+                format!(
+                    "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                    Self::sanitize_log_field(&snapshot.clause_preview),
+                    Self::sanitize_log_field(&snapshot.suffix),
+                    Self::sanitize_log_field(&snapshot.raw_hiragana),
+                    snapshot.corresponding_count,
+                    if snapshot.is_conservative {
+                        "conservative"
+                    } else {
+                        "actual"
+                    },
+                    if snapshot.is_split_derived {
+                        "split"
+                    } else {
+                        "base"
+                    },
+                    if snapshot.is_direct_split_remainder {
+                        "direct"
+                    } else {
+                        "-"
+                    },
+                    if snapshot.is_pending_remainder {
+                        "pending"
+                    } else {
+                        "-"
+                    },
+                    snapshot
+                        .split_group_id
+                        .map(|group_id| group_id.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    snapshot.right_boundary_displacement,
+                    Self::sanitize_log_field(&Self::debug_right_boundary_origin(
+                        snapshot.right_boundary_origin.as_ref(),
+                    )),
+                    Self::sanitize_log_field(&Self::debug_consumed_prefix_restore(
+                        snapshot.consumed_prefix_restore.as_ref(),
+                    )),
+                    snapshot.remainder_origin.as_deref().unwrap_or("-"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    }
+
+    #[inline]
+    fn action_log_name(action: &ClientAction) -> &'static str {
+        match action {
+            ClientAction::StartComposition => "StartComposition",
+            ClientAction::EndComposition => "EndComposition",
+            ClientAction::ShowCandidateWindow => "ShowCandidateWindow",
+            ClientAction::StartJevConversion => "StartJevConversion",
+            ClientAction::AppendText(_) => "AppendText",
+            ClientAction::AppendTextRaw(_) => "AppendTextRaw",
+            ClientAction::AppendTextDirect(_) => "AppendTextDirect",
+            ClientAction::CommitTextDirect(_) => "CommitTextDirect",
+            ClientAction::CommitWithText(_) => "CommitWithText",
+            ClientAction::RestoreReconversionOriginal => "RestoreReconversionOriginal",
+            ClientAction::RemoveText => "RemoveText",
+            ClientAction::MoveCursor(_) => "MoveCursor",
+            ClientAction::EnsureClauseNavigationReady { .. } => "EnsureClauseNavigationReady",
+            ClientAction::MoveClause(_) => "MoveClause",
+            ClientAction::AdjustBoundary(_) => "AdjustBoundary",
+            ClientAction::SetIMEMode(_) => "SetIMEMode",
+            ClientAction::SetSelection(_) => "SetSelection",
+            ClientAction::CommitLearning { .. } => "CommitLearning",
+            ClientAction::ShrinkText(_) => "ShrinkText",
+            ClientAction::ShrinkTextRaw(_) => "ShrinkTextRaw",
+            ClientAction::ShrinkTextDirect(_) => "ShrinkTextDirect",
+            ClientAction::SetTextWithType(_) => "SetTextWithType",
+            ClientAction::SetTemporaryLatin(_) => "SetTemporaryLatin",
+            ClientAction::SetTemporaryLatinShiftPending(_) => "SetTemporaryLatinShiftPending",
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn log_clause_action_state(
+        phase: &str,
+        action: &ClientAction,
+        preview: &str,
+        suffix: &str,
+        raw_input: &str,
+        raw_hiragana: &str,
+        fixed_prefix: &str,
+        corresponding_count: i32,
+        selection_index: i32,
+        candidates: &Candidates,
+        clause_snapshots: &[ClauseSnapshot],
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) {
+        if !diagnostic_log_enabled() {
+            return;
+        }
+
+        let selected = Self::select_candidate(candidates, selection_index);
+        let selected_text = selected
+            .as_ref()
+            .map(|candidate| Self::sanitize_log_field(&candidate.text))
+            .unwrap_or_default();
+        let selected_sub_text = selected
+            .as_ref()
+            .map(|candidate| Self::sanitize_log_field(&candidate.sub_text))
+            .unwrap_or_default();
+        let clauses = Self::sanitize_log_field(&Self::clause_texts_for_log(
+            preview,
+            fixed_prefix,
+            clause_snapshots,
+            future_clause_snapshots,
+        ));
+        let clauses_raw = Self::sanitize_log_field(&Self::clause_raw_texts_for_log(
+            raw_hiragana,
+            corresponding_count,
+            clause_snapshots,
+            future_clause_snapshots,
+        ));
+        let clause_input_lengths = Self::sanitize_log_field(&Self::clause_input_lengths_for_log(
+            corresponding_count,
+            clause_snapshots,
+            future_clause_snapshots,
+        ));
+
+        diagnostic_log(format!(
+            "kind=clause-action\tphase={phase}\taction={}\tcurrent_index={}\tpreview={}\tsuffix={}\traw_input={}\traw_hiragana={}\tfixed_prefix={}\tcorresponding_count={corresponding_count}\tselection_index={selection_index}\tselected_text={selected_text}\tselected_sub_text={selected_sub_text}\tclauses={clauses}\tclauses_raw={clauses_raw}\tclause_input_lengths={clause_input_lengths}\tcandidates={}\tclause_snapshots={}\tfuture_clause_snapshots={}",
+            Self::action_log_name(action),
+            clause_snapshots.len(),
+            Self::sanitize_log_field(preview),
+            Self::sanitize_log_field(suffix),
+            Self::sanitize_log_field(raw_input),
+            Self::sanitize_log_field(raw_hiragana),
+            Self::sanitize_log_field(fixed_prefix),
+            Self::sanitize_log_field(&Self::debug_candidates(candidates, selection_index)),
+            Self::sanitize_log_field(&Self::debug_clause_snapshots(clause_snapshots)),
+            Self::sanitize_log_field(&Self::debug_future_clause_snapshots(future_clause_snapshots)),
+        ));
+    }
+
+    fn clear_clause_caches(
+        clause_snapshots: &mut Vec<ClauseSnapshot>,
+        future_clause_snapshots: &mut Vec<FutureClauseSnapshot>,
+        ipc_service: &mut IPCService,
+        candidates: &Candidates,
+    ) -> Result<()> {
+        future_clause_snapshots.clear();
+        if clause_snapshots.is_empty() {
+            return Ok(());
+        }
+
+        clause_snapshots.clear();
+        ipc_service.update_composition_snapshot(ClauseSnapshotOperation::Clear, candidates, 0)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn ensure_clause_navigation_ready<B: ClauseActionBackend>(
+        state: &mut ClauseActionStateMut<'_>,
+        backend: &mut B,
+    ) -> Result<ClauseActionEffect> {
+        Self::ensure_clause_navigation_ready_with_preparation(state, backend, true)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn ensure_clause_navigation_ready_with_preparation<B: ClauseActionBackend>(
+        state: &mut ClauseActionStateMut<'_>,
+        backend: &mut B,
+        prepare_future_clauses: bool,
+    ) -> Result<ClauseActionEffect> {
+        Ok(ClauseState::transition_with_backend(
+            state,
+            ClauseCommand::StartClauseNavigation,
+            ClauseTransitionInput {
+                prepare_future_clauses,
+                ..ClauseTransitionInput::default()
+            },
+            backend,
+        )?
+        .effect)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn apply_move_clause<B: ClauseActionBackend>(
+        state: &mut ClauseActionStateMut<'_>,
+        backend: &mut B,
+        direction: i32,
+    ) -> Result<ClauseActionEffect> {
+        Ok(ClauseState::transition_with_backend(
+            state,
+            ClauseCommand::MoveBy(direction),
+            ClauseTransitionInput::default(),
+            backend,
+        )?
+        .effect)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn apply_adjust_boundary<B: ClauseActionBackend>(
+        state: &mut ClauseActionStateMut<'_>,
+        backend: &mut B,
+        direction: i32,
+    ) -> Result<ClauseActionEffect> {
+        Ok(ClauseState::transition_with_backend(
+            state,
+            ClauseCommand::AdjustBoundary(direction),
+            ClauseTransitionInput::default(),
+            backend,
+        )?
+        .effect)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn apply_set_selection(
+        state: &mut ClauseActionStateMut<'_>,
+        selection: &SetSelectionType,
+    ) -> ClauseActionEffect {
+        ClauseState::transition_without_backend(state, ClauseCommand::SetSelection(selection))
+            .effect
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn sync_clause_action_ui(
+        &self,
+        preview: &str,
+        suffix: &str,
+        candidates: &Candidates,
+        selection_index: i32,
+        ipc_service: &mut IPCService,
+        visible: Option<bool>,
+        update_pos: bool,
+        reading: Option<&str>,
+        candidate_list_visible: Option<bool>,
+        reading_vertical_adjustment: Option<i32>,
+    ) -> Result<()> {
+        self.set_text(preview, suffix)?;
+        self.sync_candidate_window_update(
+            ipc_service,
+            candidates,
+            selection_index,
+            visible,
+            update_pos,
+            reading,
+            candidate_list_visible,
+            reading_vertical_adjustment,
+        )?;
+        Ok(())
+    }
+
+    /// 読み行のピル表示と Tab 確定で共通して使う AI アシスト候補の優先度解決。
+    ///
+    /// 💡 もしかして (TYPO_CORRECTION) は「すでに入力した誤りを直す修正型」であり、
+    /// 提示しないまま確定されると誤字がそのまま本文に残る。一方 🔮 先読み
+    /// (PREDICTIVE) は「まだ打っていない未来を推測する拡張型」であり、提示できなくても
+    /// 次の入力停止で再計算される。つまり損失が非対称なので、💡 を優先して
+    /// 1つだけ提示する。表示と確定が同じ判定を使うことで、見た目と挙動がずれない。
+    fn ai_assist_priority_index(candidate_ids: &[u64]) -> Option<(usize, u64)> {
+        if let Some(index) = candidate_ids
+            .iter()
+            .position(|&id| id == shared::ai_candidate::TYPO_CORRECTION)
+        {
+            return Some((index, shared::ai_candidate::TYPO_CORRECTION));
+        }
+        candidate_ids
+            .iter()
+            .position(|&id| id == shared::ai_candidate::PREDICTIVE)
+            .map(|index| (index, shared::ai_candidate::PREDICTIVE))
+    }
+
+    #[inline]
+    fn live_conversion_reading<'a>(
+        app_config: &AppConfig,
+        candidates: &'a Candidates,
+        transition: &CompositionState,
+    ) -> Option<&'a str> {
+        if app_config.general.show_live_conversion_reading
+            && *transition != CompositionState::None
+            && !candidates.hiragana.is_empty()
+        {
+            Some(candidates.hiragana.as_str())
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn live_conversion_reading_update<'a>(
+        app_config: &AppConfig,
+        candidates: &'a Candidates,
+        transition: &CompositionState,
+    ) -> Option<&'a str> {
+        Self::live_conversion_reading(app_config, candidates, transition).or(Some(""))
+    }
+
+    #[inline]
+    fn live_conversion_reading_vertical_adjustment(app_config: &AppConfig) -> i32 {
+        app_config
+            .general
+            .live_conversion_reading_vertical_adjustment
+            .clamp(
+                LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MIN,
+                LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MAX,
+            )
+    }
+
+    #[inline]
+    fn live_conversion_reading_vertical_adjustment_update(
+        app_config: &AppConfig,
+        reading: Option<&str>,
+    ) -> Option<i32> {
+        reading
+            .is_some_and(|value| !value.is_empty())
+            .then(|| Self::live_conversion_reading_vertical_adjustment(app_config))
+    }
+
+    #[inline]
+    fn live_conversion_reading_vertical_adjustment_for_update(
+        app_config: &AppConfig,
+        candidates: &Candidates,
+        transition: &CompositionState,
+    ) -> Option<i32> {
+        Self::live_conversion_reading_vertical_adjustment_update(
+            app_config,
+            Self::live_conversion_reading(app_config, candidates, transition),
+        )
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn sync_candidate_window_update(
+        &self,
+        ipc_service: &mut IPCService,
+        candidates: &Candidates,
+        selection_index: i32,
+        visible: Option<bool>,
+        update_pos: bool,
+        reading: Option<&str>,
+        candidate_list_visible: Option<bool>,
+        reading_vertical_adjustment: Option<i32>,
+    ) -> Result<()> {
+        let mut augmented_reading = None;
+        let base_reading = reading.unwrap_or(candidates.hiragana.as_str());
+
+        // 💡 もしかして と 🔮 先読み が同時に存在する場合は 💡 を表示する。
+        // 誤字補正はすでに入力した誤りを直す「修正型」なので放置すると誤字が確定される。
+        // 先読みは未来を推測する「拡張型」なので外しても次の停止で再計算される。
+        // この非対称な損失のため、優先度が高い方だけを1つ提示する。
+        if let Some((idx, kind)) = Self::ai_assist_priority_index(&candidates.candidate_ids) {
+            if kind == shared::ai_candidate::TYPO_CORRECTION {
+                let text = &candidates.texts[idx];
+                let aug = format!("{}\t💡 {} [Tab]", base_reading, text);
+                tracing::info!("[TypoDebug/Client] augmented_reading='{}'", aug);
+                augmented_reading = Some(aug);
+            } else {
+                let text = candidates
+                    .texts
+                    .get(idx)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| {
+                        candidates
+                            .sub_texts
+                            .get(idx)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(&candidates.texts[idx])
+                    });
+                augmented_reading = Some(format!("{}\t🔮 {} [Tab]", base_reading, text));
+            }
+        }
+
+        let has_ai_assist_aug = augmented_reading.is_some();
+        let visible = if has_ai_assist_aug {
+            visible.or(Some(true))
+        } else {
+            visible
+        };
+        // NOTE: candidate_list_visible は呼び出し元の設定をそのまま維持する。
+        // 💡 もしかして (999901) は filtered_texts で候補一覧から除外されるため、
+        // 候補ウィンドウ自体を強制非表示にして通常の変換候補が消える不具合を防ぐ。
+        let reading_vertical_adjustment = if has_ai_assist_aug {
+            reading_vertical_adjustment.or(Some(4))
+        } else {
+            reading_vertical_adjustment
+        };
+        let update_pos = if has_ai_assist_aug { true } else { update_pos };
+
+        let reading = if let Some(ref aug) = augmented_reading {
+            Some(aug.as_str())
+        } else if let Some(r) = reading {
+            if visible == Some(false) && r.is_empty() {
+                Some("")
+            } else {
+                Some(r)
+            }
+        } else if visible == Some(false) {
+            Some("")
+        } else {
+            None
+        };
+        let trace_request_id = current_input_trace_request_id();
+        let total_start = trace_request_id.map(|_| Instant::now());
+        let result: Result<()> = (|| {
+            let should_update_pos =
+                self.should_update_candidate_window_position(update_pos, visible);
+            let position = if should_update_pos {
+                let position_start = trace_request_id.map(|_| Instant::now());
+                let position = if visible == Some(true) {
+                    self.candidate_window_position()?
+                } else {
+                    self.candidate_window_position_for_update()?
+                };
+                if let (Some(request_id), Some(position_start)) = (trace_request_id, position_start)
+                {
+                    Self::log_client_performance(
+                        request_id,
+                        "sync_candidate_window_update",
+                        "candidate_window_position",
+                        position_start.elapsed(),
+                        format!(
+                            "status=success;position_present={};candidate_count={}",
+                            position.is_some(),
+                            candidates.texts.len()
+                        ),
+                    );
+                }
+                position
+            } else {
+                if update_pos {
+                    tracing::debug!(
+                        "Skip candidate_window_position while candidate window is hidden"
+                    );
+                }
+                None
+            };
+            // 💡 もしかして (999901) / 🔮 先読み (999902) は通常の変換候補ウィンドウの一覧からは除外する (Tab専用)
+            let filtered_texts = if candidates
+                .candidate_ids
+                .iter()
+                .any(|&id| id == 999901 || id == 999902)
+            {
+                let list = candidates
+                    .texts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        let id = candidates.candidate_ids.get(i).copied().unwrap_or(0);
+                        if id == 999901 || id == 999902 {
+                            None
+                        } else {
+                            Some(t.clone())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if list.is_empty() {
+                    candidates.texts.clone()
+                } else {
+                    list
+                }
+            } else {
+                candidates.texts.clone()
+            };
+            let delivery = ipc_service.update_candidate_window_with_reading(
+                visible,
+                position,
+                Some(filtered_texts),
+                Some(selection_index),
+                None,
+                reading,
+                candidate_list_visible,
+                reading_vertical_adjustment,
+            )?;
+            self.remember_candidate_window_visibility_if_sent(delivery, visible);
+            Ok(())
+        })();
+
+        if let (Some(request_id), Some(total_start)) = (trace_request_id, total_start) {
+            let details = match &result {
+                Ok(()) => format!(
+                    "status=success;update_pos={update_pos};visible={visible:?};candidate_count={};selection_index={selection_index};reading_present={};candidate_list_visible={candidate_list_visible:?};reading_vertical_adjustment={reading_vertical_adjustment:?}",
+                    candidates.texts.len(),
+                    reading.is_some_and(|value| !value.is_empty())
+                ),
+                Err(error) => format!(
+                    "status=error;update_pos={update_pos};visible={visible:?};candidate_count={};selection_index={selection_index};reading_present={};candidate_list_visible={candidate_list_visible:?};reading_vertical_adjustment={reading_vertical_adjustment:?};error={error:?}",
+                    candidates.texts.len(),
+                    reading.is_some_and(|value| !value.is_empty())
+                ),
+            };
+            Self::log_client_performance(
+                request_id,
+                "sync_candidate_window_update",
+                "total",
+                total_start.elapsed(),
+                details,
+            );
+        }
+
+        result
+    }
+
+    #[inline]
+    fn hide_candidate_window_ui(&self, ipc_service: &mut IPCService) -> Result<WindowRpcDelivery> {
+        let delivery =
+            ipc_service.update_candidate_window(Some(false), None, Some(vec![]), Some(0), None)?;
+        self.remember_candidate_window_visibility_if_sent(delivery, Some(false));
+        Ok(delivery)
+    }
+
+    #[inline]
+    fn should_update_candidate_window_position(
+        &self,
+        update_pos: bool,
+        visible: Option<bool>,
+    ) -> bool {
+        match self.borrow() {
+            Ok(text_service) => text_service
+                .candidate_window_visibility_state
+                .should_update_position(update_pos, visible),
+            Err(error) => {
+                tracing::warn!(
+                    "Assume candidate window position should update after visibility state borrow failed: {error:?}"
+                );
+                update_pos && visible != Some(false)
+            }
+        }
+    }
+
+    #[inline]
+    fn delivered_candidate_window_visibility(
+        delivery: WindowRpcDelivery,
+        visible: Option<bool>,
+    ) -> Option<bool> {
+        delivery.was_sent().then_some(visible).flatten()
+    }
+
+    #[inline]
+    pub(crate) fn remember_candidate_window_visibility_if_sent(
+        &self,
+        delivery: WindowRpcDelivery,
+        visible: Option<bool>,
+    ) {
+        self.remember_candidate_window_visibility(Self::delivered_candidate_window_visibility(
+            delivery, visible,
+        ));
+    }
+
+    #[inline]
+    pub(crate) fn remember_candidate_window_visibility(&self, visible: Option<bool>) {
+        if visible.is_none() {
+            return;
+        }
+
+        match self.borrow_mut() {
+            Ok(mut text_service) => {
+                text_service
+                    .candidate_window_visibility_state
+                    .apply_visibility_update(visible);
+            }
+            Err(error) => {
+                tracing::warn!("Failed to remember candidate window visibility state: {error:?}");
+            }
+        }
+    }
+
+    #[inline]
+    fn sync_candidate_window_after_text_update(
+        &self,
+        ipc_service: &mut IPCService,
+        candidates: &Candidates,
+        selection_index: i32,
+        app_config: &AppConfig,
+        transition: &CompositionState,
+    ) -> Result<()> {
+        let has_ai_assist = candidates
+            .candidate_ids
+            .iter()
+            .any(|&id| id == 999901 || id == 999902);
+        if app_config.general.jev_conversion
+            && *transition == CompositionState::Composing
+            && !has_ai_assist
+        {
+            self.hide_candidate_window_ui(ipc_service)?;
+            return Ok(());
+        }
+        let reading = Self::live_conversion_reading(app_config, candidates, transition);
+        let reading_update = reading.or(Some(""));
+        let reading_vertical_adjustment = if has_ai_assist {
+            Some(Self::live_conversion_reading_vertical_adjustment(
+                app_config,
+            ))
+        } else {
+            Self::live_conversion_reading_vertical_adjustment_update(app_config, reading)
+        };
+        let candidate_list_visible = if *transition != CompositionState::None {
+            Some(!app_config.general.show_candidate_window_after_space)
+        } else {
+            Some(false)
+        };
+        let visible = if *transition == CompositionState::None {
+            Some(false)
+        } else if has_ai_assist {
+            Some(true) // フローティングピル (ruby_window) を表示するために可視化
+        } else if !app_config.general.show_candidate_window_after_space || reading.is_some() {
+            Some(true)
+        } else {
+            None
+        };
+        let update_pos = *transition != CompositionState::None || has_ai_assist;
+        self.sync_candidate_window_update(
+            ipc_service,
+            candidates,
+            selection_index,
+            visible,
+            update_pos,
+            reading_update,
+            candidate_list_visible,
+            reading_vertical_adjustment,
+        )
+    }
+
+    #[inline]
+    fn is_hiragana_char(ch: char) -> bool {
+        matches!(ch as u32, 0x3041..=0x3096 | 0x309D..=0x309F)
+    }
+
+    #[inline]
+    fn is_kanji_or_katakana_char(ch: char) -> bool {
+        matches!(
+            ch as u32,
+            0x30A1..=0x30FA
+                | 0x30FC..=0x30FF
+                | 0x3005..=0x3007
+                | 0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xF900..=0xFAFF
+                | 0x20000..=0x2FA1F
+        )
+    }
+
+    #[inline]
+    fn is_japanese_clause_punctuation_char(ch: char) -> bool {
+        matches!(ch, '、' | '。' | '，' | '．' | '！' | '？' | '!' | '?')
+    }
+
+    pub(crate) fn raw_input_has_pending_romaji_tail(raw_input: &str, raw_hiragana: &str) -> bool {
+        if raw_hiragana
+            .chars()
+            .last()
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            return true;
+        }
+        let mut rev = raw_input.chars().rev();
+        let Some(last) = rev.next() else {
+            return false;
+        };
+        if last.eq_ignore_ascii_case(&'n') {
+            let prev = rev.next();
+            return !prev.is_some_and(|ch| ch.eq_ignore_ascii_case(&'n') || ch == '\'');
+        }
+        last.is_ascii_alphabetic()
+            && !matches!(last.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
+    }
+
+    pub(crate) fn raw_input_split_breaks_romaji(raw_input: &str, split_char_index: usize) -> bool {
+        let chars: Vec<char> = raw_input.chars().collect();
+        if split_char_index == 0 || split_char_index >= chars.len() {
+            return true;
+        }
+        let last = chars[split_char_index - 1];
+        let next = chars[split_char_index];
+        if last.eq_ignore_ascii_case(&'n') {
+            let prev_is_n = split_char_index >= 2
+                && (chars[split_char_index - 2].eq_ignore_ascii_case(&'n')
+                    || chars[split_char_index - 2] == '\'');
+            if !prev_is_n
+                && matches!(
+                    next.to_ascii_lowercase(),
+                    'a' | 'i' | 'u' | 'e' | 'o' | 'y' | 'n'
+                )
+            {
+                return true;
+            }
+            return false;
+        }
+        last.is_ascii_alphabetic()
+            && !matches!(last.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
+    }
+
+    pub(crate) fn is_natural_auto_commit_prefix(
+        candidate_prefix: &str,
+        full_preview: &str,
+    ) -> bool {
+        let Some(remainder) = full_preview.strip_prefix(candidate_prefix) else {
+            return false;
+        };
+        if remainder.is_empty()
+            || candidate_prefix.chars().count() < LIVE_CONVERSION_AUTO_COMMIT_MIN_PREFIX_CHARS
+        {
+            return false;
+        }
+        let Some(last_char) = candidate_prefix.chars().last() else {
+            return false;
+        };
+        let Some(next_char) = remainder.chars().next() else {
+            return false;
+        };
+        if Self::is_japanese_clause_punctuation_char(last_char) {
+            return true;
+        }
+        candidate_prefix
+            .chars()
+            .any(Self::is_kanji_or_katakana_char)
+            && Self::is_hiragana_char(last_char)
+            && Self::is_kanji_or_katakana_char(next_char)
+    }
+
+    pub(crate) fn record_live_conversion_prefix_snapshot(
+        raw_input: &str,
+        raw_hiragana: &str,
+        preview: &str,
+        suffix: &str,
+        snapshots: &mut Vec<LiveConversionPrefixSnapshot>,
+        history: &mut VecDeque<String>,
+    ) {
+        if preview.is_empty()
+            || !suffix.is_empty()
+            || Self::raw_input_has_pending_romaji_tail(raw_input, raw_hiragana)
+        {
+            return;
+        }
+        let raw_input_len = raw_input.chars().count();
+        let hiragana_len = raw_hiragana.chars().count();
+        if raw_input_len == 0 || hiragana_len == 0 {
+            return;
+        }
+        if history.back().is_none_or(|last| last != preview) {
+            history.push_back(preview.to_string());
+            while history.len() > LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS {
+                history.pop_front();
+            }
+        }
+        if let Some(existing) = snapshots
+            .iter_mut()
+            .find(|snap| snap.raw_input_len == raw_input_len || snap.hiragana_len == hiragana_len)
+        {
+            existing.raw_input_len = raw_input_len;
+            existing.hiragana_len = hiragana_len;
+            existing.preview = preview.to_string();
+        } else {
+            snapshots.push(LiveConversionPrefixSnapshot {
+                raw_input_len,
+                hiragana_len,
+                preview: preview.to_string(),
+            });
+        }
+    }
+
+    pub(crate) fn find_auto_commit_live_conversion_snapshot(
+        raw_input: &str,
+        raw_hiragana: &str,
+        preview: &str,
+        suffix: &str,
+        snapshots: &[LiveConversionPrefixSnapshot],
+        history: &VecDeque<String>,
+    ) -> Option<LiveConversionPrefixSnapshot> {
+        let total_hiragana = raw_hiragana.chars().count();
+        if total_hiragana < LIVE_CONVERSION_AUTO_COMMIT_MIN_TOTAL_HIRAGANA
+            || !suffix.is_empty()
+            || Self::raw_input_has_pending_romaji_tail(raw_input, raw_hiragana)
+            || history.len() < LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS
+        {
+            return None;
+        }
+        snapshots
+            .iter()
+            .filter(|snap| {
+                snap.hiragana_len >= LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA
+                    && total_hiragana.saturating_sub(snap.hiragana_len)
+                        >= LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA
+                    && !Self::raw_input_split_breaks_romaji(raw_input, snap.raw_input_len)
+                    && Self::is_natural_auto_commit_prefix(&snap.preview, preview)
+                    && history.iter().all(|entry| {
+                        entry.starts_with(&snap.preview) && entry.len() > snap.preview.len()
+                    })
+            })
+            .max_by_key(|snap| snap.hiragana_len)
+            .cloned()
+    }
+
+    pub(crate) fn rebase_live_conversion_auto_commit_state(
+        snapshots: &mut Vec<LiveConversionPrefixSnapshot>,
+        history: &mut VecDeque<String>,
+        committed_raw_input_len: usize,
+        committed_hiragana_len: usize,
+        committed_prefix: &str,
+        remaining_preview: &str,
+    ) {
+        let mut rebased = Vec::with_capacity(snapshots.len());
+        for snap in snapshots.drain(..) {
+            if snap.raw_input_len > committed_raw_input_len
+                && snap.hiragana_len > committed_hiragana_len
+            {
+                if let Some(stripped) = snap.preview.strip_prefix(committed_prefix) {
+                    if !stripped.is_empty() {
+                        rebased.push(LiveConversionPrefixSnapshot {
+                            raw_input_len: snap.raw_input_len - committed_raw_input_len,
+                            hiragana_len: snap.hiragana_len - committed_hiragana_len,
+                            preview: stripped.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        *snapshots = rebased;
+        history.clear();
+        if !remaining_preview.is_empty() {
+            history.push_back(remaining_preview.to_string());
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// 自動確定時にサーバーが確定済みとして扱うテキストを算出する。
+    ///
+    /// `remaining_text` が `current_preview` の接尾辞であれば、確定済みテキストは
+    /// その差分になる。変換結果が確定後に変わるとスナップショット時の長さと
+    /// 確定済みテキストの長さがずれ、TSF の合成境界がずれて確定済みテキストが
+    /// 次の入力で上書きされて消えるため、ここでは残り長から確定済み長を確定する。
+    fn auto_commit_committed_text(
+        current_preview: &str,
+        snapshot_prefix: &str,
+        remaining_text: &str,
+    ) -> String {
+        if !remaining_text.is_empty() && current_preview.ends_with(remaining_text) {
+            let split = current_preview.len() - remaining_text.len();
+            if split > 0 && current_preview.is_char_boundary(split) {
+                return current_preview[..split].to_string();
+            }
+        }
+        snapshot_prefix.to_string()
+    }
+
+    fn maybe_auto_commit_live_conversion_chunk(
+        &self,
+        app_config: &AppConfig,
+        transition: &CompositionState,
+        temporary_latin: bool,
+        has_reconversion_original: bool,
+        fixed_prefix: &str,
+        clause_snapshots: &[ClauseSnapshot],
+        future_clause_snapshots: &[FutureClauseSnapshot],
+        raw_input: &mut String,
+        raw_hiragana: &mut String,
+        preview: &mut String,
+        suffix: &mut String,
+        corresponding_count: &mut i32,
+        selection_index: &mut i32,
+        candidates: &mut Candidates,
+        live_conversion_snapshots: &mut Vec<LiveConversionPrefixSnapshot>,
+        live_conversion_history: &mut VecDeque<String>,
+        ipc_service: &mut IPCService,
+    ) -> Result<()> {
+        if app_config.general.jev_conversion
+            || *transition != CompositionState::Composing
+            || temporary_latin
+            || has_reconversion_original
+            || !fixed_prefix.is_empty()
+            || !clause_snapshots.is_empty()
+            || !future_clause_snapshots.is_empty()
+            || *selection_index != 0
+        {
+            live_conversion_snapshots.clear();
+            live_conversion_history.clear();
+            return Ok(());
+        }
+
+        Self::record_live_conversion_prefix_snapshot(
+            raw_input,
+            raw_hiragana,
+            preview,
+            suffix,
+            live_conversion_snapshots,
+            live_conversion_history,
+        );
+
+        if !app_config.general.auto_commit_live_conversion {
+            return Ok(());
+        }
+
+        let Some(snap) = Self::find_auto_commit_live_conversion_snapshot(
+            raw_input,
+            raw_hiragana,
+            preview,
+            suffix,
+            live_conversion_snapshots,
+            live_conversion_history,
+        ) else {
+            return Ok(());
+        };
+
+        let Ok(shrink_offset) = i32::try_from(snap.raw_input_len) else {
+            return Ok(());
+        };
+        if shrink_offset <= 0 {
+            return Ok(());
+        }
+        let committed_prefix = snap.preview.clone();
+        let Some(remaining_preview_before_shrink) =
+            preview.strip_prefix(&committed_prefix).map(str::to_string)
+        else {
+            return Ok(());
+        };
+        let shrunk_raw_input = Self::current_raw_input_suffix(raw_input, shrink_offset);
+        if shrunk_raw_input.is_empty() {
+            return Ok(());
+        }
+
+        IMEState::set_ipc_service(ipc_service.clone())?;
+        let _ = self.update_context(&remaining_preview_before_shrink);
+        *ipc_service = IMEState::ipc_service()?.context("ipc_service is None")?;
+
+        let shrunk_candidates = ipc_service.shrink_text(shrink_offset)?;
+        let server_reset_recovered = ipc_service.take_server_reset_recovered();
+        if server_reset_recovered || shrunk_candidates.is_empty_composition() {
+            // prefix はサーバー側で確定済み。クライアント状態を残り無しに同期する
+            if shrunk_candidates.is_empty_composition() && !server_reset_recovered {
+                raw_input.clear();
+                raw_hiragana.clear();
+                preview.clear();
+                suffix.clear();
+                *corresponding_count = 0;
+            }
+            live_conversion_snapshots.clear();
+            live_conversion_history.clear();
+            return Ok(());
+        }
+
+        if let Some(remaining_selected) = Self::select_candidate(&shrunk_candidates, 0) {
+            // サーバーが確定した文字列の長さはスナップショット時の preview 长度とは限らない
+            // (変換結果が変わると確定済みテキストと幅がずれる)。残りが現在の preview の
+            // 接尾辞であれば、残り長から確定済み長を確定させて境界ずれを防ぐ。
+            let committed_text = Self::auto_commit_committed_text(
+                &preview,
+                &committed_prefix,
+                &remaining_selected.text,
+            );
+            if let Err(error) = self.shift_start(&committed_text, &remaining_selected.text) {
+                tracing::warn!(
+                    ?error,
+                    "auto-commit shift_start failed; syncing state anyway"
+                );
+            }
+            *raw_input = shrunk_raw_input;
+            *candidates = shrunk_candidates;
+            *selection_index = remaining_selected.index;
+            *corresponding_count = remaining_selected.corresponding_count;
+            *preview = remaining_selected.text;
+            *suffix = remaining_selected.sub_text;
+            *raw_hiragana = remaining_selected.hiragana;
+            Self::rebase_live_conversion_auto_commit_state(
+                live_conversion_snapshots,
+                live_conversion_history,
+                snap.raw_input_len,
+                snap.hiragana_len,
+                &committed_prefix,
+                preview,
+            );
+            ipc_service.replace_input_ledger_direct(raw_hiragana);
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn action_needs_context_update(action: &ClientAction) -> bool {
+        matches!(
+            action,
+            ClientAction::AppendText(_)
+                | ClientAction::AppendTextRaw(_)
+                | ClientAction::AppendTextDirect(_)
+                | ClientAction::ShrinkText(_)
+                | ClientAction::ShrinkTextRaw(_)
+                | ClientAction::ShrinkTextDirect(_)
+        )
+    }
+
+    #[inline]
+    fn current_raw_suffix(raw_hiragana: &str, corresponding_count: i32) -> String {
+        raw_hiragana
+            .chars()
+            .skip(corresponding_count.max(0) as usize)
+            .collect()
+    }
+
+    #[inline]
+    fn append_result_indicates_server_reset(
+        previous_raw_input: &str,
+        previous_candidates: &Candidates,
+        appended_text: &str,
+        appended_candidates: &Candidates,
+    ) -> bool {
+        if previous_raw_input.is_empty()
+            || previous_candidates.is_empty_composition()
+            || appended_candidates.is_empty_composition()
+        {
+            return false;
+        }
+
+        let appended_len = appended_text.chars().count() as i32;
+        appended_len > 0
+            && appended_candidates
+                .corresponding_count
+                .iter()
+                .copied()
+                .max()
+                .is_some_and(|count| count > 0 && count <= appended_len)
+    }
+
+    #[inline]
+    fn has_client_composition_state(
+        raw_input: &str,
+        preview: &str,
+        suffix: &str,
+        fixed_prefix: &str,
+        candidates: &Candidates,
+    ) -> bool {
+        !raw_input.is_empty()
+            || !preview.is_empty()
+            || !suffix.is_empty()
+            || !fixed_prefix.is_empty()
+            || !candidates.is_empty_composition()
+    }
+
+    #[inline]
+    fn current_raw_input_suffix(raw_input: &str, corresponding_count: i32) -> String {
+        let split_at = Self::byte_index_after_chars(raw_input, corresponding_count.max(0) as usize);
+        let adjusted_split_at = Self::adjust_single_n_raw_input_boundary(raw_input, split_at);
+
+        raw_input[adjusted_split_at..].to_string()
+    }
+
+    #[inline]
+    fn byte_index_after_chars(text: &str, char_count: usize) -> usize {
+        if char_count == 0 {
+            return 0;
+        }
+
+        text.char_indices()
+            .nth(char_count)
+            .map(|(byte_index, _)| byte_index)
+            .unwrap_or(text.len())
+    }
+
+    #[inline]
+    fn adjust_single_n_raw_input_boundary(raw_input: &str, split_at: usize) -> usize {
+        if split_at == 0 || split_at >= raw_input.len() || !raw_input.is_char_boundary(split_at) {
+            return split_at;
+        }
+
+        let Some(consumed) = raw_input[..split_at].chars().next_back() else {
+            return split_at;
+        };
+        let Some(next) = raw_input[split_at..].chars().next() else {
+            return split_at;
+        };
+        if !Self::is_ascii_romaji_consonant(consumed) || !Self::is_ascii_romaji_vowel(next) {
+            return split_at;
+        }
+
+        if raw_input[..split_at]
+            .chars()
+            .rev()
+            .skip(1)
+            .find(|ch| ch.is_ascii_alphabetic())
+            .is_some_and(|ch| ch.eq_ignore_ascii_case(&'n'))
+        {
+            split_at - consumed.len_utf8()
+        } else {
+            split_at
+        }
+    }
+
+    #[inline]
+    fn is_ascii_romaji_vowel(ch: char) -> bool {
+        matches!(ch.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
+    }
+
+    #[inline]
+    fn is_ascii_romaji_consonant(ch: char) -> bool {
+        ch.is_ascii_alphabetic()
+            && !Self::is_ascii_romaji_vowel(ch)
+            && !ch.eq_ignore_ascii_case(&'n')
+    }
+
+    #[inline]
+    fn replace_future_suffix_in_sub_text(
+        sub_text: &str,
+        future_snapshot: &FutureClauseSnapshot,
+        downstream_snapshot: Option<&FutureClauseSnapshot>,
+    ) -> Option<String> {
+        let future_raw = future_snapshot.raw_hiragana.as_str();
+        let future_display = Self::future_clause_display(future_snapshot);
+
+        sub_text
+            .strip_suffix(future_raw)
+            .map(|prefix| format!("{prefix}{future_display}"))
+            .or_else(|| (sub_text == future_raw).then(|| future_display.clone()))
+            .or_else(|| {
+                let downstream_snapshot = downstream_snapshot?;
+                let raw_clause = future_raw.strip_suffix(&downstream_snapshot.raw_hiragana)?;
+                let mixed_suffix = format!("{raw_clause}{}", future_snapshot.suffix);
+                sub_text
+                    .strip_suffix(&mixed_suffix)
+                    .map(|prefix| format!("{prefix}{future_display}"))
+            })
+    }
+
+    #[inline]
+    fn restore_raw_suffix_from_sub_text(
+        sub_text: &str,
+        future_snapshot: &FutureClauseSnapshot,
+    ) -> Option<String> {
+        let future_raw = future_snapshot.raw_hiragana.as_str();
+        let future_display = Self::future_clause_display(future_snapshot);
+
+        sub_text
+            .strip_suffix(&future_display)
+            .map(|prefix| format!("{prefix}{future_raw}"))
+            .or_else(|| (sub_text == future_display).then(|| future_raw.to_string()))
+    }
+
+    #[inline]
+    fn restore_raw_suffix_from_snapshot_chain(
+        sub_text: &str,
+        snapshot: &FutureClauseSnapshot,
+    ) -> Option<String> {
+        Self::restore_raw_suffix_from_sub_text(sub_text, snapshot).or_else(|| {
+            let mut restore = snapshot.consumed_prefix_restore.as_ref();
+            while let Some(edge) = restore {
+                let restored = edge.snapshot.as_ref();
+                if let Some(raw_suffix) = Self::restore_raw_suffix_from_sub_text(sub_text, restored)
+                {
+                    return Some(raw_suffix);
+                }
+                restore = restored.consumed_prefix_restore.as_ref();
+            }
+            None
+        })
+    }
+
+    #[inline]
+    fn consumed_restore_owns_reappearing_suffix(
+        raw_input: &str,
+        raw_suffix: &str,
+        restored: &FutureClauseSnapshot,
+    ) -> bool {
+        raw_input != restored.raw_input
+            && raw_input.ends_with(&restored.raw_input)
+            && restored.raw_hiragana.ends_with(raw_suffix)
+    }
+
+    #[inline]
+    fn has_same_following_raw_input_boundary(
+        left: &FutureClauseSnapshot,
+        right: &FutureClauseSnapshot,
+    ) -> bool {
+        left.raw_input
+            .chars()
+            .skip(left.corresponding_count.max(0) as usize)
+            .eq(right
+                .raw_input
+                .chars()
+                .skip(right.corresponding_count.max(0) as usize))
+    }
+
+    #[inline]
+    fn truncate_future_snapshots_to_restored_boundary(
+        future_clause_snapshots: &mut Vec<FutureClauseSnapshot>,
+        restored: &FutureClauseSnapshot,
+        maximum_removed_snapshots: Option<usize>,
+    ) -> bool {
+        let following_raw_input =
+            Self::current_raw_input_suffix(&restored.raw_input, restored.corresponding_count);
+        if following_raw_input.is_empty() {
+            if maximum_removed_snapshots
+                .is_some_and(|maximum| future_clause_snapshots.len() > maximum)
+            {
+                return false;
+            }
+            if future_clause_snapshots.first().is_some_and(|first| {
+                future_clause_snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.split_group_id != first.split_group_id)
+            }) {
+                return false;
+            }
+            future_clause_snapshots.clear();
+            return true;
+        }
+        let Some(following_index) = future_clause_snapshots
+            .iter()
+            .position(|snapshot| snapshot.raw_input == following_raw_input)
+        else {
+            return false;
+        };
+        let removed_snapshots = &future_clause_snapshots[following_index + 1..];
+        if maximum_removed_snapshots.is_some_and(|maximum| removed_snapshots.len() > maximum) {
+            return false;
+        }
+        if removed_snapshots.first().is_some_and(|first| {
+            removed_snapshots
+                .iter()
+                .any(|snapshot| snapshot.split_group_id != first.split_group_id)
+        }) {
+            return false;
+        }
+        future_clause_snapshots.truncate(following_index + 1);
+        true
+    }
+
+    #[inline]
+    fn sync_current_clause_future_suffix(
+        candidates: &mut Candidates,
+        selection_index: i32,
+        corresponding_count: i32,
+        future_clause_snapshots: &[FutureClauseSnapshot],
+    ) -> String {
+        let Some(future_snapshot) = future_clause_snapshots.last() else {
+            return candidates
+                .sub_texts
+                .get(selection_index.max(0) as usize)
+                .cloned()
+                .unwrap_or_default();
+        };
+
+        for sub_text in candidates.sub_texts.iter_mut() {
+            let downstream_snapshot = future_clause_snapshots.iter().rev().nth(1);
+            if let Some(updated) = Self::replace_future_suffix_in_sub_text(
+                sub_text,
+                future_snapshot,
+                downstream_snapshot,
+            ) {
+                *sub_text = updated;
+            }
+        }
+
+        candidates
+            .sub_texts
+            .get(selection_index.max(0) as usize)
+            .cloned()
+            .unwrap_or_else(|| Self::current_raw_suffix(&candidates.hiragana, corresponding_count))
+    }
+
+    #[inline]
+    fn sync_candidate_suffixes_for_boundary(
+        candidates: &mut Candidates,
+        corresponding_count: i32,
+        suffix: &str,
+    ) {
+        for (sub_text, candidate_count) in candidates
+            .sub_texts
+            .iter_mut()
+            .zip(candidates.corresponding_count.iter())
+        {
+            if *candidate_count == corresponding_count {
+                suffix.clone_into(sub_text);
+            }
+        }
+    }
+
+    #[inline]
+    fn coalesce_adjacent_pending_remainders(
+        future_clause_snapshots: &mut Vec<FutureClauseSnapshot>,
+    ) {
+        loop {
+            let Some(current) = future_clause_snapshots.last() else {
+                return;
+            };
+            let Some(trailing) = future_clause_snapshots.iter().rev().nth(1) else {
+                return;
+            };
+            if !current.is_pending_remainder
+                || !trailing.is_pending_remainder
+                || current.remainder_origin.is_none()
+                || (trailing.remainder_origin.is_some()
+                    && trailing.remainder_origin != current.remainder_origin
+                    && trailing.remainder_origin.as_deref() != Some(current.raw_input.as_str()))
+                || current.suffix != Self::future_clause_display(trailing)
+            {
+                return;
+            }
+
+            let current = future_clause_snapshots
+                .pop()
+                .expect("checked current pending remainder");
+            let trailing = future_clause_snapshots
+                .pop()
+                .expect("checked trailing pending remainder");
+            let joined_preview = format!("{}{}", current.clause_preview, trailing.clause_preview);
+            let mut joined_snapshot = Self::build_conservative_future_clause_snapshot(
+                &joined_preview,
+                &trailing.suffix,
+                &current.raw_input,
+                &current.raw_hiragana,
+                current
+                    .corresponding_count
+                    .saturating_add(trailing.corresponding_count),
+            );
+            joined_snapshot.is_split_derived =
+                current.is_split_derived || trailing.is_split_derived;
+            joined_snapshot.is_direct_split_remainder = true;
+            joined_snapshot.is_pending_remainder = true;
+            joined_snapshot.has_split_left_neighbor = true;
+            joined_snapshot.right_boundary_displacement = trailing.right_boundary_displacement;
+            joined_snapshot.right_boundary_origin = trailing.right_boundary_origin;
+            joined_snapshot.split_group_id = current.split_group_id.or(trailing.split_group_id);
+            joined_snapshot.consumed_prefix_restore = trailing
+                .consumed_prefix_restore
+                .or(current.consumed_prefix_restore);
+            joined_snapshot.remainder_origin =
+                current.remainder_origin.or(trailing.remainder_origin);
+            diagnostic_log_lazy(|| {
+                format!(
+                "kind=future-cache\tevent=join-adjacent-pending-remainders\traw_hiragana={}\tjoined={}",
+                Self::sanitize_log_field(&current.raw_hiragana),
+                Self::sanitize_log_field(&format!(
+                    "{}|{}|{}|{}",
+                    joined_snapshot.clause_preview,
+                    joined_snapshot.suffix,
+                    joined_snapshot.raw_hiragana,
+                    joined_snapshot.corresponding_count,
+                )),
+            )
+            });
+            future_clause_snapshots.push(joined_snapshot);
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn push_current_future_clause_snapshot(
+        future_clause_snapshots: &mut Vec<FutureClauseSnapshot>,
+        preview: &str,
+        suffix: &str,
+        raw_input: &str,
+        raw_hiragana: &str,
+        fixed_prefix: &str,
+        corresponding_count: i32,
+        selection_index: i32,
+        current_clause_is_split_derived: bool,
+        current_clause_is_direct_split_remainder: bool,
+        current_clause_is_pending_remainder: bool,
+        current_clause_has_split_left_neighbor: bool,
+        current_clause_right_boundary_displacement: i32,
+        current_clause_right_boundary_origin: Option<Arc<FutureClauseSnapshot>>,
+        current_clause_split_group_id: Option<u64>,
+        current_clause_consumed_prefix_restore: Option<ConsumedPrefixRestore>,
+        current_clause_remainder_origin: Option<Arc<str>>,
+        candidates: &Candidates,
+    ) {
+        let mut snapshot = Self::build_future_clause_snapshot(
+            preview,
+            suffix,
+            raw_input,
+            raw_hiragana,
+            fixed_prefix,
+            corresponding_count,
+            selection_index,
+            candidates,
+        );
+        snapshot.is_split_derived = current_clause_is_split_derived;
+        snapshot.is_direct_split_remainder = current_clause_is_direct_split_remainder;
+        snapshot.is_pending_remainder = current_clause_is_pending_remainder;
+        snapshot.has_split_left_neighbor = current_clause_has_split_left_neighbor;
+        snapshot.right_boundary_displacement = current_clause_right_boundary_displacement;
+        snapshot.right_boundary_origin = current_clause_right_boundary_origin;
+        snapshot.split_group_id = current_clause_split_group_id;
+        snapshot.consumed_prefix_restore = current_clause_consumed_prefix_restore;
+        snapshot.remainder_origin = current_clause_remainder_origin;
+        diagnostic_log_lazy(|| {
+            format!(
+            "kind=future-cache\tevent=push-current\tpreview={}\tsuffix={}\traw_input={}\traw_hiragana={}\tfuture_clause_snapshots_before={}\tis_split_derived={}\tis_direct_split_remainder={}\tsplit_group_id={}\tpushed={}",
+            Self::sanitize_log_field(preview),
+            Self::sanitize_log_field(suffix),
+            Self::sanitize_log_field(raw_input),
+            Self::sanitize_log_field(raw_hiragana),
+            future_clause_snapshots.len(),
+            current_clause_is_split_derived,
+            current_clause_is_direct_split_remainder,
+            current_clause_split_group_id
+                .map(|group_id| group_id.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            Self::sanitize_log_field(&format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                snapshot.clause_preview,
+                snapshot.suffix,
+                snapshot.raw_hiragana,
+                snapshot.corresponding_count,
+                snapshot.is_split_derived,
+                snapshot.is_direct_split_remainder,
+                snapshot
+                    .split_group_id
+                    .map(|group_id| group_id.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            )),
+        )
+        });
+        future_clause_snapshots.push(snapshot);
+        Self::coalesce_adjacent_pending_remainders(future_clause_snapshots);
+    }
+
+    #[inline]
+    fn future_snapshot_matches_raw_suffix(
+        future_snapshot: &FutureClauseSnapshot,
+        raw_suffix: &str,
+    ) -> bool {
+        raw_suffix == future_snapshot.raw_hiragana
+            || raw_suffix.ends_with(&future_snapshot.raw_hiragana)
+    }
+
+    #[inline]
+    fn trusted_raw_hiragana_suffix(raw_hiragana: &str, raw_suffix_hint: &str) -> Option<String> {
+        (!raw_suffix_hint.is_empty() && raw_hiragana.ends_with(raw_suffix_hint))
+            .then(|| raw_suffix_hint.to_string())
+    }
+
+    #[inline]
+    fn common_suffix_char_count(left: &str, right: &str) -> usize {
+        left.chars()
+            .rev()
+            .zip(right.chars().rev())
+            .take_while(|(left, right)| left == right)
+            .count()
+    }
+
+    #[inline]
+    fn recover_single_n_raw_hiragana_suffix(
+        full_raw_hiragana: &str,
+        server_raw_hiragana: &str,
+    ) -> Option<String> {
+        if server_raw_hiragana.is_empty() {
+            return None;
+        }
+
+        if full_raw_hiragana.ends_with(server_raw_hiragana) {
+            return None;
+        }
+
+        let common_suffix_len =
+            Self::common_suffix_char_count(full_raw_hiragana, server_raw_hiragana);
+        let server_len = server_raw_hiragana.chars().count();
+        if common_suffix_len == 0 || common_suffix_len + 1 != server_len {
+            return None;
+        }
+
+        let full_len = full_raw_hiragana.chars().count();
+        if full_len <= common_suffix_len {
+            return None;
+        }
+
+        Some(
+            full_raw_hiragana
+                .chars()
+                .skip(full_len - common_suffix_len - 1)
+                .collect(),
+        )
+    }
+
+    #[inline]
+    fn has_recoverable_single_n_raw_hiragana_suffix(
+        server_raw_hiragana: &str,
+        snapshot_raw_hiragana: &str,
+    ) -> bool {
+        !server_raw_hiragana.is_empty()
+            && server_raw_hiragana.chars().count() == snapshot_raw_hiragana.chars().count()
+            && Self::common_suffix_char_count(server_raw_hiragana, snapshot_raw_hiragana) + 1
+                == snapshot_raw_hiragana.chars().count()
+    }
+
+    #[inline]
+    #[cfg(test)]
+    fn maybe_push_split_future_clause_snapshot(
+        future_clause_snapshots: &mut Vec<FutureClauseSnapshot>,
+        raw_input: &str,
+        raw_hiragana: &str,
+        corresponding_count: i32,
+        raw_suffix_hint: &str,
+        allow_bootstrap_without_existing_future: bool,
+        current_clause_split_group_id: Option<u64>,
+    ) {
+        let mut current_clause_consumed_prefix_restore = None;
+        Self::maybe_push_split_future_clause_snapshot_with_restore(
+            future_clause_snapshots,
+            raw_input,
+            raw_hiragana,
+            corresponding_count,
+            raw_suffix_hint,
+            allow_bootstrap_without_existing_future,
+            current_clause_split_group_id,
+            &mut current_clause_consumed_prefix_restore,
+            None,
+            true,
+        );
+    }
+
+    #[inline]
+    fn attach_consumed_restore_tail(
+        restore: ConsumedPrefixRestore,
+        tail: Option<ConsumedPrefixRestore>,
+    ) -> ConsumedPrefixRestore {
+        let Some(tail) = tail else {
+            return restore;
+        };
+        let mut snapshot = (*restore.snapshot).clone();
+        snapshot.consumed_prefix_restore = Some(match snapshot.consumed_prefix_restore.take() {
+            Some(nested) => Self::attach_consumed_restore_tail(nested, Some(tail)),
+            None => tail,
+        });
+        ConsumedPrefixRestore {
+            snapshot: Arc::new(snapshot),
+            was_fully_consumed: restore.was_fully_consumed,
+        }
+    }
+
+    #[inline]
+    fn restore_for_consumed_snapshot(snapshot: &FutureClauseSnapshot) -> ConsumedPrefixRestore {
+        if snapshot.is_conservative {
+            return snapshot.consumed_prefix_restore.clone().unwrap_or_else(|| {
+                let mut original = snapshot.clone();
+                original.consumed_prefix_restore = None;
+                ConsumedPrefixRestore {
+                    snapshot: Arc::new(original),
+                    was_fully_consumed: false,
+                }
+            });
+        }
+
+        ConsumedPrefixRestore {
+            snapshot: Arc::new(snapshot.clone()),
+            was_fully_consumed: false,
+        }
+    }
+
+    #[inline]
+    fn mark_restore_fully_consumed(mut restore: ConsumedPrefixRestore) -> ConsumedPrefixRestore {
+        restore.was_fully_consumed = true;
+        restore
+    }
+
+    #[inline]
+    fn consumed_restore_can_materialize(restore: &ConsumedPrefixRestore) -> bool {
+        restore.was_fully_consumed || restore.right_boundary_displacement <= 0
+    }
+
+    #[inline]
+    fn find_consumed_restore(
+        mut restore: Option<&ConsumedPrefixRestore>,
+        mut predicate: impl FnMut(&ConsumedPrefixRestore) -> bool,
+    ) -> Option<&ConsumedPrefixRestore> {
+        while let Some(edge) = restore {
+            if predicate(edge) {
+                return Some(edge);
+            }
+            restore = edge.consumed_prefix_restore.as_ref();
+        }
+        None
+    }
+
+    #[inline]
+    fn find_consumed_restore_origin(
+        mut restore: Option<&ConsumedPrefixRestore>,
+        mut predicate: impl FnMut(&FutureClauseSnapshot) -> bool,
+    ) -> Option<Arc<FutureClauseSnapshot>> {
+        while let Some(edge) = restore {
+            if let Some(origin) = edge.right_boundary_origin.as_ref() {
+                if predicate(origin) {
+                    return Some(origin.clone());
+                }
+            }
+            restore = edge.consumed_prefix_restore.as_ref();
+        }
+        None
+    }
+
+    #[inline]
+    fn reset_boundary_restored_snapshot_selection(snapshot: &mut FutureClauseSnapshot) {
+        let saved_selection_is_candidate_backed = (0..snapshot.candidates.texts.len())
+            .filter_map(|index| Self::select_candidate(&snapshot.candidates, index as i32))
+            .any(|candidate| {
+                candidate.text == snapshot.selected_text
+                    && candidate.sub_text == snapshot.selected_sub_text
+                    && candidate.corresponding_count == snapshot.corresponding_count
+            });
+        if !saved_selection_is_candidate_backed {
+            return;
+        }
+
+        let Some(selected) = (0..snapshot.candidates.texts.len())
+            .filter_map(|index| Self::select_candidate(&snapshot.candidates, index as i32))
+            .find(|candidate| candidate.corresponding_count == snapshot.corresponding_count)
+        else {
+            return;
+        };
+        snapshot.selection_index = selected.index;
+        snapshot.clause_preview = selected.text.clone();
+        snapshot.suffix = selected.sub_text.clone();
+        snapshot.selected_text = selected.text;
+        snapshot.selected_sub_text = selected.sub_text;
+    }
+
+    #[inline]
+    fn future_snapshot_has_distinct_selected_candidate(snapshot: &FutureClauseSnapshot) -> bool {
+        (0..snapshot.candidates.texts.len())
+            .rev()
+            .filter_map(|index| Self::select_candidate(&snapshot.candidates, index as i32))
+            .find(|candidate| candidate.corresponding_count == snapshot.corresponding_count)
+            .is_some_and(|reading_candidate| reading_candidate.text != snapshot.selected_text)
+    }
+
+    #[inline]
+    fn future_snapshot_restores_unadjusted_clause(snapshot: &FutureClauseSnapshot) -> bool {
+        snapshot
+            .consumed_prefix_restore
+            .as_deref()
+            .is_some_and(|source| {
+                !source.is_conservative
+                    && !source.is_split_derived
+                    && !Self::future_snapshot_crosses_own_unadjusted_clause_boundary(source)
+            })
+            || snapshot
+                .right_boundary_origin
+                .as_deref()
+                .is_some_and(|source| {
+                    !source.is_conservative
+                        && !source.is_split_derived
+                        && !Self::future_snapshot_crosses_own_unadjusted_clause_boundary(source)
+                })
+    }
+
+    #[inline]
+    fn future_snapshot_restore_source_stays_within_unadjusted_clause(
+        snapshot: &FutureClauseSnapshot,
+    ) -> bool {
+        let Some(source) = snapshot.consumed_prefix_restore.as_deref() else {
+            return false;
+        };
+        if !source.is_conservative && !source.is_split_derived {
+            return source
+                .right_boundary_origin
+                .as_deref()
+                .is_some_and(|origin| {
+                    !origin.is_conservative
+                        && !origin.is_split_derived
+                        && Self::has_same_following_raw_input_boundary(source, origin)
+                });
+        }
+        let mut candidate = Some(source);
+        while let Some(restored) = candidate {
+            if !restored.is_conservative && !restored.is_split_derived {
+                return Self::has_same_following_raw_input_boundary(source, restored);
+            }
+            if let Some(origin) = restored.right_boundary_origin.as_deref() {
+                if !origin.is_conservative && !origin.is_split_derived {
+                    return Self::has_same_following_raw_input_boundary(source, origin);
+                }
+            }
+            candidate = restored.consumed_prefix_restore.as_deref();
+        }
+        false
+    }
+
+    #[inline]
+    fn future_snapshot_crosses_own_unadjusted_clause_boundary(
+        snapshot: &FutureClauseSnapshot,
+    ) -> bool {
+        snapshot
+            .right_boundary_origin
+            .as_deref()
+            .filter(|origin| !origin.is_conservative && !origin.is_split_derived)
+            .is_some_and(|origin| {
+                snapshot.raw_input == origin.raw_input
+                    && snapshot.corresponding_count > origin.corresponding_count
+            })
+    }
+
+    #[inline]
+    fn future_snapshot_restore_crosses_unadjusted_clause_boundary(
+        snapshot: &FutureClauseSnapshot,
+    ) -> bool {
+        let mut candidate = Some(snapshot);
+        while let Some(restored) = candidate {
+            if Self::future_snapshot_crosses_own_unadjusted_clause_boundary(restored) {
+                return true;
+            }
+            candidate = restored.consumed_prefix_restore.as_deref();
+        }
+        false
+    }
+
+    #[inline]
+    fn future_snapshot_materialization_crosses_unadjusted_clause_boundary(
+        snapshot: &FutureClauseSnapshot,
+    ) -> bool {
+        if snapshot.is_split_derived {
+            Self::future_snapshot_restore_crosses_unadjusted_clause_boundary(snapshot)
+        } else {
+            Self::future_snapshot_crosses_own_unadjusted_clause_boundary(snapshot)
+        }
+    }
+
+    #[inline]
+    fn rebase_restored_future_snapshot(
+        snapshot: &mut FutureClauseSnapshot,
+        downstream: Option<&FutureClauseSnapshot>,
+    ) {
+        let downstream_display = downstream
+            .map(Self::future_clause_display)
+            .unwrap_or_default();
+        let previous_suffix = snapshot.suffix.clone();
+        snapshot.suffix = downstream_display.clone();
+        if let Some(prefix) = snapshot.selected_sub_text.strip_suffix(&previous_suffix) {
+            snapshot.selected_sub_text = format!("{prefix}{downstream_display}");
+        }
+        for sub_text in snapshot.candidates.sub_texts.iter_mut() {
+            if let Some(prefix) = sub_text.strip_suffix(&previous_suffix) {
+                *sub_text = format!("{prefix}{downstream_display}");
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn maybe_push_split_future_clause_snapshot_with_restore(
+        future_clause_snapshots: &mut Vec<FutureClauseSnapshot>,
+        raw_input: &str,
+        raw_hiragana: &str,
+        corresponding_count: i32,
+        raw_suffix_hint: &str,
+        allow_bootstrap_without_existing_future: bool,
+        current_clause_split_group_id: Option<u64>,
+        current_clause_consumed_prefix_restore: &mut Option<ConsumedPrefixRestore>,
+        released_remainder_origin: Option<Arc<str>>,
+        allow_released_origin_coalesce: bool,
+    ) {
+        let raw_input_suffix = Self::current_raw_input_suffix(raw_input, corresponding_count);
+        let normalized_raw_suffix_hint = future_clause_snapshots
+            .iter()
+            .rev()
+            .find_map(|snapshot| {
+                Self::restore_raw_suffix_from_snapshot_chain(raw_suffix_hint, snapshot)
+            })
+            .or_else(|| {
+                current_clause_consumed_prefix_restore
+                    .as_deref()
+                    .and_then(|snapshot| {
+                        Self::restore_raw_suffix_from_snapshot_chain(raw_suffix_hint, snapshot)
+                    })
+            })
+            .unwrap_or_else(|| raw_suffix_hint.to_string());
+        let mut raw_suffix = if let Some(snapshot) = future_clause_snapshots
+            .iter()
+            .rev()
+            .find(|snapshot| !raw_input_suffix.is_empty() && raw_input_suffix == snapshot.raw_input)
+        {
+            snapshot.raw_hiragana.clone()
+        } else if let Some(raw_suffix) =
+            Self::trusted_raw_hiragana_suffix(raw_hiragana, &normalized_raw_suffix_hint)
+        {
+            raw_suffix
+        } else if let Some(snapshot) = future_clause_snapshots.last().filter(|snapshot| {
+            Self::future_snapshot_matches_raw_suffix(snapshot, &normalized_raw_suffix_hint)
+        }) {
+            snapshot.raw_hiragana.clone()
+        } else if !future_clause_snapshots.is_empty() && !allow_bootstrap_without_existing_future {
+            if raw_input.chars().count() == raw_hiragana.chars().count() {
+                Self::current_raw_suffix(raw_hiragana, corresponding_count)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        if raw_suffix.is_empty() && !raw_input_suffix.is_empty() {
+            return;
+        }
+        if raw_suffix.is_empty() {
+            while let Some(snapshot) = future_clause_snapshots.pop() {
+                let restore = Self::restore_for_consumed_snapshot(&snapshot);
+                let restore = Self::mark_restore_fully_consumed(restore);
+                *current_clause_consumed_prefix_restore = Some(Self::attach_consumed_restore_tail(
+                    restore,
+                    current_clause_consumed_prefix_restore.take(),
+                ));
+            }
+            return;
+        }
+
+        let contracted_origin = Self::find_consumed_restore_origin(
+            current_clause_consumed_prefix_restore.as_ref(),
+            |origin| origin.right_boundary_displacement <= 0 && origin.raw_hiragana == raw_suffix,
+        );
+        if let Some(origin) = contracted_origin {
+            let mut restored = (*origin).clone();
+            restored.is_pending_remainder |= future_clause_snapshots.is_empty()
+                || future_clause_snapshots
+                    .last()
+                    .is_some_and(|snapshot| snapshot.is_pending_remainder);
+            if Self::truncate_future_snapshots_to_restored_boundary(
+                future_clause_snapshots,
+                &restored,
+                Some(1),
+            ) {
+                let _ = current_clause_consumed_prefix_restore
+                    .take()
+                    .expect("checked consumed-prefix restore");
+                *current_clause_consumed_prefix_restore = restored.consumed_prefix_restore.take();
+                restored.is_split_derived = current_clause_split_group_id.is_some();
+                restored.is_direct_split_remainder = true;
+                restored.has_split_left_neighbor = true;
+                restored.split_group_id = current_clause_split_group_id;
+                Self::reset_boundary_restored_snapshot_selection(&mut restored);
+                Self::rebase_restored_future_snapshot(
+                    &mut restored,
+                    future_clause_snapshots.last(),
+                );
+                future_clause_snapshots.push(restored);
+                return;
+            }
+        }
+
+        if let Some(restore) = Self::find_consumed_restore(
+            current_clause_consumed_prefix_restore.as_ref(),
+            |restored| {
+                Self::consumed_restore_can_materialize(restored)
+                    && restored.raw_hiragana == raw_suffix
+                    && !Self::future_snapshot_materialization_crosses_unadjusted_clause_boundary(
+                        restored,
+                    )
+            },
+        )
+        .cloned()
+        {
+            let mut restored = (*restore).clone();
+            restored.is_pending_remainder |= future_clause_snapshots.is_empty()
+                || future_clause_snapshots
+                    .last()
+                    .is_some_and(|snapshot| snapshot.is_pending_remainder);
+            if Self::truncate_future_snapshots_to_restored_boundary(
+                future_clause_snapshots,
+                &restored,
+                None,
+            ) {
+                let _ = current_clause_consumed_prefix_restore.take();
+                *current_clause_consumed_prefix_restore = restored.consumed_prefix_restore.take();
+                Self::reset_boundary_restored_snapshot_selection(&mut restored);
+                Self::rebase_restored_future_snapshot(
+                    &mut restored,
+                    future_clause_snapshots.last(),
+                );
+                future_clause_snapshots.push(restored);
+                return;
+            }
+        }
+
+        if future_clause_snapshots.is_empty() {
+            let can_bootstrap_from_consumed_restore = current_clause_consumed_prefix_restore
+                .as_ref()
+                .is_some_and(|restored| {
+                    Self::consumed_restore_owns_reappearing_suffix(raw_input, &raw_suffix, restored)
+                });
+            if !allow_bootstrap_without_existing_future && !can_bootstrap_from_consumed_restore {
+                return;
+            }
+
+            let split_preview = if raw_suffix_hint.is_empty() {
+                raw_suffix.clone()
+            } else {
+                raw_suffix_hint.to_string()
+            };
+            let split_raw_input = if raw_input_suffix.is_empty() {
+                raw_suffix.clone()
+            } else {
+                raw_input_suffix.clone()
+            };
+            let mut split_snapshot = Self::build_conservative_future_clause_snapshot(
+                &split_preview,
+                "",
+                &split_raw_input,
+                &raw_suffix,
+                split_raw_input.chars().count() as i32,
+            );
+            split_snapshot.remainder_origin = current_clause_consumed_prefix_restore
+                .as_deref()
+                .map(Self::future_snapshot_origin)
+                .or_else(|| released_remainder_origin.clone());
+            split_snapshot.is_split_derived = current_clause_split_group_id.is_some();
+            split_snapshot.is_direct_split_remainder = true;
+            split_snapshot.is_pending_remainder = true;
+            split_snapshot.split_group_id = current_clause_split_group_id;
+            if current_clause_consumed_prefix_restore
+                .as_ref()
+                .is_some_and(|restored| {
+                    Self::consumed_restore_owns_reappearing_suffix(raw_input, &raw_suffix, restored)
+                })
+            {
+                split_snapshot.consumed_prefix_restore =
+                    current_clause_consumed_prefix_restore.take();
+            }
+            diagnostic_log_lazy(|| {
+                format!(
+                "kind=future-cache\tevent=bootstrap-split\traw_suffix={}\traw_input_suffix={}\tpushed={}",
+                Self::sanitize_log_field(&raw_suffix),
+                Self::sanitize_log_field(&split_raw_input),
+                Self::sanitize_log_field(&format!(
+                    "{}|{}|{}|{}",
+                    split_snapshot.clause_preview,
+                    split_snapshot.suffix,
+                    split_snapshot.raw_hiragana,
+                    split_snapshot.corresponding_count,
+                )),
+            )
+            });
+            future_clause_snapshots.push(split_snapshot);
+            return;
+        }
+
+        if let Some(restore) = future_clause_snapshots.last().and_then(|snapshot| {
+            Self::find_consumed_restore(snapshot.consumed_prefix_restore.as_ref(), |restored| {
+                Self::consumed_restore_can_materialize(restored)
+                    && restored.raw_hiragana == raw_suffix
+                    && Self::has_same_following_raw_input_boundary(restored, snapshot)
+                    && !Self::future_snapshot_materialization_crosses_unadjusted_clause_boundary(
+                        restored,
+                    )
+                    && (restored.split_group_id.is_none()
+                        || restored.split_group_id == current_clause_split_group_id
+                        || restored.was_fully_consumed)
+                    && (Self::future_snapshot_has_distinct_selected_candidate(restored)
+                        || Self::future_snapshot_restores_unadjusted_clause(restored)
+                        || !restored.is_conservative)
+            })
+            .cloned()
+        }) {
+            let mut restored = (*restore).clone();
+            restored.is_pending_remainder |= future_clause_snapshots
+                .last()
+                .is_some_and(|snapshot| snapshot.is_pending_remainder);
+            if Self::truncate_future_snapshots_to_restored_boundary(
+                future_clause_snapshots,
+                &restored,
+                None,
+            ) {
+                *current_clause_consumed_prefix_restore = restored.consumed_prefix_restore.take();
+                Self::reset_boundary_restored_snapshot_selection(&mut restored);
+                diagnostic_log_lazy(|| {
+                    format!(
+                    "kind=future-cache\tevent=restore-consumed-prefix\traw_suffix={}\trestored={}",
+                    Self::sanitize_log_field(&raw_suffix),
+                    Self::sanitize_log_field(&format!(
+                        "{}|{}|{}|{}",
+                        restored.clause_preview,
+                        restored.suffix,
+                        restored.raw_hiragana,
+                        restored.corresponding_count,
+                    )),
+                )
+                });
+                Self::rebase_restored_future_snapshot(
+                    &mut restored,
+                    future_clause_snapshots.last(),
+                );
+                future_clause_snapshots.push(restored);
+                return;
+            }
+        }
+
+        if let Some(origin) = future_clause_snapshots.last().and_then(|snapshot| {
+            Self::find_consumed_restore_origin(
+                snapshot.consumed_prefix_restore.as_ref(),
+                |origin| {
+                    origin.right_boundary_displacement <= 0 && origin.raw_hiragana == raw_suffix
+                },
+            )
+            .or_else(|| {
+                snapshot
+                    .right_boundary_origin
+                    .as_deref()
+                    .and_then(|boundary_origin| {
+                        Self::find_consumed_restore_origin(
+                            boundary_origin.consumed_prefix_restore.as_ref(),
+                            |origin| {
+                                origin.right_boundary_displacement <= 0
+                                    && origin.raw_hiragana == raw_suffix
+                            },
+                        )
+                    })
+            })
+        }) {
+            let mut restored = (*origin).clone();
+            restored.is_pending_remainder |= future_clause_snapshots
+                .last()
+                .is_some_and(|snapshot| snapshot.is_pending_remainder);
+            if Self::truncate_future_snapshots_to_restored_boundary(
+                future_clause_snapshots,
+                &restored,
+                Some(1),
+            ) {
+                *current_clause_consumed_prefix_restore = restored.consumed_prefix_restore.take();
+                restored.is_split_derived = current_clause_split_group_id.is_some();
+                restored.is_direct_split_remainder = true;
+                restored.is_pending_remainder = false;
+                restored.has_split_left_neighbor = true;
+                restored.split_group_id = current_clause_split_group_id;
+                Self::reset_boundary_restored_snapshot_selection(&mut restored);
+                Self::rebase_restored_future_snapshot(
+                    &mut restored,
+                    future_clause_snapshots.last(),
+                );
+                diagnostic_log_lazy(|| {
+                    format!(
+                    "kind=future-cache\tevent=restore-boundary-origin\traw_suffix={}\trestored={}",
+                    Self::sanitize_log_field(&raw_suffix),
+                    Self::sanitize_log_field(&format!(
+                        "{}|{}|{}|{}",
+                        restored.clause_preview,
+                        restored.suffix,
+                        restored.raw_hiragana,
+                        restored.corresponding_count,
+                    )),
+                )
+                });
+                future_clause_snapshots.push(restored);
+                return;
+            }
+        }
+
+        while let Some(snapshot) = future_clause_snapshots.last() {
+            if Self::future_snapshot_matches_raw_suffix(snapshot, &raw_suffix) {
+                break;
+            }
+            let earlier_snapshot_matches = future_clause_snapshots
+                .iter()
+                .rev()
+                .skip(1)
+                .any(|earlier| earlier.raw_hiragana == raw_suffix);
+            if snapshot.raw_hiragana.ends_with(&raw_suffix) && earlier_snapshot_matches {
+                let restore = Self::restore_for_consumed_snapshot(snapshot);
+                let restore = Self::mark_restore_fully_consumed(restore);
+                *current_clause_consumed_prefix_restore = Some(Self::attach_consumed_restore_tail(
+                    restore,
+                    current_clause_consumed_prefix_restore.take(),
+                ));
+                future_clause_snapshots.pop();
+                continue;
+            }
+            if snapshot.raw_hiragana.ends_with(&raw_suffix) && !earlier_snapshot_matches {
+                break;
+            }
+            diagnostic_log_lazy(|| {
+                format!(
+                    "kind=future-cache\tevent=trim-stale-split\traw_suffix={}\tdropped={}",
+                    Self::sanitize_log_field(&raw_suffix),
+                    Self::sanitize_log_field(&format!(
+                        "{}|{}|{}|{}",
+                        snapshot.clause_preview,
+                        snapshot.suffix,
+                        snapshot.raw_hiragana,
+                        snapshot.corresponding_count,
+                    )),
+                )
+            });
+            future_clause_snapshots.pop();
+        }
+
+        if !raw_suffix_hint.is_empty() {
+            if let Some(snapshot) = future_clause_snapshots.last() {
+                if let Some(restored) =
+                    Self::restore_raw_suffix_from_sub_text(raw_suffix_hint, snapshot).or_else(
+                        || {
+                            (raw_suffix_hint == Self::future_clause_display(snapshot)
+                                || raw_suffix_hint == snapshot.raw_hiragana)
+                                .then(|| snapshot.raw_hiragana.clone())
+                        },
+                    )
+                {
+                    raw_suffix = restored;
+                }
+            }
+        }
+
+        let existing_future = future_clause_snapshots.last().cloned();
+        let Some(snapshot) = existing_future.as_ref() else {
+            return;
+        };
+
+        let trailing_raw_hiragana = future_clause_snapshots
+            .iter()
+            .rev()
+            .nth(1)
+            .map(|snapshot| snapshot.raw_hiragana.clone());
+        let trailing_raw_input = future_clause_snapshots
+            .iter()
+            .rev()
+            .nth(1)
+            .map(|snapshot| snapshot.raw_input.clone());
+        let has_reappearing_restore_with_adjusted_right_boundary = snapshot
+            .consumed_prefix_restore
+            .as_deref()
+            .is_some_and(|restored| {
+                restored.raw_hiragana == raw_suffix
+                    && !Self::has_same_following_raw_input_boundary(restored, snapshot)
+            });
+        let has_right_expanded_partial_restore_for_raw_suffix = snapshot
+            .consumed_prefix_restore
+            .as_ref()
+            .is_some_and(|restored| {
+                !restored.was_fully_consumed
+                    && restored.right_boundary_displacement > 0
+                    && Self::consumed_restore_owns_reappearing_suffix(
+                        raw_input,
+                        &raw_suffix,
+                        restored,
+                    )
+            });
+        let can_coalesce_by_provenance = allow_released_origin_coalesce
+            || snapshot.right_boundary_displacement < 0
+            || Self::find_consumed_restore(snapshot.consumed_prefix_restore.as_ref(), |source| {
+                source.right_boundary_displacement < 0
+            })
+            .is_some()
+                && !Self::future_snapshot_restore_crosses_unadjusted_clause_boundary(snapshot)
+            || Self::future_snapshot_restores_unadjusted_clause(snapshot)
+            || Self::future_snapshot_restore_source_stays_within_unadjusted_clause(snapshot);
+        let has_matching_remainder_origin = released_remainder_origin.is_some()
+            && released_remainder_origin == snapshot.remainder_origin;
+        let has_same_remainder_origin = has_matching_remainder_origin
+            && (can_coalesce_by_provenance
+                || (snapshot.consumed_prefix_restore.is_none()
+                    && snapshot.right_boundary_origin.is_none()));
+        let pending_remainder_can_coalesce = snapshot.is_pending_remainder
+            && (has_same_remainder_origin
+                || snapshot.consumed_prefix_restore.is_some()
+                || trailing_raw_hiragana.is_some());
+        let direct_restore_owns_reappearing_suffix = snapshot.is_direct_split_remainder
+            && snapshot
+                .consumed_prefix_restore
+                .as_ref()
+                .is_some_and(|restored| {
+                    !Self::future_snapshot_restore_crosses_unadjusted_clause_boundary(restored)
+                        && Self::consumed_restore_owns_reappearing_suffix(
+                            raw_input,
+                            &raw_suffix,
+                            restored,
+                        )
+                });
+        let can_coalesce_released_prefix = pending_remainder_can_coalesce
+            || direct_restore_owns_reappearing_suffix
+            || has_same_remainder_origin
+            || (can_coalesce_by_provenance && has_reappearing_restore_with_adjusted_right_boundary);
+        let is_pending_remainder = snapshot.is_pending_remainder;
+        let preserves_navigated_same_origin_boundary = has_same_remainder_origin
+            && snapshot.is_direct_split_remainder
+            && !snapshot.is_pending_remainder
+            && snapshot.right_boundary_displacement == 0
+            && snapshot.consumed_prefix_restore.is_none()
+            && trailing_raw_hiragana.is_none()
+            && snapshot.remainder_origin.as_deref() != Some(raw_input_suffix.as_str());
+
+        if snapshot.raw_hiragana != raw_suffix && snapshot.raw_hiragana.ends_with(&raw_suffix) {
+            let trailing_raw_hiragana = trailing_raw_hiragana.unwrap_or_default();
+            let trailing_raw_input = trailing_raw_input.unwrap_or_default();
+            let split_preview = if trailing_raw_hiragana.is_empty() {
+                raw_suffix.clone()
+            } else {
+                raw_suffix
+                    .strip_suffix(&trailing_raw_hiragana)
+                    .unwrap_or(&raw_suffix)
+                    .to_string()
+            };
+            let split_corresponding_count = if trailing_raw_input.is_empty() {
+                raw_input_suffix.chars().count() as i32
+            } else {
+                raw_input_suffix
+                    .strip_suffix(&trailing_raw_input)
+                    .unwrap_or(&raw_input_suffix)
+                    .chars()
+                    .count() as i32
+            };
+            if split_preview.is_empty() || split_corresponding_count <= 0 {
+                return;
+            }
+            let mut replaced_snapshot = Self::build_conservative_future_clause_snapshot(
+                &split_preview,
+                &snapshot.suffix,
+                &raw_input_suffix,
+                &raw_suffix,
+                split_corresponding_count,
+            );
+            replaced_snapshot.is_split_derived = current_clause_split_group_id.is_some();
+            replaced_snapshot.is_direct_split_remainder = true;
+            replaced_snapshot.is_pending_remainder = snapshot.is_pending_remainder
+                || (!snapshot.is_split_derived && released_remainder_origin.is_some());
+            replaced_snapshot.has_split_left_neighbor = true;
+            replaced_snapshot.split_group_id = current_clause_split_group_id;
+            replaced_snapshot.remainder_origin = Some(Self::future_snapshot_origin(snapshot));
+            let restore = Self::restore_for_consumed_snapshot(snapshot);
+            replaced_snapshot.consumed_prefix_restore = Some(Self::attach_consumed_restore_tail(
+                restore,
+                current_clause_consumed_prefix_restore.take(),
+            ));
+            diagnostic_log_lazy(|| {
+                format!(
+                "kind=future-cache\tevent=replace-consumed-prefix\traw_suffix={}\traw_input_suffix={}\treplaced={}",
+                Self::sanitize_log_field(&raw_suffix),
+                Self::sanitize_log_field(&raw_input_suffix),
+                Self::sanitize_log_field(&format!(
+                    "{}|{}|{}|{}",
+                    replaced_snapshot.clause_preview,
+                    replaced_snapshot.suffix,
+                    replaced_snapshot.raw_hiragana,
+                    replaced_snapshot.corresponding_count,
+                )),
+            )
+            });
+            future_clause_snapshots.pop();
+            future_clause_snapshots.push(replaced_snapshot);
+            return;
+        }
+
+        if snapshot.raw_hiragana != raw_suffix
+            && !snapshot.is_conservative
+            && !has_right_expanded_partial_restore_for_raw_suffix
+            && !preserves_navigated_same_origin_boundary
+            && can_coalesce_released_prefix
+            && (snapshot.split_group_id == current_clause_split_group_id
+                || is_pending_remainder
+                || has_same_remainder_origin)
+            && (trailing_raw_hiragana.is_some()
+                || is_pending_remainder
+                || direct_restore_owns_reappearing_suffix
+                || has_same_remainder_origin)
+        {
+            let trailing_raw_hiragana = trailing_raw_hiragana.unwrap_or_default();
+            let trailing_raw_input = trailing_raw_input.unwrap_or_default();
+            let joined_preview = if trailing_raw_hiragana.is_empty() {
+                raw_suffix.clone()
+            } else {
+                raw_suffix
+                    .strip_suffix(&trailing_raw_hiragana)
+                    .unwrap_or(&raw_suffix)
+                    .to_string()
+            };
+            let joined_corresponding_count = if trailing_raw_input.is_empty() {
+                raw_input_suffix.chars().count() as i32
+            } else {
+                raw_input_suffix
+                    .strip_suffix(&trailing_raw_input)
+                    .unwrap_or(&raw_input_suffix)
+                    .chars()
+                    .count() as i32
+            };
+            let mut replaced_snapshot = Self::build_conservative_future_clause_snapshot(
+                &joined_preview,
+                &snapshot.suffix,
+                &raw_input_suffix,
+                &raw_suffix,
+                joined_corresponding_count,
+            );
+            replaced_snapshot.is_split_derived = true;
+            replaced_snapshot.is_direct_split_remainder = true;
+            replaced_snapshot.is_pending_remainder = snapshot.is_pending_remainder;
+            replaced_snapshot.has_split_left_neighbor = true;
+            replaced_snapshot.split_group_id = current_clause_split_group_id;
+            replaced_snapshot.consumed_prefix_restore = snapshot.consumed_prefix_restore.clone();
+            replaced_snapshot.remainder_origin = Some(Self::future_snapshot_origin(snapshot));
+            diagnostic_log_lazy(|| {
+                format!(
+                "kind=future-cache\tevent=replace-actual-direct-remainder\traw_suffix={}\traw_input_suffix={}\treplaced={}",
+                Self::sanitize_log_field(&raw_suffix),
+                Self::sanitize_log_field(&raw_input_suffix),
+                Self::sanitize_log_field(&format!(
+                    "{}|{}|{}|{}",
+                    replaced_snapshot.clause_preview,
+                    replaced_snapshot.suffix,
+                    replaced_snapshot.raw_hiragana,
+                    replaced_snapshot.corresponding_count,
+                )),
+            )
+            });
+            future_clause_snapshots.pop();
+            future_clause_snapshots.push(replaced_snapshot);
+            return;
+        }
+
+        if snapshot.is_conservative
+            && !has_right_expanded_partial_restore_for_raw_suffix
+            && can_coalesce_released_prefix
+        {
+            let trailing_raw_hiragana = trailing_raw_hiragana.unwrap_or_default();
+            let trailing_raw_input = trailing_raw_input.unwrap_or_default();
+            let split_preview = if trailing_raw_hiragana.is_empty() {
+                raw_suffix.clone()
+            } else {
+                raw_suffix
+                    .strip_suffix(&trailing_raw_hiragana)
+                    .unwrap_or(&raw_suffix)
+                    .to_string()
+            };
+            let split_corresponding_count = if trailing_raw_input.is_empty() {
+                raw_input_suffix.chars().count() as i32
+            } else {
+                raw_input_suffix
+                    .strip_suffix(&trailing_raw_input)
+                    .unwrap_or(&raw_input_suffix)
+                    .chars()
+                    .count() as i32
+            };
+            let mut replaced_snapshot = Self::build_conservative_future_clause_snapshot(
+                &split_preview,
+                &snapshot.suffix,
+                &raw_input_suffix,
+                &raw_suffix,
+                split_corresponding_count,
+            );
+            replaced_snapshot.is_split_derived = current_clause_split_group_id.is_some();
+            replaced_snapshot.is_direct_split_remainder = true;
+            replaced_snapshot.is_pending_remainder = snapshot.is_pending_remainder;
+            replaced_snapshot.split_group_id = current_clause_split_group_id;
+            replaced_snapshot.consumed_prefix_restore = snapshot.consumed_prefix_restore.clone();
+            replaced_snapshot.remainder_origin = Some(Self::future_snapshot_origin(snapshot));
+            diagnostic_log_lazy(|| {
+                format!(
+                "kind=future-cache\tevent=replace-derived-split\traw_suffix={}\traw_input_suffix={}\tcurrent_clause_split_group_id={}\treplaced={}",
+                Self::sanitize_log_field(&raw_suffix),
+                Self::sanitize_log_field(&raw_input_suffix),
+                current_clause_split_group_id
+                    .map(|group_id| group_id.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                Self::sanitize_log_field(&format!(
+                    "{}|{}|{}|{}",
+                    replaced_snapshot.clause_preview,
+                    replaced_snapshot.suffix,
+                    replaced_snapshot.raw_hiragana,
+                    replaced_snapshot.corresponding_count,
+                )),
+            )
+            });
+            future_clause_snapshots.pop();
+            future_clause_snapshots.push(replaced_snapshot);
+            return;
+        }
+
+        let Some(split_preview) = raw_suffix.strip_suffix(&snapshot.raw_hiragana) else {
+            return;
+        };
+        if split_preview.is_empty() {
+            return;
+        }
+
+        let split_corresponding_count = raw_input_suffix
+            .strip_suffix(&snapshot.raw_input)
+            .map(|prefix| prefix.chars().count() as i32)
+            .unwrap_or(split_preview.chars().count() as i32);
+        let mut split_snapshot = Self::build_conservative_future_clause_snapshot(
+            split_preview,
+            &Self::future_clause_display(snapshot),
+            &raw_input_suffix,
+            &raw_suffix,
+            split_corresponding_count,
+        );
+        split_snapshot.is_split_derived = current_clause_split_group_id.is_some();
+        split_snapshot.is_direct_split_remainder = true;
+        split_snapshot.is_pending_remainder = true;
+        split_snapshot.split_group_id = current_clause_split_group_id;
+        split_snapshot.remainder_origin = released_remainder_origin;
+        if current_clause_consumed_prefix_restore
+            .as_ref()
+            .is_some_and(|restored| {
+                Self::consumed_restore_owns_reappearing_suffix(raw_input, &raw_suffix, restored)
+            })
+        {
+            split_snapshot.consumed_prefix_restore = current_clause_consumed_prefix_restore.take();
+        }
+        diagnostic_log_lazy(|| {
+            format!(
+            "kind=future-cache\tevent=push-split\traw_suffix={}\traw_input_suffix={}\tpushed={}",
+            Self::sanitize_log_field(&raw_suffix),
+            Self::sanitize_log_field(&raw_input_suffix),
+            Self::sanitize_log_field(&format!(
+                "{}|{}|{}|{}",
+                split_snapshot.clause_preview,
+                split_snapshot.suffix,
+                split_snapshot.raw_hiragana,
+                split_snapshot.corresponding_count,
+            )),
+        )
+        });
+        future_clause_snapshots.push(split_snapshot);
+    }
+
+    fn rebuild_future_clause_snapshots_from_prepared(
+        state: &mut ClauseActionStateMut<'_>,
+        prepared: Vec<ClauseAdvance>,
+    ) -> Result<()> {
+        if state.suffix.is_empty() {
+            state.future_clause_snapshots.clear();
+            return Ok(());
+        }
+
+        let mut backend = PreparedClauseBackend {
+            advances: prepared.into(),
+        };
+        let mut temp_preview = state.preview.clone();
+        let mut temp_suffix = state.suffix.clone();
+        let mut temp_raw_input = state.raw_input.clone();
+        let mut temp_raw_hiragana = state.raw_hiragana.clone();
+        let mut temp_fixed_prefix = state.fixed_prefix.clone();
+        let mut temp_corresponding_count = *state.corresponding_count;
+        let mut temp_selection_index = *state.selection_index;
+        let mut temp_candidates = state.candidates.clone();
+        let mut temp_clause_snapshots = Vec::new();
+        let mut temp_future_clause_snapshots = Vec::new();
+        let mut temp_current_clause_is_split_derived = *state.current_clause_is_split_derived;
+        let mut temp_current_clause_is_direct_split_remainder =
+            *state.current_clause_is_direct_split_remainder;
+        let mut temp_current_clause_is_pending_remainder =
+            *state.current_clause_is_pending_remainder;
+        let mut temp_current_clause_has_split_left_neighbor =
+            *state.current_clause_has_split_left_neighbor;
+        let mut temp_current_clause_right_boundary_displacement =
+            *state.current_clause_right_boundary_displacement;
+        let mut temp_current_clause_right_boundary_origin =
+            state.current_clause_right_boundary_origin.clone();
+        let mut temp_current_clause_split_group_id = *state.current_clause_split_group_id;
+        let mut temp_current_clause_consumed_prefix_restore =
+            state.current_clause_consumed_prefix_restore.clone();
+        let mut temp_current_clause_remainder_origin =
+            state.current_clause_remainder_origin.clone();
+        let mut temp_next_split_group_id = *state.next_split_group_id;
+        let initial_suffix = state.suffix.clone();
+        let initial_raw_input_suffix =
+            Self::current_raw_input_suffix(state.raw_input, *state.corresponding_count);
+        let initial_raw_hiragana = state.raw_hiragana.clone();
+        let auto_split_group_id = *state.current_clause_split_group_id;
+        let mut collected = Vec::new();
+
+        while !backend.advances.is_empty() {
+            let (effect, made_progress) = {
+                let mut temp_state = ClauseActionStateMut {
+                    preview: &mut temp_preview,
+                    suffix: &mut temp_suffix,
+                    raw_input: &mut temp_raw_input,
+                    raw_hiragana: &mut temp_raw_hiragana,
+                    fixed_prefix: &mut temp_fixed_prefix,
+                    corresponding_count: &mut temp_corresponding_count,
+                    selection_index: &mut temp_selection_index,
+                    candidates: &mut temp_candidates,
+                    clause_snapshots: &mut temp_clause_snapshots,
+                    future_clause_snapshots: &mut temp_future_clause_snapshots,
+                    current_clause_is_split_derived: &mut temp_current_clause_is_split_derived,
+                    current_clause_is_direct_split_remainder:
+                        &mut temp_current_clause_is_direct_split_remainder,
+                    current_clause_is_pending_remainder:
+                        &mut temp_current_clause_is_pending_remainder,
+                    current_clause_has_split_left_neighbor:
+                        &mut temp_current_clause_has_split_left_neighbor,
+                    current_clause_right_boundary_displacement:
+                        &mut temp_current_clause_right_boundary_displacement,
+                    current_clause_right_boundary_origin:
+                        &mut temp_current_clause_right_boundary_origin,
+                    current_clause_split_group_id: &mut temp_current_clause_split_group_id,
+                    current_clause_consumed_prefix_restore:
+                        &mut temp_current_clause_consumed_prefix_restore,
+                    current_clause_remainder_origin: &mut temp_current_clause_remainder_origin,
+                    next_split_group_id: &mut temp_next_split_group_id,
+                };
+                let before = clause_state::MoveClauseProgressMarker::from_state(&temp_state);
+                let effect = ClauseState::transition_with_backend(
+                    &mut temp_state,
+                    ClauseCommand::MoveRight,
+                    ClauseTransitionInput::default(),
+                    &mut backend,
+                )?
+                .effect;
+                let after = clause_state::MoveClauseProgressMarker::from_state(&temp_state);
+                (effect, before != after)
+            };
+            if !effect.applied || !made_progress {
+                break;
+            }
+
+            let mut snapshot = Self::build_future_clause_snapshot(
+                &temp_preview,
+                &temp_suffix,
+                &temp_raw_input,
+                &temp_raw_hiragana,
+                &temp_fixed_prefix,
+                temp_corresponding_count,
+                temp_selection_index,
+                &temp_candidates,
+            );
+            if collected.is_empty() {
+                snapshot.is_split_derived = true;
+                snapshot.is_direct_split_remainder = true;
+                snapshot.has_split_left_neighbor = true;
+                snapshot.split_group_id = *state.current_clause_split_group_id;
+                if temp_suffix.is_empty()
+                    && !initial_suffix.is_empty()
+                    && !initial_raw_input_suffix.is_empty()
+                    && temp_raw_input == initial_raw_input_suffix
+                {
+                    if let Some(raw_hiragana_suffix) = Self::recover_single_n_raw_hiragana_suffix(
+                        &initial_raw_hiragana,
+                        &snapshot.raw_hiragana,
+                    ) {
+                        let mut repaired_snapshot = Self::build_conservative_future_clause_snapshot(
+                            &initial_suffix,
+                            "",
+                            &initial_raw_input_suffix,
+                            &raw_hiragana_suffix,
+                            initial_raw_input_suffix.chars().count() as i32,
+                        );
+                        repaired_snapshot.split_group_id = *state.current_clause_split_group_id;
+                        snapshot = repaired_snapshot;
+                    }
+                }
+            } else {
+                snapshot.is_split_derived = temp_current_clause_is_split_derived;
+                snapshot.is_direct_split_remainder = temp_current_clause_is_direct_split_remainder;
+                snapshot.is_pending_remainder = temp_current_clause_is_pending_remainder;
+                snapshot.has_split_left_neighbor = temp_current_clause_has_split_left_neighbor;
+                snapshot.right_boundary_displacement =
+                    temp_current_clause_right_boundary_displacement;
+                snapshot.right_boundary_origin = temp_current_clause_right_boundary_origin.clone();
+                snapshot.split_group_id = temp_current_clause_split_group_id;
+                snapshot.remainder_origin = temp_current_clause_remainder_origin.clone();
+            }
+            if let Some(split_group_id) = auto_split_group_id {
+                snapshot.is_split_derived = true;
+                snapshot.is_direct_split_remainder = false;
+                snapshot.is_pending_remainder = false;
+                snapshot.has_split_left_neighbor = true;
+                snapshot.right_boundary_displacement = 0;
+                snapshot.right_boundary_origin = None;
+                snapshot.split_group_id = Some(split_group_id);
+            }
+            collected.push(snapshot);
+
+            if temp_suffix.is_empty() {
+                break;
+            }
+        }
+
+        state.future_clause_snapshots.clear();
+        state
+            .future_clause_snapshots
+            .extend(collected.into_iter().rev());
+        Ok(())
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn restore_future_clause_snapshot(
+        preview: &mut String,
+        suffix: &mut String,
+        raw_input: &mut String,
+        raw_hiragana: &mut String,
+        corresponding_count: &mut i32,
+        selection_index: &mut i32,
+        current_clause_is_split_derived: &mut bool,
+        current_clause_is_direct_split_remainder: &mut bool,
+        current_clause_is_pending_remainder: &mut bool,
+        current_clause_has_split_left_neighbor: &mut bool,
+        current_clause_right_boundary_displacement: &mut i32,
+        current_clause_right_boundary_origin: &mut Option<Arc<FutureClauseSnapshot>>,
+        current_clause_split_group_id: &mut Option<u64>,
+        current_clause_consumed_prefix_restore: &mut Option<ConsumedPrefixRestore>,
+        current_clause_remainder_origin: &mut Option<Arc<str>>,
+        candidates: &mut Candidates,
+        fixed_prefix: &str,
+        snapshot: &FutureClauseSnapshot,
+    ) {
+        *preview = Self::merge_preview_with_prefix(fixed_prefix, &snapshot.clause_preview);
+        *suffix = snapshot.suffix.clone();
+        *raw_input = snapshot.raw_input.clone();
+        *raw_hiragana = snapshot.raw_hiragana.clone();
+        *corresponding_count = snapshot.corresponding_count;
+        *current_clause_is_split_derived = snapshot.is_split_derived;
+        *current_clause_is_direct_split_remainder = snapshot.is_direct_split_remainder;
+        *current_clause_is_pending_remainder = snapshot.is_pending_remainder;
+        *current_clause_has_split_left_neighbor = snapshot.has_split_left_neighbor;
+        *current_clause_right_boundary_displacement = snapshot.right_boundary_displacement;
+        *current_clause_right_boundary_origin = snapshot.right_boundary_origin.clone();
+        *current_clause_split_group_id = if *current_clause_is_split_derived {
+            snapshot.split_group_id
+        } else {
+            None
+        };
+        *current_clause_consumed_prefix_restore = snapshot.consumed_prefix_restore.clone();
+        *current_clause_remainder_origin = snapshot.remainder_origin.clone();
+        *selection_index = Self::resolve_selection_index(
+            &snapshot.candidates,
+            &snapshot.selected_text,
+            &snapshot.selected_sub_text,
+            snapshot.corresponding_count,
+            snapshot.selection_index,
+        );
+        *candidates = snapshot.candidates.clone();
+        diagnostic_log_lazy(|| {
+            format!(
+            "kind=future-cache\tevent=restore\tpreview={}\tsuffix={}\traw_input={}\traw_hiragana={}\tselection_index={}\tcorresponding_count={}\tis_split_derived={}\tis_direct_split_remainder={}\tsplit_group_id={}",
+            Self::sanitize_log_field(preview),
+            Self::sanitize_log_field(suffix),
+            Self::sanitize_log_field(raw_input),
+            Self::sanitize_log_field(raw_hiragana),
+            *selection_index,
+            *corresponding_count,
+            *current_clause_is_split_derived,
+            *current_clause_is_direct_split_remainder,
+            current_clause_split_group_id
+                .map(|group_id| group_id.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        )
+        });
+    }
+
+    #[inline]
+    fn resolve_selection_index(
+        candidates: &Candidates,
+        selected_text: &str,
+        selected_sub_text: &str,
+        corresponding_count: i32,
+        fallback_index: i32,
+    ) -> i32 {
+        if let Some(index) = candidates
+            .texts
+            .iter()
+            .zip(candidates.sub_texts.iter())
+            .zip(candidates.corresponding_count.iter())
+            .position(|((text, sub_text), candidate_corresponding_count)| {
+                text == selected_text
+                    && sub_text == selected_sub_text
+                    && *candidate_corresponding_count == corresponding_count
+            })
+        {
+            return index as i32;
+        }
+
+        let max_index = candidates.texts.len().saturating_sub(1) as i32;
+        fallback_index.clamp(0, max_index)
+    }
+
+    #[inline]
+    fn future_snapshot_matches_server(
+        future_clause_snapshots: &[FutureClauseSnapshot],
+        server_raw_input: Option<&str>,
+        server_candidates: &Candidates,
+    ) -> bool {
+        future_clause_snapshots
+            .last()
+            .map(|snapshot| {
+                server_raw_input.is_none_or(|raw_input| snapshot.raw_input == raw_input)
+                    && (server_candidates.hiragana == snapshot.raw_hiragana
+                        || server_candidates
+                            .hiragana
+                            .starts_with(&snapshot.raw_hiragana)
+                        || server_candidates.hiragana.ends_with(&snapshot.raw_hiragana)
+                        || snapshot.raw_hiragana.ends_with(&server_candidates.hiragana)
+                        || Self::has_recoverable_single_n_raw_hiragana_suffix(
+                            &server_candidates.hiragana,
+                            &snapshot.raw_hiragana,
+                        ))
+            })
+            .unwrap_or(false)
+    }
+
+    #[inline]
+    fn rehydrate_future_clause_snapshot_candidates(
+        snapshot: &FutureClauseSnapshot,
+        live_candidates: &Candidates,
+    ) -> FutureClauseSnapshot {
+        let mut hydrated = snapshot.clone();
+        if live_candidates.texts.is_empty() || live_candidates.hiragana != snapshot.raw_hiragana {
+            return hydrated;
+        }
+
+        for index in 0..live_candidates.texts.len() {
+            let Some(candidate) = Self::select_candidate(live_candidates, index as i32) else {
+                continue;
+            };
+            if candidate.corresponding_count != snapshot.corresponding_count {
+                continue;
+            }
+            let already_present = hydrated
+                .candidates
+                .texts
+                .iter()
+                .any(|text| text == &candidate.text);
+            if already_present {
+                continue;
+            }
+            hydrated.candidates.texts.push(candidate.text);
+            hydrated.candidates.sub_texts.push(candidate.sub_text);
+            hydrated
+                .candidates
+                .corresponding_count
+                .push(candidate.corresponding_count);
+            hydrated
+                .candidates
+                .candidate_ids
+                .push(candidate.candidate_id);
+        }
+        hydrated
+    }
+
+    #[inline]
+    fn sync_backend_current_clause_to_future_snapshot<B: ClauseActionBackend>(
+        backend: &mut B,
+        candidates: &mut Candidates,
+        snapshot: &FutureClauseSnapshot,
+    ) -> Result<ClauseBoundarySync> {
+        Self::sync_backend_current_clause_to_target(
+            backend,
+            candidates,
+            &snapshot.raw_hiragana,
+            &snapshot.selected_sub_text,
+            snapshot.corresponding_count,
+        )
+    }
+
+    #[inline]
+    fn sync_backend_current_clause_to_target<B: ClauseActionBackend>(
+        backend: &mut B,
+        candidates: &mut Candidates,
+        target_raw_hiragana: &str,
+        target_sub_text: &str,
+        target_corresponding_count: i32,
+    ) -> Result<ClauseBoundarySync> {
+        let original_candidates = candidates.clone();
+        let mut applied_directions = Vec::new();
+        let mut seen_signatures = HashSet::new();
+        if let Some(signature) = Self::clause_boundary_sync_signature(candidates) {
+            seen_signatures.insert(signature);
+        }
+        let max_steps = candidates.hiragana.chars().count().max(1);
+        let target_raw_suffix =
+            Self::current_raw_suffix(target_raw_hiragana, target_corresponding_count);
+
+        for _ in 0..max_steps {
+            let Some(selected) = Self::select_candidate(candidates, 0) else {
+                return Ok(ClauseBoundarySync::Unavailable);
+            };
+            let candidate_raw_suffix =
+                Self::current_raw_suffix(&candidates.hiragana, selected.corresponding_count);
+            let exact_match = selected.corresponding_count == target_corresponding_count
+                && (selected.sub_text == target_sub_text
+                    || candidates.hiragana == target_raw_hiragana
+                    || candidate_raw_suffix == target_raw_suffix);
+            if exact_match {
+                return Ok(ClauseBoundarySync::Synchronized);
+            }
+            let direction = match selected
+                .corresponding_count
+                .cmp(&target_corresponding_count)
+            {
+                std::cmp::Ordering::Greater => -1,
+                std::cmp::Ordering::Less => 1,
+                std::cmp::Ordering::Equal => return Ok(ClauseBoundarySync::Unavailable),
+            };
+
+            let previous_candidates = candidates.clone();
+            let _ = backend.move_cursor(direction)?;
+            let next_candidates = backend.move_cursor(0)?;
+            if next_candidates.texts.is_empty() {
+                return Ok(ClauseBoundarySync::BackendDesynchronized);
+            }
+
+            if Self::clause_boundary_sync_signature(&previous_candidates)
+                != Self::clause_boundary_sync_signature(&next_candidates)
+            {
+                applied_directions.push(direction);
+            }
+            let Some(signature) = Self::clause_boundary_sync_signature(&next_candidates) else {
+                let rolled_back = Self::rollback_backend_clause_cursor_moves(
+                    backend,
+                    candidates,
+                    &original_candidates,
+                    &applied_directions,
+                )?;
+                return Ok(if rolled_back {
+                    ClauseBoundarySync::Unavailable
+                } else {
+                    ClauseBoundarySync::BackendDesynchronized
+                });
+            };
+
+            *candidates = next_candidates;
+            if !seen_signatures.insert(signature) {
+                let rolled_back = Self::rollback_backend_clause_cursor_moves(
+                    backend,
+                    candidates,
+                    &original_candidates,
+                    &applied_directions,
+                )?;
+                return Ok(if rolled_back {
+                    ClauseBoundarySync::Unavailable
+                } else {
+                    ClauseBoundarySync::BackendDesynchronized
+                });
+            }
+        }
+
+        let rolled_back = Self::rollback_backend_clause_cursor_moves(
+            backend,
+            candidates,
+            &original_candidates,
+            &applied_directions,
+        )?;
+        Ok(if rolled_back {
+            ClauseBoundarySync::Unavailable
+        } else {
+            ClauseBoundarySync::BackendDesynchronized
+        })
+    }
+
+    #[inline]
+    fn clause_boundary_sync_signature(candidates: &Candidates) -> Option<(String, i32, String)> {
+        Self::select_candidate(candidates, 0).map(|selected| {
+            (
+                candidates.hiragana.clone(),
+                selected.corresponding_count,
+                selected.sub_text,
+            )
+        })
+    }
+
+    #[inline]
+    fn rollback_backend_clause_cursor_moves<B: ClauseActionBackend>(
+        backend: &mut B,
+        candidates: &mut Candidates,
+        original_candidates: &Candidates,
+        applied_directions: &[i32],
+    ) -> Result<bool> {
+        for direction in applied_directions.iter().rev() {
+            let _ = backend.move_cursor(-direction)?;
+            let restored_candidates = backend.move_cursor(0)?;
+            if restored_candidates.texts.is_empty() {
+                return Ok(false);
+            }
+            *candidates = restored_candidates;
+        }
+
+        if applied_directions.is_empty() {
+            return Ok(true);
+        }
+        let restored = Self::select_candidate(candidates, 0);
+        let original = Self::select_candidate(original_candidates, 0);
+        let missed_start = restored
+            .as_ref()
+            .map(|candidate| candidate.corresponding_count)
+            != original
+                .as_ref()
+                .map(|candidate| candidate.corresponding_count)
+            || candidates.hiragana != original_candidates.hiragana;
+        Ok(!missed_start)
+    }
+
+    #[inline]
+    fn sync_clause_snapshot_suffixes(
+        clause_snapshots: &mut [ClauseSnapshot],
+        preview: &str,
+        suffix: &str,
+    ) {
+        if clause_snapshots.is_empty() {
+            return;
+        }
+
+        let mut full_text = String::with_capacity(preview.len() + suffix.len());
+        full_text.push_str(preview);
+        full_text.push_str(suffix);
+
+        for snapshot in clause_snapshots.iter_mut() {
+            if let Some(updated_suffix) = full_text.strip_prefix(&snapshot.preview) {
+                let previous_suffix = snapshot.suffix.clone();
+                let updated_suffix = updated_suffix.to_string();
+                snapshot.suffix = updated_suffix.clone();
+
+                for sub_text in snapshot.candidates.sub_texts.iter_mut() {
+                    if let Some(prefix_part) = sub_text.strip_suffix(&previous_suffix) {
+                        *sub_text = format!("{prefix_part}{updated_suffix}");
+                    }
+                }
+
+                if let Some((sub_text, _)) = snapshot
+                    .candidates
+                    .sub_texts
+                    .iter_mut()
+                    .zip(snapshot.candidates.corresponding_count.iter())
+                    .find(|(_, candidate_corresponding_count)| {
+                        **candidate_corresponding_count == snapshot.corresponding_count
+                    })
+                {
+                    *sub_text = updated_suffix;
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn selected_learning_candidate_from_snapshot(
+        snapshot: &ClauseSnapshot,
+    ) -> Option<CandidateSelection> {
+        Self::select_candidate(&snapshot.candidates, snapshot.selection_index)
+    }
+
+    #[inline]
+    fn selected_learning_candidate_from_future_snapshot(
+        snapshot: &FutureClauseSnapshot,
+    ) -> Option<CandidateSelection> {
+        Self::select_candidate(&snapshot.candidates, snapshot.selection_index)
+    }
+
+    #[inline]
+    fn learning_candidate_reading(selection: &CandidateSelection) -> String {
+        selection
+            .hiragana
+            .chars()
+            .take(selection.corresponding_count.max(0) as usize)
+            .collect()
+    }
+
+    #[inline]
+    fn reading_has_japanese_kana(reading: &str) -> bool {
+        reading
+            .chars()
+            .any(|ch| matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}'))
+    }
+
+    #[inline]
+    fn should_commit_learning_candidate(
+        selection: &CandidateSelection,
+        temporary_latin: bool,
+    ) -> bool {
+        if temporary_latin || selection.candidate_id == 0 || selection.text.is_empty() {
+            return false;
+        }
+
+        let reading = Self::learning_candidate_reading(selection);
+        reading.chars().count() >= 2 && Self::reading_has_japanese_kana(&reading)
+    }
+
+    #[inline]
+    fn clear_current_learning_candidate_ids(candidates: &mut Candidates) {
+        candidates.candidate_ids.fill(0);
+    }
+
+    fn collect_learning_candidate_ids(
+        scope: LearningCommitScope,
+        selection_index: i32,
+        candidates: &Candidates,
+        clause_snapshots: &[ClauseSnapshot],
+        future_clause_snapshots: &[FutureClauseSnapshot],
+        temporary_latin: bool,
+    ) -> Vec<u64> {
+        let mut candidate_ids = Vec::new();
+        let mut seen = HashSet::new();
+
+        let mut push_candidate = |selection: Option<CandidateSelection>| {
+            let Some(selection) = selection else {
+                return;
+            };
+            if !Self::should_commit_learning_candidate(&selection, temporary_latin) {
+                return;
+            }
+            if seen.insert(selection.candidate_id) {
+                candidate_ids.push(selection.candidate_id);
+            }
+        };
+
+        match scope {
+            LearningCommitScope::CurrentClause => {
+                push_candidate(Self::select_candidate(candidates, selection_index));
+            }
+            LearningCommitScope::Composition => {
+                for snapshot in clause_snapshots {
+                    push_candidate(Self::selected_learning_candidate_from_snapshot(snapshot));
+                }
+                push_candidate(Self::select_candidate(candidates, selection_index));
+                for snapshot in future_clause_snapshots.iter().rev() {
+                    push_candidate(Self::selected_learning_candidate_from_future_snapshot(
+                        snapshot,
+                    ));
+                }
+            }
+        }
+
+        candidate_ids
+    }
+
+    fn flush_pending_learning_commits(
+        ipc_service: &mut IPCService,
+        pending_learning_commits: &mut Vec<PendingLearningCommit>,
+    ) {
+        let commits = pending_learning_commits
+            .drain(..)
+            .map(|commit| {
+                (
+                    commit.candidate_id,
+                    commit.kind.proto_value(),
+                    commit.surface,
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Err(error) = ipc_service.commit_learning_candidates(&commits) {
+            tracing::warn!(
+                ?error,
+                candidate_count = commits.len(),
+                "Failed to commit conversion learning candidates"
+            );
+        }
+    }
+
+    #[inline]
+    fn is_sensitive_input_scope(scope: InputScope) -> bool {
+        matches!(
+            scope,
+            IS_PASSWORD
+                | IS_NUMERIC_PASSWORD
+                | IS_PRIVATE
+                | IS_NUMERIC_PIN
+                | IS_ALPHANUMERIC_PIN
+                | IS_ALPHANUMERIC_PIN_SET
+        )
+    }
+
+    fn input_scope_list_contains_sensitive(input_scope: &ITfInputScope) -> bool {
+        unsafe {
+            let mut scopes_ptr: *mut InputScope = std::ptr::null_mut();
+            let mut scope_count = 0;
+            if input_scope
+                .GetInputScopes(&mut scopes_ptr, &mut scope_count)
+                .is_err()
+            {
+                return false;
+            }
+            if scopes_ptr.is_null() {
+                return false;
+            }
+
+            let scopes = std::slice::from_raw_parts(scopes_ptr, scope_count as usize);
+            let sensitive = scopes.iter().copied().any(Self::is_sensitive_input_scope);
+            CoTaskMemFree(Some(scopes_ptr.cast()));
+            sensitive
+        }
+    }
+
+    fn context_has_sensitive_input_scope(tid: u32, context: ITfContext) -> Result<bool> {
+        read_edit_session::<bool>(
+            tid,
+            context.clone(),
+            Rc::new({
+                move |cookie| {
+                    let mut selection: [TF_SELECTION; 1] = [TF_SELECTION::default()];
+                    let mut fetched = 0;
+                    unsafe {
+                        context.GetSelection(
+                            cookie,
+                            TF_DEFAULT_SELECTION,
+                            &mut selection,
+                            &mut fetched,
+                        )?;
+                    }
+                    if fetched == 0 {
+                        return Ok(false);
+                    }
+
+                    let range = match selection[0].range.as_ref() {
+                        Some(range) => unsafe { range.Clone()? },
+                        None => return Ok(false),
+                    };
+                    let input_scope_property =
+                        unsafe { context.GetAppProperty(&GUID_PROP_INPUTSCOPE)? };
+                    let value = unsafe { input_scope_property.GetValue(cookie, &range)? };
+                    let unknown = IUnknown::try_from(&value)?;
+                    let input_scope = unknown.cast::<ITfInputScope>()?;
+                    Ok(Self::input_scope_list_contains_sensitive(&input_scope))
+                }
+            }),
+        )
+    }
+
+    fn current_context_has_sensitive_input_scope(&self) -> bool {
+        let (tid, context) = match self.borrow() {
+            Ok(text_service) => {
+                let tid = text_service.tid;
+                match text_service.context::<ITfContext>() {
+                    Ok(context) => (tid, context),
+                    Err(error) => {
+                        tracing::debug!(
+                            ?error,
+                            "Skip learning input scope check because context is unavailable"
+                        );
+                        return false;
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Skip learning input scope check because text service borrow failed"
+                );
+                return false;
+            }
+        };
+
+        match Self::context_has_sensitive_input_scope(tid, context) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Skip learning input scope check because input scope could not be read"
+                );
+                false
+            }
+        }
+    }
+
+    #[inline]
+    fn commit_current_clause_actions(
+        composition: &Composition,
+    ) -> (CompositionState, Vec<ClientAction>) {
+        if composition.suffix.is_empty() {
+            (CompositionState::None, vec![ClientAction::EndComposition])
+        } else {
+            (
+                CompositionState::Composing,
+                vec![ClientAction::ShrinkText("".to_string())],
+            )
+        }
+    }
+
+    #[inline]
+    fn commit_enter_actions(composition: &Composition) -> (CompositionState, Vec<ClientAction>) {
+        if ClauseState::is_active_for_composition(composition) {
+            (
+                CompositionState::None,
+                vec![
+                    ClientAction::CommitLearning {
+                        scope: LearningCommitScope::Composition,
+                        kind: LearningCommitKind::Normal,
+                        was_temporary_latin: composition.temporary_latin,
+                    },
+                    ClientAction::EndComposition,
+                ],
+            )
+        } else {
+            let (state, mut actions) = Self::commit_current_clause_actions(composition);
+            let kind = if composition.suffix.is_empty() {
+                LearningCommitKind::Normal
+            } else {
+                LearningCommitKind::Partial
+            };
+            actions.insert(
+                0,
+                ClientAction::CommitLearning {
+                    scope: if composition.suffix.is_empty() {
+                        LearningCommitScope::Composition
+                    } else {
+                        LearningCommitScope::CurrentClause
+                    },
+                    kind,
+                    was_temporary_latin: composition.temporary_latin,
+                },
+            );
+            (state, actions)
+        }
+    }
+
+    #[inline]
+    fn commit_first_clause_actions(
+        composition: &Composition,
+    ) -> (CompositionState, Vec<ClientAction>) {
+        let mut actions = Vec::with_capacity(composition.clause_snapshots.len() + 1);
+
+        for _ in 0..composition.clause_snapshots.len() {
+            actions.push(ClientAction::MoveClause(-1));
+        }
+
+        let first_suffix_is_empty = composition
+            .clause_snapshots
+            .first()
+            .map(|snapshot| snapshot.suffix.is_empty())
+            .unwrap_or(composition.suffix.is_empty());
+
+        if first_suffix_is_empty {
+            actions.push(ClientAction::EndComposition);
+            (CompositionState::None, actions)
+        } else {
+            actions.push(ClientAction::ShrinkText("".to_string()));
+            (CompositionState::Composing, actions)
+        }
+    }
+
+    #[inline]
+    fn is_punctuation_commit_char(c: char) -> bool {
+        matches!(c, ',' | '.' | '、' | '。' | '，' | '．')
+    }
+
+    #[inline]
+    fn is_exclamation_commit_char(c: char) -> bool {
+        matches!(c, '!' | '！')
+    }
+
+    #[inline]
+    fn is_question_commit_char(c: char) -> bool {
+        matches!(c, '?' | '？')
+    }
+
+    #[inline]
+    fn punctuation_commit_target_enabled(c: char, app_config: &AppConfig) -> bool {
+        (Self::is_punctuation_commit_char(c) && app_config.general.punctuation_commit_punctuation)
+            || (Self::is_exclamation_commit_char(c)
+                && app_config.general.punctuation_commit_exclamation)
+            || (Self::is_question_commit_char(c) && app_config.general.punctuation_commit_question)
+    }
+
+    #[inline]
+    fn punctuation_commit_text_for_action(
+        action: &UserAction,
+        mode: &InputMode,
+        raw_input_before: &str,
+        app_config: &AppConfig,
+        romaji_lookup: &RomajiLookup,
+    ) -> Option<String> {
+        if !Self::punctuation_commit_action_target_enabled(
+            action,
+            mode,
+            raw_input_before,
+            app_config,
+            romaji_lookup,
+        ) {
+            return None;
+        }
+
+        match action {
+            UserAction::Input(ch) => {
+                let input = ch.to_string();
+                Some(Self::punctuation_commit_text_for_input(
+                    &input,
+                    app_config,
+                    romaji_lookup,
+                ))
+            }
+            UserAction::NumpadSymbol(symbol) => Some(
+                Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, false)
+                    .unwrap_or_else(|| symbol.to_string()),
+            ),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn punctuation_commit_text_for_input(
+        input: &str,
+        app_config: &AppConfig,
+        romaji_lookup: &RomajiLookup,
+    ) -> String {
+        if Self::effective_zenzai_runtime_enabled(app_config) {
+            if let Some(mapped) =
+                Self::single_symbol_romaji_output_with_lookup(input, romaji_lookup)
+            {
+                return mapped;
+            }
+        }
+
+        convert_kana_symbol(
+            input,
+            &app_config.general,
+            &app_config.character_width,
+            &app_config.romaji_table.rows,
+        )
+    }
+
+    #[inline]
+    fn punctuation_commit_action_target_enabled(
+        action: &UserAction,
+        mode: &InputMode,
+        raw_input_before: &str,
+        app_config: &AppConfig,
+        romaji_lookup: &RomajiLookup,
+    ) -> bool {
+        if !app_config.general.punctuation_commit || *mode != InputMode::Kana {
+            return false;
+        }
+
+        match action {
+            UserAction::Input(ch) => {
+                Self::punctuation_commit_target_enabled(*ch, app_config)
+                    && !Self::has_multi_character_romaji_context_with_lookup(
+                        raw_input_before,
+                        *ch,
+                        romaji_lookup,
+                    )
+            }
+            UserAction::NumpadSymbol(symbol) => {
+                Self::punctuation_commit_target_enabled(*symbol, app_config)
+                    && !Self::has_multi_character_romaji_context_with_lookup(
+                        raw_input_before,
+                        *symbol,
+                        romaji_lookup,
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    #[inline]
+    fn punctuation_commit_actions(text: String) -> (CompositionState, Vec<ClientAction>) {
+        (
+            CompositionState::None,
+            vec![
+                ClientAction::EndComposition,
+                ClientAction::CommitTextDirect(text),
+            ],
+        )
+    }
+
+    #[inline]
+    fn candidate_preview_actions(app_config: &AppConfig) -> Vec<ClientAction> {
+        let mut actions = Vec::with_capacity(2);
+        if app_config.general.show_candidate_window_after_space {
+            actions.push(ClientAction::ShowCandidateWindow);
+        }
+        actions.push(ClientAction::SetSelection(SetSelectionType::Down));
+        actions
+    }
+
+    #[inline]
+    fn commit_preview_then_append_actions(
+        append_action: ClientAction,
+        start_temporary_latin: bool,
+    ) -> (CompositionState, Vec<ClientAction>) {
+        let mut actions = Vec::with_capacity(4);
+        actions.push(ClientAction::EndComposition);
+        actions.push(ClientAction::StartComposition);
+        if start_temporary_latin {
+            actions.push(ClientAction::SetTemporaryLatin(true));
+        }
+        actions.push(append_action);
+        (CompositionState::Composing, actions)
+    }
+
+    #[inline]
+    fn clause_navigation_actions(composition: &Composition, direction: i32) -> Vec<ClientAction> {
+        if ClauseState::is_active_for_composition(composition) || !composition.suffix.is_empty() {
+            return vec![
+                ClientAction::EnsureClauseNavigationReady {
+                    prepare_future_clauses: true,
+                },
+                ClientAction::MoveClause(direction),
+            ];
+        }
+
+        if direction < 0 {
+            vec![
+                ClientAction::EnsureClauseNavigationReady {
+                    prepare_future_clauses: false,
+                },
+                ClientAction::MoveClause(Self::MOVE_CLAUSE_TO_LAST),
+            ]
+        } else {
+            vec![ClientAction::EnsureClauseNavigationReady {
+                prepare_future_clauses: true,
+            }]
+        }
+    }
+
+    #[inline]
+    fn should_defer_clause_navigation_ready_sync(actions: &[ClientAction], index: usize) -> bool {
+        matches!(
+            (actions.get(index), actions.get(index + 1)),
+            (
+                Some(ClientAction::EnsureClauseNavigationReady { .. }),
+                Some(ClientAction::MoveClause(direction)),
+            ) if *direction == Self::MOVE_CLAUSE_TO_LAST
+        )
+    }
+
+    #[inline]
+    fn clause_navigation_ready_ui_sync(
+        effect: ClauseActionEffect,
+    ) -> Option<ClauseNavigationReadyUiSync> {
+        effect.applied.then_some(ClauseNavigationReadyUiSync {
+            update_pos: effect.update_pos,
+            visible: Some(true),
+        })
+    }
+
+    #[inline]
+    fn deferred_clause_navigation_ready_ui_sync_after_move(
+        deferred_sync: Option<ClauseNavigationReadyUiSync>,
+        move_effect: ClauseActionEffect,
+    ) -> Option<ClauseNavigationReadyUiSync> {
+        if move_effect.server_reset {
+            return None;
+        }
+
+        if move_effect.applied {
+            deferred_sync.map(|sync| ClauseNavigationReadyUiSync {
+                update_pos: move_effect.update_pos,
+                visible: sync.visible,
+            })
+        } else {
+            deferred_sync
+        }
+    }
+
+    #[inline]
+    #[cfg(test)]
+    fn plan_actions_for_user_action(
+        composition: &Composition,
+        action: &UserAction,
+        mode: &InputMode,
+        is_shift_pressed: bool,
+        app_config: &AppConfig,
+        start_temporary_latin: bool,
+    ) -> Option<(CompositionState, Vec<ClientAction>)> {
+        let romaji_lookup = RomajiLookup::from_rows(&app_config.romaji_table.rows);
+        Self::plan_actions_for_user_action_with_lookup(
+            composition,
+            action,
+            mode,
+            is_shift_pressed,
+            app_config,
+            &romaji_lookup,
+            start_temporary_latin,
+        )
+    }
+
+    #[inline]
+    fn plan_actions_for_user_action_with_lookup(
+        composition: &Composition,
+        action: &UserAction,
+        mode: &InputMode,
+        is_shift_pressed: bool,
+        app_config: &AppConfig,
+        romaji_lookup: &RomajiLookup,
+        start_temporary_latin: bool,
+    ) -> Option<(CompositionState, Vec<ClientAction>)> {
+        if composition.reconversion_original.is_some()
+            && reconversion_action_requires_reading_state(action)
+        {
+            // Candidates can come from several inferred readings, while the converter keeps
+            // only one active reading. Consume reading-edit operations instead of applying
+            // them to a different candidate's state. Candidate selection, commit, Escape,
+            // mode changes, and commit-then-append input remain safe.
+            return Some((composition.state.clone(), Vec::new()));
+        }
+        if matches!(action, UserAction::Tab) {
+            // 読み行のピル表示と同じ優先度解決を使うため、Tab で確定される候補と
+            // 画面に出ている候補が常に一致する。
+            if let Some((idx, _)) =
+                Self::ai_assist_priority_index(&composition.candidates.candidate_ids)
+            {
+                if let Some(text) = composition.candidates.texts.get(idx) {
+                    return Some((
+                        CompositionState::None,
+                        vec![
+                            ClientAction::CommitWithText(text.clone()),
+                            ClientAction::EndComposition,
+                        ],
+                    ));
+                }
+            }
+        }
+        if app_config.general.jev_conversion
+            && composition.state == CompositionState::Composing
+            && matches!(
+                action,
+                UserAction::Space | UserAction::Tab | UserAction::Reconvert
+            )
+            && Self::jev_composition_eligible(composition, false)
+        {
+            return Some((
+                CompositionState::Previewing,
+                vec![
+                    ClientAction::SetSelection(SetSelectionType::Number(0)),
+                    ClientAction::ShowCandidateWindow,
+                    ClientAction::StartJevConversion,
+                ],
+            ));
+        }
+        let result = match composition.state {
+            CompositionState::None => match action {
+                _ if (composition.temporary_latin || start_temporary_latin)
+                    && Self::direct_text_for_action(action).is_some() =>
+                {
+                    let text = Self::direct_text_for_action(action)?;
+                    let mut actions = vec![ClientAction::StartComposition];
+                    if start_temporary_latin {
+                        actions.push(ClientAction::SetTemporaryLatin(true));
+                    }
+                    actions.push(ClientAction::AppendTextDirect(text));
+                    Some((CompositionState::Composing, actions))
+                }
+                UserAction::NumpadSymbol(symbol) if *mode == InputMode::Kana => {
+                    let text =
+                        Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, true)?;
+                    Some((
+                        CompositionState::Composing,
+                        vec![
+                            ClientAction::StartComposition,
+                            ClientAction::AppendTextRaw(text),
+                        ],
+                    ))
+                }
+                UserAction::Input(char) if *mode == InputMode::Kana => Some((
+                    CompositionState::Composing,
+                    vec![
+                        ClientAction::StartComposition,
+                        ClientAction::AppendText(Self::input_text_for_mode(*char, mode)),
+                    ],
+                )),
+                UserAction::Number {
+                    value,
+                    is_numpad: true,
+                } if *mode == InputMode::Kana => {
+                    let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
+                    let text =
+                        Self::numpad_text_for_mode(digit, app_config.general.numpad_input, true)?;
+
+                    Some((
+                        CompositionState::Composing,
+                        vec![
+                            ClientAction::StartComposition,
+                            ClientAction::AppendTextRaw(text),
+                        ],
+                    ))
+                }
+                UserAction::Number {
+                    value,
+                    is_numpad: false,
+                } if *mode == InputMode::Kana => Some((
+                    CompositionState::Composing,
+                    vec![
+                        ClientAction::StartComposition,
+                        ClientAction::AppendText(value.to_string()),
+                    ],
+                )),
+                UserAction::Space if *mode == InputMode::Kana => {
+                    let mut use_halfwidth =
+                        matches!(app_config.general.space_input, SpaceInputMode::AlwaysHalf);
+                    if is_shift_pressed {
+                        use_halfwidth = !use_halfwidth;
+                    }
+                    let space = if use_halfwidth { " " } else { "　" };
+                    Some((
+                        CompositionState::None,
+                        vec![
+                            ClientAction::StartComposition,
+                            ClientAction::AppendText(space.to_string()),
+                            ClientAction::EndComposition,
+                        ],
+                    ))
+                }
+                UserAction::ToggleInputMode => Some((
+                    CompositionState::None,
+                    vec![match mode {
+                        InputMode::Kana => ClientAction::SetIMEMode(InputMode::Latin),
+                        InputMode::Latin => ClientAction::SetIMEMode(InputMode::Kana),
+                    }],
+                )),
+                UserAction::InputModeOn => Some((
+                    CompositionState::None,
+                    vec![ClientAction::SetIMEMode(InputMode::Kana)],
+                )),
+                UserAction::InputModeOff => Some((
+                    CompositionState::None,
+                    vec![ClientAction::SetIMEMode(InputMode::Latin)],
+                )),
+                _ => None,
+            },
+            CompositionState::Composing => match action {
+                _ if !composition.temporary_latin
+                    && !start_temporary_latin
+                    && Self::punctuation_commit_action_target_enabled(
+                        action,
+                        mode,
+                        &composition.raw_input,
+                        app_config,
+                        romaji_lookup,
+                    ) =>
+                {
+                    let text = Self::punctuation_commit_text_for_action(
+                        action,
+                        mode,
+                        &composition.raw_input,
+                        app_config,
+                        romaji_lookup,
+                    )?;
+                    Some(Self::punctuation_commit_actions(text))
+                }
+                _ if (composition.temporary_latin || start_temporary_latin)
+                    && Self::direct_text_for_action(action).is_some() =>
+                {
+                    let text = Self::direct_text_for_action(action)?;
+                    let mut actions = vec![];
+                    if start_temporary_latin {
+                        actions.push(ClientAction::SetTemporaryLatin(true));
+                    }
+                    if Self::should_shrink_before_direct_append(composition, start_temporary_latin)
+                    {
+                        actions.push(ClientAction::ShrinkTextDirect(text));
+                    } else {
+                        actions.push(ClientAction::AppendTextDirect(text));
+                    }
+                    Some((CompositionState::Composing, actions))
+                }
+                UserAction::NumpadSymbol(symbol) if *mode == InputMode::Kana => {
+                    let text =
+                        Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, false)
+                            .unwrap_or_else(|| symbol.to_string());
+                    Some((
+                        CompositionState::Composing,
+                        vec![ClientAction::AppendTextRaw(text)],
+                    ))
+                }
+                UserAction::Input(char) => Some((
+                    CompositionState::Composing,
+                    vec![ClientAction::AppendText(Self::input_text_for_mode(
+                        *char, mode,
+                    ))],
+                )),
+                UserAction::Number {
+                    value,
+                    is_numpad: true,
+                } if *mode == InputMode::Kana => {
+                    let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
+                    let text =
+                        Self::numpad_text_for_mode(digit, app_config.general.numpad_input, false)
+                            .unwrap_or_else(|| digit.to_string());
+                    Some((
+                        CompositionState::Composing,
+                        vec![ClientAction::AppendTextRaw(text)],
+                    ))
+                }
+                UserAction::Number { value, .. } => Some((
+                    CompositionState::Composing,
+                    vec![ClientAction::AppendText(value.to_string())],
+                )),
+                UserAction::Backspace | UserAction::Delete => {
+                    if composition.raw_input.chars().count() <= 1 {
+                        Some((
+                            CompositionState::None,
+                            vec![ClientAction::RemoveText, ClientAction::EndComposition],
+                        ))
+                    } else {
+                        Some((CompositionState::Composing, vec![ClientAction::RemoveText]))
+                    }
+                }
+                UserAction::Enter => Some(Self::commit_enter_actions(composition)),
+                UserAction::CommitAndNextClause => {
+                    Some(Self::commit_current_clause_actions(composition))
+                }
+                UserAction::CommitFirstClause => {
+                    Some(Self::commit_first_clause_actions(composition))
+                }
+                UserAction::AdjustClauseBoundary(direction) => Some((
+                    CompositionState::Composing,
+                    vec![ClientAction::AdjustBoundary(*direction)],
+                )),
+                UserAction::Escape => Some((
+                    CompositionState::None,
+                    if composition.reconversion_original.is_some() {
+                        vec![
+                            ClientAction::RestoreReconversionOriginal,
+                            ClientAction::EndComposition,
+                        ]
+                    } else {
+                        vec![ClientAction::RemoveText, ClientAction::EndComposition]
+                    },
+                )),
+                UserAction::Navigation(direction) => match direction {
+                    Navigation::Right => Some((
+                        CompositionState::Composing,
+                        Self::clause_navigation_actions(composition, 1),
+                    )),
+                    Navigation::Left => Some((
+                        CompositionState::Composing,
+                        Self::clause_navigation_actions(composition, -1),
+                    )),
+                    Navigation::Up => Some((
+                        CompositionState::Previewing,
+                        vec![ClientAction::SetSelection(SetSelectionType::Up)],
+                    )),
+                    Navigation::Down => Some((
+                        CompositionState::Previewing,
+                        vec![ClientAction::SetSelection(SetSelectionType::Down)],
+                    )),
+                },
+                UserAction::ToggleInputMode => Some((
+                    CompositionState::None,
+                    vec![
+                        ClientAction::EndComposition,
+                        ClientAction::SetIMEMode(InputMode::Latin),
+                    ],
+                )),
+                UserAction::InputModeOn => Some((
+                    CompositionState::None,
+                    vec![
+                        ClientAction::EndComposition,
+                        ClientAction::SetIMEMode(InputMode::Kana),
+                    ],
+                )),
+                UserAction::InputModeOff => Some((
+                    CompositionState::None,
+                    vec![
+                        ClientAction::EndComposition,
+                        ClientAction::SetIMEMode(InputMode::Latin),
+                    ],
+                )),
+                UserAction::Space | UserAction::Tab | UserAction::Reconvert => Some((
+                    CompositionState::Previewing,
+                    Self::candidate_preview_actions(app_config),
+                )),
+                UserAction::Function(key) => Some((
+                    CompositionState::Previewing,
+                    vec![ClientAction::SetTextWithType(
+                        Self::set_text_type_for_function(*key),
+                    )],
+                )),
+                _ => None,
+            },
+            CompositionState::Previewing => match action {
+                _ if !composition.temporary_latin
+                    && !start_temporary_latin
+                    && Self::punctuation_commit_action_target_enabled(
+                        action,
+                        mode,
+                        &composition.raw_input,
+                        app_config,
+                        romaji_lookup,
+                    ) =>
+                {
+                    let text = Self::punctuation_commit_text_for_action(
+                        action,
+                        mode,
+                        &composition.raw_input,
+                        app_config,
+                        romaji_lookup,
+                    )?;
+                    Some(Self::punctuation_commit_actions(text))
+                }
+                _ if (composition.temporary_latin || start_temporary_latin)
+                    && Self::direct_text_for_action(action).is_some() =>
+                {
+                    let text = Self::direct_text_for_action(action)?;
+                    Some(Self::commit_preview_then_append_actions(
+                        ClientAction::AppendTextDirect(text),
+                        composition.temporary_latin || start_temporary_latin,
+                    ))
+                }
+                UserAction::NumpadSymbol(symbol) if *mode == InputMode::Kana => {
+                    let text =
+                        Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, false)
+                            .unwrap_or_else(|| symbol.to_string());
+                    Some(Self::commit_preview_then_append_actions(
+                        ClientAction::AppendTextRaw(text),
+                        false,
+                    ))
+                }
+                UserAction::Input(char) => Some(Self::commit_preview_then_append_actions(
+                    ClientAction::AppendText(Self::input_text_for_mode(*char, mode)),
+                    false,
+                )),
+                UserAction::Number {
+                    value,
+                    is_numpad: true,
+                } if *mode == InputMode::Kana => {
+                    let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
+                    let text =
+                        Self::numpad_text_for_mode(digit, app_config.general.numpad_input, false)
+                            .unwrap_or_else(|| digit.to_string());
+                    Some(Self::commit_preview_then_append_actions(
+                        ClientAction::AppendTextRaw(text),
+                        false,
+                    ))
+                }
+                UserAction::Number { value, .. } => Some(Self::commit_preview_then_append_actions(
+                    ClientAction::AppendText(value.to_string()),
+                    false,
+                )),
+                UserAction::Backspace | UserAction::Delete => {
+                    if composition.raw_input.chars().count() <= 1 {
+                        Some((
+                            CompositionState::None,
+                            vec![ClientAction::RemoveText, ClientAction::EndComposition],
+                        ))
+                    } else {
+                        Some((CompositionState::Composing, vec![ClientAction::RemoveText]))
+                    }
+                }
+                UserAction::Enter => Some(Self::commit_enter_actions(composition)),
+                UserAction::CommitAndNextClause => {
+                    Some(Self::commit_current_clause_actions(composition))
+                }
+                UserAction::CommitFirstClause => {
+                    Some(Self::commit_first_clause_actions(composition))
+                }
+                UserAction::AdjustClauseBoundary(direction) => Some((
+                    CompositionState::Previewing,
+                    vec![ClientAction::AdjustBoundary(*direction)],
+                )),
+                UserAction::Escape => Some((
+                    CompositionState::None,
+                    if composition.reconversion_original.is_some() {
+                        vec![
+                            ClientAction::RestoreReconversionOriginal,
+                            ClientAction::EndComposition,
+                        ]
+                    } else {
+                        vec![ClientAction::RemoveText, ClientAction::EndComposition]
+                    },
+                )),
+                UserAction::Navigation(direction) => match direction {
+                    Navigation::Right => Some((
+                        CompositionState::Composing,
+                        Self::clause_navigation_actions(composition, 1),
+                    )),
+                    Navigation::Left => Some((
+                        CompositionState::Composing,
+                        Self::clause_navigation_actions(composition, -1),
+                    )),
+                    Navigation::Up => Some((
+                        CompositionState::Previewing,
+                        vec![ClientAction::SetSelection(SetSelectionType::Up)],
+                    )),
+                    Navigation::Down => Some((
+                        CompositionState::Previewing,
+                        vec![ClientAction::SetSelection(SetSelectionType::Down)],
+                    )),
+                },
+                UserAction::ToggleInputMode => Some((
+                    CompositionState::None,
+                    vec![
+                        ClientAction::EndComposition,
+                        ClientAction::SetIMEMode(InputMode::Latin),
+                    ],
+                )),
+                UserAction::InputModeOn => Some((
+                    CompositionState::None,
+                    vec![
+                        ClientAction::EndComposition,
+                        ClientAction::SetIMEMode(InputMode::Kana),
+                    ],
+                )),
+                UserAction::InputModeOff => Some((
+                    CompositionState::None,
+                    vec![
+                        ClientAction::EndComposition,
+                        ClientAction::SetIMEMode(InputMode::Latin),
+                    ],
+                )),
+                UserAction::Space | UserAction::Tab | UserAction::Reconvert => Some((
+                    CompositionState::Previewing,
+                    Self::candidate_preview_actions(app_config),
+                )),
+                UserAction::Function(key) => Some((
+                    CompositionState::Previewing,
+                    vec![ClientAction::SetTextWithType(
+                        Self::set_text_type_for_function(*key),
+                    )],
+                )),
+                _ => None,
+            },
+            CompositionState::Selecting => None,
+        };
+
+        result
+    }
+
+    fn plan_deferred_user_action(
+        composition: &Composition,
+        deferred: &DeferredUserAction,
+        mode: &InputMode,
+        app_config: &AppConfig,
+        romaji_lookup: &RomajiLookup,
+    ) -> Option<(CompositionState, Vec<ClientAction>)> {
+        let start_temporary_latin = !composition.temporary_latin
+            && *mode == InputMode::Kana
+            && deferred.shift_alphabet_shortcut;
+        let (transition, mut actions) = Self::plan_actions_for_user_action_with_lookup(
+            composition,
+            &deferred.action,
+            mode,
+            deferred.is_shift_pressed,
+            app_config,
+            romaji_lookup,
+            start_temporary_latin,
+        )?;
+
+        if composition.temporary_latin {
+            let should_reset_on_confirm = matches!(
+                deferred.action,
+                UserAction::Enter | UserAction::CommitAndNextClause | UserAction::CommitFirstClause
+            );
+            let should_reset_on_end = transition == CompositionState::None
+                || actions.iter().any(|action| {
+                    matches!(
+                        action,
+                        ClientAction::EndComposition | ClientAction::SetIMEMode(_)
+                    )
+                });
+
+            if (should_reset_on_confirm || should_reset_on_end)
+                && !actions
+                    .iter()
+                    .any(|action| matches!(action, ClientAction::SetTemporaryLatin(false)))
+            {
+                actions.insert(0, ClientAction::SetTemporaryLatin(false));
+            }
+        }
+
+        if composition.temporary_latin_shift_pending
+            && !deferred.is_shift_key
+            && !actions
+                .iter()
+                .any(|action| matches!(action, ClientAction::SetTemporaryLatinShiftPending(_)))
+        {
+            actions.insert(0, ClientAction::SetTemporaryLatinShiftPending(false));
+        }
+
+        Some((transition, actions))
+    }
+
+    fn apply_actions_to_deferred_projection(
+        projection: &mut DeferredProjection,
+        actions: &[DeferredClientAction],
+    ) {
+        for deferred in actions {
+            projection.state = deferred.transition.clone();
+            match &deferred.action {
+                ClientAction::AppendText(text)
+                | ClientAction::AppendTextRaw(text)
+                | ClientAction::AppendTextDirect(text) => projection.raw_input.push_str(text),
+                ClientAction::RemoveText => {
+                    projection.raw_input.pop();
+                    // A mapped kana can consume more than one raw input element.
+                    // Execution will replace this estimate with the server identity.
+                    projection.reliable = false;
+                }
+                ClientAction::ShrinkText(text)
+                | ClientAction::ShrinkTextRaw(text)
+                | ClientAction::ShrinkTextDirect(text) => {
+                    projection.raw_input = text.clone();
+                    projection.reliable = false;
+                }
+                ClientAction::EnsureClauseNavigationReady { .. }
+                | ClientAction::MoveClause(_)
+                | ClientAction::AdjustBoundary(_)
+                | ClientAction::SetSelection(_)
+                | ClientAction::SetTextWithType(_)
+                | ClientAction::CommitWithText(_) => projection.reliable = false,
+                ClientAction::SetIMEMode(mode) => {
+                    projection.mode = mode.clone();
+                    if projection.state == CompositionState::None {
+                        projection.raw_input.clear();
+                        projection.reliable = true;
+                    }
+                }
+                ClientAction::SetTemporaryLatin(value) => projection.temporary_latin = *value,
+                ClientAction::SetTemporaryLatinShiftPending(value) => {
+                    projection.temporary_latin_shift_pending = *value;
+                }
+                ClientAction::EndComposition => {
+                    projection.raw_input.clear();
+                    projection.temporary_latin = false;
+                    projection.temporary_latin_shift_pending = false;
+                    projection.reliable = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn deferred_projection(composition: &Composition, mode: InputMode) -> DeferredProjection {
+        if let Some(projection) = composition.deferred_projection.clone() {
+            return projection;
+        }
+        let mut projection = DeferredProjection {
+            mode,
+            state: composition.state.clone(),
+            raw_input: composition.raw_input.clone(),
+            temporary_latin: composition.temporary_latin,
+            temporary_latin_shift_pending: composition.temporary_latin_shift_pending,
+            reliable: true,
+        };
+        Self::apply_actions_to_deferred_projection(&mut projection, &composition.deferred_actions);
+        projection
+    }
+
+    fn enqueue_deferred_user_action(
+        &self,
+        composition: &Composition,
+        input: DeferredUserAction,
+        config_snapshot: &AppConfigSnapshot,
+        replace_pending_mode_switch: bool,
+    ) -> Result<bool> {
+        self.process_deferred_user_action(
+            composition,
+            input,
+            config_snapshot,
+            replace_pending_mode_switch,
+            KeyEventPhase::Handle,
+        )
+    }
+
+    fn process_deferred_user_action(
+        &self,
+        composition: &Composition,
+        input: DeferredUserAction,
+        config_snapshot: &AppConfigSnapshot,
+        replace_pending_mode_switch: bool,
+        phase: KeyEventPhase,
+    ) -> Result<bool> {
+        let mut projection = Self::deferred_projection(composition, IMEState::input_mode()?);
+        let mut projected_composition = composition.clone();
+        projected_composition.state = projection.state.clone();
+        projected_composition.raw_input = projection.raw_input.clone();
+        projected_composition.temporary_latin = projection.temporary_latin;
+        projected_composition.temporary_latin_shift_pending =
+            projection.temporary_latin_shift_pending;
+        projected_composition.deferred_actions.clear();
+        projected_composition.deferred_inputs.clear();
+        projected_composition.deferred_projection = None;
+
+        let mut planned = Self::plan_deferred_user_action(
+            &projected_composition,
+            &input,
+            &projection.mode,
+            config_snapshot.app_config(),
+            config_snapshot.romaji_lookup(),
+        );
+        if planned.is_none() && !projection.reliable {
+            for state in [
+                CompositionState::Composing,
+                CompositionState::Previewing,
+                CompositionState::None,
+            ] {
+                projected_composition.state = state;
+                if let Some(alternative) = Self::plan_deferred_user_action(
+                    &projected_composition,
+                    &input,
+                    &projection.mode,
+                    config_snapshot.app_config(),
+                    config_snapshot.romaji_lookup(),
+                ) {
+                    planned = Some(alternative);
+                    break;
+                }
+            }
+        }
+        let Some((transition, actions)) = planned else {
+            return Ok(false);
+        };
+        if phase == KeyEventPhase::Test {
+            return Ok(true);
+        }
+        let fallback = actions
+            .into_iter()
+            .map(|action| DeferredClientAction {
+                action,
+                transition: transition.clone(),
+            })
+            .collect::<Vec<_>>();
+        Self::apply_actions_to_deferred_projection(&mut projection, &fallback);
+
+        let mut text_service = self.borrow_mut()?;
+        let mut persisted = text_service.borrow_mut_composition()?;
+        persisted
+            .deferred_inputs
+            .push_back(DeferredInputEvent::User { input, fallback });
+        persisted.deferred_projection = Some(projection);
+        drop(persisted);
+        if replace_pending_mode_switch {
+            // Queueing and invalidating the superseded async request happen under the same
+            // TextService borrow. Any earlier error leaves the pending request untouched.
+            text_service.invalidate_mode_switch_requests();
+        }
+        Ok(true)
+    }
+
+    fn enqueue_deferred_actions(
+        &self,
+        composition: &Composition,
+        actions: Vec<DeferredClientAction>,
+    ) -> Result<()> {
+        let mut projection = Self::deferred_projection(composition, IMEState::input_mode()?);
+        Self::apply_actions_to_deferred_projection(&mut projection, &actions);
+        let text_service = self.borrow()?;
+        let mut persisted = text_service.borrow_mut_composition()?;
+        persisted
+            .deferred_inputs
+            .push_back(DeferredInputEvent::Actions(actions));
+        persisted.deferred_projection = Some(projection);
+        Ok(())
+    }
+
+    fn matching_idle_reconversion_preset(
+        &self,
+        key_code: usize,
+    ) -> Result<Option<ReconversionKey>> {
+        if self.has_deferred_input()? {
+            return Ok(None);
+        }
+        if !matches!(
+            key_code,
+            VK_CONVERT_KEY_CODE | VK_SPACE_KEY_CODE | VK_OEM_SLASH_KEY_CODE
+        ) {
+            return Ok(None);
+        }
+        let composition_state = self.borrow()?.borrow_composition()?.state.clone();
+        if composition_state != CompositionState::None {
+            return Ok(None);
+        }
+        let preset = IMEState::app_config_snapshot()?
+            .app_config()
+            .shortcuts
+            .reconversion_key;
+        let modifiers = ModifierState {
+            shift: self.shift_key_state().for_regular_key(),
+            ctrl: Self::is_ctrl_pressed(),
+            alt: Self::is_alt_pressed(),
+            win: Self::is_win_pressed(),
+        };
+        Ok(reconversion_shortcut_matches(preset, key_code, modifiers).then_some(preset))
+    }
+
+    pub(crate) fn test_reconversion_key(
+        &self,
+        context: Option<&ITfContext>,
+        wparam: WPARAM,
+    ) -> Result<ReconversionKeyTestResult> {
+        if context.is_some_and(keyboard_disabled_from_context) {
+            return Ok(ReconversionKeyTestResult::Unrelated);
+        }
+        let Some(preset) = self.matching_idle_reconversion_preset(wparam.0)? else {
+            return Ok(ReconversionKeyTestResult::Unrelated);
+        };
+        let Some(context) = context else {
+            return Ok(ReconversionKeyTestResult::NotHandled);
+        };
+        // OnTest runs synchronously in the key hot path. Probe only the range
+        // shape here; the bounded text is read once in OnKeyDown.
+        let has_selection = self.has_nonempty_selection(context)?;
+        if has_selection {
+            Ok(ReconversionKeyTestResult::Owned)
+        } else if preset == ReconversionKey::Space {
+            Ok(ReconversionKeyTestResult::MatchedEmpty)
+        } else {
+            Ok(ReconversionKeyTestResult::NotHandled)
+        }
+    }
+
+    pub(crate) fn handle_reconversion_key(
+        &self,
+        context: Option<&ITfContext>,
+        wparam: WPARAM,
+    ) -> Result<Option<bool>> {
+        if context.is_some_and(keyboard_disabled_from_context) {
+            return Ok(None);
+        }
+        let Some(preset) = self.matching_idle_reconversion_preset(wparam.0)? else {
+            return Ok(None);
+        };
+        let Some(context) = context else {
+            return Ok(Some(false));
+        };
+        self.start_reconversion_from_selection(context, preset)
+    }
+
+    pub(crate) fn handle_standard_reconversion(
+        &self,
+        context: &ITfContext,
+        range: &ITfRange,
+    ) -> Result<bool> {
+        self.cleanup_observed_disabled_context()?;
+        if !self.standard_reconversion_is_enabled() {
+            return Ok(false);
+        }
+        self.start_reconversion_from_range(context, range, ReconversionKey::WinSlash)
+            .map(|handled| handled.unwrap_or(false))
+    }
+
+    pub(crate) fn standard_reconversion_is_enabled(&self) -> bool {
+        let Ok(config_snapshot) = IMEState::app_config_snapshot() else {
+            return false;
+        };
+        let Ok(text_service) = self.borrow() else {
+            return false;
+        };
+        let Ok(composition) = text_service.borrow_composition() else {
+            return false;
+        };
+        standard_reconversion_available(
+            config_snapshot.app_config().shortcuts.reconversion_key,
+            &composition.state,
+        )
+    }
+
+    fn start_reconversion_from_selection(
+        &self,
+        context: &ITfContext,
+        preset: ReconversionKey,
+    ) -> Result<Option<bool>> {
+        self.start_reconversion(context, None, preset)
+    }
+
+    fn start_reconversion_from_range(
+        &self,
+        context: &ITfContext,
+        range: &ITfRange,
+        preset: ReconversionKey,
+    ) -> Result<Option<bool>> {
+        self.start_reconversion(context, Some(range), preset)
+    }
+
+    fn start_reconversion(
+        &self,
+        context: &ITfContext,
+        range: Option<&ITfRange>,
+        preset: ReconversionKey,
+    ) -> Result<Option<bool>> {
+        self.borrow_mut()?.context = Some(context.clone());
+        let selected_text = match range {
+            Some(range) => self.reconversion_text_for_range(context, range)?,
+            None => self.selected_text(context)?,
+        };
+        let original = match selected_text {
+            SelectedText::Text(original) => original,
+            SelectedText::Unsupported => return Ok(Some(true)),
+            SelectedText::Empty => {
+                return if preset == ReconversionKey::Space {
+                    Ok(None)
+                } else {
+                    Ok(Some(false))
+                };
+            }
+        };
+
+        // A matched shortcut owns the selected text. Unsupported or sensitive text is
+        // intentionally left untouched instead of falling back to Space and replacing it.
+        if original.chars().count() > MAX_RECONVERSION_SURFACE_COUNT
+            || self.current_context_has_sensitive_input_scope()
+        {
+            return Ok(Some(true));
+        }
+        // Acquire the configuration snapshot before replacing the selected
+        // document range, so a settings read failure remains non-destructive.
+        let app_config_snapshot = IMEState::app_config_snapshot()?;
+        if !Self::ensure_ipc_service_for_key_event("start_reconversion") {
+            return Ok(Some(true));
+        }
+        let mut ipc_service = IMEState::ipc_service()?.context("ipc_service is None")?;
+        let reconversion = match ipc_service.start_reconversion(&original) {
+            Ok(Some(reconversion)) => reconversion,
+            Ok(None) => {
+                let _ = IMEState::set_ipc_service(ipc_service);
+                return Ok(Some(true));
+            }
+            Err(error) => {
+                tracing::warn!(?error, "Failed to start server-side reconversion");
+                let _ = IMEState::set_ipc_service(ipc_service);
+                return Ok(Some(true));
+            }
+        };
+        let Some(selected) =
+            Self::select_candidate(&reconversion.candidates, reconversion.selection_index)
+        else {
+            let _ = ipc_service.clear_text();
+            let _ = IMEState::set_ipc_service(ipc_service);
+            return Ok(Some(true));
+        };
+
+        let composition_start = match range {
+            Some(range) => self.start_composition_on_reconversion_range(context, range, &original),
+            None => self.start_composition_on_selected_text(context, &original),
+        };
+        match composition_start {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = ipc_service.clear_text();
+                let _ = IMEState::set_ipc_service(ipc_service);
+                return Ok(Some(true));
+            }
+            Err(error) => {
+                tracing::warn!(?error, "Host rejected reconversion composition start");
+                let _ = ipc_service.clear_text();
+                let _ = IMEState::set_ipc_service(ipc_service);
+                return Ok(Some(true));
+            }
+        }
+
+        let initialize_result: Result<()> = (|| {
+            let text_service = self.borrow()?;
+            let mut composition = text_service.borrow_mut_composition()?;
+            let tip_composition = composition.tip_composition.take();
+            *composition = Composition::default();
+            composition.tip_composition = tip_composition;
+            composition.preview = selected.text.clone();
+            composition.suffix = selected.sub_text.clone();
+            composition.raw_input = reconversion.candidates.hiragana.clone();
+            composition.raw_hiragana = reconversion.candidates.hiragana.clone();
+            composition.corresponding_count = selected.corresponding_count;
+            composition.selection_index = selected.index;
+            composition.candidates = reconversion.candidates.clone();
+            composition.state = CompositionState::Previewing;
+            composition.reconversion_original = Some(original.clone());
+            Ok(())
+        })();
+        if let Err(error) = initialize_result {
+            tracing::warn!(
+                ?error,
+                "Failed to initialize reconversion composition state"
+            );
+            let _ = self.end_composition();
+            let _ = ipc_service.clear_text();
+            let _ = IMEState::set_ipc_service(ipc_service);
+            return Ok(Some(true));
+        }
+
+        if let Err(error) = self.set_text(&selected.text, &selected.sub_text) {
+            tracing::warn!(?error, "Failed to materialize reconversion candidate");
+            let _ = self.set_text(&original, "");
+            let _ = self.end_composition();
+            if let Ok(text_service) = self.borrow() {
+                if let Ok(mut composition) = text_service.borrow_mut_composition() {
+                    *composition = Composition::default();
+                }
+            }
+            let _ = ipc_service.clear_text();
+            let _ = IMEState::set_ipc_service(ipc_service);
+            return Ok(Some(true));
+        }
+        if let Err(error) = IMEState::set_input_mode(InputMode::Kana) {
+            tracing::warn!(?error, "Failed to switch to Kana mode after reconversion");
+        }
+        if let Err(error) = self.update_lang_bar() {
+            tracing::warn!(?error, "Failed to update language bar after reconversion");
+        }
+        let app_config = app_config_snapshot.app_config();
+        if let Err(error) = self.sync_candidate_window_update(
+            &mut ipc_service,
+            &reconversion.candidates,
+            selected.index,
+            Some(true),
+            true,
+            Self::live_conversion_reading_update(
+                app_config,
+                &reconversion.candidates,
+                &CompositionState::Previewing,
+            ),
+            Some(true),
+            Self::live_conversion_reading_vertical_adjustment_for_update(
+                app_config,
+                &reconversion.candidates,
+                &CompositionState::Previewing,
+            ),
+        ) {
+            tracing::warn!(?error, "Failed to show reconversion candidates");
+        }
+        let _ = IMEState::set_ipc_service(ipc_service);
+        Ok(Some(true))
+    }
+
+    #[tracing::instrument]
+    pub(crate) fn process_key(
+        &self,
+        context: Option<&ITfContext>,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        phase: KeyEventPhase,
+    ) -> Result<ProcessKeyResult> {
+        let standalone_trace = (current_input_trace_request_id().is_none()
+            && client_performance_log_enabled())
+        .then(ClientInputTraceGuard::begin);
+        let trace_request_id = current_input_trace_request_id().or_else(|| {
+            standalone_trace
+                .as_ref()
+                .map(ClientInputTraceGuard::request_id)
+        });
+        let total_start = trace_request_id.map(|_| Instant::now());
+        let result: Result<ProcessKeyResult> = (|| {
+            if phase == KeyEventPhase::Test && context.is_none_or(keyboard_disabled_from_context) {
+                return Ok(None);
+            }
+
+            let is_ctrl_pressed = Self::is_ctrl_pressed();
+            let is_alt_pressed = Self::is_alt_pressed();
+            let is_win_pressed = Self::is_win_pressed();
+            let shift_key_state = self.shift_key_state();
+            let is_shift_pressed = shift_key_state.for_regular_key();
+            let is_ctrl_space = is_ctrl_pressed && wparam.0 == 0x20;
+            let is_capslock_key = wparam.0 == VK_CAPITAL_KEY_CODE
+                || Self::is_translated_capslock_key(wparam.0, lparam);
+            let is_eisu = if is_capslock_key {
+                let keyboard_layout = Self::current_caps_lock_keyboard_layout();
+                Self::is_eisu_shortcut(
+                    wparam.0,
+                    lparam,
+                    shift_key_state.for_eisu_shortcut(),
+                    is_ctrl_pressed,
+                    is_alt_pressed,
+                    keyboard_layout,
+                )
+            } else {
+                false
+            };
+            let is_ctrl_enter = is_ctrl_pressed && wparam.0 == 0x0D;
+            let is_ctrl_down = is_ctrl_pressed && wparam.0 == 0x28;
+            let ctrl_conversion_function =
+                Self::ctrl_conversion_shortcut_function(wparam.0, is_ctrl_pressed, is_alt_pressed);
+            let is_shift_left = is_shift_pressed && wparam.0 == 0x25;
+            let is_shift_right = is_shift_pressed && wparam.0 == 0x27;
+            let is_shift_key = Self::is_shift_key(wparam);
+            let is_alt_backquote = Self::is_alt_backquote(wparam, lparam);
+            let config_snapshot_start = trace_request_id.map(|_| Instant::now());
+            let config_snapshot = IMEState::app_config_snapshot()?;
+            let app_config = config_snapshot.app_config();
+            let romaji_lookup = config_snapshot.romaji_lookup();
+            if let (Some(request_id), Some(config_snapshot_start)) =
+                (trace_request_id, config_snapshot_start)
+            {
+                Self::log_client_performance(
+                    request_id,
+                    "process_key",
+                    "config_snapshot",
+                    config_snapshot_start.elapsed(),
+                    format!(
+                        "romaji_rows={};max_input_len={};max_multi_char_input_len={};wparam={}",
+                        app_config.romaji_table.rows.len(),
+                        romaji_lookup.max_input_len,
+                        romaji_lookup.max_multi_char_input_len,
+                        wparam.0
+                    ),
+                );
+            }
+
+            // Windows-key chords belong to the shell. The configured Win+/ path is
+            // intercepted before process_key by the key-event sink.
+            if is_win_pressed {
+                return Ok(None);
+            }
+
+            // check shortcut keys
+            if is_ctrl_pressed
+                && !is_ctrl_space
+                && !is_alt_backquote
+                && !is_ctrl_enter
+                && !is_ctrl_down
+                && ctrl_conversion_function.is_none()
+            {
+                if phase == KeyEventPhase::Handle {
+                    self.clear_temporary_latin_shift_pending_if_needed(!Self::is_shift_key(
+                        wparam,
+                    ))?;
+                }
+                return Ok(None);
+            }
+
+            if is_ctrl_space || is_alt_backquote || is_eisu {
+                let shortcuts = &app_config.shortcuts;
+
+                if is_ctrl_space && !shortcuts.ctrl_space_toggle {
+                    if phase == KeyEventPhase::Handle {
+                        self.clear_temporary_latin_shift_pending_if_needed(!Self::is_shift_key(
+                            wparam,
+                        ))?;
+                    }
+                    return Ok(None);
+                }
+
+                if is_alt_backquote && !shortcuts.alt_backquote_toggle {
+                    if phase == KeyEventPhase::Handle {
+                        self.clear_temporary_latin_shift_pending_if_needed(!Self::is_shift_key(
+                            wparam,
+                        ))?;
+                    }
+                    return Ok(None);
+                }
+
+                if is_eisu && !shortcuts.eisu_toggle {
+                    if phase == KeyEventPhase::Handle {
+                        self.clear_temporary_latin_shift_pending_if_needed(!Self::is_shift_key(
+                            wparam,
+                        ))?;
+                    }
+                    return Ok(None);
+                }
+            }
+
+            #[allow(clippy::let_and_return)]
+            let (composition, mode) = {
+                let text_service = self.borrow()?;
+                let composition = text_service.borrow_composition()?.clone();
+                let mode = IMEState::input_mode()?;
+                (composition, mode)
+            };
+            let has_deferred_input =
+                !composition.deferred_actions.is_empty() || !composition.deferred_inputs.is_empty();
+            let projected =
+                has_deferred_input.then(|| Self::deferred_projection(&composition, mode.clone()));
+            let temporary_latin = projected
+                .as_ref()
+                .map(|projection| projection.temporary_latin)
+                .unwrap_or(composition.temporary_latin);
+            if temporary_latin && is_shift_key && !is_shift_left && !is_shift_right {
+                if let Some(projection) = projected {
+                    if phase == KeyEventPhase::Handle {
+                        self.enqueue_deferred_actions(
+                            &composition,
+                            vec![DeferredClientAction {
+                                action: ClientAction::SetTemporaryLatinShiftPending(true),
+                                transition: projection.state,
+                            }],
+                        )?;
+                    }
+                    return Ok(Some((
+                        Vec::new(),
+                        composition.state.clone(),
+                        config_snapshot,
+                    )));
+                }
+                return Ok(Some((
+                    vec![ClientAction::SetTemporaryLatinShiftPending(true)],
+                    composition.state.clone(),
+                    config_snapshot,
+                )));
+            }
+
+            let should_clear_shift_pending =
+                composition.temporary_latin_shift_pending && !is_shift_key;
+
+            let action = if is_alt_backquote || is_eisu {
+                UserAction::ToggleInputMode
+            } else if is_ctrl_enter {
+                UserAction::CommitFirstClause
+            } else if is_ctrl_down {
+                UserAction::CommitAndNextClause
+            } else if let Some(function) = ctrl_conversion_function {
+                UserAction::Function(function)
+            } else if is_shift_left {
+                UserAction::AdjustClauseBoundary(-1)
+            } else if is_shift_right {
+                UserAction::AdjustClauseBoundary(1)
+            } else {
+                UserAction::try_from(wparam.0)?
+            };
+
+            let deferred_user_action = DeferredUserAction {
+                action,
+                is_shift_pressed,
+                is_shift_key,
+                shift_alphabet_shortcut: Self::is_shift_alphabet_shortcut(wparam, is_shift_pressed),
+            };
+
+            if has_deferred_input {
+                if !self.process_deferred_user_action(
+                    &composition,
+                    deferred_user_action,
+                    &config_snapshot,
+                    false,
+                    phase,
+                )? {
+                    if phase == KeyEventPhase::Handle {
+                        self.clear_temporary_latin_shift_pending_if_needed(
+                            should_clear_shift_pending,
+                        )?;
+                    }
+                    return Ok(None);
+                }
+                return Ok(Some((
+                    Vec::new(),
+                    composition.state.clone(),
+                    config_snapshot,
+                )));
+            }
+
+            let Some((transition, actions)) = Self::plan_deferred_user_action(
+                &composition,
+                &deferred_user_action,
+                &mode,
+                app_config,
+                romaji_lookup,
+            ) else {
+                if phase == KeyEventPhase::Handle {
+                    self.clear_temporary_latin_shift_pending_if_needed(should_clear_shift_pending)?;
+                }
+                return Ok(None);
+            };
+
+            if phase == KeyEventPhase::Handle
+                && !Self::ensure_ipc_service_for_key_event("process_key")
+            {
+                return Ok(None);
+            }
+
+            Ok(Some((actions, transition, config_snapshot)))
+        })();
+
+        if let (Some(request_id), Some(total_start)) = (trace_request_id, total_start) {
+            let details = match &result {
+                Ok(Some((actions, transition, _))) => format!(
+                    "status=success;handled=true;actions={};transition={transition:?};wparam={}",
+                    actions.len(),
+                    wparam.0
+                ),
+                Ok(None) => format!("status=success;handled=false;wparam={}", wparam.0),
+                Err(error) => format!("status=error;wparam={};error={error:?}", wparam.0),
+            };
+            Self::log_client_performance(
+                request_id,
+                "process_key",
+                "total",
+                total_start.elapsed(),
+                details,
+            );
+        }
+
+        result
+    }
+
+    #[tracing::instrument]
+    pub(crate) fn process_key_up(
+        &self,
+        context: Option<&ITfContext>,
+        wparam: WPARAM,
+        _lparam: LPARAM,
+        phase: KeyEventPhase,
+    ) -> Result<Option<(Vec<ClientAction>, CompositionState)>> {
+        if phase == KeyEventPhase::Test && context.is_none_or(keyboard_disabled_from_context) {
+            return Ok(None);
+        }
+        if !Self::is_shift_key(wparam) {
+            return Ok(None);
+        }
+        let shift_only = !self.borrow()?.shift_key_used_in_chord;
+
+        let composition = {
+            let text_service = self.borrow()?;
+            let composition = text_service.borrow_composition()?.clone();
+            composition
+        };
+
+        if !composition.deferred_actions.is_empty() || !composition.deferred_inputs.is_empty() {
+            let projection = Self::deferred_projection(&composition, IMEState::input_mode()?);
+            if !projection.temporary_latin_shift_pending {
+                return Ok(None);
+            }
+            let mut actions = vec![ClientAction::SetTemporaryLatinShiftPending(false)];
+            if projection.temporary_latin && shift_only {
+                actions.insert(0, ClientAction::SetTemporaryLatin(false));
+            }
+            if phase == KeyEventPhase::Handle {
+                self.enqueue_deferred_actions(
+                    &composition,
+                    actions
+                        .into_iter()
+                        .map(|action| DeferredClientAction {
+                            action,
+                            transition: projection.state.clone(),
+                        })
+                        .collect(),
+                )?;
+            }
+            return Ok(Some((Vec::new(), composition.state.clone())));
+        }
+
+        if !composition.temporary_latin_shift_pending {
+            return Ok(None);
+        }
+
+        let mut actions = vec![ClientAction::SetTemporaryLatinShiftPending(false)];
+        if composition.temporary_latin && shift_only {
+            actions.insert(0, ClientAction::SetTemporaryLatin(false));
+        }
+
+        if phase == KeyEventPhase::Handle
+            && !Self::ensure_ipc_service_for_key_event("process_key_up")
+        {
+            return Ok(None);
+        }
+
+        Ok(Some((actions, composition.state.clone())))
+    }
+
+    pub(crate) fn has_deferred_input(&self) -> Result<bool> {
+        let text_service = self.borrow()?;
+        let composition = text_service.borrow_composition()?;
+        Ok(!composition.deferred_actions.is_empty() || !composition.deferred_inputs.is_empty())
+    }
+
+    pub(crate) fn deferred_input_ready(&self) -> Result<bool> {
+        Ok(self.has_deferred_input()?
+            && IMEState::ipc_service()?.is_none_or(|ipc_service| {
+                !ipc_service.recovery_pending() || ipc_service.recovery_restart_ready()
+            }))
+    }
+
+    fn flush_deferred_user_actions(&self) -> Result<()> {
+        self.cleanup_observed_disabled_context()?;
+        if let Some(ipc_service) = IMEState::ipc_service()? {
+            ipc_service.ensure_server_restart_requested();
+            if ipc_service.recovery_pending() && !ipc_service.recovery_restart_ready() {
+                return Ok(());
+            }
+        }
+        self.replay_deferred_user_actions(|actions, transition, config_snapshot| {
+            self.handle_action_with_config_snapshot(actions, transition, config_snapshot)
+        })
+    }
+
+    fn replay_deferred_user_actions(
+        &self,
+        mut execute: impl FnMut(&[ClientAction], CompositionState, AppConfigSnapshot) -> Result<()>,
+    ) -> Result<()> {
+        loop {
+            let composition = self.borrow()?.borrow_composition()?.clone();
+            if !composition.deferred_actions.is_empty() {
+                execute(
+                    &[],
+                    composition.state.clone(),
+                    IMEState::app_config_snapshot()?,
+                )?;
+                continue;
+            }
+
+            let Some(event) = composition.deferred_inputs.front().cloned() else {
+                self.borrow()?.borrow_mut_composition()?.deferred_projection = None;
+                return Ok(());
+            };
+
+            match event {
+                DeferredInputEvent::Actions(actions) => {
+                    let text_service = self.borrow()?;
+                    let mut composition = text_service.borrow_mut_composition()?;
+                    composition.deferred_inputs.pop_front();
+                    composition.deferred_actions.extend(actions);
+                }
+                DeferredInputEvent::User { input, fallback } => {
+                    // Keep the user event queued until every fallible prerequisite for
+                    // replanning has succeeded. A transient configuration or mode lookup
+                    // failure must not discard the user's input.
+                    let config_snapshot = IMEState::app_config_snapshot()?;
+                    let mode = IMEState::input_mode()?;
+                    let planned = Self::plan_deferred_user_action(
+                        &composition,
+                        &input,
+                        &mode,
+                        config_snapshot.app_config(),
+                        config_snapshot.romaji_lookup(),
+                    );
+                    self.borrow()?
+                        .borrow_mut_composition()?
+                        .deferred_inputs
+                        .pop_front();
+                    if let Some((transition, actions)) = planned {
+                        execute(&actions, transition, config_snapshot)?;
+                    } else {
+                        self.borrow()?
+                            .borrow_mut_composition()?
+                            .deferred_actions
+                            .extend(fallback);
+                    }
+                }
+            }
+        }
+    }
+
+    #[tracing::instrument]
+    pub fn handle_key(
+        &self,
+        context: Option<&ITfContext>,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Result<bool> {
+        self.cancel_jev_conversion();
+        let input_trace = client_performance_log_enabled().then(ClientInputTraceGuard::begin);
+        let total_start = input_trace.as_ref().map(|_| Instant::now());
+        let result: Result<bool> = (|| {
+            self.cleanup_observed_disabled_context()?;
+            if let Some(context) = context {
+                self.borrow_mut()?.context = Some(context.clone());
+                let disabled = keyboard_disabled_from_context(context);
+                self.set_keyboard_disabled_state(disabled)?;
+                if disabled {
+                    self.cancel_composition_for_disabled_context();
+                    return Ok(false);
+                }
+            } else {
+                self.set_keyboard_disabled_state(true)?;
+                return Ok(false);
+            };
+
+            // Drain ready work before deciding ownership of the next physical key.
+            // OnTest claims that callback even when the projected key is pass-through.
+            let replay_ready = self.deferred_input_ready()?;
+            let replay_failed = if replay_ready {
+                match self.flush_deferred_user_actions() {
+                    Ok(()) => false,
+                    Err(error)
+                        if requires_action_recovery(&error)
+                            || is_non_destructive_ipc_error(&error) =>
+                    {
+                        tracing::warn!(
+                            ?error,
+                            "Deferred recovery failed; preserving the current key before retrying"
+                        );
+                        true
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                false
+            };
+            if replay_ready && !replay_failed && !self.has_deferred_input()? {
+                // The sink could not probe selection before the queued work was
+                // drained. Dispatch reconversion for this same physical key now.
+                match self.handle_reconversion_key(context, wparam) {
+                    Ok(Some(handled)) => return Ok(handled),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            ?error,
+                            "Reconversion after deferred replay failed; passing key through"
+                        );
+                        return Ok(false);
+                    }
+                }
+            }
+            if let Some((actions, transition, config_snapshot)) =
+                self.process_key(context, wparam, lparam, KeyEventPhase::Handle)?
+            {
+                if actions.is_empty() {
+                    if !replay_failed {
+                        self.flush_deferred_user_actions()?;
+                    }
+                } else {
+                    self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)?;
+                }
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })();
+
+        if let (Some(input_trace), Some(total_start)) = (input_trace.as_ref(), total_start) {
+            let request_id = input_trace.request_id();
+            let details = match &result {
+                Ok(handled) => format!(
+                    "status=success;handled={handled};wparam={};lparam={}",
+                    wparam.0, lparam.0
+                ),
+                Err(error) => format!(
+                    "status=error;wparam={};lparam={};error={error:?}",
+                    wparam.0, lparam.0
+                ),
+            };
+            Self::log_client_performance(
+                request_id,
+                "handle_key",
+                "total",
+                total_start.elapsed(),
+                details,
+            );
+        }
+
+        match result {
+            Ok(handled) => Ok(handled),
+            Err(error)
+                if is_non_destructive_ipc_error(&error)
+                    || is_non_destructive_edit_session_error(&error) =>
+            {
+                tracing::warn!(
+                    ?error,
+                    "Operation failed without invalidating local composition; preserving it"
+                );
+                Ok(true)
+            }
+            Err(error) if is_edit_session_error(&error) => {
+                tracing::warn!(
+                    ?error,
+                    "Edit-session callback failed after possible document mutation; preserving composition for recovery"
+                );
+                Ok(true)
+            }
+            Err(error) => {
+                tracing::error!("handle_key failed: {error:?}");
+                self.recover_after_key_error();
+                Ok(false)
+            }
+        }
+    }
+
+    #[tracing::instrument]
+    pub fn handle_key_up(
+        &self,
+        context: Option<&ITfContext>,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Result<bool> {
+        let input_trace = client_performance_log_enabled().then(ClientInputTraceGuard::begin);
+        let total_start = input_trace.as_ref().map(|_| Instant::now());
+        let result: Result<bool> = (|| {
+            self.cleanup_observed_disabled_context()?;
+            if let Some(context) = context {
+                self.borrow_mut()?.context = Some(context.clone());
+                let disabled = keyboard_disabled_from_context(context);
+                self.set_keyboard_disabled_state(disabled)?;
+                if disabled {
+                    self.cancel_composition_for_disabled_context();
+                    return Ok(false);
+                }
+            } else {
+                self.set_keyboard_disabled_state(true)?;
+                return Ok(false);
+            };
+
+            if let Some((actions, transition)) =
+                self.process_key_up(context, wparam, lparam, KeyEventPhase::Handle)?
+            {
+                if actions.is_empty() {
+                    self.flush_deferred_user_actions()?;
+                } else {
+                    self.handle_action(&actions, transition)?;
+                }
+                return Ok(true);
+            }
+
+            Ok(false)
+        })();
+
+        if let (Some(input_trace), Some(total_start)) = (input_trace.as_ref(), total_start) {
+            let request_id = input_trace.request_id();
+            let details = match &result {
+                Ok(handled) => format!(
+                    "status=success;handled={handled};wparam={};lparam={}",
+                    wparam.0, lparam.0
+                ),
+                Err(error) => format!(
+                    "status=error;wparam={};lparam={};error={error:?}",
+                    wparam.0, lparam.0
+                ),
+            };
+            Self::log_client_performance(
+                request_id,
+                "handle_key_up",
+                "total",
+                total_start.elapsed(),
+                details,
+            );
+        }
+
+        match result {
+            Ok(handled) => Ok(handled),
+            Err(error)
+                if is_non_destructive_ipc_error(&error)
+                    || is_non_destructive_edit_session_error(&error) =>
+            {
+                tracing::warn!(
+                    ?error,
+                    "Key-up operation failed without invalidating local composition; preserving it"
+                );
+                Ok(true)
+            }
+            Err(error) if is_edit_session_error(&error) => {
+                tracing::warn!(
+                    ?error,
+                    "Key-up edit-session callback failed after possible mutation; preserving composition for recovery"
+                );
+                Ok(true)
+            }
+            Err(error) => {
+                tracing::error!("handle_key_up failed: {error:?}");
+                self.recover_after_key_error();
+                Ok(false)
+            }
+        }
+    }
+
+    #[tracing::instrument]
+    pub fn handle_preserved_eisu_shortcut(&self, context: Option<&ITfContext>) -> Result<bool> {
+        let result: Result<bool> = (|| {
+            self.cleanup_observed_disabled_context()?;
+            let Some(context) = context else {
+                self.set_keyboard_disabled_state(true)?;
+                return Ok(false);
+            };
+
+            self.borrow_mut()?.context = Some(context.clone());
+
+            let keyboard_disabled = keyboard_disabled_from_context(context);
+            self.set_keyboard_disabled_state(keyboard_disabled)?;
+            if keyboard_disabled {
+                self.cancel_composition_for_disabled_context();
+                return Ok(false);
+            }
+
+            let shift_key_state = self.shift_key_state();
+            let is_ctrl_pressed = Self::is_ctrl_pressed();
+            let is_alt_pressed = Self::is_alt_pressed();
+            let keyboard_layout = Self::current_caps_lock_keyboard_layout();
+            if !Self::is_eisu_shortcut(
+                VK_CAPITAL_KEY_CODE,
+                LPARAM(0),
+                shift_key_state.for_eisu_shortcut(),
+                is_ctrl_pressed,
+                is_alt_pressed,
+                keyboard_layout,
+            ) {
+                return Ok(false);
+            }
+
+            let config_snapshot = IMEState::app_config_snapshot()?;
+            let app_config = config_snapshot.app_config();
+            if !app_config.shortcuts.eisu_toggle {
+                return Ok(false);
+            }
+
+            #[allow(clippy::let_and_return)]
+            let (composition, mode) = {
+                let text_service = self.borrow()?;
+                let composition = text_service.borrow_composition()?.clone();
+                let mode = IMEState::input_mode()?;
+                (composition, mode)
+            };
+
+            let deferred = DeferredUserAction {
+                action: UserAction::ToggleInputMode,
+                is_shift_pressed: shift_key_state.for_regular_key(),
+                is_shift_key: false,
+                shift_alphabet_shortcut: false,
+            };
+            if !composition.deferred_actions.is_empty() || !composition.deferred_inputs.is_empty() {
+                if !self.enqueue_deferred_user_action(
+                    &composition,
+                    deferred,
+                    &config_snapshot,
+                    false,
+                )? {
+                    return Ok(false);
+                }
+                self.flush_deferred_user_actions()?;
+                return Ok(true);
+            }
+
+            let Some((transition, actions)) = Self::plan_deferred_user_action(
+                &composition,
+                &deferred,
+                &mode,
+                app_config,
+                config_snapshot.romaji_lookup(),
+            ) else {
+                return Ok(false);
+            };
+
+            if !Self::ensure_ipc_service_for_key_event("handle_preserved_eisu_shortcut") {
+                return Ok(false);
+            }
+
+            self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)?;
+            Ok(true)
+        })();
+
+        match result {
+            Ok(handled) => Ok(handled),
+            Err(error)
+                if is_non_destructive_ipc_error(&error)
+                    || is_non_destructive_edit_session_error(&error) =>
+            {
+                tracing::warn!(
+                    ?error,
+                    "Shortcut operation failed without invalidating local composition; preserving it"
+                );
+                Ok(true)
+            }
+            Err(error) if is_edit_session_error(&error) => {
+                tracing::warn!(
+                    ?error,
+                    "Shortcut edit-session callback failed after possible mutation; preserving composition for recovery"
+                );
+                Ok(true)
+            }
+            Err(error) => {
+                tracing::error!("handle_preserved_eisu_shortcut failed: {error:?}");
+                self.recover_after_key_error();
+                Ok(false)
+            }
+        }
+    }
+
+    fn recover_after_key_error(&self) {
+        self.cancel_composition_for_disabled_context();
+    }
+
+    fn handle_external_composition_terminated(&self, terminated: Option<&ITfComposition>) {
+        self.cancel_jev_conversion();
+        let is_current = self
+            .borrow()
+            .ok()
+            .and_then(|text_service| {
+                text_service
+                    .borrow_composition()
+                    .ok()
+                    .and_then(|composition| composition.tip_composition.clone())
+            })
+            .zip(terminated.cloned())
+            .is_some_and(|(current, terminated)| has_same_com_identity(&current, &terminated));
+        if !is_current {
+            tracing::debug!("Ignore termination callback for a stale TSF composition");
+            return;
+        }
+
+        if let Ok(text_service) = self.borrow() {
+            if let Ok(mut composition) = text_service.borrow_mut_composition() {
+                *composition = Composition::default();
+            }
+        }
+
+        if let Ok(Some(mut ipc_service)) = IMEState::ipc_service() {
+            ipc_service.discard_input_ledger();
+            if let Ok(delivery) =
+                ipc_service.update_candidate_window(Some(false), None, Some(vec![]), Some(0), None)
+            {
+                self.remember_candidate_window_visibility_if_sent(delivery, Some(false));
+            }
+            let _ = ipc_service.clear_text();
+            let _ = IMEState::set_ipc_service(ipc_service);
+        }
+    }
+
+    pub(crate) fn cleanup_observed_disabled_context(&self) -> Result<()> {
+        let observed = {
+            let mut text_service = self.borrow_mut()?;
+            std::mem::take(&mut text_service.disabled_context_observed)
+        };
+        if observed {
+            self.cancel_composition_for_disabled_context();
+        }
+        Ok(())
+    }
+
+    fn cancel_composition_for_disabled_context(&self) {
+        let reconversion_original = self.borrow().ok().and_then(|text_service| {
+            text_service
+                .borrow_composition()
+                .ok()
+                .and_then(|composition| composition.reconversion_original.clone())
+        });
+        if let Some(original) = reconversion_original {
+            let _ = self.set_text(&original, "");
+            let _ = self.end_composition();
+        } else {
+            let _ = self.abort_composition();
+        }
+
+        if let Ok(text_service) = self.borrow() {
+            if let Ok(mut composition) = text_service.borrow_mut_composition() {
+                *composition = Composition::default();
+            }
+        }
+
+        let ipc_service = IMEState::ipc_service().ok().flatten();
+
+        if let Some(mut ipc_service) = ipc_service {
+            if let Ok(delivery) =
+                ipc_service.update_candidate_window(Some(false), None, Some(vec![]), Some(0), None)
+            {
+                self.remember_candidate_window_visibility_if_sent(delivery, Some(false));
+            }
+            let _ = ipc_service.clear_text();
+
+            let _ = IMEState::set_ipc_service(ipc_service);
+        }
+    }
+
+    pub(crate) fn end_composition_for_tsf_event(&self) {
+        self.cancel_jev_conversion();
+        // Collect queued learning while the candidate IDs and owner are still
+        // valid. Focus loss may terminate a deferred terminal action.
+        let mut pending_learning_commits = Vec::new();
+        if !IMEState::keyboard_disabled().unwrap_or(true)
+            && !self.current_context_has_sensitive_input_scope()
+        {
+            if let Ok(text_service) = self.borrow() {
+                if let Ok(composition) = text_service.borrow_composition() {
+                    for deferred in &composition.deferred_actions {
+                        if let ClientAction::CommitLearning {
+                            scope,
+                            kind,
+                            was_temporary_latin,
+                        } = &deferred.action
+                        {
+                            pending_learning_commits.extend(
+                                Self::collect_learning_candidate_ids(
+                                    *scope,
+                                    composition.selection_index,
+                                    &composition.candidates,
+                                    &composition.clause_snapshots,
+                                    &composition.future_clause_snapshots,
+                                    *was_temporary_latin,
+                                )
+                                .into_iter()
+                                .map(|candidate_id| {
+                                    PendingLearningCommit {
+                                        candidate_id,
+                                        kind: *kind,
+                                        surface: String::new(),
+                                    }
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let mut ipc_service = IMEState::ipc_service().ok().flatten();
+        if let Some(ipc_service) = ipc_service.as_mut() {
+            Self::flush_pending_learning_commits(ipc_service, &mut pending_learning_commits);
+        }
+        self.end_composition_async_best_effort();
+
+        if let Ok(mut text_service) = self.borrow_mut() {
+            text_service.invalidate_mode_switch_requests();
+            if let Ok(mut composition) = text_service.borrow_mut_composition() {
+                *composition = Composition::default();
+            }
+        }
+
+        if let Some(mut ipc_service) = ipc_service {
+            ipc_service.discard_input_ledger();
+            if let Ok(delivery) =
+                ipc_service.update_candidate_window(Some(false), None, Some(vec![]), Some(0), None)
+            {
+                self.remember_candidate_window_visibility_if_sent(delivery, Some(false));
+            }
+            let _ = ipc_service.clear_text();
+            let _ = IMEState::set_ipc_service(ipc_service);
+        }
+    }
+
+    fn complete_input_mode_switch_best_effort(
+        &self,
+        generation: u64,
+        mode: InputMode,
+        position: Option<shared::proto::WindowPosition>,
+    ) {
+        let Ok(mut text_service) = self.borrow_mut() else {
+            tracing::warn!("Failed to complete deferred input mode switch due to borrow conflict");
+            return;
+        };
+        if !text_service.clear_pending_mode_switch(generation) {
+            tracing::debug!("Skip superseded deferred input mode switch");
+            return;
+        }
+        if let Ok(mut composition) = text_service.borrow_mut_composition() {
+            *composition = Composition::default();
+        }
+        drop(text_service);
+
+        if let Err(error) = IMEState::set_input_mode(mode.clone()) {
+            tracing::warn!(?error, "Failed to apply deferred input mode switch");
+        }
+        if let Err(error) = self.update_lang_bar() {
+            tracing::warn!(?error, "Failed to update language bar after mode switch");
+        }
+
+        let mode_label = match mode {
+            InputMode::Latin => "A",
+            InputMode::Kana => "あ",
+        };
+        if let Ok(Some(mut ipc_service)) = IMEState::ipc_service() {
+            if let Err(error) = ipc_service.update_candidate_window_with_reading(
+                None,
+                position,
+                None,
+                None,
+                Some(mode_label),
+                Some(""),
+                Some(false),
+                None,
+            ) {
+                tracing::warn!(?error, "Failed to update candidate UI after mode switch");
+            }
+            ipc_service.discard_input_ledger();
+            if let Err(error) = ipc_service.clear_text() {
+                tracing::warn!(?error, "Failed to clear server text after mode switch");
+            }
+            if let Err(error) = IMEState::set_ipc_service(ipc_service) {
+                tracing::warn!(?error, "Failed to persist IPC state after mode switch");
+            }
+        }
+    }
+
+    fn is_current_mode_switch_request(
+        &self,
+        generation: u64,
+        context: &ITfContext,
+        tip_composition: &ITfComposition,
+    ) -> bool {
+        let Ok(text_service) = self.borrow() else {
+            return false;
+        };
+        let context_matches = text_service
+            .context
+            .as_ref()
+            .is_some_and(|current| has_same_com_identity(current, context));
+        let composition_matches = text_service
+            .borrow_composition()
+            .ok()
+            .and_then(|composition| composition.tip_composition.clone())
+            .is_some_and(|current| has_same_com_identity(&current, tip_composition));
+        mode_switch_request_is_current(
+            generation,
+            text_service.mode_switch_generation,
+            context_matches,
+            composition_matches,
+        )
+    }
+
+    fn is_current_idle_mode_switch_request(&self, generation: u64, context: &ITfContext) -> bool {
+        let Ok(text_service) = self.borrow() else {
+            return false;
+        };
+        let context_matches = text_service
+            .context
+            .as_ref()
+            .is_some_and(|current| has_same_com_identity(current, context));
+        let composition_is_empty = text_service
+            .borrow_composition()
+            .is_ok_and(|composition| composition.tip_composition.is_none());
+        idle_mode_switch_request_is_current(
+            generation,
+            text_service.mode_switch_generation,
+            context_matches,
+            composition_is_empty,
+        )
+    }
+
+    pub(crate) fn request_input_mode_switch_after_composition(
+        &self,
+        mode: InputMode,
+    ) -> Result<()> {
+        self.cleanup_observed_disabled_context()?;
+        let (this, context, tip_composition, generation) = {
+            let mut text_service = self.borrow_mut()?;
+            let tip_composition = text_service.borrow_composition()?.tip_composition.clone();
+            let this = text_service.this::<ITfTextInputProcessor>()?;
+            let context = text_service.context::<ITfContext>()?;
+            let generation = text_service.begin_mode_switch(mode.clone());
+            (this, context, tip_composition, generation)
+        };
+
+        let Some(tip_composition) = tip_composition else {
+            let on_complete = Rc::new({
+                let this = this.clone();
+                let context = context.clone();
+                let mode = mode.clone();
+                move |position| {
+                    let factory = unsafe { this.as_impl() };
+                    if factory.is_current_idle_mode_switch_request(generation, &context) {
+                        factory.complete_input_mode_switch_best_effort(
+                            generation,
+                            mode.clone(),
+                            position,
+                        );
+                    } else {
+                        tracing::debug!("Skip stale idle mode-switch completion");
+                    }
+                }
+            });
+            let on_terminal = Rc::new({
+                let this = this.clone();
+                move || {
+                    let factory = unsafe { this.as_impl() };
+                    if let Ok(mut text_service) = factory.borrow_mut() {
+                        text_service.clear_pending_mode_switch(generation);
+                    }
+                }
+            });
+            if let Err(error) = self.request_caret_window_position_async(on_complete, on_terminal) {
+                tracing::warn!(
+                    ?error,
+                    "Failed to queue caret lookup for language-bar mode switch"
+                );
+                let factory = unsafe { this.as_impl() };
+                if factory.is_current_idle_mode_switch_request(generation, &context) {
+                    factory.complete_input_mode_switch_best_effort(generation, mode, None);
+                }
+            }
+            return Ok(());
+        };
+        let position = match self.candidate_window_position() {
+            Ok(position) => position,
+            Err(error) => {
+                if let Ok(mut text_service) = self.borrow_mut() {
+                    text_service.clear_pending_mode_switch(generation);
+                }
+                return Err(error);
+            }
+        };
+
+        let is_current = Rc::new({
+            let this = this.clone();
+            let context = context.clone();
+            let tip_composition = tip_composition.clone();
+            move || {
+                let factory = unsafe { this.as_impl() };
+                factory.is_current_mode_switch_request(generation, &context, &tip_composition)
+            }
+        });
+        let on_success = Rc::new({
+            let this = this.clone();
+            move || {
+                let factory = unsafe { this.as_impl() };
+                factory.complete_input_mode_switch_best_effort(generation, mode.clone(), position);
+            }
+        });
+        let on_terminal = Rc::new(move || {
+            let factory = unsafe { this.as_impl() };
+            if let Ok(mut text_service) = factory.borrow_mut() {
+                text_service.clear_pending_mode_switch(generation);
+            }
+        });
+        let result = self.end_composition_async_on_success(is_current, on_success, on_terminal);
+        if result.is_err() {
+            if let Ok(mut text_service) = self.borrow_mut() {
+                text_service.clear_pending_mode_switch(generation);
+            }
+        }
+        result
+    }
+
+    pub(crate) fn request_language_bar_input_mode_toggle(&self, mode: InputMode) -> Result<()> {
+        self.cleanup_observed_disabled_context()?;
+        let (composition, replaces_pending_mode_switch) = {
+            let text_service = self.borrow()?;
+            let composition = text_service.borrow_composition()?.clone();
+            let replaces_pending_mode_switch = text_service.pending_mode_switch().is_some();
+            (composition, replaces_pending_mode_switch)
+        };
+        if !language_bar_toggle_requires_deferred_replay(&composition) {
+            return self.request_input_mode_switch_after_composition(mode);
+        }
+
+        // A pending asynchronous language-bar request must not overtake queued recovery input.
+        // Preserve the absolute target computed from that pending request, and only invalidate
+        // the request after the replacement has been queued successfully.
+        let config_snapshot = IMEState::app_config_snapshot()?;
+        let deferred = DeferredUserAction {
+            action: language_bar_deferred_action(&mode, replaces_pending_mode_switch),
+            is_shift_pressed: false,
+            is_shift_key: false,
+            shift_alphabet_shortcut: false,
+        };
+        if !self.enqueue_deferred_user_action(
+            &composition,
+            deferred,
+            &config_snapshot,
+            replaces_pending_mode_switch,
+        )? {
+            tracing::warn!("Failed to plan deferred language-bar input mode toggle");
+            return Ok(());
+        }
+        self.flush_deferred_user_actions()
+    }
+
+    #[tracing::instrument]
+    pub fn handle_action(
+        &self,
+        actions: &[ClientAction],
+        transition: CompositionState,
+    ) -> Result<()> {
+        let trace_request_id = current_input_trace_request_id();
+        let config_snapshot_start = trace_request_id.map(|_| Instant::now());
+        let config_snapshot = IMEState::app_config_snapshot()?;
+        if let (Some(request_id), Some(config_snapshot_start)) =
+            (trace_request_id, config_snapshot_start)
+        {
+            let app_config = config_snapshot.app_config();
+            let romaji_lookup = config_snapshot.romaji_lookup();
+            Self::log_client_performance(
+                request_id,
+                "handle_action",
+                "config_snapshot",
+                config_snapshot_start.elapsed(),
+                format!(
+                    "actions={};romaji_rows={};max_input_len={};max_multi_char_input_len={}",
+                    actions.len(),
+                    app_config.romaji_table.rows.len(),
+                    romaji_lookup.max_input_len,
+                    romaji_lookup.max_multi_char_input_len
+                ),
+            );
+        }
+
+        self.handle_action_with_config_snapshot(actions, transition, config_snapshot)
+    }
+
+    fn handle_action_with_config_snapshot(
+        &self,
+        actions: &[ClientAction],
+        transition: CompositionState,
+        config_snapshot: AppConfigSnapshot,
+    ) -> Result<()> {
+        self.cancel_jev_conversion();
+        let start_jev = actions
+            .iter()
+            .any(|action| matches!(action, ClientAction::StartJevConversion));
+        let trace_request_id = current_input_trace_request_id();
+        let total_start = trace_request_id.map(|_| Instant::now());
+        let requested_transition = transition.clone();
+        let mut retry_actions = None;
+        let mut failed_action_index = 0usize;
+        let mut failed_ledger_snapshot = None;
+        let mut terminal_ui_cleanup_delegated_to_followup = false;
+        let result: Result<()> = (|| {
+            #[allow(clippy::let_and_return)]
+            let (composition, mode) = {
+                let text_service = self.borrow()?;
+                let composition = text_service.borrow_composition()?.clone();
+                let mode = IMEState::input_mode()?;
+                (composition, mode)
+            };
+            let app_config = config_snapshot.app_config();
+            let romaji_lookup = config_snapshot.romaji_lookup();
+            let mut effective_actions = composition.deferred_actions.clone();
+            effective_actions.extend(actions.iter().cloned().map(|action| DeferredClientAction {
+                action,
+                transition: transition.clone(),
+            }));
+            retry_actions = Some(effective_actions.clone());
+            let actions = effective_actions.as_slice();
+            let action_values = effective_actions
+                .iter()
+                .map(|deferred| deferred.action.clone())
+                .collect::<Vec<_>>();
+
+            let mut preview = composition.preview.clone();
+            let mut suffix = composition.suffix.clone();
+            let mut raw_input = composition.raw_input.clone();
+            let mut raw_hiragana = composition.raw_hiragana.clone();
+            let mut fixed_prefix = composition.fixed_prefix.clone();
+            let mut corresponding_count = composition.corresponding_count;
+            let mut candidates = composition.candidates.clone();
+            let mut clause_snapshots = composition.clause_snapshots.clone();
+            let mut future_clause_snapshots = composition.future_clause_snapshots.clone();
+            let mut current_clause_is_split_derived = composition.current_clause_is_split_derived;
+            let mut current_clause_is_direct_split_remainder =
+                composition.current_clause_is_direct_split_remainder;
+            let mut current_clause_is_pending_remainder =
+                composition.current_clause_is_pending_remainder;
+            let mut current_clause_has_split_left_neighbor =
+                composition.current_clause_has_split_left_neighbor;
+            let mut current_clause_right_boundary_displacement =
+                composition.current_clause_right_boundary_displacement;
+            let mut current_clause_right_boundary_origin =
+                composition.current_clause_right_boundary_origin.clone();
+            let mut current_clause_split_group_id = composition.current_clause_split_group_id;
+            let mut current_clause_consumed_prefix_restore =
+                composition.current_clause_consumed_prefix_restore.clone();
+            let mut current_clause_remainder_origin =
+                composition.current_clause_remainder_origin.clone();
+            let mut next_split_group_id = composition.next_split_group_id;
+            let mut selection_index = composition.selection_index;
+            let mut temporary_latin = composition.temporary_latin;
+            let mut temporary_latin_shift_pending = composition.temporary_latin_shift_pending;
+            let mut reconversion_original = composition.reconversion_original.clone();
+            let mut live_conversion_snapshots = composition.live_conversion_snapshots.clone();
+            let mut live_conversion_history = composition.live_conversion_history.clone();
+            let mut ipc_service;
+            let mut transition = transition;
+            let mut deferred_clause_navigation_ready_ui_sync = None;
+            let mut pending_learning_commits = Vec::new();
+            let mut terminal_ui_cleanup_sent_at = None;
+            let has_learning_action = actions
+                .iter()
+                .any(|deferred| matches!(deferred.action, ClientAction::CommitLearning { .. }));
+            let learning_blocked = has_learning_action
+                && (IMEState::keyboard_disabled().unwrap_or(true)
+                    || self.current_context_has_sensitive_input_scope());
+
+            macro_rules! render_local_text {
+                () => {{
+                    if app_config.general.jev_conversion
+                        && transition == CompositionState::Composing
+                        && !temporary_latin
+                        && reconversion_original.is_none()
+                        && fixed_prefix.is_empty()
+                        && clause_snapshots.is_empty()
+                        && future_clause_snapshots.is_empty()
+                    {
+                        // The suffix is already canonical server output. Preserve its
+                        // boundary and the raw consumed count when rendering kana.
+                        if let Some(kana_prefix) = candidates.hiragana.strip_suffix(&suffix) {
+                            preview = kana_prefix.to_owned();
+                            raw_hiragana = candidates.hiragana.clone();
+                        }
+                    }
+                    self.set_text(&preview, &suffix)?;
+                }};
+            }
+
+            macro_rules! persist_local_state {
+                () => {{
+                    let text_service = self.borrow()?;
+                    let mut persisted = text_service.borrow_mut_composition()?;
+                    persisted.preview = preview.clone();
+                    persisted.state = transition.clone();
+                    persisted.selection_index = selection_index;
+                    persisted.raw_input = raw_input.clone();
+                    persisted.raw_hiragana = raw_hiragana.clone();
+                    persisted.fixed_prefix = fixed_prefix.clone();
+                    persisted.candidates = candidates.clone();
+                    persisted.clause_snapshots = clause_snapshots.clone();
+                    persisted.future_clause_snapshots = future_clause_snapshots.clone();
+                    persisted.current_clause_is_split_derived = current_clause_is_split_derived;
+                    persisted.current_clause_is_direct_split_remainder =
+                        current_clause_is_direct_split_remainder;
+                    persisted.current_clause_is_pending_remainder =
+                        current_clause_is_pending_remainder;
+                    persisted.current_clause_has_split_left_neighbor =
+                        current_clause_has_split_left_neighbor;
+                    persisted.current_clause_right_boundary_displacement =
+                        current_clause_right_boundary_displacement;
+                    persisted.current_clause_right_boundary_origin =
+                        current_clause_right_boundary_origin.clone();
+                    persisted.current_clause_split_group_id = current_clause_split_group_id;
+                    persisted.current_clause_consumed_prefix_restore =
+                        current_clause_consumed_prefix_restore.clone();
+                    persisted.current_clause_remainder_origin =
+                        current_clause_remainder_origin.clone();
+                    persisted.next_split_group_id = next_split_group_id;
+                    persisted.suffix = suffix.clone();
+                    persisted.corresponding_count = corresponding_count;
+                    persisted.temporary_latin = temporary_latin;
+                    persisted.temporary_latin_shift_pending = temporary_latin_shift_pending;
+                    persisted.reconversion_original = reconversion_original.clone();
+                    persisted.live_conversion_snapshots = live_conversion_snapshots.clone();
+                    persisted.live_conversion_history = live_conversion_history.clone();
+                }};
+            }
+
+            macro_rules! reset_after_empty_server_composition {
+                ($reason:expr) => {{
+                    tracing::warn!(
+                        reason = $reason,
+                        "Reset stale client composition after server returned empty composition"
+                    );
+
+                    transition = CompositionState::None;
+                    live_conversion_snapshots.clear();
+                    live_conversion_history.clear();
+                    selection_index = 0;
+                    corresponding_count = 0;
+                    temporary_latin = false;
+                    temporary_latin_shift_pending = false;
+                    preview.clear();
+                    suffix.clear();
+                    raw_input.clear();
+                    raw_hiragana.clear();
+                    fixed_prefix.clear();
+                    candidates = Candidates::default();
+                    clause_snapshots.clear();
+                    future_clause_snapshots.clear();
+                    current_clause_is_split_derived = false;
+                    current_clause_is_direct_split_remainder = false;
+                    current_clause_is_pending_remainder = false;
+                    current_clause_has_split_left_neighbor = false;
+                    current_clause_right_boundary_displacement = 0;
+                    current_clause_right_boundary_origin = None;
+                    current_clause_split_group_id = None;
+                    current_clause_consumed_prefix_restore = None;
+                    current_clause_remainder_origin = None;
+                    next_split_group_id = 0;
+
+                    // Clear the UI before the fallible TSF edit. Otherwise a temporary
+                    // edit-session failure can leave stale ruby and candidates visible
+                    // after the document text has already disappeared.
+                    self.hide_candidate_window_ui(&mut ipc_service)?;
+                    if let Some(original) = reconversion_original.take() {
+                        self.set_text(&original, "")?;
+                        self.end_composition()?;
+                    } else {
+                        self.discard_composition_text()?;
+                    }
+                    ipc_service.clear_text()?;
+                }};
+            }
+
+            macro_rules! reset_stale_composition_before_fresh_append {
+                ($reason:expr) => {{
+                    tracing::warn!(
+                        reason = $reason,
+                        "Reset stale client composition before applying fresh append"
+                    );
+
+                    transition = CompositionState::Composing;
+                    live_conversion_snapshots.clear();
+                    live_conversion_history.clear();
+                    corresponding_count = 0;
+                    temporary_latin = false;
+                    temporary_latin_shift_pending = false;
+                    preview.clear();
+                    suffix.clear();
+                    raw_input.clear();
+                    raw_hiragana.clear();
+                    fixed_prefix.clear();
+                    clause_snapshots.clear();
+                    future_clause_snapshots.clear();
+                    current_clause_is_split_derived = false;
+                    current_clause_is_direct_split_remainder = false;
+                    current_clause_is_pending_remainder = false;
+                    current_clause_has_split_left_neighbor = false;
+                    current_clause_right_boundary_displacement = 0;
+                    current_clause_right_boundary_origin = None;
+                    current_clause_split_group_id = None;
+                    current_clause_consumed_prefix_restore = None;
+                    current_clause_remainder_origin = None;
+                    next_split_group_id = 0;
+
+                    if let Some(original) = reconversion_original.take() {
+                        self.set_text(&original, "")?;
+                        self.end_composition()?;
+                    } else {
+                        self.discard_composition_text()?;
+                    }
+                    self.start_composition()?;
+                }};
+            }
+
+            ipc_service = IMEState::ipc_service()?.context("ipc_service is None")?;
+            failed_ledger_snapshot = Some(ipc_service.input_ledger_snapshot());
+
+            if ipc_service.recovery_pending() {
+                ipc_service.ensure_server_restart_requested();
+                if !ipc_service.recovery_restart_ready() {
+                    return Err(ipc_service.recovery_pending_error());
+                }
+
+                let recovered = ipc_service
+                    .recover_composition_if_needed(&raw_input, &raw_hiragana)?
+                    .context("IPC recovery unexpectedly produced no composition")?;
+                tracing::warn!(
+                    raw_input_len = raw_input.chars().count(),
+                    "Rebuilt server composition after IPC deadline"
+                );
+                candidates = recovered.candidates;
+                live_conversion_snapshots.clear();
+                live_conversion_history.clear();
+                clause_snapshots.clear();
+                future_clause_snapshots.clear();
+                current_clause_is_split_derived = false;
+                current_clause_is_direct_split_remainder = false;
+                current_clause_is_pending_remainder = false;
+                current_clause_has_split_left_neighbor = false;
+                current_clause_right_boundary_displacement = 0;
+                current_clause_right_boundary_origin = None;
+                current_clause_split_group_id = None;
+                current_clause_consumed_prefix_restore = None;
+                current_clause_remainder_origin = None;
+                next_split_group_id = 0;
+                selection_index = 0;
+                if let Some(selected) = Self::select_candidate(&candidates, selection_index) {
+                    corresponding_count = selected.corresponding_count;
+                    preview = Self::merge_preview_with_prefix(&fixed_prefix, &selected.text);
+                    suffix = selected.sub_text.clone();
+                    raw_hiragana = selected.hiragana;
+                    if composition.tip_composition.is_some() {
+                        render_local_text!();
+                        self.sync_candidate_window_after_text_update(
+                            &mut ipc_service,
+                            &candidates,
+                            selection_index,
+                            app_config,
+                            &transition,
+                        )?;
+                    }
+                }
+            }
+
+            for (action_index, deferred) in actions.iter().enumerate() {
+                failed_action_index = action_index;
+                failed_ledger_snapshot = Some(ipc_service.input_ledger_snapshot());
+                transition = deferred.transition.clone();
+                let action = &deferred.action;
+                if Self::action_needs_context_update(action) {
+                    IMEState::set_ipc_service(ipc_service.clone())?;
+                    self.update_context(&preview)?;
+                    ipc_service = IMEState::ipc_service()?.context("ipc_service is None")?;
+                }
+
+                if !matches!(
+                    action,
+                    ClientAction::StartJevConversion
+                        | ClientAction::StartComposition
+                        | ClientAction::ShowCandidateWindow
+                        | ClientAction::CommitLearning { .. }
+                        | ClientAction::AppendText(_)
+                        | ClientAction::AppendTextRaw(_)
+                ) {
+                    live_conversion_snapshots.clear();
+                    live_conversion_history.clear();
+                }
+
+                match action {
+                    // Start only after all local state has been persisted below.
+                    ClientAction::StartJevConversion => {}
+                    ClientAction::StartComposition => {
+                        // start_composition closes any stale TIP handle and then starts a
+                        // fresh composition. Merely seeing a handle is not sufficient: a
+                        // previous terminal edit may have emptied its range before failing.
+                        self.start_composition()?;
+                        if app_config.general.show_candidate_window_after_space {
+                            let delivery = ipc_service.update_candidate_window(
+                                Some(false),
+                                None,
+                                None,
+                                None,
+                                None,
+                            )?;
+                            self.remember_candidate_window_visibility_if_sent(
+                                delivery,
+                                Some(false),
+                            );
+                        }
+                    }
+                    ClientAction::ShowCandidateWindow => {
+                        let position = self.candidate_window_position()?;
+                        let delivery = ipc_service.update_candidate_window_with_reading(
+                            Some(true),
+                            position,
+                            None,
+                            None,
+                            None,
+                            Self::live_conversion_reading_update(
+                                app_config,
+                                &candidates,
+                                &transition,
+                            ),
+                            Some(true),
+                            Self::live_conversion_reading_vertical_adjustment_for_update(
+                                app_config,
+                                &candidates,
+                                &transition,
+                            ),
+                        )?;
+                        self.remember_candidate_window_visibility_if_sent(delivery, Some(true));
+                    }
+                    ClientAction::CommitLearning {
+                        scope,
+                        kind,
+                        was_temporary_latin,
+                    } => {
+                        if learning_blocked
+                            || (app_config.general.jev_conversion
+                                && composition.state == CompositionState::Composing
+                                && !composition.temporary_latin)
+                        {
+                            tracing::debug!(
+                                ?scope,
+                                ?kind,
+                                "Skip conversion learning in disabled or sensitive context"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        pending_learning_commits.extend(
+                            Self::collect_learning_candidate_ids(
+                                *scope,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                                *was_temporary_latin,
+                            )
+                            .into_iter()
+                            .map(|candidate_id| {
+                                PendingLearningCommit {
+                                    candidate_id,
+                                    kind: *kind,
+                                    surface: String::new(),
+                                }
+                            }),
+                        );
+                    }
+                    ClientAction::EndComposition => {
+                        self.borrow()?.borrow_mut_composition()?.deferred_actions =
+                            deferred_action_suffix(actions, action_index);
+                        // EndComposition can reenter focus-loss callbacks, which
+                        // release the owner. Learn before requesting that TSF edit.
+                        Self::flush_pending_learning_commits(
+                            &mut ipc_service,
+                            &mut pending_learning_commits,
+                        );
+                        // Let TSF commit the document before waiting for the synchronous UI
+                        // RPC. UI cleanup is still attempted after a TSF error, and terminal
+                        // RemoveText can own the cleanup before its fallible final edit. A
+                        // following standalone direct commit owns cleanup after its own TSF
+                        // composition, so the logical terminal operation is reconciled once.
+                        let followup_owns_ui_cleanup =
+                            Self::followup_owns_terminal_ui_cleanup(actions, action_index);
+                        terminal_ui_cleanup_delegated_to_followup = followup_owns_ui_cleanup;
+                        let skip_ui_cleanup = Self::preceding_action_sent_terminal_ui_cleanup(
+                            terminal_ui_cleanup_sent_at,
+                            action_index,
+                        ) || followup_owns_ui_cleanup;
+                        Self::run_terminal_action_cleanup(
+                            skip_ui_cleanup,
+                            || self.end_composition(),
+                            || self.hide_candidate_window_ui(&mut ipc_service),
+                        )?;
+                        selection_index = 0;
+                        corresponding_count = 0;
+                        temporary_latin = false;
+                        temporary_latin_shift_pending = false;
+                        reconversion_original = None;
+                        preview.clear();
+                        suffix.clear();
+                        raw_input.clear();
+                        raw_hiragana.clear();
+                        fixed_prefix.clear();
+                        candidates = Candidates::default();
+                        clause_snapshots.clear();
+                        future_clause_snapshots.clear();
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        next_split_group_id = 0;
+                        ipc_service.clear_text()?;
+                    }
+                    ClientAction::AppendText(text) => {
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        let resolved_symbol_text = match mode {
+                            InputMode::Kana => Self::resolve_symbol_input_text_with_lookup(
+                                &raw_input,
+                                text,
+                                app_config,
+                                romaji_lookup,
+                            ),
+                            InputMode::Latin => None,
+                        };
+                        let text = match mode {
+                            InputMode::Kana => {
+                                resolved_symbol_text.unwrap_or_else(|| text.to_string())
+                            }
+                            InputMode::Latin => text.to_string(),
+                        };
+
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        let appended_candidates =
+                            ipc_service.append_text_with_context(text.clone(), &candidates)?;
+                        let session_changed = ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            );
+                        let server_reset_recovered = session_changed
+                            || Self::append_result_indicates_server_reset(
+                                &raw_input,
+                                &candidates,
+                                &text,
+                                &appended_candidates,
+                            );
+                        candidates = appended_candidates;
+                        if server_reset_recovered {
+                            reset_stale_composition_before_fresh_append!(
+                                "append_text recovered after server reset"
+                            );
+                            selection_index = 0;
+                        }
+                        raw_input.push_str(&text);
+                        if let Some(selected) = Self::select_candidate(&candidates, selection_index)
+                        {
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview =
+                                Self::merge_preview_with_prefix(&fixed_prefix, &selected.text);
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            render_local_text!();
+                            if matches!(
+                                action,
+                                ClientAction::AppendText(_) | ClientAction::AppendTextRaw(_)
+                            ) {
+                                self.maybe_auto_commit_live_conversion_chunk(
+                                    app_config,
+                                    &transition,
+                                    temporary_latin,
+                                    reconversion_original.is_some(),
+                                    &fixed_prefix,
+                                    &clause_snapshots,
+                                    &future_clause_snapshots,
+                                    &mut raw_input,
+                                    &mut raw_hiragana,
+                                    &mut preview,
+                                    &mut suffix,
+                                    &mut corresponding_count,
+                                    &mut selection_index,
+                                    &mut candidates,
+                                    &mut live_conversion_snapshots,
+                                    &mut live_conversion_history,
+                                    &mut ipc_service,
+                                )?;
+                            }
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "append_text returned empty composition"
+                            );
+                        }
+                    }
+                    ClientAction::AppendTextRaw(text) => {
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        let appended_candidates =
+                            ipc_service.append_text_with_context(text.clone(), &candidates)?;
+                        let session_changed = ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            );
+                        let server_reset_recovered = session_changed
+                            || Self::append_result_indicates_server_reset(
+                                &raw_input,
+                                &candidates,
+                                text,
+                                &appended_candidates,
+                            );
+                        candidates = appended_candidates;
+                        if server_reset_recovered {
+                            reset_stale_composition_before_fresh_append!(
+                                "append_text_raw recovered after server reset"
+                            );
+                            selection_index = 0;
+                        }
+                        raw_input.push_str(text);
+                        if let Some(selected) = Self::select_candidate(&candidates, selection_index)
+                        {
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview =
+                                Self::merge_preview_with_prefix(&fixed_prefix, &selected.text);
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            render_local_text!();
+                            if matches!(
+                                action,
+                                ClientAction::AppendText(_) | ClientAction::AppendTextRaw(_)
+                            ) {
+                                self.maybe_auto_commit_live_conversion_chunk(
+                                    app_config,
+                                    &transition,
+                                    temporary_latin,
+                                    reconversion_original.is_some(),
+                                    &fixed_prefix,
+                                    &clause_snapshots,
+                                    &future_clause_snapshots,
+                                    &mut raw_input,
+                                    &mut raw_hiragana,
+                                    &mut preview,
+                                    &mut suffix,
+                                    &mut corresponding_count,
+                                    &mut selection_index,
+                                    &mut candidates,
+                                    &mut live_conversion_snapshots,
+                                    &mut live_conversion_history,
+                                    &mut ipc_service,
+                                )?;
+                            }
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "append_text_raw returned empty composition"
+                            );
+                        }
+                    }
+                    ClientAction::AppendTextDirect(text) => {
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        let appended_candidates = ipc_service
+                            .append_text_direct_with_context(text.clone(), &candidates)?;
+                        let session_changed = ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            );
+                        let server_reset_recovered = session_changed
+                            || Self::append_result_indicates_server_reset(
+                                &raw_input,
+                                &candidates,
+                                text,
+                                &appended_candidates,
+                            );
+                        candidates = appended_candidates;
+                        if server_reset_recovered {
+                            reset_stale_composition_before_fresh_append!(
+                                "append_text_direct recovered after server reset"
+                            );
+                            selection_index = 0;
+                        }
+                        raw_input.push_str(text);
+                        if let Some(selected) = Self::select_candidate(&candidates, selection_index)
+                        {
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview =
+                                Self::merge_preview_with_prefix(&fixed_prefix, &selected.text);
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            render_local_text!();
+                            if matches!(
+                                action,
+                                ClientAction::AppendText(_) | ClientAction::AppendTextRaw(_)
+                            ) {
+                                self.maybe_auto_commit_live_conversion_chunk(
+                                    app_config,
+                                    &transition,
+                                    temporary_latin,
+                                    reconversion_original.is_some(),
+                                    &fixed_prefix,
+                                    &clause_snapshots,
+                                    &future_clause_snapshots,
+                                    &mut raw_input,
+                                    &mut raw_hiragana,
+                                    &mut preview,
+                                    &mut suffix,
+                                    &mut corresponding_count,
+                                    &mut selection_index,
+                                    &mut candidates,
+                                    &mut live_conversion_snapshots,
+                                    &mut live_conversion_history,
+                                    &mut ipc_service,
+                                )?;
+                            }
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "append_text_direct returned empty composition"
+                            );
+                        }
+                    }
+                    ClientAction::CommitWithText(text) => {
+                        // AI アシストの誤字補正候補 (💡) が確定した場合は、サーバーが
+                        // 採用した誤字読みと正解表記を自己学習できるよう通知する。
+                        let typo_candidate_index = candidates
+                            .candidate_ids
+                            .iter()
+                            .position(|&id| id == shared::ai_candidate::TYPO_CORRECTION);
+                        if let Some(index) = typo_candidate_index {
+                            let is_typo_candidate = candidates
+                                .texts
+                                .get(index)
+                                .is_some_and(|candidate_text| candidate_text == text);
+                            if is_typo_candidate {
+                                pending_learning_commits.push(PendingLearningCommit {
+                                    candidate_id: shared::ai_candidate::TYPO_CORRECTION,
+                                    kind: LearningCommitKind::Normal,
+                                    surface: text.clone(),
+                                });
+                            }
+                        }
+                        self.set_text(text, "")?;
+                        preview = text.clone();
+                        suffix.clear();
+                        ipc_service.discard_input_ledger();
+                        let _ = ipc_service.clear_text();
+                    }
+                    ClientAction::CommitTextDirect(text) => {
+                        // This action creates and ends a standalone TSF composition while the
+                        // logical state is already terminal. It must therefore own the final UI
+                        // reconciliation instead of relying on an earlier EndComposition.
+                        let direct_commit_result = Self::run_terminal_action_cleanup(
+                            false,
+                            || {
+                                self.start_composition()?;
+                                self.set_text(text, "")?;
+                                self.end_composition()
+                            },
+                            || self.hide_candidate_window_ui(&mut ipc_service),
+                        );
+                        // The direct commit attempts cleanup on both success and failure, so
+                        // the postamble no longer needs to recover the delegated ownership.
+                        terminal_ui_cleanup_delegated_to_followup = false;
+                        direct_commit_result?;
+                    }
+                    ClientAction::RestoreReconversionOriginal => {
+                        if let Some(original) = reconversion_original.as_deref() {
+                            self.set_text(original, "")?;
+                            preview = original.to_string();
+                            suffix.clear();
+                        }
+                    }
+                    ClientAction::RemoveText => {
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "server session changed before remove_text"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        let removal = ipc_service.remove_text()?;
+                        raw_input = removal.raw_input;
+                        candidates = removal.candidates;
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "remove_text detected server session change"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        if let Some(selected) = Self::select_candidate_for_remove_text_transition(
+                            &candidates,
+                            selection_index,
+                            &transition,
+                        ) {
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+
+                            preview =
+                                Self::merge_preview_with_prefix(&fixed_prefix, &selected.text);
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            render_local_text!();
+                            self.sync_candidate_window_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                None,
+                                false,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                        } else {
+                            // The requested final state is authoritative even if the server
+                            // returns stale non-empty candidates. Never materialize that stale
+                            // response back into TSF; close the composition from the local state.
+                            let committed_prefix = fixed_prefix.clone();
+                            let followup_owns_terminal_end =
+                                Self::followup_owns_terminal_end(actions, action_index);
+
+                            transition = CompositionState::None;
+                            live_conversion_snapshots.clear();
+                            live_conversion_history.clear();
+                            selection_index = 0;
+                            corresponding_count = 0;
+                            temporary_latin = false;
+                            temporary_latin_shift_pending = false;
+                            suffix.clear();
+                            raw_input.clear();
+                            raw_hiragana.clear();
+                            candidates = Candidates::default();
+                            clause_snapshots.clear();
+                            future_clause_snapshots.clear();
+                            current_clause_is_split_derived = false;
+                            current_clause_is_direct_split_remainder = false;
+                            current_clause_is_pending_remainder = false;
+                            current_clause_has_split_left_neighbor = false;
+                            current_clause_right_boundary_displacement = 0;
+                            current_clause_right_boundary_origin = None;
+                            current_clause_split_group_id = None;
+                            current_clause_consumed_prefix_restore = None;
+                            current_clause_remainder_origin = None;
+                            next_split_group_id = 0;
+
+                            // Hide before either TSF edit below can fail. This keeps the
+                            // candidate and ruby windows consistent with an empty document.
+                            let hide_delivery = self.hide_candidate_window_ui(&mut ipc_service)?;
+                            terminal_ui_cleanup_sent_at =
+                                hide_delivery.was_sent().then_some(action_index);
+                            if committed_prefix.is_empty() {
+                                self.set_text("", "")?;
+                            } else {
+                                self.set_text(&committed_prefix, "")?;
+                            }
+
+                            // A planned terminal removal is followed by EndComposition.
+                            // Let that single action own the TIP close and server clear so
+                            // a failed duplicate cleanup cannot replay over the next input.
+                            if !followup_owns_terminal_end {
+                                self.end_composition()?;
+                                ipc_service.clear_text()?;
+                            }
+
+                            preview.clear();
+                            fixed_prefix.clear();
+                        }
+                    }
+                    ClientAction::MoveCursor(offset) => {
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "server session changed before move_cursor"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        candidates = ipc_service.move_cursor(*offset)?;
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "move_cursor detected server session change"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        if let Some(selected) = Self::select_candidate(&candidates, selection_index)
+                        {
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview =
+                                Self::merge_preview_with_prefix(&fixed_prefix, &selected.text);
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            render_local_text!();
+                            self.sync_candidate_window_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                None,
+                                true,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "move_cursor returned empty composition"
+                            );
+                        }
+                    }
+                    ClientAction::EnsureClauseNavigationReady {
+                        prepare_future_clauses,
+                    } => {
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "server session changed before clause_navigation_ready"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        Self::log_clause_action_state(
+                            "before",
+                            action,
+                            &preview,
+                            &suffix,
+                            &raw_input,
+                            &raw_hiragana,
+                            &fixed_prefix,
+                            corresponding_count,
+                            selection_index,
+                            &candidates,
+                            &clause_snapshots,
+                            &future_clause_snapshots,
+                        );
+                        let effect = {
+                            let mut state = ClauseState::from_composition_parts(
+                                &mut preview,
+                                &mut suffix,
+                                &mut raw_input,
+                                &mut raw_hiragana,
+                                &mut fixed_prefix,
+                                &mut corresponding_count,
+                                &mut selection_index,
+                                &mut candidates,
+                                &mut clause_snapshots,
+                                &mut future_clause_snapshots,
+                                &mut current_clause_is_split_derived,
+                                &mut current_clause_is_direct_split_remainder,
+                                &mut current_clause_is_pending_remainder,
+                                &mut current_clause_has_split_left_neighbor,
+                                &mut current_clause_right_boundary_displacement,
+                                &mut current_clause_right_boundary_origin,
+                                &mut current_clause_split_group_id,
+                                &mut current_clause_consumed_prefix_restore,
+                                &mut current_clause_remainder_origin,
+                                &mut next_split_group_id,
+                            );
+                            let transition = ClauseState::transition_with_backend(
+                                &mut state,
+                                ClauseCommand::StartClauseNavigation,
+                                ClauseTransitionInput {
+                                    prepare_future_clauses: *prepare_future_clauses,
+                                    ..ClauseTransitionInput::default()
+                                },
+                                &mut ipc_service,
+                            )?;
+                            let effect = transition.effect;
+                            ClauseState::write_back(state);
+                            effect
+                        };
+
+                        if effect.server_reset {
+                            reset_after_empty_server_composition!(
+                                "clause_navigation_ready returned empty composition"
+                            );
+                        } else if effect.applied {
+                            let defer_ui_sync = Self::should_defer_clause_navigation_ready_sync(
+                                &action_values,
+                                action_index,
+                            );
+                            let ready_ui_sync = Self::clause_navigation_ready_ui_sync(effect);
+                            if defer_ui_sync {
+                                deferred_clause_navigation_ready_ui_sync = ready_ui_sync;
+                                Self::log_clause_action_state(
+                                    "defer",
+                                    action,
+                                    &preview,
+                                    &suffix,
+                                    &raw_input,
+                                    &raw_hiragana,
+                                    &fixed_prefix,
+                                    corresponding_count,
+                                    selection_index,
+                                    &candidates,
+                                    &clause_snapshots,
+                                    &future_clause_snapshots,
+                                );
+                                persist_local_state!();
+                                continue;
+                            }
+
+                            self.sync_clause_action_ui(
+                                &preview,
+                                &suffix,
+                                &candidates,
+                                selection_index,
+                                &mut ipc_service,
+                                ready_ui_sync.and_then(|sync| sync.visible),
+                                effect.update_pos,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                ready_ui_sync.and_then(|sync| sync.visible),
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            Self::log_clause_action_state(
+                                "after",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        } else {
+                            Self::log_clause_action_state(
+                                "skip",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        }
+                    }
+                    ClientAction::MoveClause(direction) => {
+                        // Ctrl+Enter rewinds before committing. Intermediate TSF writes in
+                        // this callback can erase the IMM32 host's partial-result string;
+                        // ShrinkText owns the final document and candidate-window update.
+                        let defer_commit_ui_sync =
+                            Self::followup_owns_partial_commit_ui(actions, action_index);
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "server session changed before move_clause"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        Self::log_clause_action_state(
+                            "before",
+                            action,
+                            &preview,
+                            &suffix,
+                            &raw_input,
+                            &raw_hiragana,
+                            &fixed_prefix,
+                            corresponding_count,
+                            selection_index,
+                            &candidates,
+                            &clause_snapshots,
+                            &future_clause_snapshots,
+                        );
+                        let effect = {
+                            let mut state = ClauseState::from_composition_parts(
+                                &mut preview,
+                                &mut suffix,
+                                &mut raw_input,
+                                &mut raw_hiragana,
+                                &mut fixed_prefix,
+                                &mut corresponding_count,
+                                &mut selection_index,
+                                &mut candidates,
+                                &mut clause_snapshots,
+                                &mut future_clause_snapshots,
+                                &mut current_clause_is_split_derived,
+                                &mut current_clause_is_direct_split_remainder,
+                                &mut current_clause_is_pending_remainder,
+                                &mut current_clause_has_split_left_neighbor,
+                                &mut current_clause_right_boundary_displacement,
+                                &mut current_clause_right_boundary_origin,
+                                &mut current_clause_split_group_id,
+                                &mut current_clause_consumed_prefix_restore,
+                                &mut current_clause_remainder_origin,
+                                &mut next_split_group_id,
+                            );
+                            let transition = ClauseState::transition_with_backend(
+                                &mut state,
+                                ClauseCommand::MoveBy(*direction),
+                                ClauseTransitionInput::default(),
+                                &mut ipc_service,
+                            )?;
+                            let effect = transition.effect;
+                            ClauseState::write_back(state);
+                            effect
+                        };
+
+                        let deferred_ready_ui_sync =
+                            Self::deferred_clause_navigation_ready_ui_sync_after_move(
+                                deferred_clause_navigation_ready_ui_sync.take(),
+                                effect,
+                            );
+                        if effect.server_reset
+                            || (ipc_service.take_server_reset_recovered()
+                                && Self::has_client_composition_state(
+                                    &raw_input,
+                                    &preview,
+                                    &suffix,
+                                    &fixed_prefix,
+                                    &candidates,
+                                ))
+                        {
+                            reset_after_empty_server_composition!(
+                                "move_clause detected server reset"
+                            );
+                        } else if effect.applied && !defer_commit_ui_sync {
+                            self.sync_clause_action_ui(
+                                &preview,
+                                &suffix,
+                                &candidates,
+                                selection_index,
+                                &mut ipc_service,
+                                deferred_ready_ui_sync.and_then(|sync| sync.visible),
+                                effect.update_pos,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                deferred_ready_ui_sync.and_then(|sync| sync.visible),
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            Self::log_clause_action_state(
+                                "after",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        } else if let Some(sync) =
+                            deferred_ready_ui_sync.filter(|_| !defer_commit_ui_sync)
+                        {
+                            self.sync_clause_action_ui(
+                                &preview,
+                                &suffix,
+                                &candidates,
+                                selection_index,
+                                &mut ipc_service,
+                                sync.visible,
+                                sync.update_pos,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                sync.visible,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            Self::log_clause_action_state(
+                                "after-deferred",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        } else {
+                            Self::log_clause_action_state(
+                                "skip",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        }
+                    }
+                    ClientAction::AdjustBoundary(direction) => {
+                        if ipc_service.take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            )
+                        {
+                            reset_after_empty_server_composition!(
+                                "server session changed before adjust_boundary"
+                            );
+                            persist_local_state!();
+                            continue;
+                        }
+                        Self::log_clause_action_state(
+                            "before",
+                            action,
+                            &preview,
+                            &suffix,
+                            &raw_input,
+                            &raw_hiragana,
+                            &fixed_prefix,
+                            corresponding_count,
+                            selection_index,
+                            &candidates,
+                            &clause_snapshots,
+                            &future_clause_snapshots,
+                        );
+                        let effect = {
+                            let mut state = ClauseState::from_composition_parts(
+                                &mut preview,
+                                &mut suffix,
+                                &mut raw_input,
+                                &mut raw_hiragana,
+                                &mut fixed_prefix,
+                                &mut corresponding_count,
+                                &mut selection_index,
+                                &mut candidates,
+                                &mut clause_snapshots,
+                                &mut future_clause_snapshots,
+                                &mut current_clause_is_split_derived,
+                                &mut current_clause_is_direct_split_remainder,
+                                &mut current_clause_is_pending_remainder,
+                                &mut current_clause_has_split_left_neighbor,
+                                &mut current_clause_right_boundary_displacement,
+                                &mut current_clause_right_boundary_origin,
+                                &mut current_clause_split_group_id,
+                                &mut current_clause_consumed_prefix_restore,
+                                &mut current_clause_remainder_origin,
+                                &mut next_split_group_id,
+                            );
+                            let transition = ClauseState::transition_with_backend(
+                                &mut state,
+                                ClauseCommand::AdjustBoundary(*direction),
+                                ClauseTransitionInput::default(),
+                                &mut ipc_service,
+                            )?;
+                            let effect = transition.effect;
+                            ClauseState::write_back(state);
+                            effect
+                        };
+
+                        if effect.server_reset
+                            || (ipc_service.take_server_reset_recovered()
+                                && Self::has_client_composition_state(
+                                    &raw_input,
+                                    &preview,
+                                    &suffix,
+                                    &fixed_prefix,
+                                    &candidates,
+                                ))
+                        {
+                            reset_after_empty_server_composition!(
+                                "adjust_boundary detected server reset"
+                            );
+                        } else if effect.applied {
+                            self.sync_clause_action_ui(
+                                &preview,
+                                &suffix,
+                                &candidates,
+                                selection_index,
+                                &mut ipc_service,
+                                None,
+                                effect.update_pos,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            Self::log_clause_action_state(
+                                "after",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        } else {
+                            Self::log_clause_action_state(
+                                "skip",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        }
+                    }
+                    ClientAction::SetIMEMode(mode) => {
+                        let composition_active = self
+                            .borrow()?
+                            .borrow_composition()?
+                            .tip_composition
+                            .is_some();
+                        let position = if composition_active {
+                            let position = self.candidate_window_position()?;
+                            self.end_composition()?;
+                            position
+                        } else {
+                            self.caret_window_position()?
+                        };
+
+                        IMEState::set_input_mode(mode.clone())?;
+
+                        // update the language bar
+                        self.update_lang_bar()?;
+
+                        let mode = match mode {
+                            InputMode::Latin => "A",
+                            InputMode::Kana => "あ",
+                        };
+
+                        ipc_service.update_candidate_window_with_reading(
+                            None,
+                            position,
+                            None,
+                            None,
+                            Some(mode),
+                            Some(""),
+                            Some(false),
+                            None,
+                        )?;
+
+                        selection_index = 0;
+                        corresponding_count = 0;
+                        temporary_latin = false;
+                        temporary_latin_shift_pending = false;
+                        preview.clear();
+                        suffix.clear();
+                        raw_input.clear();
+                        raw_hiragana.clear();
+                        fixed_prefix.clear();
+                        clause_snapshots.clear();
+                        future_clause_snapshots.clear();
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        next_split_group_id = 0;
+                        ipc_service.clear_text()?;
+                    }
+                    ClientAction::SetSelection(selection) => {
+                        Self::log_clause_action_state(
+                            "before",
+                            action,
+                            &preview,
+                            &suffix,
+                            &raw_input,
+                            &raw_hiragana,
+                            &fixed_prefix,
+                            corresponding_count,
+                            selection_index,
+                            &candidates,
+                            &clause_snapshots,
+                            &future_clause_snapshots,
+                        );
+                        let effect = {
+                            let mut state = ClauseState::from_composition_parts(
+                                &mut preview,
+                                &mut suffix,
+                                &mut raw_input,
+                                &mut raw_hiragana,
+                                &mut fixed_prefix,
+                                &mut corresponding_count,
+                                &mut selection_index,
+                                &mut candidates,
+                                &mut clause_snapshots,
+                                &mut future_clause_snapshots,
+                                &mut current_clause_is_split_derived,
+                                &mut current_clause_is_direct_split_remainder,
+                                &mut current_clause_is_pending_remainder,
+                                &mut current_clause_has_split_left_neighbor,
+                                &mut current_clause_right_boundary_displacement,
+                                &mut current_clause_right_boundary_origin,
+                                &mut current_clause_split_group_id,
+                                &mut current_clause_consumed_prefix_restore,
+                                &mut current_clause_remainder_origin,
+                                &mut next_split_group_id,
+                            );
+                            let transition = ClauseState::transition_without_backend(
+                                &mut state,
+                                ClauseCommand::SetSelection(selection),
+                            );
+                            let effect = transition.effect;
+                            ClauseState::write_back(state);
+                            effect
+                        };
+
+                        if effect.applied {
+                            self.sync_clause_action_ui(
+                                &preview,
+                                &suffix,
+                                &candidates,
+                                selection_index,
+                                &mut ipc_service,
+                                None,
+                                effect.update_pos,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            Self::log_clause_action_state(
+                                "after",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        } else {
+                            Self::log_clause_action_state(
+                                "skip",
+                                action,
+                                &preview,
+                                &suffix,
+                                &raw_input,
+                                &raw_hiragana,
+                                &fixed_prefix,
+                                corresponding_count,
+                                selection_index,
+                                &candidates,
+                                &clause_snapshots,
+                                &future_clause_snapshots,
+                            );
+                        }
+                    }
+                    ClientAction::ShrinkText(text) => {
+                        fixed_prefix.clear();
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        let shrunk_raw_input =
+                            Self::current_raw_input_suffix(&raw_input, corresponding_count);
+                        let resolved_symbol_text = match mode {
+                            InputMode::Kana => Self::resolve_symbol_input_text_with_lookup(
+                                &shrunk_raw_input,
+                                text,
+                                app_config,
+                                romaji_lookup,
+                            ),
+                            InputMode::Latin => None,
+                        };
+                        let mut updated_raw_input = shrunk_raw_input.clone();
+                        updated_raw_input.push_str(text);
+
+                        let text = match mode {
+                            InputMode::Kana => {
+                                resolved_symbol_text.unwrap_or_else(|| text.to_string())
+                            }
+                            InputMode::Latin => text.to_string(),
+                        };
+                        let session_changed_before_shrink = ipc_service
+                            .take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            );
+                        let shrunk_candidates = if session_changed_before_shrink {
+                            Candidates::default()
+                        } else {
+                            ipc_service.shrink_text(corresponding_count)?
+                        };
+                        let mut fresh_append_after_server_reset = session_changed_before_shrink
+                            || shrunk_candidates.is_empty_composition();
+                        if fresh_append_after_server_reset {
+                            let reset_reason = if session_changed_before_shrink {
+                                "server session changed before shrink_text"
+                            } else {
+                                "shrink_text returned empty composition before append"
+                            };
+                            reset_stale_composition_before_fresh_append!(reset_reason);
+                            updated_raw_input.clear();
+                            updated_raw_input.push_str(&text);
+                        }
+                        candidates = ipc_service
+                            .append_text_with_context(text.clone(), &shrunk_candidates)?;
+                        if ipc_service.take_server_reset_recovered() {
+                            if !fresh_append_after_server_reset {
+                                reset_stale_composition_before_fresh_append!(
+                                    "shrink_text append recovered after server reset"
+                                );
+                            }
+                            updated_raw_input.clear();
+                            updated_raw_input.push_str(&text);
+                            fresh_append_after_server_reset = true;
+                        }
+                        raw_input = updated_raw_input;
+                        selection_index = 0;
+
+                        let recovered = if let Some(selected) =
+                            Self::select_candidate(&candidates, selection_index)
+                        {
+                            let previous_preview = preview.clone();
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview = selected.text.clone();
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            if fresh_append_after_server_reset {
+                                render_local_text!();
+                            } else {
+                                self.shift_start(&previous_preview, &selected.text)?;
+                            }
+                            self.sync_candidate_window_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                None,
+                                true,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            true
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "shrink_text returned empty composition"
+                            );
+                            false
+                        } else {
+                            true
+                        };
+
+                        if recovered {
+                            Self::flush_pending_learning_commits(
+                                &mut ipc_service,
+                                &mut pending_learning_commits,
+                            );
+                            transition = CompositionState::Composing;
+                            live_conversion_snapshots.clear();
+                            live_conversion_history.clear();
+                        }
+                    }
+                    ClientAction::ShrinkTextRaw(text) => {
+                        fixed_prefix.clear();
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        let mut updated_raw_input =
+                            Self::current_raw_input_suffix(&raw_input, corresponding_count);
+                        updated_raw_input.push_str(text);
+
+                        let session_changed_before_shrink = ipc_service
+                            .take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            );
+                        let shrunk_candidates = if session_changed_before_shrink {
+                            Candidates::default()
+                        } else {
+                            ipc_service.shrink_text(corresponding_count)?
+                        };
+                        let mut fresh_append_after_server_reset = session_changed_before_shrink
+                            || shrunk_candidates.is_empty_composition();
+                        if fresh_append_after_server_reset {
+                            let reset_reason = if session_changed_before_shrink {
+                                "server session changed before shrink_text_raw"
+                            } else {
+                                "shrink_text_raw returned empty composition before append"
+                            };
+                            reset_stale_composition_before_fresh_append!(reset_reason);
+                            updated_raw_input.clear();
+                            updated_raw_input.push_str(text);
+                        }
+                        candidates = ipc_service
+                            .append_text_with_context(text.clone(), &shrunk_candidates)?;
+                        if ipc_service.take_server_reset_recovered() {
+                            if !fresh_append_after_server_reset {
+                                reset_stale_composition_before_fresh_append!(
+                                    "shrink_text_raw append recovered after server reset"
+                                );
+                            }
+                            updated_raw_input.clear();
+                            updated_raw_input.push_str(text);
+                            fresh_append_after_server_reset = true;
+                        }
+                        raw_input = updated_raw_input;
+                        selection_index = 0;
+
+                        let recovered = if let Some(selected) =
+                            Self::select_candidate(&candidates, selection_index)
+                        {
+                            let previous_preview = preview.clone();
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview = selected.text.clone();
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            if fresh_append_after_server_reset {
+                                render_local_text!();
+                            } else {
+                                self.shift_start(&previous_preview, &selected.text)?;
+                            }
+                            self.sync_candidate_window_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                None,
+                                true,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            true
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "shrink_text_raw returned empty composition"
+                            );
+                            false
+                        } else {
+                            true
+                        };
+
+                        if recovered {
+                            Self::flush_pending_learning_commits(
+                                &mut ipc_service,
+                                &mut pending_learning_commits,
+                            );
+                            transition = CompositionState::Composing;
+                            live_conversion_snapshots.clear();
+                            live_conversion_history.clear();
+                        }
+                    }
+                    ClientAction::ShrinkTextDirect(text) => {
+                        fixed_prefix.clear();
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
+                        let mut updated_raw_input =
+                            Self::current_raw_input_suffix(&raw_input, corresponding_count);
+                        updated_raw_input.push_str(text);
+
+                        let session_changed_before_shrink = ipc_service
+                            .take_server_reset_recovered()
+                            && Self::has_client_composition_state(
+                                &raw_input,
+                                &preview,
+                                &suffix,
+                                &fixed_prefix,
+                                &candidates,
+                            );
+                        let shrunk_candidates = if session_changed_before_shrink {
+                            Candidates::default()
+                        } else {
+                            ipc_service.shrink_text(corresponding_count)?
+                        };
+                        let mut fresh_append_after_server_reset = session_changed_before_shrink
+                            || shrunk_candidates.is_empty_composition();
+                        if fresh_append_after_server_reset {
+                            let reset_reason = if session_changed_before_shrink {
+                                "server session changed before shrink_text_direct"
+                            } else {
+                                "shrink_text_direct returned empty composition before append"
+                            };
+                            reset_stale_composition_before_fresh_append!(reset_reason);
+                            updated_raw_input.clear();
+                            updated_raw_input.push_str(text);
+                        }
+                        candidates = ipc_service
+                            .append_text_direct_with_context(text.clone(), &shrunk_candidates)?;
+                        if ipc_service.take_server_reset_recovered() {
+                            if !fresh_append_after_server_reset {
+                                reset_stale_composition_before_fresh_append!(
+                                    "shrink_text_direct append recovered after server reset"
+                                );
+                            }
+                            updated_raw_input.clear();
+                            updated_raw_input.push_str(text);
+                            fresh_append_after_server_reset = true;
+                        }
+                        raw_input = updated_raw_input;
+                        selection_index = 0;
+
+                        let recovered = if let Some(selected) =
+                            Self::select_candidate(&candidates, selection_index)
+                        {
+                            let previous_preview = preview.clone();
+                            selection_index = selected.index;
+                            corresponding_count = selected.corresponding_count;
+                            preview = selected.text.clone();
+                            suffix = selected.sub_text.clone();
+                            raw_hiragana = selected.hiragana;
+
+                            if fresh_append_after_server_reset {
+                                render_local_text!();
+                            } else {
+                                self.shift_start(&previous_preview, &selected.text)?;
+                            }
+                            self.sync_candidate_window_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                None,
+                                true,
+                                Self::live_conversion_reading_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                                None,
+                                Self::live_conversion_reading_vertical_adjustment_for_update(
+                                    app_config,
+                                    &candidates,
+                                    &transition,
+                                ),
+                            )?;
+                            true
+                        } else if candidates.is_empty_composition() {
+                            reset_after_empty_server_composition!(
+                                "shrink_text_direct returned empty composition"
+                            );
+                            false
+                        } else {
+                            true
+                        };
+
+                        if recovered {
+                            Self::flush_pending_learning_commits(
+                                &mut ipc_service,
+                                &mut pending_learning_commits,
+                            );
+                            transition = CompositionState::Composing;
+                            live_conversion_snapshots.clear();
+                            live_conversion_history.clear();
+                        }
+                    }
+                    ClientAction::SetTemporaryLatin(is_temporary_latin) => {
+                        temporary_latin = *is_temporary_latin;
+                        if !temporary_latin {
+                            temporary_latin_shift_pending = false;
+                        }
+                    }
+                    ClientAction::SetTemporaryLatinShiftPending(is_shift_pending) => {
+                        temporary_latin_shift_pending = *is_shift_pending;
+                    }
+                    ClientAction::SetTextWithType(set_type) => {
+                        let clause_raw_input = Self::current_clause_raw_input_preview(
+                            &raw_input,
+                            corresponding_count,
+                            &future_clause_snapshots,
+                        );
+                        let clause_raw_hiragana = Self::current_clause_raw_hiragana_preview(
+                            &raw_hiragana,
+                            corresponding_count,
+                            &future_clause_snapshots,
+                        );
+                        let converted_clause = Self::converted_clause_preview_text(
+                            set_type,
+                            &clause_raw_input,
+                            &clause_raw_hiragana,
+                        );
+
+                        preview = Self::merge_preview_with_prefix(&fixed_prefix, &converted_clause);
+                        Self::clear_current_learning_candidate_ids(&mut candidates);
+                        Self::sync_clause_snapshot_suffixes(
+                            &mut clause_snapshots,
+                            &preview,
+                            &suffix,
+                        );
+                        // Explicit F6-F10 conversion must keep the requested script.
+                        self.set_text(&preview, &suffix)?;
+                    }
+                }
+                if matches!(
+                    action,
+                    ClientAction::ShrinkText(_)
+                        | ClientAction::ShrinkTextRaw(_)
+                        | ClientAction::ShrinkTextDirect(_)
+                ) {
+                    ipc_service.replace_input_ledger_direct(&raw_hiragana);
+                }
+                persist_local_state!();
+            }
+
+            persist_local_state!();
+            self.borrow()?
+                .borrow_mut_composition()?
+                .deferred_actions
+                .clear();
+
+            if let Err(error) = IMEState::set_ipc_service(ipc_service) {
+                tracing::warn!(
+                    ?error,
+                    "Failed to persist updated IPC service into IMEState"
+                );
+            }
+
+            Ok(())
+        })();
+
+        if result.is_ok() && start_jev && self.begin_jev_conversion().is_err() {
+            tracing::debug!("Jev request unavailable; retain KKC candidates");
+        }
+
+        if result.is_err()
+            && Self::terminal_ui_cleanup_required_after_failure(
+                &requested_transition,
+                terminal_ui_cleanup_delegated_to_followup,
+            )
+        {
+            // The requested state is authoritative even when a TSF callback fails
+            // midway through the edit. A deferred replay can carry the old persisted
+            // state, so also reclaim cleanup delegated to a follow-up action that was
+            // never reached. UI cleanup must not require terminal action replay.
+            if let Ok(Some(mut ipc_service)) = IMEState::ipc_service() {
+                let _ = self.hide_candidate_window_ui(&mut ipc_service);
+                let _ = IMEState::set_ipc_service(ipc_service);
+            }
+        }
+
+        if result.as_ref().is_err_and(requires_action_recovery) {
+            if let Some(actions) = retry_actions.as_ref() {
+                let deferred = deferred_action_suffix(actions, failed_action_index);
+                if let Ok(text_service) = self.borrow() {
+                    if let Ok(mut composition) = text_service.borrow_mut_composition() {
+                        composition.deferred_actions = deferred;
+                    }
+                }
+            }
+
+            if let Ok(Some(ipc_service)) = IMEState::ipc_service() {
+                if let Some(snapshot) = failed_ledger_snapshot.take() {
+                    ipc_service.restore_input_ledger(snapshot);
+                }
+                if result
+                    .as_ref()
+                    .is_err_and(requires_server_resynchronization)
+                {
+                    // A TSF callback can fail after the server-side action has already mutated
+                    // its composition. Restart before replaying the deferred action so both
+                    // sides are rebuilt from the restored client ledger.
+                    ipc_service.require_server_recovery("edit_session_action");
+                } else {
+                    ipc_service.ensure_server_restart_requested();
+                }
+                let _ = IMEState::set_ipc_service(ipc_service);
+            }
+        }
+
+        if let (Some(request_id), Some(total_start)) = (trace_request_id, total_start) {
+            let details = match &result {
+                Ok(()) => format!(
+                    "status=success;actions={};requested_transition={requested_transition:?}",
+                    actions.len()
+                ),
+                Err(error) => format!(
+                    "status=error;actions={};requested_transition={requested_transition:?};error={error:?}",
+                    actions.len()
+                ),
+            };
+            Self::log_client_performance(
+                request_id,
+                "handle_action",
+                "total",
+                total_start.elapsed(),
+                details,
+            );
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
+mod jev;
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn authorization_denial_defers_actions_without_server_resynchronization() {
+        let error = anyhow::Error::new(tonic::Status::permission_denied("another live owner"));
+        assert!(requires_action_recovery(&error));
+        assert!(!requires_server_resynchronization(&error));
+        let actions = vec![DeferredClientAction {
+            action: ClientAction::AppendText("k".into()),
+            transition: CompositionState::Composing,
+        }];
+        assert_eq!(deferred_action_suffix(&actions, 0), actions);
+    }
+
+    #[test]
+    fn terminal_suffix_does_not_relearn_commits_during_reentrant_focus_loss() {
+        let actions = vec![
+            DeferredClientAction {
+                action: ClientAction::CommitLearning {
+                    scope: LearningCommitScope::Composition,
+                    kind: LearningCommitKind::Normal,
+                    was_temporary_latin: false,
+                },
+                transition: CompositionState::None,
+            },
+            DeferredClientAction {
+                action: ClientAction::EndComposition,
+                transition: CompositionState::None,
+            },
+        ];
+        let suffix = deferred_action_suffix(&actions, 1);
+        assert_eq!(suffix.len(), 1);
+        assert_eq!(suffix[0].action, ClientAction::EndComposition);
+    }
+
+    #[test]
+    fn ai_assist_priority_prefers_typo_correction_over_predictive() {
+        // 💡 もしかして (TYPO_CORRECTION) は誤字を直す修正型なので優先する
+        let ids = vec![
+            0u64,
+            shared::ai_candidate::TYPO_CORRECTION,
+            shared::ai_candidate::PREDICTIVE,
+        ];
+        let (index, kind) =
+            TextServiceFactory::ai_assist_priority_index(&ids).expect("should resolve");
+        assert_eq!(index, 1);
+        assert_eq!(kind, shared::ai_candidate::TYPO_CORRECTION);
+
+        // 先読みしかない場合は先読みを選ぶ
+        let ids = vec![0u64, shared::ai_candidate::PREDICTIVE];
+        let (index, kind) =
+            TextServiceFactory::ai_assist_priority_index(&ids).expect("should resolve");
+        assert_eq!(index, 1);
+        assert_eq!(kind, shared::ai_candidate::PREDICTIVE);
+
+        // どちらも無ければ提示しない
+        assert!(TextServiceFactory::ai_assist_priority_index(&[0u64, 1u64]).is_none());
+    }
+
+    #[test]
+    fn auto_commit_committed_text_uses_current_preview_remainder() {
+        // 変換結果が確定後に変わると、スナップショット時の preview 幅と
+        // サーバーが確定したテキスト幅がずれる。残り長から確定済み長を
+        // 求めて境界ずれ（確定済みテキストの上書きによる消失）を防ぐ。
+        let committed = TextServiceFactory::auto_commit_committed_text(
+            "私は学校に行って勉強します",
+            "私は",
+            "学校に行って勉強します",
+        );
+        assert_eq!(committed, "私は");
+
+        // 残りが接尾辞にならない場合はスナップショット値へフォールバックする
+        let committed =
+            TextServiceFactory::auto_commit_committed_text("私は学校", "私は", "別のテキスト");
+        assert_eq!(committed, "私は");
+    }
+
+    #[test]
+    fn live_conversion_auto_commit_detects_stable_clause_boundary_and_rebases() {
+        let mut snapshots = Vec::new();
+        let mut history = VecDeque::new();
+
+        let steps = [
+            ("watashiwa", "わたしは", "私は"),
+            ("watashiwagakkouni", "わたしはがっこうに", "私は学校に"),
+            (
+                "watashiwagakkouniik",
+                "わたしはがっこうにいk",
+                "私は学校にいk",
+            ),
+            (
+                "watashiwagakkouniitt",
+                "わたしはがっこうにいっt",
+                "私は学校にいっt",
+            ),
+            (
+                "watashiwagakkouniitte",
+                "わたしはがっこうにいって",
+                "私は学校に行って",
+            ),
+            (
+                "watashiwagakkouniittebe",
+                "わたしはがっこうにいってべ",
+                "私は学校に行ってべ",
+            ),
+            (
+                "watashiwagakkouniittebenn",
+                "わたしはがっこうにいってべん",
+                "私は学校に行ってべん",
+            ),
+            (
+                "watashiwagakkouniittebennkyo",
+                "わたしはがっこうにいってべんきょ",
+                "私は学校に行って勉強",
+            ),
+            (
+                "watashiwagakkouniittebennkyou",
+                "わたしはがっこうにいってべんきょう",
+                "私は学校に行って勉強",
+            ),
+            (
+                "watashiwagakkouniittebennkyoushi",
+                "わたしはがっこうにいってべんきょうし",
+                "私は学校に行って勉強し",
+            ),
+        ];
+
+        let mut committed = None;
+        for (raw_input, raw_hiragana, preview) in steps {
+            TextServiceFactory::record_live_conversion_prefix_snapshot(
+                raw_input,
+                raw_hiragana,
+                preview,
+                "",
+                &mut snapshots,
+                &mut history,
+            );
+            if let Some(snap) = TextServiceFactory::find_auto_commit_live_conversion_snapshot(
+                raw_input,
+                raw_hiragana,
+                preview,
+                "",
+                &snapshots,
+                &history,
+            ) {
+                committed = Some((snap, raw_input, raw_hiragana, preview));
+                break;
+            }
+        }
+
+        let (snap, _, _, preview) = committed.expect("should auto-commit stable prefix");
+        assert_eq!(snap.preview, "私は学校に");
+        assert_eq!(snap.raw_input_len, "watashiwagakkouni".len());
+        assert_eq!(snap.hiragana_len, "わたしはがっこうに".chars().count());
+
+        let remaining_preview = preview.strip_prefix(&snap.preview).unwrap();
+        TextServiceFactory::rebase_live_conversion_auto_commit_state(
+            &mut snapshots,
+            &mut history,
+            snap.raw_input_len,
+            snap.hiragana_len,
+            &snap.preview,
+            remaining_preview,
+        );
+        assert!(snapshots.iter().any(|s| s.preview == "行って"));
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn live_conversion_auto_commit_never_splits_inside_kanji_or_pending_romaji() {
+        assert!(!TextServiceFactory::is_natural_auto_commit_prefix(
+            "私は学",
+            "私は学校に行って勉強する"
+        ));
+        assert!(!TextServiceFactory::is_natural_auto_commit_prefix(
+            "私は学校に行",
+            "私は学校に行って勉強する"
+        ));
+        assert!(!TextServiceFactory::is_natural_auto_commit_prefix(
+            "私は学校にい",
+            "私は学校に行って勉強する"
+        ));
+        assert!(TextServiceFactory::is_natural_auto_commit_prefix(
+            "私は学校に",
+            "私は学校に行って勉強する"
+        ));
+        assert!(TextServiceFactory::raw_input_has_pending_romaji_tail(
+            "watashiwagakkoun",
+            "わたしはがっこうん"
+        ));
+        assert!(!TextServiceFactory::raw_input_has_pending_romaji_tail(
+            "watashiwagakkounn",
+            "わたしはがっこうん"
+        ));
+    }
+}
