@@ -1,0 +1,316 @@
+syntax = "proto3";
+
+package azookey;
+
+message Suggestion {
+  string text = 1;    // The main suggestion text.
+  string subtext = 2; // Additional information or subtext for the suggestion.
+  int32 corresponding_count = 3;
+  uint64 candidate_id = 4;
+}
+
+// ComposingText represents the text and its associated suggestions.
+message ComposingText {
+  string hiragana = 1; // The main text content.
+  repeated Suggestion suggestions = 2; // List of suggestions for the text.
+}
+
+enum InputStyle {
+  ROMAN2KANA = 0;
+  DIRECT = 1;
+}
+
+// Request message for AppendText.
+message AppendTextRequest {
+  string text_to_append = 1; // The text to append to the current content.
+  InputStyle input_style = 2;
+  uint64 request_id = 3;
+}
+
+// Response message for AppendText.
+message AppendTextResponse {
+  ComposingText composing_text = 1; // The resulting text and suggestions.
+  uint64 server_session_id = 2; // Identifies the current server process session.
+}
+
+// A client-observed successful mutation used to rebuild server composition
+// after an ambiguous transport failure. Replaying the complete log after a
+// clear is intentionally idempotent.
+enum CompositionOperationKind {
+  COMPOSITION_OPERATION_KIND_APPEND = 0;
+  COMPOSITION_OPERATION_KIND_REMOVE = 1;
+  COMPOSITION_OPERATION_KIND_MOVE_CURSOR = 2;
+}
+
+message CompositionOperation {
+  CompositionOperationKind kind = 1;
+  string text = 2;
+  InputStyle input_style = 3;
+  int32 cursor_offset = 4;
+}
+
+message ReplaceCompositionRequest {
+  repeated CompositionOperation operations = 1;
+  uint64 request_id = 2;
+}
+
+message ReplaceCompositionResponse {
+  ComposingText composing_text = 1;
+  uint64 server_session_id = 2;
+}
+
+// Starts reverse conversion from a finalized surface string. The operation is
+// absolute and idempotent: a successful request replaces the server's current
+// composition with the inferred reading, while an unsupported surface leaves
+// the current server state untouched.
+message StartReconversionRequest {
+  string surface = 1;
+  uint64 request_id = 2;
+}
+
+message StartReconversionResponse {
+  ComposingText composing_text = 1;
+  uint64 server_session_id = 2;
+  int32 selection_index = 3;
+  bool applied = 4;
+}
+
+// Request message for RemoveText.
+message RemoveTextRequest {
+  uint64 request_id = 1;
+}
+
+// Response message for RemoveText.
+message RemoveTextResponse {
+  ComposingText composing_text = 1; // The resulting text and suggestions.
+  uint64 server_session_id = 2; // Identifies the current server process session.
+  // New clients must not interpret an older server's missing field as an empty
+  // composition. Absence triggers reconstruction with the current server.
+  optional string raw_input = 3; // Exact remaining raw input after mapped deletion.
+}
+
+message MoveCursorRequest {
+  int32 offset = 1; // Relative cursor movement in input units.
+  uint64 request_id = 2;
+}
+
+// Moves a clause boundary to the adjacent independent input segment. The
+// current boundary is expressed in raw input elements so alternate romaji
+// spellings remain atomic even when their kana lengths differ.
+message AdjustClauseBoundaryRequest {
+  int32 current_input_count = 1;
+  int32 direction = 2;
+  uint64 request_id = 3;
+  // Raw input currently materialized on the client (the full current
+  // remainder, not only the selected clause). This gives
+  // current_input_count an unambiguous coordinate space.
+  string expected_raw_input = 4;
+}
+
+message AdjustClauseBoundaryResponse {
+  ComposingText composing_text = 1;
+  bool applied = 2;
+  int32 adjusted_input_count = 3;
+  int32 cursor_offset = 4;
+  uint64 server_session_id = 5;
+}
+
+enum CompositionSnapshotOperation {
+  COMPOSITION_SNAPSHOT_OPERATION_UNSPECIFIED = 0;
+  COMPOSITION_SNAPSHOT_OPERATION_CLEAR = 1;
+  COMPOSITION_SNAPSHOT_OPERATION_PUSH = 2;
+  COMPOSITION_SNAPSHOT_OPERATION_POP = 3;
+}
+
+message UpdateCompositionSnapshotRequest {
+  CompositionSnapshotOperation operation = 1;
+  uint64 request_id = 2;
+  // Candidate selected by the client when pushing or popping a clause
+  // snapshot. The server keeps only this still-referenced learning candidate
+  // when bounded candidate batches are evicted.
+  uint64 selected_candidate_id = 3;
+}
+
+message UpdateCompositionSnapshotResponse {
+  uint64 server_session_id = 1;
+}
+
+// Request message for ShrinkText.
+message ShrinkTextRequest {
+  int32 offset = 1;
+  uint64 request_id = 2;
+}
+
+message ShrinkTextResponse {
+  ComposingText composing_text = 1; // The resulting text and suggestions.
+  uint64 server_session_id = 2; // Identifies the current server process session.
+}
+
+// Advances clause navigation as one server-side transaction. The snapshot is
+// pushed before shrinking so moving left can restore the previous clause.
+message AdvanceClauseRequest {
+  int32 offset = 1;
+  uint64 request_id = 2;
+  uint64 selected_candidate_id = 3;
+}
+
+message AdvanceClauseResponse {
+  ComposingText shrunk_text = 1;
+  ComposingText navigation_text = 2;
+  uint64 server_session_id = 3;
+  // Raw input that remains after the server atomically shrinks the current
+  // clause. The client uses this to validate cached future-clause snapshots.
+  string raw_input = 4;
+}
+
+message PreparedClauseAdvance {
+  ComposingText shrunk_text = 1;
+  ComposingText navigation_text = 2;
+}
+
+message PrepareFutureClausesRequest {
+  int32 initial_offset = 1;
+  uint64 request_id = 2;
+  // Keep the server-side composition snapshots and cursor at the final
+  // prepared clause. Used by initial left-arrow navigation so the client can
+  // move to the last clause without replaying one RPC per clause.
+  bool leave_at_last = 3;
+  uint64 initial_selected_candidate_id = 4;
+}
+
+message PrepareFutureClausesResponse {
+  repeated PreparedClauseAdvance advances = 1;
+  uint64 server_session_id = 2;
+  // True only when preparation reached the final clause. If false, a
+  // leave_at_last request has been rolled back to its initial server state.
+  bool completed = 3;
+}
+
+// Response message for MoveCursor.
+message MoveCursorResponse {
+  ComposingText composing_text = 1; // The resulting text and suggestions.
+  uint64 server_session_id = 2; // Identifies the current server process session.
+  // Present for offset-zero refreshes so a client recovering an edit response
+  // can restore the server's exact raw-input identity without replaying it.
+  optional string raw_input = 3;
+}
+
+// Request message for ClearText.
+message ClearTextRequest {
+  uint64 request_id = 1;
+}
+
+// Response message for ClearText.
+message ClearTextResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+}
+
+message SetContextRequest {
+  string context = 1;
+  uint64 request_id = 2;
+}
+
+message SetContextResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+}
+
+message UpdateConfigRequest {
+  uint64 request_id = 1;
+}
+message UpdateConfigResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+}
+
+enum LearningCommitKind {
+  LEARNING_COMMIT_KIND_UNSPECIFIED = 0;
+  LEARNING_COMMIT_KIND_NORMAL = 1;
+  LEARNING_COMMIT_KIND_PUNCTUATION = 2;
+  LEARNING_COMMIT_KIND_PARTIAL = 3;
+}
+
+message CommitLearningCandidateRequest {
+  uint64 candidate_id = 1;
+  LearningCommitKind commit_kind = 2;
+  uint64 request_id = 3;
+  // Surface the client committed. AI assist candidates (the reserved 999xxx
+  // range) are not known to the conversion engine, so the server uses this
+  // value to resolve the committed text against its own candidate records.
+  // Empty for conversion engine candidates.
+  string surface = 4;
+}
+
+message CommitLearningCandidateResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+}
+
+message LearningCandidateCommit {
+  uint64 candidate_id = 1;
+  LearningCommitKind commit_kind = 2;
+  // Surface the client committed. Empty for conversion engine candidates.
+  string surface = 3;
+}
+
+message CommitLearningCandidatesRequest {
+  repeated LearningCandidateCommit commits = 1;
+  uint64 request_id = 2;
+}
+
+message CommitLearningCandidatesResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+  uint32 committed_count = 2;
+}
+
+message ResetLearningMemoryRequest {
+  uint64 request_id = 1;
+}
+
+message ResetLearningMemoryResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+  bool reset = 2;
+}
+
+message PerformanceLogRequest {
+  uint64 request_id = 1;
+  string component = 2;
+  string operation = 3;
+  string stage = 4;
+  uint64 elapsed_ms = 5;
+  string details = 6;
+}
+
+message PerformanceLogResponse {}
+
+
+// Stateless selection over a client snapshot; never mutates server composition.
+message RerankCandidatesRequest {
+  string reading = 1;
+  string context = 2;
+  repeated string candidates = 3;
+  bool allow_remote = 4;
+  uint64 request_id = 5;
+}
+message RerankCandidatesResponse {
+  optional uint32 selected_index = 1;
+}
+
+// Service definition for text editing operations.
+service AzookeyService {
+  rpc RerankCandidates (RerankCandidatesRequest) returns (RerankCandidatesResponse);
+  rpc AppendText (AppendTextRequest) returns (AppendTextResponse);
+  rpc ReplaceComposition (ReplaceCompositionRequest) returns (ReplaceCompositionResponse);
+  rpc StartReconversion (StartReconversionRequest) returns (StartReconversionResponse);
+  rpc RemoveText (RemoveTextRequest) returns (RemoveTextResponse);
+  rpc ShrinkText (ShrinkTextRequest) returns (ShrinkTextResponse);
+  rpc AdvanceClause (AdvanceClauseRequest) returns (AdvanceClauseResponse);
+  rpc PrepareFutureClauses (PrepareFutureClausesRequest) returns (PrepareFutureClausesResponse);
+  rpc MoveCursor (MoveCursorRequest) returns (MoveCursorResponse);
+  rpc AdjustClauseBoundary (AdjustClauseBoundaryRequest) returns (AdjustClauseBoundaryResponse);
+  rpc UpdateCompositionSnapshot (UpdateCompositionSnapshotRequest) returns (UpdateCompositionSnapshotResponse);
+  rpc ClearText (ClearTextRequest) returns (ClearTextResponse);
+  rpc SetContext (SetContextRequest) returns (SetContextResponse);
+  rpc UpdateConfig (UpdateConfigRequest) returns (UpdateConfigResponse);
+  rpc CommitLearningCandidate (CommitLearningCandidateRequest) returns (CommitLearningCandidateResponse);
+  rpc CommitLearningCandidates (CommitLearningCandidatesRequest) returns (CommitLearningCandidatesResponse);
+  rpc ResetLearningMemory (ResetLearningMemoryRequest) returns (ResetLearningMemoryResponse);
+  rpc LogPerformance (PerformanceLogRequest) returns (PerformanceLogResponse);
+}

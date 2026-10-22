@@ -1,0 +1,318 @@
+// reference to the original code:
+// https://github.com/google/mozc/blob/master/src/win32/tip/tip_surrounding_text.cc
+
+use std::{mem::ManuallyDrop, rc::Rc, time::Instant};
+
+use anyhow::Result;
+use windows::{
+    core::{IUnknown, Interface},
+    Win32::UI::TextServices::{
+        ITfCompartmentMgr, ITfContext, ITfDocumentMgr, GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT,
+        TF_ANCHOR_START, TF_DEFAULT_SELECTION, TF_HALTCOND, TF_HF_OBJECT, TF_SELECTION,
+        TF_TF_MOVESTART, TS_SS_TRANSITORY,
+    },
+};
+
+use crate::{
+    engine::{ipc_service::current_input_trace_request_id, state::IMEState},
+    extension::utf16_code_unit_len,
+};
+
+use super::{edit_session::read_edit_session, factory::TextServiceFactory};
+
+fn preview_end_shift(preview: &str) -> anyhow::Result<i32> {
+    Ok(-utf16_code_unit_len(preview)?)
+}
+
+impl TextServiceFactory {
+    fn log_update_context_performance(
+        request_id: u64,
+        stage: &str,
+        start: Instant,
+        details: impl Into<String>,
+    ) {
+        if let Ok(Some(ipc_service)) = IMEState::ipc_service() {
+            ipc_service.log_client_performance(
+                request_id,
+                "update_context",
+                stage,
+                start.elapsed(),
+                details.into(),
+            );
+        }
+    }
+
+    fn to_parent_document_if_exists(
+        &self,
+        document_manager: Option<ITfDocumentMgr>,
+    ) -> Result<ITfDocumentMgr> {
+        let document_manager = match document_manager {
+            Some(doc_mgr) => doc_mgr,
+            None => return Err(anyhow::anyhow!("Document manager is null")),
+        };
+
+        unsafe {
+            // Get top context
+            let context = match document_manager.GetTop() {
+                Ok(ctx) => ctx,
+                Err(_) => return Ok(document_manager),
+            };
+
+            // Get status
+            let status = match context.GetStatus() {
+                Ok(s) => s,
+                Err(_) => return Ok(document_manager),
+            };
+
+            // Check if context is transitory
+            if (status.dwStaticFlags & TS_SS_TRANSITORY) != TS_SS_TRANSITORY {
+                return Ok(document_manager);
+            }
+
+            // Get compartment manager
+            let compartment_mgr = match document_manager.cast::<ITfCompartmentMgr>() {
+                Ok(mgr) => mgr,
+                Err(_) => return Ok(document_manager),
+            };
+
+            // Get compartment
+            let compartment = match compartment_mgr
+                .GetCompartment(&GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT)
+            {
+                Ok(comp) => comp,
+                Err(_) => return Ok(document_manager),
+            };
+
+            // Get value
+            let variant = match compartment.GetValue() {
+                Ok(var) => var,
+                Err(_) => return Ok(document_manager),
+            };
+
+            // Use a cloned IUnknown from VARIANT to avoid invalid reference-count handling.
+            // If this is not VT_UNKNOWN (or null), treat it as "parent not available".
+            let variant_unk = match IUnknown::try_from(&variant) {
+                Ok(unk) => unk,
+                Err(_) => return Ok(document_manager),
+            };
+
+            match variant_unk.cast::<ITfDocumentMgr>() {
+                Ok(parent_doc_mgr) => Ok(parent_doc_mgr),
+                Err(_) => Ok(document_manager),
+            }
+        }
+    }
+
+    fn to_parent_context_if_exists(&self, context: Option<ITfContext>) -> Result<ITfContext> {
+        let context = match context {
+            Some(ctx) => ctx,
+            None => return Err(anyhow::anyhow!("Context is null")),
+        };
+
+        unsafe {
+            // Get document manager
+            let document_mgr = match context.GetDocumentMgr() {
+                Ok(doc_mgr) => doc_mgr,
+                Err(_) => return Ok(context),
+            };
+
+            // Get parent document
+            let parent_doc_mgr = self.to_parent_document_if_exists(Some(document_mgr))?;
+
+            // Get top context from parent document
+            let parent_context = match parent_doc_mgr.GetTop() {
+                Ok(ctx) => ctx,
+                Err(_) => return Ok(context),
+            };
+
+            Ok(parent_context)
+        }
+    }
+
+    pub fn update_context(&self, preview: &str) -> Result<Option<String>> {
+        self.update_context_with_scope_check(preview, false)
+    }
+
+    pub(crate) fn update_context_for_jev(&self, preview: &str) -> Result<Option<String>> {
+        self.update_context_with_scope_check(preview, true)
+    }
+
+    fn update_context_with_scope_check(
+        &self,
+        preview: &str,
+        for_jev: bool,
+    ) -> Result<Option<String>> {
+        let trace_request_id = current_input_trace_request_id();
+        let total_start = trace_request_id.map(|_| Instant::now());
+        let result: Result<Option<String>> = (|| unsafe {
+            let (tid, parent_context) = {
+                let text_service = self.borrow()?;
+                let context = text_service.context::<ITfContext>()?;
+                let parent_context = self.to_parent_context_if_exists(Some(context))?;
+                (text_service.tid, parent_context)
+            };
+
+            let edit_session_start = trace_request_id.map(|_| Instant::now());
+            let preview_end_shift = preview_end_shift(preview)?;
+            let preceding_text = read_edit_session::<String>(
+                tid,
+                parent_context.clone(),
+                Rc::new({
+                    move |cookie| {
+                        // 2. Get the selection from the parent context.
+                        let mut pselection: [TF_SELECTION; 1] = [TF_SELECTION::default()];
+                        let mut pfetched = 0;
+                        parent_context.GetSelection(
+                            cookie,
+                            TF_DEFAULT_SELECTION,
+                            &mut pselection,
+                            &mut pfetched,
+                        )?;
+
+                        if pfetched == 0 {
+                            return Ok(String::new());
+                        }
+
+                        let range = match pselection[0].range.as_ref() {
+                            Some(range) => range.Clone()?,
+                            None => return Ok(String::new()),
+                        };
+
+                        let mut preceding_range_shifted = 0;
+
+                        let halt_cond = TF_HALTCOND {
+                            pHaltRange: ManuallyDrop::new(None),
+                            aHaltPos: TF_ANCHOR_START,
+                            dwFlags: TF_HF_OBJECT,
+                        };
+
+                        let preceding_range = range.Clone()?;
+                        preceding_range.Collapse(cookie, TF_ANCHOR_START)?;
+                        preceding_range.ShiftStart(
+                            cookie,
+                            -30,
+                            &mut preceding_range_shifted,
+                            &halt_cond,
+                        )?;
+
+                        preceding_range.ShiftEnd(
+                            cookie,
+                            preview_end_shift,
+                            &mut preceding_range_shifted,
+                            &halt_cond,
+                        )?;
+
+                        if for_jev
+                            && !Self::jev_context_range_allows_remote_scoring(
+                                &parent_context,
+                                cookie,
+                                &preceding_range,
+                            )
+                            .unwrap_or(false)
+                        {
+                            // Do not read sensitive/unchecked text, or reuse cached context.
+                            return Ok(String::new());
+                        }
+
+                        let mut pchtext = [0u16; 64];
+                        let mut pcch = 0;
+                        preceding_range.GetText(
+                            cookie,
+                            TF_TF_MOVESTART,
+                            &mut pchtext,
+                            &mut pcch,
+                        )?;
+
+                        Ok(String::from_utf16_lossy(&pchtext[..pcch as usize]))
+                    }
+                }),
+            )?;
+            if let (Some(request_id), Some(edit_session_start)) =
+                (trace_request_id, edit_session_start)
+            {
+                Self::log_update_context_performance(
+                    request_id,
+                    "edit_session",
+                    edit_session_start,
+                    format!(
+                        "status=success;preview_len={};preceding_text_present=true",
+                        preview.chars().count()
+                    ),
+                );
+            }
+
+            // Jev passes this fresh value explicitly; it must not touch KKC's cache
+            // or issue the normal synchronous set_context RPC.
+            if for_jev {
+                return Ok(Some(preceding_text));
+            }
+
+            let Some(mut ipc_service) = IMEState::ipc_service()? else {
+                return Ok(Some(preceding_text));
+            };
+
+            let connection_id = ipc_service.connection_id();
+            let should_set_context = {
+                let text_service = self.borrow_mut()?;
+                text_service
+                    .surrounding_text_context_state
+                    .should_send(ipc_service.context_cache_key(), &preceding_text)
+            };
+            if !should_set_context {
+                if let Some(request_id) = trace_request_id {
+                    Self::log_update_context_performance(
+                        request_id,
+                        "set_context",
+                        Instant::now(),
+                        format!(
+                            "status=skipped;reason=unchanged;preview_len={};context_len={};connection_id={connection_id}",
+                            preview.chars().count(),
+                            preceding_text.chars().count()
+                        ),
+                    );
+                }
+                return Ok(Some(preceding_text));
+            }
+
+            ipc_service.set_context(preceding_text.clone())?;
+            {
+                let mut text_service = self.borrow_mut()?;
+                text_service
+                    .surrounding_text_context_state
+                    .remember(ipc_service.context_cache_key(), &preceding_text);
+            }
+            IMEState::set_ipc_service(ipc_service)?;
+
+            Ok(Some(preceding_text))
+        })();
+
+        if let (Some(request_id), Some(total_start)) = (trace_request_id, total_start) {
+            let details = match &result {
+                Ok(_) => format!("status=success;preview_len={}", preview.chars().count()),
+                Err(error) => format!(
+                    "status=error;preview_len={};error={error:?}",
+                    preview.chars().count()
+                ),
+            };
+            Self::log_update_context_performance(request_id, "total", total_start, details);
+        }
+
+        if let Err(error) = &result {
+            tracing::warn!("Failed to update surrounded text context: {error:?}");
+        }
+
+        Ok(result.ok().flatten())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_end_shift;
+
+    #[test]
+    fn utf16_tsf_boundary_surrounded_text_excludes_preview_by_code_units() {
+        assert_eq!(preview_end_shift("😀かな").unwrap(), -4);
+        assert_eq!(preview_end_shift("か😀な").unwrap(), -4);
+        assert_eq!(preview_end_shift("かな𠮷").unwrap(), -4);
+    }
+}

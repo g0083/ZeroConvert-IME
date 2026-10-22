@@ -1,0 +1,10 @@
+[submodule "windows-dictionary"]
+	path = windows/server-swift/azooKey_dictionary_storage
+	url = https://github.com/ensan-hcl/azooKey_dictionary_storage.git
+[submodule "windows-emoji-dictionary"]
+	path = windows/server-swift/azooKey_emoji_dictionary_storage
+	url = https://github.com/ensan-hcl/azooKey_emoji_dictionary_storage.git
+[submodule "android-llama"]
+	path = android/app/src/main/cpp/llama.cpp
+	url = https://github.com/ggerganov/llama.cpp.git
+	ignore = dirty

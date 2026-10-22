@@ -1,0 +1,326 @@
+use anyhow::Result;
+use hyper_util::rt::TokioIo;
+use shared::proto::azookey_service_client::AzookeyServiceClient;
+use std::{
+    os::windows::io::IntoRawHandle,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{net::windows::named_pipe::NamedPipeClient, time};
+use tonic::transport::Endpoint;
+use tower::service_fn;
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_PIPE_BUSY};
+
+const IPC_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const IPC_CONNECT_DEADLINE: Duration = Duration::from_secs(2);
+const SETTINGS_RPC_DEADLINE: Duration = Duration::from_secs(5);
+
+fn open_named_pipe_client(pipe_name: &str) -> std::io::Result<NamedPipeClient> {
+    let handle = shared::open_named_pipe_client_handle(pipe_name)?;
+    unsafe { NamedPipeClient::from_raw_handle(handle.into_raw_handle()) }
+}
+
+// connect to kkc server
+#[derive(Debug, Clone)]
+pub struct IPCService {
+    // kkc server client
+    azookey_client: AzookeyServiceClient<tonic::transport::channel::Channel>,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl IPCService {
+    pub fn new() -> Result<Self> {
+        Self::new_inner(None)
+    }
+
+    pub fn get_or_connect(connection: &mut Option<Self>) -> Result<&mut Self> {
+        Self::get_or_connect_with(connection, Self::new)
+    }
+
+    fn get_or_connect_with(
+        connection: &mut Option<Self>,
+        connect: impl FnOnce() -> Result<Self>,
+    ) -> Result<&mut Self> {
+        if connection.is_none() {
+            *connection = Some(connect()?);
+        }
+        Ok(connection.as_mut().unwrap())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime should be created");
+        let server_channel = {
+            let _runtime_guard = runtime.enter();
+            Endpoint::from_static("http://[::]:50051").connect_lazy()
+        };
+        let azookey_client = AzookeyServiceClient::new(server_channel);
+
+        Self {
+            azookey_client,
+            runtime: Arc::new(runtime),
+        }
+    }
+
+    pub fn new_with_timeout(timeout: Duration) -> Result<Self> {
+        Self::new_inner(Some(timeout))
+    }
+
+    fn new_inner(timeout: Option<Duration>) -> Result<Self> {
+        let pipe_path = shared::server_pipe_path()?;
+        let runtime = tokio::runtime::Runtime::new()?;
+        let connect_deadline = connect_deadline(timeout);
+
+        let endpoint = Endpoint::try_from("http://[::]:50051")?;
+        let connect = endpoint.connect_with_connector(service_fn(move |_| async move {
+            let started_at = Instant::now();
+            let client = loop {
+                match open_named_pipe_client(pipe_path) {
+                    Ok(client) => break client,
+                    Err(e)
+                        if should_retry_pipe_connect_error(
+                            e.raw_os_error(),
+                            started_at,
+                            timeout,
+                        ) => {}
+                    Err(e) => return Err(e),
+                }
+
+                time::sleep(IPC_RETRY_INTERVAL).await;
+            };
+
+            Ok::<_, std::io::Error>(TokioIo::new(client))
+        }));
+        let server_channel: tonic::transport::Channel = runtime.block_on(async {
+            match time::timeout(connect_deadline, connect).await {
+                Ok(result) => result.map_err(anyhow::Error::from),
+                Err(_) => Err(anyhow::anyhow!("settings IPC connect deadline exceeded")),
+            }
+        })?;
+
+        let azookey_client = AzookeyServiceClient::new(server_channel);
+
+        Ok(Self {
+            azookey_client,
+            runtime: Arc::new(runtime),
+        })
+    }
+}
+
+fn connect_deadline(timeout: Option<Duration>) -> Duration {
+    timeout.unwrap_or(IPC_CONNECT_DEADLINE)
+}
+
+fn should_retry_pipe_connect_error(
+    raw_os_error: Option<i32>,
+    started_at: Instant,
+    timeout: Option<Duration>,
+) -> bool {
+    match timeout {
+        Some(timeout) if started_at.elapsed() >= timeout => return false,
+        Some(_) => {}
+        None => return raw_os_error == Some(ERROR_PIPE_BUSY.0 as i32),
+    }
+
+    raw_os_error == Some(ERROR_FILE_NOT_FOUND.0 as i32)
+        || raw_os_error == Some(ERROR_PATH_NOT_FOUND.0 as i32)
+        || raw_os_error == Some(ERROR_PIPE_BUSY.0 as i32)
+}
+
+// implement methods to interact with kkc server
+impl IPCService {
+    pub fn update_config(&mut self) -> anyhow::Result<()> {
+        let mut request = tonic::Request::new(shared::proto::UpdateConfigRequest { request_id: 0 });
+        request.set_timeout(SETTINGS_RPC_DEADLINE);
+        self.runtime.clone().block_on(async {
+            time::timeout(
+                SETTINGS_RPC_DEADLINE,
+                self.azookey_client.update_config(request),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("update_config IPC deadline exceeded"))??;
+            anyhow::Ok(())
+        })?;
+
+        Ok(())
+    }
+
+    pub fn reset_learning_memory(&mut self) -> anyhow::Result<bool> {
+        let mut request =
+            tonic::Request::new(shared::proto::ResetLearningMemoryRequest { request_id: 0 });
+        request.set_timeout(SETTINGS_RPC_DEADLINE);
+        let response = self
+            .runtime
+            .clone()
+            .block_on(async {
+                match time::timeout(
+                    SETTINGS_RPC_DEADLINE,
+                    self.azookey_client.reset_learning_memory(request),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(anyhow::Error::from),
+                    Err(_) => Err(anyhow::anyhow!(
+                        "reset_learning_memory IPC deadline exceeded"
+                    )),
+                }
+            })?
+            .into_inner();
+
+        Ok(response.reset)
+    }
+
+    pub fn convert_text(
+        &mut self,
+        context: &str,
+        target: &str,
+    ) -> anyhow::Result<(Vec<String>, f64)> {
+        let runtime = self.runtime.clone();
+        runtime.block_on(async {
+            let mut clear_req =
+                tonic::Request::new(shared::proto::ClearTextRequest { request_id: 10 });
+            clear_req.set_timeout(SETTINGS_RPC_DEADLINE);
+            let _ = self.azookey_client.clear_text(clear_req).await;
+
+            if !context.is_empty() {
+                let mut ctx_req = tonic::Request::new(shared::proto::SetContextRequest {
+                    context: context.to_string(),
+                    request_id: 11,
+                });
+                ctx_req.set_timeout(SETTINGS_RPC_DEADLINE);
+                let _ = self.azookey_client.set_context(ctx_req).await;
+            }
+
+            let start = std::time::Instant::now();
+            let mut append_req = tonic::Request::new(shared::proto::AppendTextRequest {
+                text_to_append: target.to_string(),
+                input_style: shared::proto::InputStyle::Direct as i32,
+                request_id: 12,
+            });
+            append_req.set_timeout(SETTINGS_RPC_DEADLINE);
+            let response = self
+                .azookey_client
+                .append_text(append_req)
+                .await?
+                .into_inner();
+            let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+            let suggestions = if let Some(composing) = response.composing_text {
+                composing.suggestions.into_iter().map(|s| s.text).collect()
+            } else {
+                Vec::new()
+            };
+
+            Ok((suggestions, latency_ms))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        connect_deadline, should_retry_pipe_connect_error, ERROR_FILE_NOT_FOUND,
+        ERROR_PATH_NOT_FOUND, ERROR_PIPE_BUSY, IPC_CONNECT_DEADLINE,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn reconnects_after_startup_failure_and_reuses_the_connection() {
+        let mut connection = None;
+        assert!(super::IPCService::get_or_connect_with(&mut connection, || {
+            anyhow::bail!("server has not started")
+        })
+        .is_err());
+        assert!(connection.is_none());
+        assert!(super::IPCService::get_or_connect_with(&mut connection, || {
+            Ok(super::IPCService::new_for_test())
+        })
+        .is_ok());
+        assert!(super::IPCService::get_or_connect_with(&mut connection, || {
+            panic!("an existing connection must be reused")
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn explicit_reconnect_timeout_controls_outer_deadline() {
+        let reconnect_timeout = Duration::from_secs(10);
+
+        assert_eq!(connect_deadline(Some(reconnect_timeout)), reconnect_timeout);
+        assert_eq!(connect_deadline(None), IPC_CONNECT_DEADLINE);
+    }
+
+    #[test]
+    fn retries_missing_and_busy_pipe_errors_before_timeout() {
+        let started_at = Instant::now();
+        let timeout = Some(Duration::from_secs(10));
+
+        assert!(should_retry_pipe_connect_error(
+            Some(ERROR_FILE_NOT_FOUND.0 as i32),
+            started_at,
+            timeout
+        ));
+        assert!(should_retry_pipe_connect_error(
+            Some(ERROR_PATH_NOT_FOUND.0 as i32),
+            started_at,
+            timeout
+        ));
+        assert!(should_retry_pipe_connect_error(
+            Some(ERROR_PIPE_BUSY.0 as i32),
+            started_at,
+            timeout
+        ));
+    }
+
+    #[test]
+    fn stops_retrying_busy_pipe_after_timeout() {
+        let timeout = Duration::from_secs(10);
+        let started_at = Instant::now() - timeout;
+
+        assert!(!should_retry_pipe_connect_error(
+            Some(ERROR_PIPE_BUSY.0 as i32),
+            started_at,
+            Some(timeout)
+        ));
+    }
+
+    #[test]
+    fn retries_busy_pipe_without_timeout() {
+        let started_at = Instant::now();
+
+        assert!(should_retry_pipe_connect_error(
+            Some(ERROR_PIPE_BUSY.0 as i32),
+            started_at,
+            None
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_missing_pipe_without_timeout() {
+        let started_at = Instant::now();
+
+        assert!(!should_retry_pipe_connect_error(
+            Some(ERROR_FILE_NOT_FOUND.0 as i32),
+            started_at,
+            None
+        ));
+        assert!(!should_retry_pipe_connect_error(
+            Some(ERROR_PATH_NOT_FOUND.0 as i32),
+            started_at,
+            None
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_other_pipe_errors() {
+        let started_at = Instant::now();
+        let timeout = Some(Duration::from_secs(10));
+
+        assert!(!should_retry_pipe_connect_error(
+            Some(5),
+            started_at,
+            timeout
+        ));
+        assert!(!should_retry_pipe_connect_error(None, started_at, timeout));
+    }
+}

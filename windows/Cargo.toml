@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/client",
+  "crates/server",
+  "crates/shared",
+  "crates/ui",
+  "crates/macros",
+  "crates/launcher",
+  "frontend/src-tauri"
+]

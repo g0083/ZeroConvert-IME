@@ -1,0 +1,24 @@
+* text=auto
+*.py text eol=lf
+*.rs text eol=lf
+*.swift text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.json text eol=lf
+.gitmodules text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.patch text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+gradlew text eol=lf
+*.png binary
+*.ico binary
+*.jar binary
+# LOUDS dictionaries contain binary tables even when Git's heuristic sees text.
+/android/app/src/main/assets/dictionary/** binary
+# Keep the empty trailing dictionary column; it is source data, not code whitespace.
+/android/app/src/main/assets/emoji_all_E15.1.txt whitespace=-blank-at-eol

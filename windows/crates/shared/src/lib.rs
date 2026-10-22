@@ -1,0 +1,1864 @@
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    env, error, fmt, fs, io,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
+
+// Generated Tonic APIs prescribe tonic::Status as their error type.
+#[allow(clippy::result_large_err)]
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/azookey.rs"));
+    include!(concat!(env!("OUT_DIR"), "/window.rs"));
+    pub const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("azookey_service_descriptor");
+}
+
+/// Candidate identifiers reserved for the experimental AI assist layer.
+///
+/// These candidates are produced by the server's AI assist pipeline and are
+/// never known to the conversion engine's learning cache, so the server must
+/// intercept them instead of forwarding them to the engine.
+pub mod ai_candidate {
+    /// 💡 もしかして (誤字補正) candidate.
+    pub const TYPO_CORRECTION: u64 = 999_901;
+    /// 🔮 先読み (共起語・予測補完) candidate.
+    pub const PREDICTIVE: u64 = 999_902;
+    /// ⚡ 動的マクロ (日付・時刻・インライン計算) candidate.
+    pub const DYNAMIC_MACRO: u64 = 999_903;
+
+    /// Lowest id of the reserved AI assist range.
+    const AI_ASSIST_RANGE_START: u64 = TYPO_CORRECTION;
+    /// Exclusive upper bound of the reserved AI assist range.
+    const AI_ASSIST_RANGE_END: u64 = 1_000_000;
+
+    /// Returns true when the candidate id belongs to the reserved AI assist
+    /// range and therefore must not reach the conversion engine.
+    pub fn is_ai_assist_candidate(candidate_id: u64) -> bool {
+        (AI_ASSIST_RANGE_START..AI_ASSIST_RANGE_END).contains(&candidate_id)
+    }
+}
+
+// Desktop LOCAL pipe names are global in NPFS, so every leaf includes the
+// Terminal Services session ID. AppContainer clients resolve LOCAL inside their
+// package namespace; the server publishes the same suffixed leaf there too.
+static PIPE_PATHS: OnceLock<Result<[String; 3], String>> = OnceLock::new();
+
+#[cfg(any(windows, test))]
+fn pipe_paths_for_session(session_id: u32) -> [String; 3] {
+    ["azookey_server", "azookey_ui", "azookey_launcher"]
+        .map(|leaf| format!(r"\\.\pipe\LOCAL\{leaf}_s{session_id}"))
+}
+
+fn session_pipe_path(index: usize) -> io::Result<&'static str> {
+    PIPE_PATHS
+        .get_or_init(|| {
+            #[cfg(windows)]
+            {
+                use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+
+                let mut session_id = 0;
+                unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) }
+                    .map_err(|error| format!("Failed to get IPC process session: {error}"))?;
+                Ok(pipe_paths_for_session(session_id))
+            }
+            #[cfg(not(windows))]
+            {
+                Err("Session-specific named pipes require Windows".to_owned())
+            }
+        })
+        .as_ref()
+        .map(|paths| paths[index].as_str())
+        .map_err(|message| io::Error::other(message.clone()))
+}
+
+pub fn server_pipe_path() -> io::Result<&'static str> {
+    session_pipe_path(0)
+}
+
+pub fn ui_pipe_path() -> io::Result<&'static str> {
+    session_pipe_path(1)
+}
+
+pub fn launcher_pipe_path() -> io::Result<&'static str> {
+    session_pipe_path(2)
+}
+
+// Bounds the suffix-bearing candidate payload and snapshot cloning performed
+// when clause navigation starts. Longer compositions continue lazily.
+pub const MAX_PREPARED_CLAUSE_ADVANCES: usize = 16;
+
+#[cfg(windows)]
+pub fn open_named_pipe_client_handle(
+    pipe_path: &str,
+) -> io::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows::{
+        core::PCWSTR,
+        Win32::{
+            Foundation::HANDLE,
+            Storage::FileSystem::{
+                CreateFileW, FILE_FLAG_OVERLAPPED, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
+                FILE_SHARE_MODE, FILE_WRITE_DATA, OPEN_EXISTING, SECURITY_IDENTIFICATION,
+                SECURITY_SQOS_PRESENT, SYNCHRONIZE,
+            },
+        },
+    };
+
+    let pipe_path_wide = pipe_path.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let desired_access = (FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE).0;
+    let flags = FILE_FLAG_OVERLAPPED | SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT;
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(pipe_path_wide.as_ptr()),
+            desired_access,
+            FILE_SHARE_MODE(0),
+            None,
+            OPEN_EXISTING,
+            flags,
+            HANDLE::default(),
+        )
+    }
+    .map_err(|_| io::Error::last_os_error())?;
+
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle.0) })
+}
+
+#[cfg(test)]
+mod pipe_path_tests {
+    use super::pipe_paths_for_session;
+
+    #[test]
+    fn ipc_pipe_paths_share_the_explicit_session_suffix() {
+        assert_eq!(
+            pipe_paths_for_session(7),
+            [
+                r"\\.\pipe\LOCAL\azookey_server_s7",
+                r"\\.\pipe\LOCAL\azookey_ui_s7",
+                r"\\.\pipe\LOCAL\azookey_launcher_s7",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_pipe_name_is_distinct_within_and_between_sessions() {
+        let sessions = [0, 1, 7, 8, u32::MAX];
+        let paths = sessions.map(pipe_paths_for_session);
+        for (index, session_paths) in paths.iter().enumerate() {
+            for (pipe_index, path) in session_paths.iter().enumerate() {
+                assert!(!session_paths[..pipe_index].contains(path));
+                for other_session_paths in &paths[..index] {
+                    assert!(!other_session_paths.contains(path));
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unsupported_session_lookup_fails_without_a_fixed_path_fallback() {
+        assert!(super::server_pipe_path().is_err());
+        assert!(super::ui_pipe_path().is_err());
+        assert!(super::launcher_pipe_path().is_err());
+    }
+}
+
+/// Enables RedirectionGuard before a privileged process reads or writes data
+/// below user-writable directories. The policy blocks traversal through
+/// junctions and symbolic links created by non-administrators.
+#[cfg(windows)]
+pub fn enable_redirection_guard() -> Result<(), String> {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetProcessMitigationPolicy, ProcessRedirectionTrustPolicy,
+        SetProcessMitigationPolicy,
+    };
+
+    const ENFORCE_REDIRECTION_TRUST: u32 = 1;
+    let requested = ENFORCE_REDIRECTION_TRUST;
+    unsafe {
+        SetProcessMitigationPolicy(
+            ProcessRedirectionTrustPolicy,
+            (&requested as *const u32).cast(),
+            std::mem::size_of::<u32>(),
+        )
+        .map_err(|error| format!("failed to enable RedirectionGuard: {error}"))?;
+    }
+
+    let mut actual = 0_u32;
+    unsafe {
+        GetProcessMitigationPolicy(
+            GetCurrentProcess(),
+            ProcessRedirectionTrustPolicy,
+            (&mut actual as *mut u32).cast(),
+            std::mem::size_of::<u32>(),
+        )
+        .map_err(|error| format!("failed to verify RedirectionGuard: {error}"))?;
+    }
+    if actual & ENFORCE_REDIRECTION_TRUST == 0 {
+        return Err("RedirectionGuard is not enforced for this process".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn enable_redirection_guard() -> Result<(), String> {
+    Ok(())
+}
+
+fn get_config_root() -> Result<PathBuf, ConfigError> {
+    let appdata = env::var_os("APPDATA").ok_or(ConfigError::MissingAppData)?;
+    Ok(PathBuf::from(appdata).join("Azookey"))
+}
+
+const SETTINGS_FILENAME: &str = "settings.json";
+const CONFIG_VERSION: &str = "0.1.3";
+const LEGACY_MIGRATION_TARGET_VERSION: &str = "0.1.2";
+pub const LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MIN: i32 = -12;
+pub const LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MAX: i32 = 12;
+pub const LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT: i32 = 4;
+
+/// Exit code used by the UI process when it re-launches itself with a UIAccess enabled
+/// token. The launcher treats it as "the UI now runs as a separate process" and does not
+/// start yet another UI, which would otherwise turn the hand-off into an endless
+/// respawn loop.
+pub const UIACCESS_HANDOFF_EXIT_CODE: i32 = 0x5A;
+
+fn default_auto_commit_live_conversion() -> bool {
+    true
+}
+
+#[cfg(windows)]
+pub mod jev_credentials;
+
+#[derive(Debug)]
+pub enum ConfigError {
+    MissingAppData,
+    CreateDir {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Read {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Parse {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    InvalidVersion {
+        path: PathBuf,
+        version: String,
+        source: semver::Error,
+    },
+    FutureVersion {
+        path: PathBuf,
+        stored: String,
+        current: String,
+    },
+    Lock {
+        message: String,
+    },
+    Backup {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+    },
+    Serialize {
+        source: serde_json::Error,
+    },
+    WriteTemp {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Persist {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+    },
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigError::MissingAppData => write!(f, "APPDATA is not set"),
+            ConfigError::CreateDir { path, source } => {
+                write!(
+                    f,
+                    "failed to create config directory {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+            ConfigError::Read { path, source } => {
+                write!(f, "failed to read config {}: {}", path.display(), source)
+            }
+            ConfigError::Parse { path, source } => {
+                write!(f, "failed to parse config {}: {}", path.display(), source)
+            }
+            ConfigError::InvalidVersion {
+                path,
+                version,
+                source,
+            } => write!(
+                f,
+                "invalid settings version {version:?} in {}: {source}",
+                path.display()
+            ),
+            ConfigError::FutureVersion {
+                path,
+                stored,
+                current,
+            } => write!(
+                f,
+                "settings version {stored} in {} is newer than supported version {current}; refusing to rewrite it",
+                path.display()
+            ),
+            ConfigError::Lock { message } => {
+                write!(f, "failed to acquire config write lock: {message}")
+            }
+            ConfigError::Backup { from, to, source } => write!(
+                f,
+                "failed to back up corrupted config {} to {}: {}",
+                from.display(),
+                to.display(),
+                source
+            ),
+            ConfigError::Serialize { source } => {
+                write!(f, "failed to serialize config: {}", source)
+            }
+            ConfigError::WriteTemp { path, source } => {
+                write!(
+                    f,
+                    "failed to write temporary config {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+            ConfigError::Persist { from, to, source } => write!(
+                f,
+                "failed to replace config {} with {}: {}",
+                to.display(),
+                from.display(),
+                source
+            ),
+        }
+    }
+}
+
+impl error::Error for ConfigError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            ConfigError::MissingAppData
+            | ConfigError::FutureVersion { .. }
+            | ConfigError::Lock { .. } => None,
+            ConfigError::CreateDir { source, .. }
+            | ConfigError::Read { source, .. }
+            | ConfigError::Backup { source, .. }
+            | ConfigError::WriteTemp { source, .. }
+            | ConfigError::Persist { source, .. } => Some(source),
+            ConfigError::Parse { source, .. } | ConfigError::Serialize { source } => Some(source),
+            ConfigError::InvalidVersion { source, .. } => Some(source),
+        }
+    }
+}
+
+impl ConfigError {
+    pub fn is_version_compatibility_error(&self) -> bool {
+        matches!(
+            self,
+            ConfigError::InvalidVersion { .. } | ConfigError::FutureVersion { .. }
+        )
+    }
+}
+
+/// Serializes settings read-modify-write operations across azooKey processes.
+///
+/// `AppConfig::write` acquires this guard before checking the on-disk version,
+/// so a future-version process cannot replace the file between that check and
+/// the atomic file replacement. Callers that read before writing can acquire
+/// the same guard around the whole transaction; Windows mutexes are reentrant
+/// for their owning thread.
+pub struct ConfigWriteGuard {
+    #[cfg(windows)]
+    handle: windows::Win32::Foundation::HANDLE,
+}
+
+impl ConfigWriteGuard {
+    #[cfg(windows)]
+    pub fn acquire() -> Result<Self, ConfigError> {
+        use windows::{
+            core::w,
+            Win32::{
+                Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0},
+                System::Threading::{CreateMutexW, WaitForSingleObject, INFINITE},
+            },
+        };
+
+        let handle = unsafe { CreateMutexW(None, false, w!("Local\\AzookeyWindowsConfigUpdate")) }
+            .map_err(|error| ConfigError::Lock {
+                message: format!("failed to create mutex: {error}"),
+            })?;
+        let wait = unsafe { WaitForSingleObject(handle, INFINITE) };
+        if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+            Ok(Self { handle })
+        } else {
+            let _ = unsafe { CloseHandle(handle) };
+            Err(ConfigError::Lock {
+                message: format!("unexpected wait result: {}", wait.0),
+            })
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn acquire() -> Result<Self, ConfigError> {
+        Ok(Self {})
+    }
+}
+
+impl Drop for ConfigWriteGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            use windows::Win32::{Foundation::CloseHandle, System::Threading::ReleaseMutex};
+
+            let _ = unsafe { ReleaseMutex(self.handle) };
+            let _ = unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfigRecovery {
+    pub original_path: PathBuf,
+    pub backup_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct AppConfigLoadResult {
+    pub config: AppConfig,
+    pub recovery: Option<ConfigRecovery>,
+    pub rewrite_error: Option<ConfigError>,
+}
+
+pub const CHARACTER_WIDTH_SYMBOL_DEFAULTS: [(&str, bool); 42] = [
+    ("0", false),
+    ("1", false),
+    ("2", false),
+    ("3", false),
+    ("4", false),
+    ("5", false),
+    ("6", false),
+    ("7", false),
+    ("8", false),
+    ("9", false),
+    ("!", true),
+    ("\"", true),
+    ("#", false),
+    ("$", false),
+    ("%", false),
+    ("&", false),
+    ("'", true),
+    ("(", true),
+    (")", true),
+    ("*", true),
+    ("+", true),
+    (",", true),
+    ("-", true),
+    (".", true),
+    ("/", true),
+    (":", true),
+    (";", true),
+    ("<", true),
+    ("=", true),
+    (">", true),
+    ("?", true),
+    ("@", false),
+    ("[", true),
+    ("\\", false),
+    ("]", true),
+    ("^", false),
+    ("_", false),
+    ("`", false),
+    ("{", true),
+    ("|", false),
+    ("}", true),
+    ("~", true),
+];
+
+pub fn default_symbol_fullwidth_map() -> HashMap<String, bool> {
+    CHARACTER_WIDTH_SYMBOL_DEFAULTS
+        .into_iter()
+        .map(|(symbol, is_fullwidth)| (symbol.to_string(), is_fullwidth))
+        .collect()
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WidthMode {
+    Half,
+    Full,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PunctuationStyle {
+    #[default]
+    ToutenKuten,
+    FullwidthCommaFullwidthPeriod,
+    ToutenFullwidthPeriod,
+    FullwidthCommaKuten,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolStyle {
+    #[default]
+    CornerBracketMiddleDot,
+    SquareBracketBackslash,
+    CornerBracketBackslash,
+    SquareBracketMiddleDot,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceInputMode {
+    #[default]
+    AlwaysHalf,
+    #[serde(alias = "always_full")]
+    FollowInputMode,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NumpadInputMode {
+    #[default]
+    DirectInput,
+    AlwaysHalf,
+    FollowInputMode,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LearningMode {
+    #[default]
+    Enabled,
+    ReadOnly,
+    Disabled,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct CharacterWidthGroups {
+    pub alphabet: WidthMode,
+    pub number: WidthMode,
+    pub bracket: WidthMode,
+    pub comma_period: WidthMode,
+    pub middle_dot_corner_bracket: WidthMode,
+    pub quote: WidthMode,
+    pub colon_semicolon: WidthMode,
+    pub hash_group: WidthMode,
+    pub tilde: WidthMode,
+    pub math_symbol: WidthMode,
+    pub question_exclamation: WidthMode,
+}
+
+impl Default for CharacterWidthGroups {
+    fn default() -> Self {
+        Self {
+            alphabet: WidthMode::Half,
+            number: WidthMode::Half,
+            bracket: WidthMode::Full,
+            comma_period: WidthMode::Full,
+            middle_dot_corner_bracket: WidthMode::Full,
+            quote: WidthMode::Full,
+            colon_semicolon: WidthMode::Full,
+            hash_group: WidthMode::Half,
+            tilde: WidthMode::Full,
+            math_symbol: WidthMode::Full,
+            question_exclamation: WidthMode::Full,
+        }
+    }
+}
+
+fn group_mode_from_legacy(
+    symbol_fullwidth: &HashMap<String, bool>,
+    keys: &[&str],
+    fallback: WidthMode,
+) -> WidthMode {
+    let mut full = 0;
+    let mut half = 0;
+
+    for key in keys {
+        if let Some(value) = symbol_fullwidth.get(*key) {
+            if *value {
+                full += 1;
+            } else {
+                half += 1;
+            }
+        }
+    }
+
+    if full == 0 && half == 0 {
+        fallback
+    } else if full >= half {
+        WidthMode::Full
+    } else {
+        WidthMode::Half
+    }
+}
+
+fn legacy_groups_from_symbol_fullwidth(
+    symbol_fullwidth: &HashMap<String, bool>,
+) -> CharacterWidthGroups {
+    let defaults = CharacterWidthGroups::default();
+    CharacterWidthGroups {
+        alphabet: defaults.alphabet,
+        number: group_mode_from_legacy(
+            symbol_fullwidth,
+            &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+            defaults.number,
+        ),
+        bracket: group_mode_from_legacy(
+            symbol_fullwidth,
+            &["(", ")", "{", "}", "[", "]"],
+            defaults.bracket,
+        ),
+        comma_period: group_mode_from_legacy(symbol_fullwidth, &[",", "."], defaults.comma_period),
+        middle_dot_corner_bracket: group_mode_from_legacy(
+            symbol_fullwidth,
+            &["/", "[", "]"],
+            defaults.middle_dot_corner_bracket,
+        ),
+        quote: group_mode_from_legacy(symbol_fullwidth, &["\"", "'"], defaults.quote),
+        colon_semicolon: group_mode_from_legacy(
+            symbol_fullwidth,
+            &[":", ";"],
+            defaults.colon_semicolon,
+        ),
+        hash_group: group_mode_from_legacy(
+            symbol_fullwidth,
+            &["#", "%", "&", "@", "$", "^", "_", "|", "`", "\\"],
+            defaults.hash_group,
+        ),
+        tilde: group_mode_from_legacy(symbol_fullwidth, &["~"], defaults.tilde),
+        math_symbol: group_mode_from_legacy(
+            symbol_fullwidth,
+            &["<", ">", "=", "+", "-", "/", "*"],
+            defaults.math_symbol,
+        ),
+        question_exclamation: group_mode_from_legacy(
+            symbol_fullwidth,
+            &["?", "!"],
+            defaults.question_exclamation,
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct GeneralConfig {
+    #[serde(default)]
+    pub jev_conversion: bool,
+    #[serde(default)]
+    pub punctuation_style: PunctuationStyle,
+    #[serde(default)]
+    pub symbol_style: SymbolStyle,
+    #[serde(default)]
+    pub space_input: SpaceInputMode,
+    #[serde(default)]
+    pub numpad_input: NumpadInputMode,
+    #[serde(default)]
+    pub punctuation_commit: bool,
+    #[serde(default = "default_punctuation_commit_target_enabled")]
+    pub punctuation_commit_punctuation: bool,
+    #[serde(default = "default_punctuation_commit_target_enabled")]
+    pub punctuation_commit_exclamation: bool,
+    #[serde(default = "default_punctuation_commit_target_enabled")]
+    pub punctuation_commit_question: bool,
+    #[serde(default)]
+    pub show_candidate_window_after_space: bool,
+    #[serde(default = "default_live_conversion_reading_enabled")]
+    pub show_live_conversion_reading: bool,
+    #[serde(default = "default_live_conversion_reading_vertical_adjustment")]
+    pub live_conversion_reading_vertical_adjustment: i32,
+    #[serde(default)]
+    pub experimental_typo_correction: bool,
+    #[serde(default = "default_ai_assist_enabled")]
+    pub experimental_ai_assist: bool,
+    #[serde(default = "default_predictive_model")]
+    pub experimental_predictive_model: String,
+    #[serde(default = "default_ai_engine")]
+    pub experimental_ai_engine: String,
+    #[serde(default = "default_ai_engine_port")]
+    pub experimental_ai_engine_port: u16,
+    #[serde(default = "default_auto_commit_live_conversion")]
+    pub auto_commit_live_conversion: bool,
+    #[serde(default)]
+    pub auto_commit_rewind_on_backspace: bool,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            jev_conversion: false,
+            punctuation_style: PunctuationStyle::ToutenKuten,
+            symbol_style: SymbolStyle::CornerBracketMiddleDot,
+            space_input: SpaceInputMode::AlwaysHalf,
+            numpad_input: NumpadInputMode::DirectInput,
+            punctuation_commit: false,
+            punctuation_commit_punctuation: true,
+            punctuation_commit_exclamation: true,
+            punctuation_commit_question: true,
+            show_candidate_window_after_space: false,
+            show_live_conversion_reading: true,
+            live_conversion_reading_vertical_adjustment:
+                LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT,
+            experimental_typo_correction: false,
+            experimental_ai_assist: true,
+            experimental_predictive_model: default_predictive_model(),
+            experimental_ai_engine: default_ai_engine(),
+            experimental_ai_engine_port: default_ai_engine_port(),
+            auto_commit_live_conversion: true,
+            auto_commit_rewind_on_backspace: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct RomajiRule {
+    pub input: String,
+    pub output: String,
+    #[serde(default)]
+    pub next_input: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct LegacyCharacterWidthConfig {
+    #[serde(default = "default_symbol_fullwidth_map")]
+    symbol_fullwidth: HashMap<String, bool>,
+}
+
+fn is_legacy_removed_default_row(row: &RomajiRule) -> bool {
+    matches!(
+        (
+            row.input.as_str(),
+            row.output.as_str(),
+            row.next_input.as_str()
+        ),
+        ("~", "〜", "") | (".", "。", "") | (",", "、", "") | ("[", "「", "") | ("]", "」", "")
+    )
+}
+
+fn default_romaji_rows() -> Vec<RomajiRule> {
+    include_str!("default_romaji_table.txt")
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+
+            let mut parts = trimmed.split('\t');
+            let input = parts.next()?.trim();
+            let output = parts.next()?.trim();
+            if input.is_empty() || output.is_empty() {
+                return None;
+            }
+            let next_input = parts.next().unwrap_or_default().trim();
+
+            Some(RomajiRule {
+                input: input.to_string(),
+                output: output.to_string(),
+                next_input: next_input.to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn get_default_romaji_rows() -> Vec<RomajiRule> {
+    default_romaji_rows()
+}
+
+pub fn zenzai_cpu_backend_supported() -> bool {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        std::is_x86_feature_detected!("avx")
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn jev_conversion_is_opt_in_and_round_trips() {
+        let mut general: super::GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!general.jev_conversion);
+        general.jev_conversion = true;
+        let saved = serde_json::to_string(&general).unwrap();
+        assert!(
+            serde_json::from_str::<super::GeneralConfig>(&saved)
+                .unwrap()
+                .jev_conversion
+        );
+    }
+
+    #[cfg(windows)]
+    use super::ConfigWriteGuard;
+    use super::{
+        AppConfig, ConfigError, DebugConfig, GeneralConfig, LearningConfig, LearningMode,
+        NumpadInputMode, ReconversionKey, ShortcutConfig, WidthMode, CONFIG_VERSION,
+        LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT, SETTINGS_FILENAME,
+    };
+    use std::{
+        env,
+        ffi::OsString,
+        fs, io,
+        path::{Path, PathBuf},
+        sync::{Mutex, MutexGuard, OnceLock},
+    };
+
+    const OLD_SETTINGS_FIXTURE: &str = include_str!("../tests/fixtures/settings-version/old.json");
+    const CURRENT_SETTINGS_FIXTURE: &str =
+        include_str!("../tests/fixtures/settings-version/current.json");
+    const FUTURE_SETTINGS_FIXTURE: &str =
+        include_str!("../tests/fixtures/settings-version/future.json");
+    const MALFORMED_SETTINGS_FIXTURE: &str =
+        include_str!("../tests/fixtures/settings-version/malformed.json");
+
+    fn write_settings_fixture(config_root: &Path, fixture: &str) -> PathBuf {
+        fs::create_dir_all(config_root).unwrap();
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        fs::write(&config_path, fixture).unwrap();
+        config_path
+    }
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    struct AppDataGuard {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<OsString>,
+    }
+
+    impl AppDataGuard {
+        fn set(path: &Path) -> Self {
+            let guard = env_lock();
+            let previous = env::var_os("APPDATA");
+            unsafe {
+                env::set_var("APPDATA", path);
+            }
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+
+        fn unset() -> Self {
+            let guard = env_lock();
+            let previous = env::var_os("APPDATA");
+            unsafe {
+                env::remove_var("APPDATA");
+            }
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for AppDataGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => env::set_var("APPDATA", value),
+                    None => env::remove_var("APPDATA"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_window_delay_defaults_to_off() {
+        let default_config = GeneralConfig::default();
+        assert!(!default_config.show_candidate_window_after_space);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.show_candidate_window_after_space);
+    }
+
+    #[test]
+    fn live_conversion_reading_defaults_to_on() {
+        let default_config = GeneralConfig::default();
+        assert!(default_config.show_live_conversion_reading);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(deserialized.show_live_conversion_reading);
+    }
+
+    #[test]
+    fn live_conversion_reading_vertical_adjustment_defaults_to_slightly_higher_position() {
+        let default_config = GeneralConfig::default();
+        assert_eq!(
+            default_config.live_conversion_reading_vertical_adjustment,
+            LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT
+        );
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            deserialized.live_conversion_reading_vertical_adjustment,
+            LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT
+        );
+    }
+
+    #[test]
+    fn experimental_typo_correction_defaults_to_off() {
+        let default_config = GeneralConfig::default();
+        assert!(!default_config.experimental_typo_correction);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.experimental_typo_correction);
+
+        let enabled: GeneralConfig =
+            serde_json::from_str(r#"{"experimental_typo_correction":true}"#).unwrap();
+        assert!(enabled.experimental_typo_correction);
+    }
+
+    #[test]
+    fn punctuation_commit_defaults_to_off() {
+        let default_config = GeneralConfig::default();
+        assert!(!default_config.punctuation_commit);
+        assert!(default_config.punctuation_commit_punctuation);
+        assert!(default_config.punctuation_commit_exclamation);
+        assert!(default_config.punctuation_commit_question);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.punctuation_commit);
+        assert!(deserialized.punctuation_commit_punctuation);
+        assert!(deserialized.punctuation_commit_exclamation);
+        assert!(deserialized.punctuation_commit_question);
+    }
+
+    #[test]
+    fn debug_server_log_defaults_to_off() {
+        let default_config = DebugConfig::default();
+        assert!(!default_config.server_log_enabled);
+        assert_eq!(default_config.server_log_level, "warn");
+        assert!(default_config.server_crash_trace_enabled);
+
+        let deserialized: DebugConfig = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.server_log_enabled);
+        assert_eq!(deserialized.server_log_level, "warn");
+        assert!(deserialized.server_crash_trace_enabled);
+    }
+
+    #[test]
+    fn shortcut_toggles_default_to_expected_values() {
+        let default_config = ShortcutConfig::default();
+        assert!(default_config.ctrl_space_toggle);
+        assert!(default_config.alt_backquote_toggle);
+        assert!(!default_config.eisu_toggle);
+        assert_eq!(default_config.reconversion_key, ReconversionKey::WinSlash);
+
+        let deserialized: ShortcutConfig = serde_json::from_str("{}").unwrap();
+        assert!(deserialized.ctrl_space_toggle);
+        assert!(deserialized.alt_backquote_toggle);
+        assert!(!deserialized.eisu_toggle);
+        assert_eq!(deserialized.reconversion_key, ReconversionKey::WinSlash);
+    }
+
+    #[test]
+    fn reconversion_key_serializes_as_a_preset() {
+        let config = ShortcutConfig {
+            reconversion_key: ReconversionKey::WinSlash,
+            ..ShortcutConfig::default()
+        };
+
+        let serialized = serde_json::to_value(config).unwrap();
+        assert_eq!(serialized["reconversion_key"], "win_slash");
+
+        let deserialized: ShortcutConfig = serde_json::from_value(serde_json::json!({
+            "reconversion_key": "shift_convert"
+        }))
+        .unwrap();
+        assert_eq!(deserialized.reconversion_key, ReconversionKey::ShiftConvert);
+    }
+
+    #[test]
+    fn learning_defaults_to_enabled() {
+        let default_config = LearningConfig::default();
+        assert_eq!(default_config.mode, LearningMode::Enabled);
+
+        let deserialized: LearningConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(deserialized.mode, LearningMode::Enabled);
+
+        let app_config: AppConfig = serde_json::from_str(
+            r#"{
+                "version": "0.1.2",
+                "zenzai": { "enable": false, "profile": "", "backend": "cpu" }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(app_config.learning.mode, LearningMode::Enabled);
+    }
+
+    #[test]
+    fn new_creates_default_settings_when_file_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+
+        let result = AppConfig::new_with_recovery().unwrap();
+        let config_path = temp.path().join("Azookey").join(SETTINGS_FILENAME);
+
+        assert!(result.recovery.is_none());
+        assert_eq!(result.config.version, CONFIG_VERSION);
+        assert!(config_path.exists());
+
+        let saved: AppConfig = serde_json::from_str(&fs::read_to_string(config_path).unwrap())
+            .expect("saved default config should be valid JSON");
+        assert_eq!(saved.version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn corrupted_settings_are_backed_up_and_default_settings_are_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        fs::create_dir_all(&config_root).unwrap();
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        fs::write(&config_path, "{not valid json").unwrap();
+
+        let result = AppConfig::new_with_recovery().unwrap();
+        let recovery = result
+            .recovery
+            .expect("broken settings should produce recovery metadata");
+
+        assert_eq!(recovery.original_path, config_path);
+        assert!(recovery.backup_path.exists());
+        assert!(recovery
+            .backup_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("settings.json.broken-"));
+        assert_eq!(
+            fs::read_to_string(recovery.backup_path).unwrap(),
+            "{not valid json"
+        );
+
+        let saved: AppConfig = serde_json::from_str(&fs::read_to_string(config_path).unwrap())
+            .expect("recreated settings should be valid JSON");
+        assert_eq!(saved.version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn read_migrates_valid_legacy_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        fs::create_dir_all(&config_root).unwrap();
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        let mut legacy = AppConfig {
+            version: "0.1.1".to_string(),
+            ..AppConfig::default()
+        };
+        legacy.general.numpad_input = NumpadInputMode::AlwaysHalf;
+        fs::write(&config_path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+
+        let migrated = AppConfig::read().unwrap();
+
+        assert_eq!(migrated.version, CONFIG_VERSION);
+        assert_eq!(migrated.general.numpad_input, NumpadInputMode::DirectInput);
+    }
+
+    #[test]
+    fn old_version_fixture_keeps_legacy_migration_and_rewrites_current_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        let config_path = write_settings_fixture(&config_root, OLD_SETTINGS_FIXTURE);
+
+        let result = AppConfig::new_with_recovery().unwrap();
+
+        assert_eq!(result.config.version, CONFIG_VERSION);
+        assert_eq!(
+            result.config.general.numpad_input,
+            NumpadInputMode::DirectInput
+        );
+        let saved: AppConfig = serde_json::from_str(&fs::read_to_string(config_path).unwrap())
+            .expect("migrated settings should be valid JSON");
+        assert_eq!(saved.version, CONFIG_VERSION);
+        assert_eq!(saved.general.numpad_input, NumpadInputMode::DirectInput);
+    }
+
+    #[test]
+    fn previous_release_fixture_updates_schema_without_reapplying_legacy_migrations() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        let config_path = write_settings_fixture(&config_root, CURRENT_SETTINGS_FIXTURE);
+
+        let result = AppConfig::new_with_recovery().unwrap();
+
+        assert_eq!(CONFIG_VERSION, "0.1.3");
+        assert_eq!(result.config.version, CONFIG_VERSION);
+        assert!(result.config.zenzai.enable);
+        assert_eq!(result.config.zenzai.profile, "current-version-profile");
+        assert_eq!(
+            result.config.general.numpad_input,
+            NumpadInputMode::AlwaysHalf
+        );
+        assert_eq!(result.config.character_width.groups.number, WidthMode::Full);
+        assert!(result
+            .config
+            .romaji_table
+            .rows
+            .iter()
+            .any(|row| row.input == "~" && row.output == "〜"));
+        assert_eq!(
+            result.config.shortcuts.reconversion_key,
+            ReconversionKey::WinSlash
+        );
+
+        let saved_str = fs::read_to_string(config_path).unwrap();
+        let saved: AppConfig =
+            serde_json::from_str(&saved_str).expect("schema-updated settings should be valid JSON");
+        assert_eq!(saved.version, CONFIG_VERSION);
+        assert_eq!(saved.general.numpad_input, NumpadInputMode::AlwaysHalf);
+        assert_eq!(saved.character_width.groups.number, WidthMode::Full);
+        assert!(saved
+            .romaji_table
+            .rows
+            .iter()
+            .any(|row| row.input == "~" && row.output == "〜"));
+        let saved_json: serde_json::Value = serde_json::from_str(&saved_str).unwrap();
+        assert_eq!(saved_json["shortcuts"]["reconversion_key"], "win_slash");
+    }
+
+    #[test]
+    fn future_version_fixture_is_rejected_without_modifying_the_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        let config_path = write_settings_fixture(&config_root, FUTURE_SETTINGS_FIXTURE);
+        let original = fs::read(&config_path).unwrap();
+
+        let error = AppConfig::new_with_recovery()
+            .expect_err("future-version settings must not be loaded or rewritten");
+
+        assert!(error.to_string().contains("newer than supported"));
+        assert_eq!(fs::read(&config_path).unwrap(), original);
+        assert_eq!(fs::read_dir(&config_root).unwrap().count(), 1);
+
+        let write_error = AppConfig::default()
+            .write()
+            .expect_err("direct writes must not overwrite future-version settings");
+        assert!(write_error.to_string().contains("newer than supported"));
+        assert_eq!(fs::read(config_path).unwrap(), original);
+    }
+
+    #[test]
+    fn malformed_version_fixture_is_backed_up_before_defaults_are_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        let config_path = write_settings_fixture(&config_root, MALFORMED_SETTINGS_FIXTURE);
+        let original = fs::read(&config_path).unwrap();
+
+        let result = AppConfig::new_with_recovery().unwrap();
+        let recovery = result
+            .recovery
+            .expect("malformed settings versions should use corrupted-config recovery");
+
+        assert_eq!(fs::read(recovery.backup_path).unwrap(), original);
+        let saved: AppConfig = serde_json::from_str(&fs::read_to_string(config_path).unwrap())
+            .expect("recreated settings should be valid JSON");
+        assert_eq!(saved.version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn new_with_recovery_repairs_mojibake_default_romaji_table() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        fs::create_dir_all(&config_root).unwrap();
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        let mut config = AppConfig::default();
+        for row in &mut config.romaji_table.rows {
+            row.output = "繝ｼ".to_string();
+        }
+        fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let result = AppConfig::new_with_recovery().unwrap();
+
+        assert_eq!(
+            result
+                .config
+                .romaji_table
+                .rows
+                .iter()
+                .find(|row| row.input == "-")
+                .unwrap()
+                .output,
+            "ー"
+        );
+        assert_eq!(
+            result
+                .config
+                .romaji_table
+                .rows
+                .iter()
+                .find(|row| row.input == "a")
+                .unwrap()
+                .output,
+            "あ"
+        );
+
+        let saved: AppConfig = serde_json::from_str(&fs::read_to_string(config_path).unwrap())
+            .expect("rewritten settings should be valid JSON");
+        assert_eq!(
+            saved
+                .romaji_table
+                .rows
+                .iter()
+                .find(|row| row.input == "a")
+                .unwrap()
+                .output,
+            "あ"
+        );
+    }
+
+    #[test]
+    fn read_keeps_custom_romaji_table_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let config_root = temp.path().join("Azookey");
+        fs::create_dir_all(&config_root).unwrap();
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        let mut config = AppConfig::default();
+        config.romaji_table.rows[0].output = "custom".to_string();
+        fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let loaded = AppConfig::read().unwrap();
+
+        assert_eq!(loaded.romaji_table.rows[0].output, "custom");
+    }
+
+    #[test]
+    fn new_with_recovery_keeps_loaded_config_when_rewrite_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_root = temp.path().join("Azookey");
+        fs::create_dir_all(&config_root).unwrap();
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        let mut config = AppConfig::default();
+        config.zenzai.enable = true;
+        fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let result = AppConfig::new_with_recovery_from_root(&config_root, |_| {
+            Err(ConfigError::WriteTemp {
+                path: config_root.join("settings.json.tmp-test"),
+                source: io::Error::new(io::ErrorKind::PermissionDenied, "test write failure"),
+            })
+        })
+        .unwrap();
+
+        assert!(result.config.zenzai.enable);
+        assert!(result.recovery.is_none());
+        assert!(matches!(
+            result.rewrite_error,
+            Some(ConfigError::WriteTemp { .. })
+        ));
+    }
+
+    #[test]
+    fn write_persists_valid_json_without_temp_file_leftover() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let mut config = AppConfig::default();
+        config.zenzai.enable = true;
+
+        config.write().unwrap();
+
+        let config_root = temp.path().join("Azookey");
+        let saved: AppConfig =
+            serde_json::from_str(&fs::read_to_string(config_root.join(SETTINGS_FILENAME)).unwrap())
+                .expect("written settings should be valid JSON");
+        assert!(saved.zenzai.enable);
+        let temp_files = fs::read_dir(config_root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.json.tmp-")
+            })
+            .count();
+        assert_eq!(temp_files, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_reenters_the_cross_process_config_guard() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let _transaction_guard = ConfigWriteGuard::acquire().unwrap();
+
+        AppConfig::default().write().unwrap();
+
+        assert!(temp.path().join("Azookey").join(SETTINGS_FILENAME).exists());
+    }
+
+    #[test]
+    fn missing_appdata_returns_config_error() {
+        let _appdata = AppDataGuard::unset();
+
+        let error = AppConfig::read().expect_err("APPDATA absence should not panic");
+
+        assert!(matches!(error, ConfigError::MissingAppData));
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct RomajiTableConfig {
+    #[serde(default = "default_romaji_rows")]
+    pub rows: Vec<RomajiRule>,
+}
+
+impl Default for RomajiTableConfig {
+    fn default() -> Self {
+        Self {
+            rows: default_romaji_rows(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct ZenzaiConfig {
+    pub enable: bool,
+    pub profile: String,
+    pub backend: String,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconversionKey {
+    Convert,
+    ShiftConvert,
+    Space,
+    #[default]
+    WinSlash,
+    Disabled,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct ShortcutConfig {
+    #[serde(default = "default_shortcut_enabled")]
+    pub ctrl_space_toggle: bool,
+    #[serde(default = "default_shortcut_enabled")]
+    pub alt_backquote_toggle: bool,
+    #[serde(default)]
+    pub eisu_toggle: bool,
+    #[serde(default)]
+    pub reconversion_key: ReconversionKey,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct DebugConfig {
+    #[serde(default)]
+    pub server_log_enabled: bool,
+    #[serde(default = "default_server_log_level")]
+    pub server_log_level: String,
+    #[serde(default = "default_server_crash_trace_enabled")]
+    pub server_crash_trace_enabled: bool,
+}
+
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self {
+            server_log_enabled: false,
+            server_log_level: default_server_log_level(),
+            server_crash_trace_enabled: default_server_crash_trace_enabled(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct CharacterWidthConfig {
+    #[serde(default = "default_symbol_fullwidth_map")]
+    pub symbol_fullwidth: HashMap<String, bool>,
+    #[serde(default)]
+    pub groups: CharacterWidthGroups,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct UserDictionaryEntry {
+    pub reading: String,
+    pub word: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+pub struct UserDictionaryConfig {
+    #[serde(default)]
+    pub entries: Vec<UserDictionaryEntry>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct LearningConfig {
+    #[serde(default)]
+    pub mode: LearningMode,
+}
+
+impl Default for LearningConfig {
+    fn default() -> Self {
+        Self {
+            mode: LearningMode::Enabled,
+        }
+    }
+}
+
+impl Default for CharacterWidthConfig {
+    fn default() -> Self {
+        Self {
+            symbol_fullwidth: default_symbol_fullwidth_map(),
+            groups: CharacterWidthGroups::default(),
+        }
+    }
+}
+
+fn default_shortcut_enabled() -> bool {
+    true
+}
+
+fn default_server_log_level() -> String {
+    "warn".to_string()
+}
+
+fn default_server_crash_trace_enabled() -> bool {
+    true
+}
+
+fn default_punctuation_commit_target_enabled() -> bool {
+    true
+}
+
+fn default_ai_assist_enabled() -> bool {
+    true
+}
+
+fn default_predictive_model() -> String {
+    "230m_q4km".to_string()
+}
+
+fn default_ai_engine() -> String {
+    "embedded".to_string()
+}
+
+fn default_ai_engine_port() -> u16 {
+    18090
+}
+
+fn default_live_conversion_reading_enabled() -> bool {
+    true
+}
+
+fn default_live_conversion_reading_vertical_adjustment() -> i32 {
+    LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT
+}
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self {
+            ctrl_space_toggle: true,
+            alt_backquote_toggle: true,
+            eisu_toggle: false,
+            reconversion_key: ReconversionKey::default(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct AppConfig {
+    pub version: String,
+    #[serde(default)]
+    pub debug: DebugConfig,
+    pub zenzai: ZenzaiConfig,
+    #[serde(default)]
+    pub shortcuts: ShortcutConfig,
+    #[serde(default)]
+    pub general: GeneralConfig,
+    #[serde(default)]
+    pub romaji_table: RomajiTableConfig,
+    #[serde(default)]
+    pub character_width: CharacterWidthConfig,
+    #[serde(default)]
+    pub user_dictionary: UserDictionaryConfig,
+    #[serde(default)]
+    pub learning: LearningConfig,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            version: CONFIG_VERSION.to_string(),
+            debug: DebugConfig::default(),
+            zenzai: ZenzaiConfig {
+                enable: true,
+                profile: "".to_string(),
+                backend: "vulkan".to_string(),
+            },
+            shortcuts: ShortcutConfig::default(),
+            general: GeneralConfig::default(),
+            romaji_table: RomajiTableConfig::default(),
+            character_width: CharacterWidthConfig::default(),
+            user_dictionary: UserDictionaryConfig::default(),
+            learning: LearningConfig::default(),
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn settings_path() -> Result<PathBuf, ConfigError> {
+        Ok(get_config_root()?.join(SETTINGS_FILENAME))
+    }
+
+    pub fn write(&self) -> Result<(), ConfigError> {
+        let _write_guard = ConfigWriteGuard::acquire()?;
+        let config_root = get_config_root()?;
+        ensure_config_dir(&config_root)?;
+        let config_path = config_root.join(SETTINGS_FILENAME);
+        ensure_existing_config_is_writable(&config_path)?;
+        let temp_path = temporary_config_path(&config_root);
+        let config_str = serde_json::to_string_pretty(self)
+            .map_err(|source| ConfigError::Serialize { source })?;
+        compare_config_version(&config_path, &config_str)?;
+
+        write_temp_config(&temp_path, config_str.as_bytes())?;
+        replace_config_file(&temp_path, &config_path).map_err(|source| {
+            let _ = fs::remove_file(&temp_path);
+            ConfigError::Persist {
+                from: temp_path.clone(),
+                to: config_path,
+                source,
+            }
+        })?;
+
+        Ok(())
+    }
+
+    pub fn read() -> Result<Self, ConfigError> {
+        let config_path = get_config_root()?.join(SETTINGS_FILENAME);
+        if !config_path.exists() {
+            return Ok(AppConfig::default());
+        }
+        let config_str = fs::read_to_string(&config_path).map_err(|source| ConfigError::Read {
+            path: config_path.clone(),
+            source,
+        })?;
+        let config = parse_config(&config_path, &config_str)?;
+
+        Ok(config)
+    }
+
+    pub fn new() -> Result<Self, ConfigError> {
+        Ok(Self::new_with_recovery()?.config)
+    }
+
+    pub fn new_with_recovery() -> Result<AppConfigLoadResult, ConfigError> {
+        let config_root = get_config_root()?;
+        Self::new_with_recovery_from_root(&config_root, |config| config.write())
+    }
+
+    fn new_with_recovery_from_root(
+        config_root: &Path,
+        rewrite_config: impl FnOnce(&AppConfig) -> Result<(), ConfigError>,
+    ) -> Result<AppConfigLoadResult, ConfigError> {
+        ensure_config_dir(config_root)?;
+        let config_path = config_root.join(SETTINGS_FILENAME);
+
+        let (config, recovery) = if !config_path.exists() {
+            (AppConfig::default(), None)
+        } else {
+            let config_str =
+                fs::read_to_string(&config_path).map_err(|source| ConfigError::Read {
+                    path: config_path.clone(),
+                    source,
+                })?;
+
+            match parse_config(&config_path, &config_str) {
+                Ok(config) => (config, None),
+                Err(ConfigError::Parse { .. } | ConfigError::InvalidVersion { .. }) => {
+                    let backup_path = backup_corrupted_config(&config_path)?;
+                    (
+                        AppConfig::default(),
+                        Some(ConfigRecovery {
+                            original_path: config_path.clone(),
+                            backup_path,
+                        }),
+                    )
+                }
+                Err(error) => return Err(error),
+            }
+        };
+
+        let rewrite_error = rewrite_config(&config).err();
+        Ok(AppConfigLoadResult {
+            config,
+            recovery,
+            rewrite_error,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct ConfigVersionHeader {
+    version: String,
+}
+
+struct ConfigVersionComparison {
+    stored: semver::Version,
+    ordering: std::cmp::Ordering,
+}
+
+fn compare_config_version(
+    config_path: &Path,
+    config_str: &str,
+) -> Result<ConfigVersionComparison, ConfigError> {
+    let header: ConfigVersionHeader =
+        serde_json::from_str(config_str).map_err(|source| ConfigError::Parse {
+            path: config_path.to_path_buf(),
+            source,
+        })?;
+    let stored =
+        semver::Version::parse(&header.version).map_err(|source| ConfigError::InvalidVersion {
+            path: config_path.to_path_buf(),
+            version: header.version,
+            source,
+        })?;
+    let current = semver::Version::parse(CONFIG_VERSION)
+        .expect("CONFIG_VERSION must be a valid semantic version");
+
+    match stored.cmp_precedence(&current) {
+        std::cmp::Ordering::Greater => Err(ConfigError::FutureVersion {
+            path: config_path.to_path_buf(),
+            stored: stored.to_string(),
+            current: current.to_string(),
+        }),
+        ordering => Ok(ConfigVersionComparison { stored, ordering }),
+    }
+}
+
+fn ensure_existing_config_is_writable(config_path: &Path) -> Result<(), ConfigError> {
+    let config_str = match fs::read_to_string(config_path) {
+        Ok(config_str) => config_str,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(ConfigError::Read {
+                path: config_path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    compare_config_version(config_path, &config_str)?;
+    Ok(())
+}
+
+fn parse_config(config_path: &Path, config_str: &str) -> Result<AppConfig, ConfigError> {
+    let version_comparison = compare_config_version(config_path, config_str)?;
+    let mut config: AppConfig =
+        serde_json::from_str(config_str).map_err(|source| ConfigError::Parse {
+            path: config_path.to_path_buf(),
+            source,
+        })?;
+    let legacy_migration_target = semver::Version::parse(LEGACY_MIGRATION_TARGET_VERSION)
+        .expect("LEGACY_MIGRATION_TARGET_VERSION must be a valid semantic version");
+
+    if version_comparison
+        .stored
+        .cmp_precedence(&legacy_migration_target)
+        == std::cmp::Ordering::Less
+    {
+        config.general.numpad_input = match config.general.numpad_input {
+            // 旧仕様との互換: always_half(直接入力) -> direct_input
+            NumpadInputMode::AlwaysHalf => NumpadInputMode::DirectInput,
+            // 旧仕様との互換: follow_input_mode(変換待ち半角) -> always_half
+            NumpadInputMode::FollowInputMode => NumpadInputMode::AlwaysHalf,
+            NumpadInputMode::DirectInput => NumpadInputMode::DirectInput,
+        };
+
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(config_str) {
+            let legacy = value
+                .get("character_width")
+                .cloned()
+                .and_then(|cw| serde_json::from_value::<LegacyCharacterWidthConfig>(cw).ok())
+                .unwrap_or(LegacyCharacterWidthConfig {
+                    symbol_fullwidth: config.character_width.symbol_fullwidth.clone(),
+                });
+            let legacy_groups = legacy_groups_from_symbol_fullwidth(&legacy.symbol_fullwidth);
+
+            if config.character_width.groups == legacy_groups {
+                config.character_width.groups = CharacterWidthGroups::default();
+            }
+        }
+
+        config
+            .romaji_table
+            .rows
+            .retain(|row| !is_legacy_removed_default_row(row));
+    }
+
+    if version_comparison.ordering == std::cmp::Ordering::Less {
+        config.version = CONFIG_VERSION.to_string();
+    }
+
+    repair_mojibake_default_romaji_table(&mut config);
+
+    Ok(config)
+}
+
+fn repair_mojibake_default_romaji_table(config: &mut AppConfig) {
+    if romaji_table_looks_like_mojibake_default(&config.romaji_table.rows) {
+        config.romaji_table.rows = default_romaji_rows();
+    }
+}
+
+fn romaji_table_looks_like_mojibake_default(rows: &[RomajiRule]) -> bool {
+    let default_rows = default_romaji_rows();
+    if rows.len() != default_rows.len() {
+        return false;
+    }
+
+    let matching_keys = rows
+        .iter()
+        .zip(default_rows.iter())
+        .filter(|(row, default_row)| {
+            row.input == default_row.input && row.next_input == default_row.next_input
+        })
+        .count();
+    if matching_keys < default_rows.len().saturating_mul(9) / 10 {
+        return false;
+    }
+
+    let differing_outputs = rows
+        .iter()
+        .zip(default_rows.iter())
+        .filter(|(row, default_row)| row.output != default_row.output)
+        .count();
+    let mojibake_outputs = rows
+        .iter()
+        .filter(|row| contains_common_utf8_mojibake_marker(&row.output))
+        .count();
+
+    differing_outputs > default_rows.len() / 2 && mojibake_outputs > 10
+}
+
+fn contains_common_utf8_mojibake_marker(value: &str) -> bool {
+    const MARKERS: [&str; 12] = [
+        "繝", "縺", "繧", "窶", "竊", "縲", "荳", "譁", "ã", "Ã", "Â", "â",
+    ];
+    MARKERS.iter().any(|marker| value.contains(marker))
+}
+
+fn ensure_config_dir(config_root: &Path) -> Result<(), ConfigError> {
+    fs::create_dir_all(config_root).map_err(|source| ConfigError::CreateDir {
+        path: config_root.to_path_buf(),
+        source,
+    })
+}
+
+fn write_temp_config(temp_path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
+    let mut file = fs::File::create(temp_path).map_err(|source| ConfigError::WriteTemp {
+        path: temp_path.to_path_buf(),
+        source,
+    })?;
+    use std::io::Write as _;
+    file.write_all(bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|source| ConfigError::WriteTemp {
+            path: temp_path.to_path_buf(),
+            source,
+        })
+}
+
+fn temporary_config_path(config_root: &Path) -> PathBuf {
+    let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S%f");
+    config_root.join(format!(
+        "{SETTINGS_FILENAME}.tmp-{}-{timestamp}",
+        std::process::id()
+    ))
+}
+
+fn backup_corrupted_config(config_path: &Path) -> Result<PathBuf, ConfigError> {
+    let base_name = format!(
+        "{SETTINGS_FILENAME}.broken-{}",
+        chrono::Local::now().format("%Y%m%d%H%M%S")
+    );
+    let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+    for index in 0..1000 {
+        let candidate = if index == 0 {
+            parent.join(&base_name)
+        } else {
+            parent.join(format!("{base_name}-{index}"))
+        };
+
+        if candidate.exists() {
+            continue;
+        }
+
+        fs::rename(config_path, &candidate).map_err(|source| ConfigError::Backup {
+            from: config_path.to_path_buf(),
+            to: candidate.clone(),
+            source,
+        })?;
+        return Ok(candidate);
+    }
+
+    let fallback = parent.join(format!("{base_name}-overflow"));
+    fs::rename(config_path, &fallback).map_err(|source| ConfigError::Backup {
+        from: config_path.to_path_buf(),
+        to: fallback.clone(),
+        source,
+    })?;
+    Ok(fallback)
+}
+
+#[cfg(not(windows))]
+fn replace_config_file(temp_path: &Path, config_path: &Path) -> io::Result<()> {
+    fs::rename(temp_path, config_path)
+}
+
+#[cfg(windows)]
+fn replace_config_file(temp_path: &Path, config_path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows::{
+        core::PCWSTR,
+        Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        },
+    };
+
+    let from: Vec<u16> = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let to: Vec<u16> = config_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        MoveFileExW(
+            PCWSTR(from.as_ptr()),
+            PCWSTR(to.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| io::Error::other(error.to_string()))
+}

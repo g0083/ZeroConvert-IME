@@ -1,0 +1,38 @@
+diff --git a/conversion/base.py b/conversion/base.py
+index dec1d43..9e696cd 100644
+--- a/conversion/base.py
++++ b/conversion/base.py
+@@ -1894,6 +1894,8 @@ class TextModel(ModelBase):
+         if chkhsh == "1f9825a388f700a6b591722f17d470cbbcf10973ece35d2fd14239a14110ae1a":
+             # ref: https://huggingface.co/IFM/K2-Horizon-0.9B
+             res = "k2-horizon"
++        if chkhsh == "acded0362f57dcca1fbdada8d4c87dd782c798cb4c510a70f12a9de6aea57857":
++            res = "default"
+         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
+             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
+             res = "llama-bpe"
+diff --git a/conversion/gpt2.py b/conversion/gpt2.py
+index 06dff9e..c1dd6fe 100644
+--- a/conversion/gpt2.py
++++ b/conversion/gpt2.py
+@@ -36,6 +36,8 @@ class GPT2Model(TextModel):
+         new_name = self.map_tensor_name(name)
+ 
+         yield from super().modify_tensors(data_torch, new_name, bid)
++        if new_name == "token_embd.weight":
++            yield from super().modify_tensors(data_torch, "output.weight", bid)
+ 
+ 
+ @ModelBase.register("RuGPT3XLForCausalLM")
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index 84f50d7..34d8922 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -2465,6 +2465,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_STARCODER;
+             } else if (
+                     tokenizer_pre == "gpt-2"   ||
++                    tokenizer_pre == "gpt2-small-japanese-char" ||
+                     tokenizer_pre == "phi-2"   ||
+                     tokenizer_pre == "jina-es" ||
+                     tokenizer_pre == "jina-de" ||

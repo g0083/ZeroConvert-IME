@@ -1,0 +1,35 @@
+{"id": 1, "category": "adjacent_key", "context": "お昼のチャットで、", "raw_romaji": "kinnitiwa", "raw_input": "きんにちは", "target_reading": "こんにちは", "expected": "こんにちは", "acceptable": ["こんにちは！"]}
+{"id": 2, "category": "adjacent_key", "context": "サポート宛のメールで、", "raw_romaji": "arigatougozdimasu", "raw_input": "ありがとうごづいます", "target_reading": "ありがとうございます", "expected": "ありがとうございます", "acceptable": ["有難うございます"]}
+{"id": 3, "category": "adjacent_key", "context": "上司への連絡で、", "raw_romaji": "yorosikyoonegai", "raw_input": "よろしくょおねがい", "target_reading": "よろしくおねがい", "expected": "よろしくお願い", "acceptable": ["宜しくお願い", "よろしくお願いいたします"]}
+{"id": 4, "category": "adjacent_key", "context": "システム開発で、", "raw_romaji": "kuraudo", "raw_input": "くらおど", "target_reading": "くらうど", "expected": "クラウド", "acceptable": ["cloud"]}
+{"id": 5, "category": "adjacent_key", "context": "日程の連絡で、", "raw_romaji": "asitamo", "raw_input": "あしたも", "target_reading": "あしたの", "expected": "明日の", "acceptable": ["あすの"]}
+{"id": 6, "category": "missing_vowel", "context": "朝の挨拶で、", "raw_romaji": "ohyo", "raw_input": "おひょ", "target_reading": "おはよう", "expected": "おはよう", "acceptable": ["おはようございます"]}
+{"id": 7, "category": "missing_vowel", "context": "店舗の接客で、", "raw_romaji": "okykusan", "raw_input": "おきょくさん", "target_reading": "おきゃくさん", "expected": "お客さん", "acceptable": ["お客様"]}
+{"id": 8, "category": "missing_vowel", "context": "業務終了時に、", "raw_romaji": "otukresama", "raw_input": "おつくれさま", "target_reading": "おつかれさま", "expected": "お疲れ様", "acceptable": ["お疲れ様です"]}
+{"id": 9, "category": "missing_vowel", "context": "プロジェクトの進捗で、", "raw_romaji": "sintyok", "raw_input": "しんちょk", "target_reading": "しんちょく", "expected": "進捗", "acceptable": []}
+{"id": 10, "category": "missing_vowel", "context": "駅の改札前で、", "raw_romaji": "kipp", "raw_input": "きっp", "target_reading": "きっぷ", "expected": "切符", "acceptable": ["きっぷ"]}
+{"id": 11, "category": "double_consonant", "context": "試験の発表で、", "raw_romaji": "kekka", "raw_input": "けか", "target_reading": "けっか", "expected": "結果", "acceptable": []}
+{"id": 12, "category": "double_consonant", "context": "見送りの挨拶で、", "raw_romaji": "itterassyai", "raw_input": "いてらっしゃい", "target_reading": "いってらっしゃい", "expected": "いってらっしゃい", "acceptable": ["行ってらっしゃい"]}
+{"id": 13, "category": "double_consonant", "context": "学校への登校で、", "raw_romaji": "gakkou", "raw_input": "がこう", "target_reading": "がっこう", "expected": "学校", "acceptable": []}
+{"id": 14, "category": "double_consonant", "context": "失敗した時に、", "raw_romaji": "sippai", "raw_input": "しぱい", "target_reading": "しっぱい", "expected": "失敗", "acceptable": []}
+{"id": 15, "category": "double_consonant", "context": "ニュースの速報で、", "raw_romaji": "hakkenn", "raw_input": "はけん", "target_reading": "はっけん", "expected": "発見", "acceptable": []}
+{"id": 16, "category": "syllabic_nasal", "context": "朝刊を読んで、", "raw_romaji": "sinbun", "raw_input": "しぶみ", "target_reading": "しんぶん", "expected": "新聞", "acceptable": []}
+{"id": 17, "category": "syllabic_nasal", "context": "問題の難易度について、", "raw_romaji": "kantan", "raw_input": "かたん", "target_reading": "かんたん", "expected": "簡単", "acceptable": []}
+{"id": 18, "category": "syllabic_nasal", "context": "安全確認のため、", "raw_romaji": "tenken", "raw_input": "てけn", "target_reading": "てんけん", "expected": "点検", "acceptable": []}
+{"id": 19, "category": "syllabic_nasal", "context": "連絡先のアドレスで、", "raw_romaji": "denwa", "raw_input": "でわ", "target_reading": "でんわ", "expected": "電話", "acceptable": []}
+{"id": 20, "category": "syllabic_nasal", "context": "製品の動作について、", "raw_romaji": "anzen", "raw_input": "あぜん", "target_reading": "あんぜん", "expected": "安全", "acceptable": []}
+{"id": 21, "category": "transposition", "context": "プログラムの検証で、", "raw_romaji": "tesot", "raw_input": "てそと", "target_reading": "てすと", "expected": "テスト", "acceptable": ["test"]}
+{"id": 22, "category": "transposition", "context": "謎解きの助言で、", "raw_romaji": "hitno", "raw_input": "ひとの", "target_reading": "ひんと", "expected": "ヒント", "acceptable": ["hint"]}
+{"id": 23, "category": "transposition", "context": "急ぎの用件で、", "raw_romaji": "sguru", "raw_input": "すぐる", "target_reading": "すぐ", "expected": "すぐ", "acceptable": ["直ぐ"]}
+{"id": 24, "category": "transposition", "context": "組織への加入で、", "raw_romaji": "kaini", "raw_input": "かいに", "target_reading": "かいいん", "expected": "会員", "acceptable": []}
+{"id": 25, "category": "transposition", "context": "文章のチェックで、", "raw_romaji": "koin", "raw_input": "こいん", "target_reading": "こういん", "expected": "校正", "acceptable": ["更生", "コイン"]}
+{"id": 26, "category": "prolonged_sound", "context": "IT環境の運用で、", "raw_romaji": "sa-bisu", "raw_input": "さびす", "target_reading": "さーびす", "expected": "サービス", "acceptable": ["service"]}
+{"id": 27, "category": "prolonged_sound", "context": "ソフトウェアの対象で、", "raw_romaji": "yu-za-", "raw_input": "ゆざ", "target_reading": "ゆーざー", "expected": "ユーザー", "acceptable": ["ユーザ", "user"]}
+{"id": 28, "category": "prolonged_sound", "context": "資料の複製で、", "raw_romaji": "kopi-", "raw_input": "こぴ", "target_reading": "こぴー", "expected": "コピー", "acceptable": ["copy"]}
+{"id": 29, "category": "prolonged_sound", "context": "機器の操作で、", "raw_romaji": "ri-da-", "raw_input": "りだ", "target_reading": "りーだー", "expected": "リーダー", "acceptable": ["リーダー", "reader"]}
+{"id": 30, "category": "prolonged_sound", "context": "プロジェクトの管理で、", "raw_romaji": "te-ma", "raw_input": "てま", "target_reading": "てーま", "expected": "テーマ", "acceptable": ["theme"]}
+{"id": 31, "category": "contextual", "context": "空から大粒の雨が降ってきたので、", "raw_romaji": "kasaosasu", "raw_input": "かさおさす", "target_reading": "かさをさす", "expected": "傘を差す", "acceptable": ["傘をさす"]}
+{"id": 32, "category": "contextual", "context": "レストランで席に着いて、", "raw_romaji": "menyu-omisete", "raw_input": "めにゅおみせて", "target_reading": "めにゅーをみせて", "expected": "メニューを見せて", "acceptable": ["メニューをみせて"]}
+{"id": 33, "category": "contextual", "context": "取引先への請求書について、", "raw_romaji": "kakuninosuguni", "raw_input": "かくにのすぐに", "target_reading": "かくにんをすぐに", "expected": "確認をすぐに", "acceptable": ["確認をすぐ"]}
+{"id": 34, "category": "contextual", "context": "会議が長引いてしまったため、", "raw_romaji": "zikanha", "raw_input": "じかんわ", "target_reading": "じかんは", "expected": "時間は", "acceptable": []}
+{"id": 35, "category": "contextual", "context": "新しいパソコンを購入して、", "raw_romaji": "setutingu", "raw_input": "せちんぐ", "target_reading": "せってぃんぐ", "expected": "セッティング", "acceptable": ["設定"]}

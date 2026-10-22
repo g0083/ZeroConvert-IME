@@ -1,0 +1,40 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      check_candidate_ui:
+        description: Run candidate UI CSS checks (known pre-existing spacing mismatch)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate source tree
+        run: python scripts/check_repository.py
+      - name: Frontend behavior tests
+        working-directory: windows/frontend
+        run: npm test
+      - name: Candidate scroller tests
+        if: github.event_name == 'workflow_dispatch' && inputs.check_candidate_ui
+        working-directory: windows
+        run: node --test crates/ui/tests/candidate_scroller.test.cjs
+      - name: Reverse dictionary generator tests
+        working-directory: windows
+        run: node --test scripts/generate-reverse-dictionary.test.mjs
