@@ -44,6 +44,7 @@ type ModelInfo = {
     size_mb: number;
     description: string;
     is_active: boolean;
+    available: boolean;
 };
 
 type ModelListResponse = {
@@ -85,7 +86,6 @@ const AI_ASSIST_CASES = [
 
 export function Benchmark() {
     const [benchmarkTab, setBenchmarkTab] = useState<"zenzai" | "ai_assist">("zenzai");
-    const [aiAssistModel, setAiAssistModel] = useState<string>("zerocon");
     const [aiAssistResults, setAiAssistResults] = useState<Record<number, AiAssistItemResult>>({});
     const [isAiAssistRunning, setIsAiAssistRunning] = useState(false);
     const stopAiAssistSignalRef = useRef(false);
@@ -97,7 +97,9 @@ export function Benchmark() {
     const [showErrorsOnly, setShowErrorsOnly] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
-    const [activeModelId, setActiveModelId] = useState<string>("iq4xs");
+    const [activeModelId, setActiveModelId] = useState<string>("");
+    const [models, setModels] = useState<ModelInfo[]>([]);
+    const activeModel = models.find((model) => model.id === activeModelId);
     const [isSwitchingModel, setIsSwitchingModel] = useState(false);
     const stopSignalRef = useRef(false);
 
@@ -111,16 +113,15 @@ export function Benchmark() {
     // Load active model info
     useEffect(() => {
         invoke<ModelListResponse>("get_active_model").then((data) => {
-            if (data?.active_id) {
-                setActiveModelId(data.active_id);
-            }
+            setActiveModelId(data.active_id);
+            setModels(data.models);
         }).catch((err) => {
             console.error("Failed to load active model in benchmark:", err);
         });
     }, []);
 
     const handleSwitchModel = async (newModelId: string) => {
-        if (newModelId === activeModelId || isSwitchingModel || isRunning) return;
+        if (newModelId === activeModelId || isSwitchingModel || isRunning || isAiAssistRunning) return;
         setIsSwitchingModel(true);
         const toastId = toast.loading("モデル切り替え中... (サーバー再起動)");
         try {
@@ -128,7 +129,7 @@ export function Benchmark() {
             setActiveModelId(newModelId);
             setResults({});
             setProgressCount(0);
-            toast.success(`モデルを ${newModelId === "q4km" ? "ZeroCon Model v3.2 Standard (Q4_K_M)" : "ZeroCon Model v3.2 Fast (IQ4_XS)"} に切り替えました！`, { id: toastId });
+            toast.success(`モデルを ${models.find((model) => model.id === newModelId)?.name ?? newModelId} に切り替えました`, { id: toastId });
         } catch (err) {
             toast.error(`モデル切り替えに失敗しました: ${err}`, { id: toastId });
         } finally {
@@ -228,7 +229,7 @@ export function Benchmark() {
         stopAiAssistSignalRef.current = false;
         setAiAssistResults({});
 
-        const toastId = toast.loading(`AIアシスト ベンチマーク実行中 (${aiAssistModel})...`);
+        const toastId = toast.loading(`AIアシスト ベンチマーク実行中 (ZeroCon)...`);
         try {
             for (const item of AI_ASSIST_CASES) {
                 if (stopAiAssistSignalRef.current) break;
@@ -236,7 +237,6 @@ export function Benchmark() {
                     id: item.id,
                     context: item.context,
                     input: item.input,
-                    modelKey: aiAssistModel,
                 });
                 setAiAssistResults((prev) => ({ ...prev, [item.id]: res }));
             }
@@ -321,43 +321,28 @@ export function Benchmark() {
                     <p className="text-xs text-muted-foreground mt-0.5">
                         {benchmarkTab === "zenzai"
                             ? "230 問の難関評価データセットで純粋なAIモデル直結推論の変換精度とGPUレイテンシを直接検証します。"
-                            : "メイン変換は入力通りを100%維持しつつ、Prefix Levenshtein誤字補正と内蔵LFM推論エンジン(18090)の応答速度をリアルタイム測定します。"}
+                            : "ZeroCon Modelによる変換・先読みと、規則による補正を測定します。このベンチマークは corecctor（ZeroCon Model Corrector）の補正精度・応答時間を測定しません。"}
                     </p>
                 </div>
 
                 {/* Model Selector Pill */}
                 <div className="flex items-center gap-1.5 p-1 rounded-xl bg-muted/60 border border-border/70 self-start sm:self-auto">
-                    <button
+                    {models.map((model) => <button
+                        key={model.id}
                         type="button"
-                        disabled={isSwitchingModel || isRunning}
-                        onClick={() => handleSwitchModel("iq4xs")}
+                        disabled={isSwitchingModel || isRunning || isAiAssistRunning || !model.available}
+                        onClick={() => handleSwitchModel(model.id)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer ${
-                            activeModelId === "iq4xs"
+                            activeModelId === model.id
                                 ? "bg-card text-foreground shadow-xs font-semibold border border-border/80"
                                 : "text-muted-foreground hover:text-foreground"
                         }`}
                     >
                         <Cpu className="size-3.5" />
-                        <span>IQ4_XS</span>
-                        <span className="text-[10px] text-muted-foreground px-1 py-0.2 rounded bg-muted">52.6MB</span>
-                        {activeModelId === "iq4xs" && <Check className="size-3 text-emerald-500 stroke-[2.5]" />}
-                    </button>
-
-                    <button
-                        type="button"
-                        disabled={isSwitchingModel || isRunning}
-                        onClick={() => handleSwitchModel("q4km")}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer ${
-                            activeModelId === "q4km"
-                                ? "bg-card text-foreground shadow-xs font-semibold border border-border/80"
-                                : "text-muted-foreground hover:text-foreground"
-                        }`}
-                    >
-                        <Cpu className="size-3.5" />
-                        <span>Q4_K_M</span>
-                        <span className="text-[10px] text-muted-foreground px-1 py-0.2 rounded bg-muted">61.3MB</span>
-                        {activeModelId === "q4km" && <Check className="size-3 text-emerald-500 stroke-[2.5]" />}
-                    </button>
+                        <span>{model.name}</span>
+                        <span className="text-[10px] text-muted-foreground px-1 py-0.2 rounded bg-muted">{model.available ? `${model.size_mb.toFixed(1)}MB` : "未配置"}</span>
+                        {activeModelId === model.id && <Check className="size-3 text-emerald-500 stroke-[2.5]" />}
+                    </button>)}
                 </div>
             </div>
 
@@ -410,10 +395,10 @@ export function Benchmark() {
                         <SlidersHorizontal className="size-3.5 text-muted-foreground" />
                     </div>
                     <div className="text-lg font-bold tracking-tight text-foreground truncate">
-                        {activeModelId === "q4km" ? "Q4_K_M (高精度)" : "IQ4_XS (超軽量)"}
+                        {activeModel?.name ?? "選択肢外のモデル"}
                     </div>
                     <div className="text-[11px] text-muted-foreground">
-                        {activeModelId === "q4km" ? "61.3 MB | ~750 tok/s" : "52.6 MB | ~800 tok/s"}
+                        {activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "Standard または Nano を選択してください"}
                     </div>
                 </div>
             </div>
@@ -652,44 +637,7 @@ export function Benchmark() {
                 <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                         <span className="text-xs font-semibold text-muted-foreground">先読みモデル:</span>
-                        <div className="flex items-center gap-1.5 p-1 rounded-lg bg-muted border border-border">
-                            <button
-                                type="button"
-                                disabled={isAiAssistRunning}
-                                onClick={() => setAiAssistModel("zerocon")}
-                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all cursor-pointer ${
-                                    aiAssistModel === "zerocon"
-                                        ? "bg-card text-foreground shadow-xs font-semibold"
-                                        : "text-muted-foreground hover:text-foreground"
-                                }`}
-                            >
-                                ZeroCon (RTX 4070)
-                            </button>
-                            <button
-                                type="button"
-                                disabled={isAiAssistRunning}
-                                onClick={() => setAiAssistModel("230m_q4km")}
-                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all cursor-pointer ${
-                                    aiAssistModel === "230m_q4km"
-                                        ? "bg-card text-foreground shadow-xs font-semibold"
-                                        : "text-muted-foreground hover:text-foreground"
-                                }`}
-                            >
-                                LFM 230M (Q4_K_M)
-                            </button>
-                            <button
-                                type="button"
-                                disabled={isAiAssistRunning}
-                                onClick={() => setAiAssistModel("350m_q4km")}
-                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all cursor-pointer ${
-                                    aiAssistModel === "350m_q4km"
-                                        ? "bg-card text-foreground shadow-xs font-semibold"
-                                        : "text-muted-foreground hover:text-foreground"
-                                }`}
-                            >
-                                LFM 350M (Q4_K_M)
-                            </button>
-                        </div>
+                        <span className="text-sm font-medium">ZeroCon Model</span>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -709,7 +657,7 @@ export function Benchmark() {
                                 className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-xs"
                             >
                                 <Play className="size-3.5 fill-current" />
-                                ベンチマーク実行 ({aiAssistModel})
+                                ベンチマーク実行 (ZeroCon)
                             </button>
                         )}
                         <button

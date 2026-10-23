@@ -20,6 +20,8 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 エージェントの入口は [AGENTS.md](AGENTS.md)。詳細は [構成](docs/architecture.md)、[探索ガイド](docs/file-map.md)、[セットアップ](docs/setup.md) を参照してください。
 
+機能編集からこのPCの試験IMEへの反映、インストーラー作成、Gitでの保存までの流れは [開発・反映・Gitの手順](docs/development-workflow.md) にまとめています。普段は `Build-Trial.bat` だけでビルドと適用まで行い、配布時は確認した同じ完全パッケージからインストーラーを作ります。
+
 ## 開始手順
 
 ```powershell

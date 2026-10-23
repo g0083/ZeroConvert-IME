@@ -34,9 +34,7 @@ type GeneralConfigState = {
     show_live_conversion_reading: boolean;
     live_conversion_reading_vertical_adjustment: number;
     jev_conversion: boolean;
-    experimental_typo_correction: boolean;
     experimental_ai_assist: boolean;
-    experimental_predictive_model: string;
     experimental_ai_engine: string;
     auto_commit_live_conversion: boolean;
     auto_commit_rewind_on_backspace: boolean;
@@ -60,9 +58,7 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     show_live_conversion_reading: true,
     live_conversion_reading_vertical_adjustment: 4,
     jev_conversion: false,
-    experimental_typo_correction: false,
     experimental_ai_assist: true,
-    experimental_predictive_model: "230m_q4km",
     experimental_ai_engine: "embedded",
     auto_commit_live_conversion: true,
     auto_commit_rewind_on_backspace: false,
@@ -409,33 +405,26 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                 </SettingsSection>
             </>}
             {page === "advanced" && <>
-                <SettingsSection title="実験的機能">
-                    <SettingsRow label="辞書ベース誤入力補正" description="PCキーボードのタイポや入力間違いを補正した候補を表示します。" htmlFor="typo-correction">
-                        <Switch id="typo-correction" checked={generalValue.experimental_typo_correction} onCheckedChange={(value) => void updateGeneralConfig("experimental_typo_correction", value)} />
+                <SettingsSection title="タイポ補正と先読み">
+                    <SettingsRow label="タイポ補正モデル" description="日本語入力のタイポ補正に特化して独自に追加学習した corecctor を搭載。入力と左文脈から補正候補を生成します。">
+                        <span className="text-sm font-medium">corecctor（ZeroCon Model Corrector）</span>
                     </SettingsRow>
-                    <SettingsRow label="AIアシスト（💡もしかして / 🔮先読み）" description="基本変換は入力通りを100%維持しつつ、読み行に 💡誤字補正 と 🔮続きの先読み をピル表示し、Tabキーで確定できます。⚡展開（日付等）も候補に追加されます。" htmlFor="ai-assist">
+                    <SettingsRow label="タイポ補正・先読みを使う" description="corecctor によるタイポ補正と、ZeroCon Model による続きの先読みを有効にします。補正・先読み候補はTabキーで採用できます。" htmlFor="ai-assist">
                         <Switch id="ai-assist" checked={generalValue.experimental_ai_assist} onCheckedChange={(value) => void updateGeneralConfig("experimental_ai_assist", value)} />
                     </SettingsRow>
                     {generalValue.experimental_ai_assist && (
                         <>
-                            <SettingsRow label="AI推論エンジン" description="推論エンジンの実行モードを選択します。通常時は内蔵エンジンが自動起動します。">
+                            <SettingsRow label="タイポ補正の実行方法" description="通常は内蔵エンジンが corecctor を自動起動します。LM Studioは開発者向けの接続先です。" htmlFor="ai-engine">
                                 <Select value={generalValue.experimental_ai_engine || "embedded"} onValueChange={(value) => void updateGeneralConfig("experimental_ai_engine", value)}>
-                                    <SelectTrigger className="w-64"><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="ai-engine" className="w-64"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="embedded">内蔵推論エンジン (推奨・自動起動)</SelectItem>
                                         <SelectItem value="lm_studio">LM Studio (検証・デバッグ用)</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </SettingsRow>
-                            <SettingsRow label="先読み推論モデル" description="文脈先読みに使用するAIモデルを選択します。ZeroCon ModelはGPU上で最速・高精度に動作します。">
-                                <Select value={generalValue.experimental_predictive_model || "230m_q4km"} onValueChange={(value) => void updateGeneralConfig("experimental_predictive_model", value)}>
-                                    <SelectTrigger className="w-64"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="zerocon">ZeroCon Model v3.2 (RTX 4070 / 最速・高精度)</SelectItem>
-                                        <SelectItem value="230m_q4km">LFM 2.5 230M (Q4_K_M) - 内蔵汎用モデル</SelectItem>
-                                        <SelectItem value="350m_q4km">LFM 2.5 350M (Q4_K_M) - 大規模文脈モデル</SelectItem>
-                                    </SelectContent>
-                                </Select>
+                            <SettingsRow label="先読みモデル" description="漢字変換と同じバックエンドを使用します（既定: Vulkan）。バックエンドは漢字変換の設定から変更できます。">
+                                <span className="text-sm">ZeroCon Model</span>
                             </SettingsRow>
                         </>
                     )}

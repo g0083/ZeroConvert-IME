@@ -36,6 +36,7 @@ pub mod data_paths;
 pub mod indicator;
 pub mod ipc;
 pub mod ruby;
+mod theme;
 pub mod uiaccess;
 pub mod utils;
 
@@ -148,8 +149,7 @@ fn ruby_clearance<'a>(
     _ruby_size_ready: bool,
     vertical_adjustment: i32,
 ) -> Option<(&'a tao::window::Window, i32)> {
-    (candidate_list_visible && !reading.is_empty())
-        .then_some((ruby_window, vertical_adjustment))
+    (candidate_list_visible && !reading.is_empty()).then_some((ruby_window, vertical_adjustment))
 }
 
 fn send_user_event(proxy: &EventLoopProxy<UserEvent>, event: UserEvent) {
@@ -251,6 +251,15 @@ fn show_ruby_window_if_ready(
     }
 }
 
+fn candidate_list_should_show(
+    visible: bool,
+    list_visible: bool,
+    ready: bool,
+    candidates: &[String],
+) -> bool {
+    visible && list_visible && ready && !candidates.is_empty()
+}
+
 fn set_candidate_list_visible(candidate_webview: &wry::WebView, visible: bool) {
     evaluate_script(
         candidate_webview,
@@ -323,6 +332,8 @@ fn keep_windows_topmost(
 
 #[derive(Debug)]
 pub enum UserEvent {
+    UpdateTheme(shared::ColorTheme),
+    CandidateReady,
     UpdateHeight(i32),
     UpdateRubySize {
         request_id: u32,
@@ -378,17 +389,26 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let event_loop_proxy = event_loop.create_proxy();
+    let initial_theme = shared::AppConfig::read()
+        .unwrap_or_default()
+        .appearance
+        .ime_theme;
+    let theme_script = theme::initialization_script(initial_theme);
+    theme::watch_settings(event_loop_proxy.clone(), initial_theme)?;
     let task_guard: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 
     let proxy_clone = event_loop_proxy.clone();
     let candidate_window = candidate::create_candidate_window(&event_loop)?;
     let candidate_webview_builder = candidate::create_candidate_webview(&mut web_context)?;
     let candidate_webview = candidate_webview_builder
+        .with_initialization_script(&theme_script)
         .with_devtools(cfg!(debug_assertions))
         .with_ipc_handler(move |message| {
             if let Ok(message) = serde_json::from_str::<serde_json::Value>(message.body()) {
                 if let Some(type_value) = message.get("type") {
-                    if type_value == "resize" {
+                    if type_value == "candidate-ready" {
+                        send_user_event(&proxy_clone, UserEvent::CandidateReady);
+                    } else if type_value == "resize" {
                         if let Some(height) = message.get("height") {
                             let height = height.as_f64().unwrap_or(0.0);
                             send_user_event(&proxy_clone, UserEvent::UpdateHeight(height as i32));
@@ -401,11 +421,12 @@ async fn main() -> anyhow::Result<()> {
 
     let indicator_window = indicator::create_indicator_window(&event_loop)?;
     let indicator_webview =
-        indicator::create_indicator_webview(&indicator_window, &mut web_context)?;
+        indicator::create_indicator_webview(&indicator_window, &mut web_context, &theme_script)?;
     let ruby_window = ruby::create_ruby_window(&event_loop)?;
     let proxy_clone = event_loop_proxy.clone();
     let ruby_webview_builder = ruby::create_ruby_webview(&mut web_context)?;
     let ruby_webview = ruby_webview_builder
+        .with_initialization_script(&theme_script)
         .with_devtools(cfg!(debug_assertions))
         .with_ipc_handler(move |message| {
             if let Ok(message) = serde_json::from_str::<serde_json::Value>(message.body()) {
@@ -442,6 +463,9 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let mut last_candidate_rect: Option<CandidateRect> = None;
+    let mut candidate_ready = false;
+    let mut latest_candidates: Vec<String> = Vec::new();
+    let mut latest_selection = 0;
     let mut current_reading = String::new();
     let mut current_candidate_list_visible = true;
     let mut current_window_visible = false;
@@ -464,13 +488,35 @@ async fn main() -> anyhow::Result<()> {
                 ..
             } => *control_flow = ControlFlow::Exit,
             Event::UserEvent(script) => match script {
+                UserEvent::UpdateTheme(theme) => {
+                    let script = format!(
+                        "window.setColorTheme({})",
+                        serde_json::to_string(&theme).expect("theme is serializable")
+                    );
+                    for webview in [&candidate_webview, &ruby_webview, &indicator_webview] {
+                        evaluate_script(webview, &script);
+                    }
+                }
+                UserEvent::CandidateReady => {
+                    candidate_ready = true;
+                    set_candidate_list_visible(&candidate_webview, current_candidate_list_visible);
+                    set_candidate_window_width(&candidate_window, &latest_candidates);
+                    update_candidate_list(&candidate_webview, &latest_candidates, Some(latest_selection));
+                    if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
+                        show_window_no_activate(&candidate_window);
+                    }
+                }
                 UserEvent::UpdateCandidates(candidates) => {
+                    if let Ok(values) = serde_json::from_str::<Vec<String>>(&candidates) {
+                        latest_candidates = values;
+                    }
                     evaluate_script(
                         &candidate_webview,
                         &format!("updateCandidates({})", candidates),
                     );
                 }
                 UserEvent::UpdateSelection(index) => {
+                    latest_selection = index;
                     evaluate_script(&candidate_webview, &format!("updateSelection({})", index));
                 }
                 UserEvent::UpdateInputMethod(input_method) => {
@@ -573,7 +619,9 @@ async fn main() -> anyhow::Result<()> {
                             }
 
                             current_window_visible = true;
-                            show_window_no_activate(&candidate_window);
+                            if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
+                                show_window_no_activate(&candidate_window);
+                            } else { hide_window(&candidate_window); }
                             show_ruby_window_if_ready(
                                 &ruby_window,
                                 current_window_visible,
@@ -641,6 +689,7 @@ async fn main() -> anyhow::Result<()> {
                             );
                         }
                         WindowAction::SetCandidate { candidates } => {
+                            latest_candidates = candidates.clone();
                             current_candidate_list_visible = true;
                             set_candidate_list_visible(&candidate_webview, true);
                             set_candidate_window_width(&candidate_window, &candidates);
@@ -668,6 +717,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         WindowAction::SetSelection { index } => {
+                            latest_selection = index;
                             send_user_event(&event_loop_proxy, UserEvent::UpdateSelection(index));
                         }
                         WindowAction::SetInputMode(input_method) => {
@@ -757,7 +807,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
 
+                            if let Some(index) = selected_index { latest_selection = index; }
                             if let Some(ref candidates) = candidates {
+                                latest_candidates = candidates.clone();
                                 set_candidate_window_width(&candidate_window, candidates);
                                 update_candidate_list(
                                     &candidate_webview,
@@ -911,7 +963,9 @@ async fn main() -> anyhow::Result<()> {
                                         };
                                     }
 
-                                    show_window_no_activate(&candidate_window);
+                                    if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
+                                show_window_no_activate(&candidate_window);
+                            } else { hide_window(&candidate_window); }
 
                                     show_ruby_window_if_ready(
                                         &ruby_window,
@@ -924,6 +978,10 @@ async fn main() -> anyhow::Result<()> {
                                     hide_window(&candidate_window);
                                     hide_window(&ruby_window);
                                 }
+                            }
+
+                            if !candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
+                                hide_window(&candidate_window);
                             }
 
                             // Always re-evaluate the floating "原文" window once every state
@@ -952,6 +1010,22 @@ mod tests {
         candidate_window_width, logical_width_for_physical_width, CANDIDATE_WINDOW_MAX_WIDTH,
         CANDIDATE_WINDOW_MIN_WIDTH,
     };
+
+    #[test]
+    fn empty_or_hidden_candidate_list_never_reveals_a_frame() {
+        let values = vec!["hello".to_string()];
+        assert!(!super::candidate_list_should_show(
+            true, false, true, &values
+        ));
+        assert!(!super::candidate_list_should_show(
+            true, true, false, &values
+        ));
+        assert!(!super::candidate_list_should_show(true, true, true, &[]));
+        assert!(super::candidate_list_should_show(true, true, true, &values));
+        assert!(!super::candidate_list_should_show(
+            false, true, true, &values
+        ));
+    }
 
     #[test]
     fn candidate_window_width_uses_minimum_for_short_candidates() {

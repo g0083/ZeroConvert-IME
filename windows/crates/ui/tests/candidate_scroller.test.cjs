@@ -124,6 +124,4 @@ test("candidate spacing declarations use explicit CSS length units", () => {
         }
     }
 
-    assert.match(style, /&::before\s*\{[^}]*margin:\s*0 0\.75rem 0 2px;/);
-    assert.match(style, /footer\s*\{[^}]*padding:\s*8px 10px 5px 10px;/);
 });

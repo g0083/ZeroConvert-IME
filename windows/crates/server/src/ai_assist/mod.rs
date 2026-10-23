@@ -3,71 +3,35 @@
 //
 // 世代交代のアシスト機能群は以下のように分割されている。
 // - `dynamic_macro`: ⚡ 動的マクロ展開 (日付・時刻・年号・インライン計算)
-// - `collocation`   : 🔮 格助詞バイグラム (共起語) 先読み
+// - `prediction`    : 🔮 ZeroCon Modelによる先読み
 // - `typo_variant`  : 💡 QWERTY 隣接キー変種生成 & 軽量辞書インデックス
 // - `learning`      : 🧠 「もしかして」確定時の自己学習フィードバック
 //
-// いずれも外部ネットワーク・推論エンジン非依存で、IME 単体で完結する。
+// 補正はローカル辞書・学習と専用endpoint、先読みはZeroCon専用endpointを使う。
+// 入力スレッドから同期呼び出ししない。
 
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-pub mod collocation;
+pub mod corrector;
 pub mod dynamic_macro;
 pub mod learning;
+pub mod prediction;
+mod reading_check;
 pub mod romaji_decoder;
 pub mod typo_variant;
 
-pub use collocation::{find_collocation, CollocationCandidate};
 pub use dynamic_macro::{current_expansions, expand_dynamic_macros, MacroCandidate, MacroKind};
 pub use learning::{lookup_learned_typo, record_learned_typo};
 pub use typo_variant::{find_indexed_surface, find_qwerty_correction};
-
-static LAST_KEY_INSTANT: Mutex<Option<Instant>> = Mutex::new(None);
-static LFM_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-static LFM_CACHE: Mutex<Option<(String, String)>> = Mutex::new(None);
-
-static USER_HISTORY_CACHE: Mutex<Vec<String>> = Mutex::new(Vec::new());
-const MAX_USER_HISTORY: usize = 300;
 
 /// 直近に生成した「💡 もしかして」候補。
 ///
 /// クライアントからの確定通知 (candidate_id 999901) と突き合わせるために保持する。
 static LAST_TYPO_CANDIDATE: Mutex<Option<GeneratedTypoCandidate>> = Mutex::new(None);
-
-/// ユーザーが確定したテキストを学習・記録する（先読み用 LRU キャッシュ）
-pub fn record_user_committed_text(text: &str) {
-    let trimmed = text.trim();
-    if trimmed.chars().count() < 3 {
-        return;
-    }
-    if let Ok(mut lock) = USER_HISTORY_CACHE.lock() {
-        if lock.first().map(|s| s.as_str()) == Some(trimmed) {
-            return;
-        }
-        if trimmed.contains('。') {
-            for sentence in trimmed.split('。') {
-                let s_trim = sentence.trim();
-                if s_trim.chars().count() >= 3 {
-                    let s_with_dot = format!("{}。", s_trim);
-                    if !lock.contains(&s_with_dot) {
-                        lock.insert(0, s_with_dot);
-                    }
-                }
-            }
-        }
-        if !lock.contains(&trimmed.to_string()) {
-            lock.insert(0, trimmed.to_string());
-        }
-        if lock.len() > MAX_USER_HISTORY {
-            lock.truncate(MAX_USER_HISTORY);
-        }
-    }
-}
 
 /// QWERTY キーボード配列における物理座標
 fn qwerty_key_coord(c: char) -> Option<(i8, i8)> {
@@ -243,50 +207,28 @@ pub fn has_qwerty_adjacent_difference(s1: &str, s2: &str) -> bool {
     false
 }
 
-pub const DEBOUNCE_THRESHOLD_MS: u64 = 60;
-
-struct InFlightGuard;
-impl Drop for InFlightGuard {
-    fn drop(&mut self) {
-        LFM_IN_FLIGHT.store(false, Ordering::Release);
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct AiAssistConfig {
     pub enabled: bool,
-    pub predictive_model: String, // "230m_q4km" or "350m_q4km"
-    pub engine: String,           // "embedded" or "lm_studio"
-    pub lfm_port: u16,
-    pub zenzai_port: u16,
+    pub engine: String, // Corrector: "embedded" or "lm_studio"
+    pub corrector_port: u16,
+    pub prediction_port: u16,
 }
 
 impl Default for AiAssistConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            predictive_model: "230m_q4km".to_string(),
             engine: "embedded".to_string(),
-            lfm_port: 18090,
-            zenzai_port: 8090,
-        }
-    }
-}
-
-impl AiAssistConfig {
-    pub fn resolved_model_id(&self) -> &str {
-        if self.engine == "embedded" {
-            "lfm"
-        } else if self.predictive_model.contains("350") {
-            "liquidai/lfm2.5-350m"
-        } else {
-            "lfm2.5-230m@q4_k_m"
+            corrector_port: 18090,
+            prediction_port: shared::PREDICTION_SERVER_PORT,
         }
     }
 }
 
 /// 超軽量HTTP POSTリクエスト（依存関係不要・即座にタイムアウト可能）
 fn simple_http_post(port: u16, path: &str, body_json: &Value, timeout_ms: u64) -> Option<Value> {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let addr = format!("127.0.0.1:{}", port);
     let mut stream =
         TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_millis(timeout_ms)).ok()?;
@@ -305,7 +247,19 @@ fn simple_http_post(port: u16, path: &str, body_json: &Value, timeout_ms: u64) -
     }
 
     let mut response_buf = Vec::new();
-    let _ = stream.read_to_end(&mut response_buf);
+    let mut chunk = [0; 4096];
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        stream.set_read_timeout(Some(remaining)).ok()?;
+        let count = stream.read(&mut chunk).ok()?;
+        if count == 0 {
+            break;
+        }
+        response_buf.extend_from_slice(&chunk[..count]);
+        if response_buf.len() > 128 * 1024 {
+            return None;
+        }
+    }
     let response_str = String::from_utf8_lossy(&response_buf);
 
     if let Some(pos) = response_str.find("\r\n\r\n") {
@@ -904,6 +858,8 @@ pub fn take_typo_candidate(surface: &str) -> Option<GeneratedTypoCandidate> {
     guard.take()
 }
 
+pub use corrector::suggest as fetch_typo_suggestion;
+
 /// 💡 もしかして (AI 誤字補正候補の生成)
 pub fn fetch_moshikashite_candidate(
     context: &str,
@@ -920,8 +876,8 @@ pub fn fetch_moshikashite_candidate(
 /// 2. 静的誤字テーブル・音韻規則 (既存挙動)。
 /// 3. Damerau-Levenshtein 編集距離 (既存挙動)。
 /// 4. QWERTY 隣接キー変種 + 軽量辞書インデックス (Phase 3)。
-pub fn fetch_typo_suggestion(
-    context: &str,
+fn heuristic_typo_suggestion(
+    _context: &str,
     raw_hiragana: &str,
     config: &AiAssistConfig,
 ) -> Option<TypoSuggestion> {
@@ -934,16 +890,8 @@ pub fn fetch_typo_suggestion(
         return None;
     }
 
-    eprintln!(
-        "[TypoDebug] fetch_typo_suggestion: raw_hiragana='{}'",
-        raw_hiragana
-    );
     // 0.5. ローマ字子音浮き・混入タイポ (例: 「おｋせり」->「おかえり」, 「おｔかれ」->「おつかれ」)
     if let Some(decoded_hira) = romaji_decoder::decode_floating_consonant_typo(raw_hiragana) {
-        eprintln!(
-            "[TypoDebug] decode_floating_consonant_typo HIT: raw='{}' -> decoded='{}'",
-            raw_hiragana, decoded_hira
-        );
         let surface =
             typo_variant::lookup_surface(&decoded_hira).unwrap_or_else(|| decoded_hira.clone());
         return Some(TypoSuggestion {
@@ -1098,30 +1046,6 @@ pub fn fetch_typo_suggestion(
     }
 
     if let Some((_, _, full, prefix, v_surface)) = best_prefix_correction {
-        // ZeroCon Model による文脈リランキング検証 (文脈 context がある場合)
-        if !context.is_empty() && config.predictive_model == "zerocon" {
-            let target_katakana = to_katakana(&full);
-            let prompt = format!("\u{EE02}{}\u{EE00}{}\u{EE01}", context, target_katakana);
-            let payload = json!({
-                "prompt": prompt,
-                "n_predict": 16,
-                "temperature": 0.0,
-                "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-            });
-            if let Some(res) = simple_http_post(config.zenzai_port, "/completion", &payload, 60) {
-                if let Some(content) = res.get("content").and_then(|c| c.as_str()) {
-                    let trimmed = content.trim();
-                    if !trimmed.is_empty() {
-                        return Some(TypoSuggestion {
-                            surface: trimmed.to_string(),
-                            token_reading: prefix,
-                            token_surface: v_surface,
-                            learned: false,
-                        });
-                    }
-                }
-            }
-        }
         return Some(TypoSuggestion {
             surface: full,
             token_reading: prefix,
@@ -1138,52 +1062,6 @@ pub fn fetch_typo_suggestion(
             token_surface: correction.token_surface,
             learned: false,
         });
-    }
-
-    // 8. 単語・文節単位 ニューラル特化モデル (xsmall, port 18090) フォールバック
-    // 辞書やルールで解決できなかった未知のタイポを、左文脈 + 単語ウィンドウで高精度に補正する
-    if true {
-        // 末尾の単語・文節ウィンドウ（最大8文字）を抽出
-        let chars: Vec<char> = hiragana.chars().collect();
-        let win_len = chars.len().min(8);
-        let split_idx = chars.len() - win_len;
-        let prefix_part: String = chars[..split_idx].iter().collect();
-        let target_part: String = chars[split_idx..].iter().collect();
-
-        let effective_ctx = if !context.is_empty() {
-            format!("{context}{prefix_part}")
-        } else {
-            prefix_part.clone()
-        };
-
-        let target_katakana = to_katakana(&target_part);
-        let prompt = if !effective_ctx.is_empty() {
-            format!("\u{EE02}{effective_ctx}\u{EE00}{target_katakana}\u{EE01}")
-        } else {
-            format!("\u{EE00}{target_katakana}\u{EE01}")
-        };
-
-        let payload = json!({
-            "prompt": prompt,
-            "n_predict": 8,
-            "temperature": 0.0,
-            "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-        });
-
-        // zenzai_port (または補正モデルポート) へ超低遅延で問い合わせ
-        if let Some(res) = simple_http_post(config.lfm_port, "/completion", &payload, 150) {
-            if let Some(content) = res.get("content").and_then(|c| c.as_str()) {
-                let trimmed = content.trim();
-                if !trimmed.is_empty() && trimmed != target_part && trimmed != target_katakana {
-                    return Some(TypoSuggestion {
-                        surface: format!("{prefix_part}{trimmed}"),
-                        token_reading: target_part,
-                        token_surface: trimmed.to_string(),
-                        learned: false,
-                    });
-                }
-            }
-        }
     }
 
     None
@@ -1323,250 +1201,9 @@ fn correction_for_embedded_typo(hiragana: &str) -> Option<TypoSuggestion> {
     None
 }
 
-/// 🔮 先読み (AI 予測補完候補の生成)
-pub fn fetch_predictive_candidate(
-    context: &str,
-    partial_surface: &str,
-    config: &AiAssistConfig,
-) -> Option<String> {
-    fetch_predictive_candidate_internal(context, partial_surface, config, false)
-}
-
-/// モデル推論で得た先読みが「提示する価値があるか」を判定する。
-///
-/// 推論出力には辞書ベースの上書きと異なり、的外れや短い断片が混ざる。
-/// 誤った先読みは注意を引いて実入力を遅らせるため、明確に使えないものは
-/// 提示しない。IME は句点や記号を単独で確定することはないので、
-/// 文末記号だけの先読みも提示価値がないものとして弾く。
-fn is_useful_predictive_continuation(continuation: &str) -> bool {
-    let trimmed = continuation.trim();
-    if trimmed.chars().count() < 2 {
-        return false;
-    }
-    // 文末記号だけの先読みは情報がない
-    !trimmed.chars().all(|ch| {
-        matches!(
-            ch,
-            '。' | '、' | '！' | '!' | '?' | '？' | '.' | ',' | ' ' | '\t'
-        )
-    })
-}
-
-/// 内部用・テスト用（skip_debounce を指定可能）
-pub fn fetch_predictive_candidate_internal(
-    context: &str,
-    partial_surface: &str,
-    config: &AiAssistConfig,
-    skip_debounce: bool,
-) -> Option<String> {
-    if !config.enabled || partial_surface.chars().count() < 2 {
-        return None;
-    }
-
-    // 1. 高頻度定型句キャッシュ（0ms 即応、22句）
-    // （※定型句はデバウンス判定の前に行い、連打中であっても即座にヒットさせる）
-    const PREDICTIVE_PHRASES: &[(&str, &str)] = &[
-        ("いつもお世話に", "なっております。"),
-        ("よろしくお願い", "いたします。"),
-        ("よろしくお願いし", "ます。"),
-        ("お疲れ様", "でした。"),
-        ("お疲れ様です", "。お疲れ様でした。"),
-        ("おはよう", "ございます！"),
-        ("おはようご", "ざいます。"),
-        ("ありがとうご", "ざいます！"),
-        ("ありがとうございます", "。助かりました。"),
-        ("申し訳", "ございません。"),
-        ("申し訳あり", "ません。"),
-        ("ご確認のほど", "よろしくお願いいたします。"),
-        ("ご連絡いただき", "ありがとうございます。"),
-        ("ご対応いただき", "ありがとうございます。"),
-        ("お手数をおかけ", "しますが、よろしくお願いいたします。"),
-        ("引き続きよろしく", "お願いいたします。"),
-        ("何卒よろしく", "お願いいたします。"),
-        ("ご検討のほど", "よろしくお願いいたします。"),
-        ("確認いた", "しました。"),
-        ("承知いた", "しました。"),
-        ("かしこまり", "ました。"),
-        ("了解いた", "しました。"),
-        ("失礼いた", "します。"),
-        ("返信が遅れ", "申し訳ありません。"),
-        ("現在原因を調査", "中です。"),
-        ("機能の実装が完了", "いたしました。"),
-        ("進捗状況をご報告", "いたします。"),
-        ("メンテナンス作業は無事終了", "しました。"),
-        ("最新バージョンを公開", "しました。"),
-        ("ご都合のよろしい", "日時をご教示ください。"),
-        ("日程の調整を", "お願いできますでしょうか。"),
-        ("お忙しいところ恐縮ですが、", "ご確認をお願いいたします。"),
-        ("添付の資料を", "ご覧ください。"),
-        ("出欠のご連絡を", "お願いいたします。"),
-        ("プルリクエストを", "作成しました。"),
-        ("デプロイが正常に", "完了しました。"),
-        ("エラーログを", "確認してください。"),
-        ("タイポの修正と", "リファクタリングを行いました。"),
-        ("今からそちらへ", "向かいます。"),
-        ("ぜひ参加させて", "いただきます。"),
-        ("今後ともよろしく", "お願いいたします。"),
-        ("取り急ぎ", "ご報告まで。"),
-    ];
-
-    for &(prefix, cont) in PREDICTIVE_PHRASES {
-        // 入力が定型句 prefix を含んで (以上に) 打たれている場合 → 続きだけを返す
-        if partial_surface.ends_with(prefix)
-            && partial_surface.chars().count() >= prefix.chars().count()
-        {
-            return Some(cont.to_string());
-        }
-        // 入力が prefix の途中 (prefix の前方一致) の場合 → 残りの prefix + 続きを返す
-        let prefix_chars: Vec<char> = prefix.chars().collect();
-        let partial_chars: Vec<char> = partial_surface.chars().collect();
-        if prefix_chars.starts_with(&partial_chars) && partial_chars.len() >= 2 {
-            let rest: String = prefix_chars[partial_chars.len()..].iter().collect();
-            return Some(format!("{}{}", rest, cont));
-        }
-    }
-
-    // 1.5 ユーザー確定履歴キャッシュ照合 (User History Cache / 0ms 即応)
-    // ユーザー自身が直近に入力・確定したフレーズに前方一致すれば、その続きを最優先で提示
-    if let Ok(guard) = USER_HISTORY_CACHE.lock() {
-        for history_item in guard.iter() {
-            if history_item.starts_with(partial_surface) && history_item != partial_surface {
-                let continuation = &history_item[partial_surface.len()..];
-                if !continuation.trim().is_empty() {
-                    return Some(continuation.to_string());
-                }
-            }
-        }
-    }
-
-    // 2. プロンプト構築 & 直近キャッシュチェック（同一プロンプトなら 0ms で即応）
-    let full_prompt = if context.is_empty() {
-        partial_surface.to_string()
-    } else {
-        format!("{}{}", context, partial_surface)
-    };
-
-    if let Ok(guard) = LFM_CACHE.lock() {
-        if let Some((cached_prompt, cached_res)) = &*guard {
-            if cached_prompt == &full_prompt {
-                return Some(cached_res.clone());
-            }
-        }
-    }
-
-    // 3. デバウンス判定（直前打鍵からの経過時間チェック）
-    // 高速タイピング中（打鍵間隔が DEBOUNCE_THRESHOLD_MS 未満）は LFM 2.5 の同期呼び出しをスキップ
-    if !skip_debounce {
-        let now = Instant::now();
-        let is_rapid_typing = {
-            let mut last = LAST_KEY_INSTANT.lock().unwrap();
-            let rapid = if let Some(prev) = *last {
-                now.duration_since(prev) < Duration::from_millis(DEBOUNCE_THRESHOLD_MS)
-            } else {
-                false
-            };
-            *last = Some(now);
-            rapid
-        };
-
-        if is_rapid_typing {
-            return None;
-        }
-    }
-
-    // 4. 重複リクエスト抑制（In-flight ガード: 前のリクエストが処理中なら即座にスキップ）
-    if LFM_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        return None;
-    }
-    let _in_flight_guard = InFlightGuard;
-
-    // 5. 先読み推論エンジン実行 (ZeroCon Model on RTX 4070 / LFM 2.5)
-    if config.predictive_model == "zerocon" {
-        // ZeroCon Model v3.2 (RTX 4070 Vulkan / Port 8090) による超高速・日本語特化先読み
-        let target_katakana = to_katakana(partial_surface);
-        let prompt = format!("\u{EE02}{}\u{EE00}{}", context, target_katakana);
-        let payload = json!({
-            "prompt": prompt,
-            "n_predict": 16,
-            "temperature": 0.0,
-            "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-        });
-
-        if let Some(res) = simple_http_post(config.zenzai_port, "/completion", &payload, 100) {
-            if let Some(content) = res.get("content").and_then(|c| c.as_str()) {
-                let trimmed = content.trim();
-                if !trimmed.is_empty() {
-                    // カタカナ出力をひらがな変換（句読点等の記号は維持）
-                    let hiragana_cand = katakana_to_hiragana(trimmed);
-                    let sentence_end = hiragana_cand
-                        .find('。')
-                        .map(|i| i + '。'.len_utf8())
-                        .unwrap_or(hiragana_cand.len());
-                    let result_str = hiragana_cand[..sentence_end].trim().to_string();
-                    if is_useful_predictive_continuation(&result_str) {
-                        if let Ok(mut guard) = LFM_CACHE.lock() {
-                            *guard = Some((full_prompt, result_str.clone()));
-                        }
-                        return Some(result_str);
-                    }
-                }
-            }
-        }
-        // ポート 8090 (Zenzai) が未起動・未接続の場合は、常駐している内蔵推論エンジン (Port 18090) へフォールバック
-    }
-
-    // 内蔵 LFM 2.5 Text Completion (Port 18090)
-    let payload = json!({
-        "model": config.resolved_model_id(),
-        "prompt": full_prompt,
-        "max_tokens": 12,
-        "temperature": 0.1,
-        "stop": ["\n"]
-    });
-
-    let timeout_ms = 150;
-    if let Some(res) = simple_http_post(config.lfm_port, "/v1/completions", &payload, timeout_ms) {
-        if let Some(choices) = res.get("choices").and_then(|c| c.as_array()) {
-            if let Some(text) = choices
-                .get(0)
-                .and_then(|c| c.get("text"))
-                .and_then(|t| t.as_str())
-            {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() && trimmed.chars().count() >= 2 {
-                    let sentence_end = trimmed
-                        .find('。')
-                        .map(|i| i + '。'.len_utf8())
-                        .unwrap_or(trimmed.len());
-                    let result_str = trimmed[..sentence_end].trim().to_string();
-                    if is_useful_predictive_continuation(&result_str) {
-                        if let Ok(mut guard) = LFM_CACHE.lock() {
-                            *guard = Some((full_prompt, result_str.clone()));
-                        }
-                        return Some(result_str);
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::{damerau_levenshtein_distance, fetch_moshikashite_candidate, AiAssistConfig};
-
-    #[test]
-    fn test_user_history_cache_prediction() {
-        let conf = config();
-        super::record_user_committed_text("お世話になっております。本日の打ち合わせの件です。");
-        let pred = super::fetch_predictive_candidate("", "本日の打ち合わせ", &conf);
-        assert_eq!(pred, Some("の件です。".to_string()));
-    }
 
     #[test]
     fn test_qwerty_adjacent() {
@@ -1593,8 +1230,8 @@ mod tests {
             // 推論ポートは未使用ポートへ寄せる。誤字補正のフォールバックは
             // ローカルの推論サーバーへ HTTP 接続するため、その起動の有無で
             // 結果が変わるテストを避け、決定的にする。
-            lfm_port: 1,
-            zenzai_port: 1,
+            corrector_port: 1,
+            prediction_port: 1,
             ..AiAssistConfig::default()
         }
     }
@@ -1675,23 +1312,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_predictive_continuation_and_full_text() {
-        let conf = config();
-        let first_surface = "いつもお世話に";
-        let pred = super::fetch_predictive_candidate("", first_surface, &conf)
-            .expect("should match prefix");
-
-        let (full_text, continuation) = if let Some(stripped) = pred.strip_prefix(first_surface) {
-            (pred.clone(), stripped.to_string())
-        } else {
-            (format!("{}{}", first_surface, pred), pred.clone())
-        };
-
-        assert_eq!(full_text, "いつもお世話になっております。");
-        assert_eq!(continuation, "なっております。");
-    }
-
-    #[test]
     fn corrects_prefix_typo_with_suffix() {
         assert_eq!(
             fetch_moshikashite_candidate("", "おあようございます", &config()),
@@ -1701,32 +1321,6 @@ mod tests {
             fetch_moshikashite_candidate("", "てそとする", &config()),
             Some("テストする".to_string())
         );
-    }
-
-    #[test]
-    fn test_debounce_rapid_typing_skips_lfm() {
-        let conf = config();
-        // 直前打鍵時刻を現在時刻に明示的に設定
-        if let Ok(mut last) = super::LAST_KEY_INSTANT.lock() {
-            *last = Some(std::time::Instant::now());
-        }
-        // 直後（即座）の呼び出しは DEBOUNCE_THRESHOLD_MS (60ms) 未満のためスキップされること
-        let res = super::fetch_predictive_candidate("", "てすとのにゅうりょくそのに", &conf);
-        assert_eq!(res, None);
-    }
-
-    #[test]
-    fn test_zerocon_mode_predictive_fallback() {
-        let mut conf = config();
-        conf.predictive_model = "zerocon".to_string();
-        // 定型句キャッシュ
-        let pred = super::fetch_predictive_candidate("", "よろしくお願い", &conf);
-        assert_eq!(pred, Some("いたします。".to_string()));
-
-        // ユーザー確定履歴キャッシュ
-        super::record_user_committed_text("明日の会議室予約完了しました。");
-        let pred_hist = super::fetch_predictive_candidate("", "明日の会議室", &conf);
-        assert_eq!(pred_hist, Some("予約完了しました。".to_string()));
     }
 
     #[test]

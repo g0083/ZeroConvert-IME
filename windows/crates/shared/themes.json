@@ -1,0 +1,80 @@
+[
+  {
+    "id": "dark_blue",
+    "label": "ダークブルー",
+    "mode": "dark",
+    "background": "#101722",
+    "surface": "#182334",
+    "selection": "#24344b",
+    "text": "#edf3fc",
+    "muted": "#a5b6cc",
+    "accent": "#74b5ff",
+    "onAccent": "#10213a",
+    "border": "#344760"
+  },
+  {
+    "id": "graphite",
+    "label": "グラファイト",
+    "mode": "dark",
+    "background": "#18191c",
+    "surface": "#232529",
+    "selection": "#34373d",
+    "text": "#f1f2f4",
+    "muted": "#b0b4bd",
+    "accent": "#c0c7d4",
+    "onAccent": "#22252b",
+    "border": "#454951"
+  },
+  {
+    "id": "forest",
+    "label": "フォレスト",
+    "mode": "dark",
+    "background": "#101e19",
+    "surface": "#182c23",
+    "selection": "#254234",
+    "text": "#e7f5ed",
+    "muted": "#a2c4b1",
+    "accent": "#80d5a5",
+    "onAccent": "#102a1b",
+    "border": "#355943"
+  },
+  {
+    "id": "plum",
+    "label": "プラム",
+    "mode": "dark",
+    "background": "#211727",
+    "surface": "#302139",
+    "selection": "#47314f",
+    "text": "#f5eafa",
+    "muted": "#c5abcf",
+    "accent": "#d6a0ed",
+    "onAccent": "#30143d",
+    "border": "#604269"
+  },
+  {
+    "id": "sakura",
+    "label": "サクラ",
+    "mode": "light",
+    "background": "#fff5f7",
+    "surface": "#ffffff",
+    "selection": "#f9e4eb",
+    "text": "#442631",
+    "muted": "#815763",
+    "accent": "#a72e5b",
+    "onAccent": "#ffffff",
+    "border": "#e2b6c5"
+  },
+  {
+    "id": "paper",
+    "label": "ペーパー",
+    "mode": "light",
+    "background": "#f7f5ef",
+    "surface": "#fffefa",
+    "selection": "#eae6db",
+    "text": "#302e27",
+    "muted": "#6e6756",
+    "accent": "#716027",
+    "onAccent": "#ffffff",
+    "border": "#d3cbb7"
+  }
+]

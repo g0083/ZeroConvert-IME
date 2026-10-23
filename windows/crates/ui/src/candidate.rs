@@ -216,14 +216,9 @@ fn candidate_html() -> String {
                     let renderCandidateRangeFrame = null;
 
                     function scheduleAdjustWindowSize() {
-                        if (adjustWindowSizeFrame !== null) {
-                            return;
-                        }
-
-                        adjustWindowSizeFrame = window.requestAnimationFrame(() => {
-                            adjustWindowSizeFrame = null;
-                            adjustWindowSize();
-                        });
+                        // A hidden WebView can suspend animation frames. Measure now so
+                        // the first visible update does not stay at an empty-frame size.
+                        adjustWindowSize();
                     }
 
                     function scheduleRenderCandidateRange() {
@@ -281,7 +276,7 @@ fn candidate_html() -> String {
                         text.textContent = 'Item';
                         li.appendChild(text);
                         candidateList.appendChild(li);
-                        currentItemHeight = li.offsetHeight;
+                        currentItemHeight = li.offsetHeight || 34;
                         candidateList.removeChild(li);
                         return currentItemHeight;
                     }
@@ -419,7 +414,7 @@ fn candidate_html() -> String {
 
                         const candidateListVisible = !main.hasAttribute('data-candidate-list-hidden');
                         const itemHeight = candidateListVisible ? measureListItemHeight(candidateList) : 0;
-                        const candidateListHeight = itemHeight * VISIBLE_ITEM_COUNT;
+                        const candidateListHeight = itemHeight * Math.min(VISIBLE_ITEM_COUNT, currentCandidates.length);
                         const footerHeight = candidateListVisible ? footer.offsetHeight : 0;
                         const mainPadding = parseInt(window.getComputedStyle(main).paddingTop) + 
                                            parseInt(window.getComputedStyle(main).paddingBottom);
@@ -441,7 +436,8 @@ fn candidate_html() -> String {
                                 passive: true,
                             });
                         }
-                        setTimeout(adjustWindowSize, 50); // Small delay to ensure rendering is complete
+                        adjustWindowSize();
+                        window.ipc.postMessage(JSON.stringify({type: 'candidate-ready'}));
                     });
                 </script>
             </head>

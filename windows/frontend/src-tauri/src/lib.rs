@@ -1,5 +1,8 @@
+mod benchmark_runtime;
+mod cuda_backend;
 mod ipc;
 mod jev_api;
+mod model_catalog;
 mod server_process;
 mod updater;
 
@@ -264,18 +267,24 @@ fn update_config_impl(
     };
     let new_config = merge_config_update(current_config.clone(), base_config, new_config)?;
     let changed = current_config != new_config;
+    // Appearance is consumed directly by the settings app and floating UI.
+    // Saving colors must also work while the conversion server is unavailable.
+    let mut server_config = current_config.clone();
+    server_config.appearance = new_config.appearance.clone();
+    let server_changed = server_config != new_config;
     if changed {
         new_config.write().map_err(|error| error.to_string())?;
     }
     *state.settings.lock().unwrap() = new_config.clone();
 
-    if changed {
+    if server_changed {
         *state.server_config_dirty.lock().unwrap() = true;
-    } else if !*state.server_config_dirty.lock().unwrap() {
+    }
+    if !*state.server_config_dirty.lock().unwrap() {
         return Ok(UpdateConfigResponse {
             saved: true,
             server_applied: true,
-            changed: false,
+            changed,
             config: new_config,
             message: None,
         });
@@ -382,6 +391,21 @@ struct Capability {
 }
 
 #[tauri::command]
+fn cuda_backend_status() -> cuda_backend::Status {
+    cuda_backend::status()
+}
+
+#[tauri::command]
+async fn install_cuda_backend(
+    app: tauri::AppHandle,
+    confirmed: bool,
+) -> Result<cuda_backend::Status, String> {
+    cuda_backend::install(app, confirmed)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 fn check_capability() -> Capability {
     // cuda:
     // cudart64_12.dll
@@ -396,18 +420,10 @@ fn check_capability() -> Capability {
         vulkan: false,
     };
 
-    // Check for CUDA availability
-    let cuda_files = ["cudart64_12.dll", "cublas64_12.dll"];
-    let cuda_available = cuda_files.iter().all(|file| {
-        // Check if the file exists in system path or in the current directory
-        std::env::var("PATH")
-            .unwrap_or_default()
-            .split(';')
-            .map(PathBuf::from)
-            .chain(std::iter::once(std::env::current_dir().unwrap_or_default()))
-            .any(|path| path.join(file).exists())
-    });
-    capability.cuda = cuda_available;
+    // The optional download includes CUDA runtime DLLs; only the NVIDIA driver is required here.
+    capability.cuda = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .is_some_and(|root| root.join("System32/nvcuda.dll").is_file());
 
     // Check for Vulkan availability
     let vulkan_file = "vulkan-1.dll";
@@ -477,22 +493,6 @@ pub fn run_updater_helper() -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ModelInfo {
-    pub id: String,
-    pub name: String,
-    pub filename: String,
-    pub size_mb: f64,
-    pub description: String,
-    pub is_active: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ModelListResponse {
-    pub active_id: String,
-    pub models: Vec<ModelInfo>,
-}
-
 fn get_appdata_azookey_dir() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         PathBuf::from(appdata).join("Azookey")
@@ -521,45 +521,19 @@ fn get_models_search_dirs() -> Vec<PathBuf> {
     }
     if let Some(root) = get_workspace_root() {
         dirs.push(root.join("ZeroConvertIME-windows").join("models"));
+        dirs.push(root.join("artifacts/models/zerocon"));
         dirs.push(root.join("artifacts").join("models"));
     }
     dirs
 }
 
 #[tauri::command]
-fn get_active_model() -> Result<ModelListResponse, String> {
-    let active_path = get_appdata_azookey_dir().join("zenz.gguf");
-    let active_size = std::fs::metadata(&active_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    // Q4_K_M is ~64.2 MB (64282688), IQ4_XS is ~55.1 MB (55180960)
-    let is_q4km = active_size > 60_000_000;
-    let active_id = if is_q4km { "q4km" } else { "iq4xs" };
-
-    let models = vec![
-        ModelInfo {
-            id: "iq4xs".to_string(),
-            name: "ZeroCon Model v3.2 Fast (IQ4_XS)".to_string(),
-            filename: "zenz-v3.2-small-iq4xs.gguf".to_string(),
-            size_mb: 52.6,
-            description: "超高速・軽量 (~800 tok/s) — 低メモリ消費で瞬時変換".to_string(),
-            is_active: active_id == "iq4xs",
-        },
-        ModelInfo {
-            id: "q4km".to_string(),
-            name: "ZeroCon Model v3.2 Standard (Q4_K_M)".to_string(),
-            filename: "zenz-v3.2-small-q4km.gguf".to_string(),
-            size_mb: 61.3,
-            description: "高精度・標準 (~750 tok/s) — 安定した高精度文脈変換".to_string(),
-            is_active: active_id == "q4km",
-        },
-    ];
-
-    Ok(ModelListResponse {
-        active_id: active_id.to_string(),
-        models,
-    })
+fn get_active_model(
+    state: tauri::State<AppState>,
+) -> Result<model_catalog::ModelListResponse, String> {
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    let active = get_benchmark_model_path(&config)?;
+    model_catalog::list(&active, &get_models_search_dirs()).map_err(|error| error.to_string())
 }
 
 fn to_hiragana(s: &str) -> String {
@@ -602,74 +576,45 @@ fn stop_benchmark_server() {
     *model_guard = None;
 }
 
-fn kill_all_llama_servers() {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "llama-server.exe"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
-    }
-}
-
-fn find_llama_server_exe() -> Option<PathBuf> {
-    let p1 = get_appdata_azookey_dir()
-        .join("llama_cuda")
-        .join("llama-server.exe");
-    if p1.exists() {
-        return Some(p1);
-    }
+fn find_llama_server_exe(backend: &str) -> Option<PathBuf> {
+    let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let p2 = parent.join("llama_cuda").join("llama-server.exe");
-            if p2.exists() {
-                return Some(p2);
-            }
+            roots.push(parent.to_path_buf());
         }
     }
     if let Some(root) = get_workspace_root() {
-        let p3 = root
-            .join("ZeroConvertIME-windows")
-            .join("llama_cuda")
-            .join("llama-server.exe");
-        if p3.exists() {
-            return Some(p3);
-        }
+        roots.push(root.join("ZeroConvertIME-windows"));
     }
-    None
+    roots.push(get_appdata_azookey_dir());
+    benchmark_runtime::find_server(&roots, backend)
 }
 
-fn get_benchmark_model_path() -> Result<PathBuf, String> {
-    let appdata_zenz = get_appdata_azookey_dir().join("zenz.gguf");
-    if appdata_zenz.exists() {
-        return Ok(appdata_zenz);
-    }
+fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
+    let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let exe_zenz = parent.join("zenz.gguf");
-            if exe_zenz.exists() {
-                return Ok(exe_zenz);
-            }
+            roots.push(parent.to_path_buf());
         }
     }
-    for dir in get_models_search_dirs() {
-        let p = dir.join("zenz.gguf");
-        if p.exists() {
-            return Ok(p);
-        }
-        let p2 = dir.join("zenz-v3.2-small-q4km.gguf");
-        if p2.exists() {
-            return Ok(p2);
-        }
+    if let Some(root) = get_workspace_root() {
+        roots.push(root.join("ZeroConvertIME-windows"));
     }
-    Err("No zenz model found for benchmark inference".to_string())
+    roots.push(get_appdata_azookey_dir());
+    roots
+        .iter()
+        .map(|root| shared::runtime_assets::converter_model(root, &config.zenzai.model))
+        .find(|p| p.is_file())
+        .ok_or_else(|| "ZeroCon model not found".to_string())
 }
 
-async fn ensure_benchmark_server() -> Result<(), String> {
-    let model_path = get_benchmark_model_path()?;
+async fn ensure_benchmark_server(config: &AppConfig) -> Result<(), String> {
+    let backend = config.zenzai.backend.as_str();
+    let server_exe = find_llama_server_exe(backend)
+        .ok_or_else(|| format!("llama-server.exe not found for backend: {backend}"))?;
+    let model_path = get_benchmark_model_path(config)?;
     let model_path_str = model_path.to_string_lossy().to_string();
+    let identity = format!("{}|{}", server_exe.display(), model_path_str);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(500))
@@ -679,7 +624,7 @@ async fn ensure_benchmark_server() -> Result<(), String> {
     // Check if server is already running with matching model
     let model_matches = {
         let current_model_guard = CURRENT_BENCHMARK_MODEL.lock().unwrap();
-        current_model_guard.as_deref() == Some(model_path_str.as_str())
+        current_model_guard.as_deref() == Some(identity.as_str())
     };
     if model_matches {
         if let Ok(resp) = client.get("http://127.0.0.1:8090/health").send().await {
@@ -691,11 +636,6 @@ async fn ensure_benchmark_server() -> Result<(), String> {
 
     // Stop existing server if model changed or unresponsive
     stop_benchmark_server();
-    kill_all_llama_servers();
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    let server_exe = find_llama_server_exe()
-        .ok_or_else(|| "llama-server.exe not found in llama_cuda directory".to_string())?;
 
     let mut cmd = std::process::Command::new(server_exe);
     cmd.args([
@@ -706,7 +646,7 @@ async fn ensure_benchmark_server() -> Result<(), String> {
         "--host",
         "127.0.0.1",
         "-ngl",
-        "99",
+        if backend == "cpu" { "0" } else { "99" },
         "--log-disable",
     ]);
     #[cfg(windows)]
@@ -725,7 +665,7 @@ async fn ensure_benchmark_server() -> Result<(), String> {
         let mut server_guard = BENCHMARK_SERVER.lock().unwrap();
         *server_guard = Some(child);
         let mut model_guard = CURRENT_BENCHMARK_MODEL.lock().unwrap();
-        *model_guard = Some(model_path_str);
+        *model_guard = Some(identity);
     }
 
     // Wait up to 7 seconds for server to be ready
@@ -793,52 +733,23 @@ fn evaluate_output(
 
 #[tauri::command]
 fn switch_model(state: tauri::State<AppState>, model_id: String) -> Result<String, String> {
-    let target_filename = match model_id.as_str() {
-        "iq4xs" => "zenz-v3.2-small-iq4xs.gguf",
-        "q4km" => "zenz-v3.2-small-q4km.gguf",
-        _ => return Err(format!("Unknown model_id: {model_id}")),
-    };
-
-    let mut source_path: Option<PathBuf> = None;
-    for dir in get_models_search_dirs() {
-        let p = dir.join(target_filename);
-        if p.exists() {
-            source_path = Some(p);
-            break;
-        }
-    }
-
-    let source = source_path.ok_or_else(|| format!("Model file not found: {target_filename}"))?;
-
-    // Stop benchmark server so it releases any locks
+    model_catalog::source_for(&model_id, &get_models_search_dirs())?;
+    let model_update = shared::model_update::ModelUpdateGuard::begin(Duration::from_secs(5))
+        .map_err(|error| error.to_string())?;
     stop_benchmark_server();
-
-    // 1. Terminate server first to release mmap lock on zenz.gguf
-    let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/IM", "azookey-server.exe"])
-        .output();
-    std::thread::sleep(std::time::Duration::from_millis(400));
-
-    // 2. Deploy to exe directory (execURL where azookey-server loads zenz.gguf)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let exe_zenz = parent.join("zenz.gguf");
-            let _ = std::fs::copy(&source, &exe_zenz);
-        }
+    let base = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    let mut updated = base.clone();
+    updated.zenzai.model = match model_id.as_str() {
+        "nano_q4km" => "nano",
+        "standard_q4km" => "standard",
+        other => other,
     }
-    // Also deploy to AppData
-    let dest_dir = get_appdata_azookey_dir();
-    let _ = std::fs::create_dir_all(&dest_dir);
-    let dest_path = dest_dir.join("zenz.gguf");
-    let _ = std::fs::copy(&source, &dest_path);
-
-    // 3. Restart server with new model
+    .into();
+    update_config_impl(&state, base, updated)?;
+    drop(model_update);
     restart_server_impl(&state)
-        .map_err(|e| format!("Model deployed, but server restart failed: {e}"))?;
-
-    Ok(format!(
-        "Switched to {model_id} and server restarted successfully!"
-    ))
+        .map_err(|e| format!("Model saved, but server restart failed: {e}"))?;
+    Ok(format!("Switched to {model_id}"))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -852,6 +763,7 @@ pub struct BenchmarkItemResult {
 
 #[tauri::command]
 async fn run_benchmark_item(
+    state: tauri::State<'_, AppState>,
     id: u32,
     context: String,
     target: String,
@@ -859,7 +771,8 @@ async fn run_benchmark_item(
     acceptable: Option<Vec<String>>,
     forbidden_examples: Option<Vec<String>>,
 ) -> Result<BenchmarkItemResult, String> {
-    ensure_benchmark_server().await?;
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    ensure_benchmark_server(&config).await?;
 
     let effective_context = if context == "なし" {
         ""
@@ -944,170 +857,22 @@ pub struct AiAssistItemResult {
     pub total_latency_ms: f64,
 }
 
-fn katakana_to_hiragana(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if ('\u{30A1}'..='\u{30F6}').contains(&c) {
-                std::char::from_u32(c as u32 - 0x60).unwrap_or(c)
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-fn damerau_levenshtein(s1: &str, s2: &str) -> usize {
-    let s1_chars: Vec<char> = s1.chars().collect();
-    let s2_chars: Vec<char> = s2.chars().collect();
-    let len1 = s1_chars.len();
-    let len2 = s2_chars.len();
-    if len1 == 0 {
-        return len2;
-    }
-    if len2 == 0 {
-        return len1;
-    }
-    let mut dp = vec![vec![0usize; len2 + 1]; len1 + 1];
-    for i in 0..=len1 {
-        dp[i][0] = i;
-    }
-    for j in 0..=len2 {
-        dp[0][j] = j;
-    }
-    for i in 1..=len1 {
-        for j in 1..=len2 {
-            let cost = if s1_chars[i - 1] == s2_chars[j - 1] {
-                0
-            } else {
-                1
-            };
-            dp[i][j] = (dp[i - 1][j] + 1)
-                .min(dp[i][j - 1] + 1)
-                .min(dp[i - 1][j - 1] + cost);
-            if i > 1
-                && j > 1
-                && s1_chars[i - 1] == s2_chars[j - 2]
-                && s1_chars[i - 2] == s2_chars[j - 1]
-            {
-                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + 1);
-            }
-        }
-    }
-    dp[len1][len2]
-}
-
-const BENCHMARK_VOCAB: &[(&str, &str)] = &[
-    ("こんにちは", "こんにちは"),
-    ("こんばんわ", "こんばんは"),
-    ("こんばんは", "こんばんは"),
-    ("ありがとうございます", "ありがとうございます"),
-    ("ありがとうございました", "ありがとうございました"),
-    ("よろしくおねがいします", "よろしくお願いします"),
-    ("よろしくおねがいいたします", "よろしくお願いいたします"),
-    ("よろしくおねがい", "よろしくお願い"),
-    ("くらうど", "クラウド"),
-    ("あしたの", "明日の"),
-    ("おはようございます", "おはようございます"),
-    ("おはよう", "おはよう"),
-    ("おきゃくさん", "お客さん"),
-    ("おつかれさまです", "お疲れ様です"),
-    ("おつかれさまでした", "お疲れ様でした"),
-    ("おつかれさま", "お疲れ様"),
-    ("ごくろうさまです", "ご苦労様です"),
-    ("もうしわけありません", "申し訳ありません"),
-    ("もうしわけございません", "申し訳ございません"),
-    ("おねがいします", "お願いします"),
-    ("てすと", "テスト"),
-    ("さーびす", "サービス"),
-    ("かさおさす", "傘を差す"),
-    ("じかんは", "時間は"),
-    ("しんぶん", "新聞"),
-    ("かんたん", "簡単"),
-];
-
-fn benchmark_moshikashite(input: &str) -> Option<String> {
-    let hiragana = input.trim();
-    if hiragana.chars().count() < 2 {
-        return None;
-    }
-
-    // 1. 静的タイポ表
-    let typo_map = [
-        ("おつくれさま", "お疲れ様"),
-        ("きんにちは", "こんにちは"),
-        ("ありがとうごづいます", "ありがとうございます"),
-        ("よろしくょおねがい", "よろしくお願い"),
-        ("くらおど", "クラウド"),
-        ("おひょ", "おはよう"),
-        ("しぶみ", "新聞"),
-        ("かたん", "簡単"),
-        ("てそと", "テスト"),
-        ("さびす", "サービス"),
-        ("かさおさす", "傘を差す"),
-        ("じかんわ", "時間は"),
-    ];
-    for (k, v) in typo_map {
-        if hiragana == k {
-            return Some(v.to_string());
-        }
-    }
-
-    // 2. Damerau-Levenshtein 全文一致 (距離 1)
-    for &(v_reading, v_surface) in BENCHMARK_VOCAB {
-        if hiragana != v_reading && damerau_levenshtein(hiragana, v_reading) == 1 {
-            return Some(v_surface.to_string());
-        }
-    }
-
-    // 3. プレフィックス Damerau-Levenshtein (例: 「おあようございます」->「おはようございます」)
-    let hiragana_chars: Vec<char> = hiragana.chars().collect();
-    let total_len = hiragana_chars.len();
-    let mut best_prefix: Option<(usize, String)> = None;
-
-    for &(v_reading, v_surface) in BENCHMARK_VOCAB {
-        let v_len = v_reading.chars().count();
-        if v_len < 3 || v_len >= total_len {
-            continue;
-        }
-        let min_cand_len = if v_len > 1 { v_len - 1 } else { 1 };
-        let max_cand_len = (v_len + 1).min(total_len - 1);
-        for cand_len in min_cand_len..=max_cand_len {
-            let prefix: String = hiragana_chars[..cand_len].iter().collect();
-            if prefix != v_reading && damerau_levenshtein(&prefix, v_reading) == 1 {
-                let tail: String = hiragana_chars[cand_len..].iter().collect();
-                let full = format!("{}{}", v_surface, tail);
-                if best_prefix
-                    .as_ref()
-                    .map_or(true, |(best_len, _)| v_len > *best_len)
-                {
-                    best_prefix = Some((v_len, full));
-                }
-            }
-        }
-    }
-
-    if let Some((_, full)) = best_prefix {
-        return Some(full);
-    }
-
-    None
-}
-
 #[tauri::command]
 async fn run_ai_assist_benchmark_item(
+    state: tauri::State<'_, AppState>,
     id: u32,
     context: String,
     input: String,
-    model_key: String,
 ) -> Result<AiAssistItemResult, String> {
-    ensure_benchmark_server().await?;
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    ensure_benchmark_server(&config).await?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1500))
         .build()
         .map_err(|e| e.to_string())?;
 
-    // 1. メイン変換 (Zenzai on Vulkan)
+    // 1. メイン変換 (漢字変換設定と同じバックエンド)
     let effective_context = if context == "なし" {
         ""
     } else {
@@ -1148,136 +913,49 @@ async fn run_ai_assist_benchmark_item(
         Err(_) => input.clone(),
     };
 
-    // 2. 💡 もしかして (誤字補正: 本番同等 Prefix Levenshtein)
+    // 2. 💡 もしかして (誤字補正: 実IMEと同じ corrector::suggest_composition)
     let t_assist = std::time::Instant::now();
-    let moshikashite_output = benchmark_moshikashite(&input);
+    let corrector_port = if config.general.experimental_ai_engine == "lm_studio" {
+        1234
+    } else {
+        config.general.experimental_ai_engine_port
+    };
+    let assist_config = azookey_server::ai_assist::AiAssistConfig {
+        enabled: true,
+        engine: config.general.experimental_ai_engine.clone(),
+        corrector_port,
+        prediction_port: 8090,
+    };
+    let moshikashite_output = azookey_server::ai_assist::corrector::suggest_composition(
+        effective_context,
+        &clean_target,
+        &main_output,
+        &assist_config,
+    )
+    .map(|suggestion| suggestion.surface);
 
-    // 3. 🔮 先読み (定型句キャッシュまたは内蔵 LFM 2.5: ポート 18090)
-    let prefix_map = [
-        ("いつもお世話に", "なっております。"),
-        ("よろしくお願い", "いたします。"),
-        ("よろしくお願いし", "ます。"),
-        ("お疲れ様", "でした。"),
-        ("お疲れ様です", "。お疲れ様でした。"),
-        ("おはよう", "ございます！"),
-        ("おはようご", "ざいます。"),
-        ("ありがとうご", "ざいます！"),
-        ("ありがとうございます", "。助かりました。"),
-        ("申し訳", "ございません。"),
-        ("申し訳あり", "ません。"),
-        ("ご確認のほど", "よろしくお願いいたします。"),
-        ("ご連絡いただき", "ありがとうございます。"),
-        ("ご対応いただき", "ありがとうございます。"),
-        ("お手数をおかけ", "しますが、よろしくお願いいたします。"),
-        ("引き続きよろしく", "お願いいたします。"),
-        ("何卒よろしく", "お願いいたします。"),
-        ("ご検討のほど", "よろしくお願いいたします。"),
-        ("確認いた", "しました。"),
-        ("承知いた", "しました。"),
-        ("かしこまり", "ました。"),
-        ("了解いた", "しました。"),
-        ("失礼いた", "します。"),
-        ("返信が遅れ", "申し訳ありません。"),
-        ("現在原因を調査", "中です。"),
-        ("機能の実装が完了", "いたしました。"),
-        ("進捗状況をご報告", "いたします。"),
-        ("メンテナンス作業は無事終了", "しました。"),
-        ("最新バージョンを公開", "しました。"),
-        ("ご都合のよろしい", "日時をご教示ください。"),
-        ("日程の調整を", "お願いできますでしょうか。"),
-        ("お忙しいところ恐縮ですが、", "ご確認をお願いいたします。"),
-        ("添付の資料を", "ご覧ください。"),
-        ("出欠のご連絡を", "お願いいたします。"),
-        ("プルリクエストを", "作成しました。"),
-        ("デプロイが正常に", "完了しました。"),
-        ("エラーログを", "確認してください。"),
-        ("タイポの修正と", "リファクタリングを行いました。"),
-        ("今からそちらへ", "向かいます。"),
-        ("ぜひ参加させて", "いただきます。"),
-        ("今後ともよろしく", "お願いいたします。"),
-        ("取り急ぎ", "ご報告まで。"),
-    ];
-    let main_hira = katakana_to_hiragana(&main_output);
-    let mut predictive_output = prefix_map
-        .iter()
-        .find(|(k, _)| main_hira.ends_with(k) || k.starts_with(&main_hira))
-        .map(|(_, v)| v.to_string());
-
-    if predictive_output.is_none() {
-        if model_key == "zerocon" {
-            // ZeroCon Model v3.2 (RTX 4070 Vulkan / Port 8090) による超高速先読み
-            let target_katakana = to_katakana(&main_output);
-            let prompt = format!("\u{EE02}{}\u{EE00}{}", effective_context, target_katakana);
-            let z_payload = serde_json::json!({
-                "prompt": prompt,
-                "n_predict": 16,
-                "temperature": 0.0,
-                "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-            });
-
-            if let Ok(r) = client
-                .post("http://127.0.0.1:8090/completion")
-                .json(&z_payload)
-                .send()
-                .await
-            {
-                if let Ok(json) = r.json::<serde_json::Value>().await {
-                    if let Some(content_str) = json.get("content").and_then(|c| c.as_str()) {
-                        let trimmed = content_str.trim();
-                        if !trimmed.is_empty() {
-                            let hira = katakana_to_hiragana(trimmed);
-                            let end_pos = hira
-                                .find('。')
-                                .map(|i| i + '。'.len_utf8())
-                                .unwrap_or(hira.len());
-                            let final_str = hira[..end_pos].trim().to_string();
-                            if !final_str.is_empty() {
-                                predictive_output = Some(final_str);
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // 内蔵 LFM 2.5 (ポート 18090)
-            let full_p = format!("{}{}", effective_context, main_hira);
-            let payload = serde_json::json!({
-                "model": "lfm",
-                "prompt": full_p,
-                "max_tokens": 12,
-                "temperature": 0.1,
-                "stop": ["\n"]
-            });
-
-            if let Ok(r) = client
-                .post("http://127.0.0.1:18090/v1/completions")
-                .json(&payload)
-                .send()
-                .await
-            {
-                if let Ok(json) = r.json::<serde_json::Value>().await {
-                    if let Some(txt) = json
-                        .get("choices")
-                        .and_then(|c| c.get(0))
-                        .and_then(|ch| ch.get("text"))
-                        .and_then(|t| t.as_str())
-                    {
-                        let trimmed = txt.trim();
-                        if !trimmed.is_empty() {
-                            let end_pos = trimmed
-                                .find('。')
-                                .map(|i| i + '。'.len_utf8())
-                                .unwrap_or(trimmed.len());
-                            let final_str = trimmed[..end_pos].trim().to_string();
-                            if !final_str.is_empty() {
-                                predictive_output = Some(final_str);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 3. ZeroCon only: use the same bounded reading -> surface path as the IME.
+    // Benchmark owns port 8090 and does not send prompts to the corrector.
+    let prediction_context = effective_context.to_owned();
+    let prediction_reading = clean_target.clone();
+    let prediction_surface = main_output.clone();
+    let predictive_output = tauri::async_runtime::spawn_blocking(move || {
+        // Each benchmark must measure inference, including after backend/model changes.
+        azookey_server::ai_assist::prediction::clear_cache();
+        azookey_server::ai_assist::prediction::suggest(
+            &prediction_context,
+            &prediction_reading,
+            &prediction_surface,
+            &azookey_server::ai_assist::AiAssistConfig {
+                enabled: true,
+                prediction_port: 8090,
+                ..Default::default()
+            },
+        )
+        .map(|prediction| prediction.continuation)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
 
     let assist_latency_ms = t_assist.elapsed().as_secs_f64() * 1000.0;
     let total_latency_ms = main_latency_ms + assist_latency_ms;
@@ -1316,6 +994,8 @@ pub fn run() {
             take_config_startup_notice,
             update_config,
             check_capability,
+            cuda_backend_status,
+            install_cuda_backend,
             get_default_romaji_rows,
             check_for_updates,
             start_update,
@@ -1401,12 +1081,44 @@ mod tests {
     }
 
     #[test]
+    fn appearance_saves_without_conversion_server() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let state = test_state();
+        let base = AppConfig::default();
+        let mut config = base.clone();
+        config.appearance.frontend_theme = shared::ColorTheme::Sakura;
+        config.appearance.ime_theme = shared::ColorTheme::Forest;
+        let result = update_config_impl(&state, base, config.clone()).unwrap();
+        assert!(result.saved && result.changed && result.server_applied);
+        assert_eq!(AppConfig::read().unwrap().appearance, config.appearance);
+        assert!(!*state.server_config_dirty.lock().unwrap());
+        assert!(state.ipc.lock().unwrap().is_none());
+
+        // An IME theme edit from an older settings snapshot preserves the newer
+        // frontend theme saved by a different page/window.
+        let base = AppConfig::default();
+        let mut stale_update = base.clone();
+        stale_update.appearance.ime_theme = shared::ColorTheme::Paper;
+        let result = update_config_impl(&state, base, stale_update).unwrap();
+        assert_eq!(
+            result.config.appearance.frontend_theme,
+            shared::ColorTheme::Sakura
+        );
+        assert_eq!(
+            result.config.appearance.ime_theme,
+            shared::ColorTheme::Paper
+        );
+        assert!(state.ipc.lock().unwrap().is_none());
+    }
+
+    #[test]
     fn update_config_reports_saved_when_server_is_unavailable() {
         let temp = tempfile::tempdir().unwrap();
         let _appdata = AppDataGuard::set(temp.path());
         let state = test_state();
         let mut config = AppConfig::default();
-        config.zenzai.enable = true;
+        config.zenzai.enable = false;
 
         let result = update_config_impl(&state, AppConfig::default(), config).unwrap();
 
@@ -1415,7 +1127,7 @@ mod tests {
         assert!(result.changed);
         assert!(result.message.is_some());
         assert!(temp.path().join("Azookey").join("settings.json").exists());
-        assert!(state.settings.lock().unwrap().zenzai.enable);
+        assert!(!state.settings.lock().unwrap().zenzai.enable);
     }
 
     #[test]
@@ -1437,13 +1149,13 @@ mod tests {
         let _appdata = AppDataGuard::unset();
         let state = test_state();
         let mut config = AppConfig::default();
-        config.zenzai.enable = true;
+        config.zenzai.enable = false;
 
         let error = update_config_impl(&state, AppConfig::default(), config)
             .expect_err("save failure should be returned to the UI");
 
         assert!(error.contains("APPDATA"));
-        assert!(!state.settings.lock().unwrap().zenzai.enable);
+        assert!(state.settings.lock().unwrap().zenzai.enable);
     }
 
     #[test]
@@ -1471,14 +1183,12 @@ mod tests {
         let state = test_state();
         let base = AppConfig::default();
         let mut update = base.clone();
-        update.general.experimental_ai_assist = true;
-        update.general.experimental_predictive_model = "350m_q4km".to_string();
+        update.general.experimental_ai_assist = !base.general.experimental_ai_assist;
 
         let result = update_config_impl(&state, base, update).unwrap();
         assert!(result.changed);
         let persisted = AppConfig::read().unwrap();
-        assert!(persisted.general.experimental_ai_assist);
-        assert_eq!(persisted.general.experimental_predictive_model, "350m_q4km");
+        assert!(!persisted.general.experimental_ai_assist);
     }
 
     #[test]
@@ -1525,7 +1235,7 @@ mod tests {
 
         assert!(error.contains("newer than supported"));
         assert_eq!(fs::read_to_string(config_path).unwrap(), future_settings);
-        assert!(!state.settings.lock().unwrap().zenzai.enable);
+        assert!(state.settings.lock().unwrap().zenzai.enable);
     }
 
     #[test]
@@ -1549,7 +1259,9 @@ mod tests {
         let error =
             restart_server_impl(&state).expect_err("missing server exe should fail restart");
 
-        assert!(error.to_string().contains("Server executable not found"));
+        assert!(error
+            .to_string()
+            .contains("Unit tests must not restart a running IME"));
         assert!(state.ipc.lock().unwrap().is_some());
     }
 

@@ -148,3 +148,9 @@ pub fn to_half_katakana(s: &str) -> String {
 
     result
 }
+
+/// Normalize ASCII spaces to U+3000 for zenz model compatibility.
+#[allow(dead_code)]
+pub fn normalize_ascii_space_to_fullwidth(s: &str) -> String {
+    s.replace(' ', "\u{3000}")
+}

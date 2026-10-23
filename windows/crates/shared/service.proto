@@ -237,6 +237,9 @@ message CommitLearningCandidateRequest {
   // value to resolve the committed text against its own candidate records.
   // Empty for conversion engine candidates.
   string surface = 4;
+  // Explicitly accepted typo, retained by the client until commit. Empty for
+  // ordinary conversion. Avoids a global "last generated candidate" race.
+  string typo_reading = 5;
 }
 
 message CommitLearningCandidateResponse {
@@ -293,8 +296,28 @@ message RerankCandidatesResponse {
   optional uint32 selected_index = 1;
 }
 
+// Stateless assistance for an immutable client snapshot. Never changes Swift composition.
+message GetAssistCandidatesRequest {
+  string reading = 1;
+  string raw_input = 2;
+  string baseline = 3;
+  int32 input_count = 4;
+  uint64 request_id = 5;
+  // 0: both (legacy), 1: correction, 2: prediction. Separate requests let a
+  // fast prediction arrive without waiting for correction inference.
+  uint32 kind = 6;
+}
+message GetAssistCandidatesResponse {
+  repeated Suggestion suggestions = 1;
+  bool auto_apply = 2;
+  // Ordinal evidence strength, not a calibrated model probability.
+  uint32 relevance = 3;
+  string continuation = 4;
+}
+
 // Service definition for text editing operations.
 service AzookeyService {
+  rpc GetAssistCandidates (GetAssistCandidatesRequest) returns (GetAssistCandidatesResponse);
   rpc RerankCandidates (RerankCandidatesRequest) returns (RerankCandidatesResponse);
   rpc AppendText (AppendTextRequest) returns (AppendTextResponse);
   rpc ReplaceComposition (ReplaceCompositionRequest) returns (ReplaceCompositionResponse);

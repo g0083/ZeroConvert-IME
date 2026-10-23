@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "standard",
+      "name": "ZeroCon Model Standard",
+      "filename": "zerocon-model-standard.gguf",
+      "legacyFilename": "zenz-v3.2-small-q4km.gguf",
+      "sha256": "94c290aa772ae9f66bca45842dd506dbedeba5ef6f67368189261ff7364f25f2",
+      "bytes": 64282688
+    },
+    {
+      "id": "nano",
+      "name": "ZeroCon Model Nano",
+      "filename": "zerocon-model-nano.gguf",
+      "legacyFilename": "zenz-v3.2-xsmall-q4km.gguf",
+      "sha256": "e0d2d20ff3da5dc71ba8e0fdc14c70701aec01b52afe75eba8e1f2ec0780b26e",
+      "bytes": 18452288
+    },
+    {
+      "id": "corrector",
+      "name": "ZeroCon Model Corrector",
+      "filename": "zerocon-model-corrector.gguf",
+      "legacyFilename": "typo-corrector-xsmall-q4km.gguf",
+      "sha256": "0641a5be4e7d9f563776275f9904b5cad9875e84e752d146949ead3c5ac7089a",
+      "bytes": 18452384
+    }
+  ]
+}

@@ -23,7 +23,7 @@ pub mod proto {
 pub mod ai_candidate {
     /// 💡 もしかして (誤字補正) candidate.
     pub const TYPO_CORRECTION: u64 = 999_901;
-    /// 🔮 先読み (共起語・予測補完) candidate.
+    /// 🔮 ZeroCon先読み candidate.
     pub const PREDICTIVE: u64 = 999_902;
     /// ⚡ 動的マクロ (日付・時刻・インライン計算) candidate.
     pub const DYNAMIC_MACRO: u64 = 999_903;
@@ -39,6 +39,14 @@ pub mod ai_candidate {
         (AI_ASSIST_RANGE_START..AI_ASSIST_RANGE_END).contains(&candidate_id)
     }
 }
+
+// Keep runtime prediction separate from the corrector (18090) and the settings
+// application's benchmark process (8090).
+pub const PREDICTION_SERVER_PORT: u16 = 18091;
+pub mod runtime_assets;
+
+#[cfg(windows)]
+pub mod model_update;
 
 // Desktop LOCAL pipe names are global in NPFS, so every leaf includes the
 // Terminal Services session ID. AppContainer clients resolve LOCAL inside their
@@ -684,8 +692,6 @@ pub struct GeneralConfig {
     pub experimental_typo_correction: bool,
     #[serde(default = "default_ai_assist_enabled")]
     pub experimental_ai_assist: bool,
-    #[serde(default = "default_predictive_model")]
-    pub experimental_predictive_model: String,
     #[serde(default = "default_ai_engine")]
     pub experimental_ai_engine: String,
     #[serde(default = "default_ai_engine_port")]
@@ -694,6 +700,8 @@ pub struct GeneralConfig {
     pub auto_commit_live_conversion: bool,
     #[serde(default)]
     pub auto_commit_rewind_on_backspace: bool,
+    #[serde(default = "default_theme_color")]
+    pub theme_color: String,
 }
 
 impl Default for GeneralConfig {
@@ -714,11 +722,11 @@ impl Default for GeneralConfig {
                 LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT,
             experimental_typo_correction: false,
             experimental_ai_assist: true,
-            experimental_predictive_model: default_predictive_model(),
             experimental_ai_engine: default_ai_engine(),
             experimental_ai_engine_port: default_ai_engine_port(),
             auto_commit_live_conversion: true,
             auto_commit_rewind_on_backspace: false,
+            theme_color: default_theme_color(),
         }
     }
 }
@@ -792,6 +800,17 @@ pub fn zenzai_cpu_backend_supported() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retired_predictive_model_setting_is_ignored_and_not_saved() {
+        let mut legacy = serde_json::to_value(super::AppConfig::default()).unwrap();
+        legacy["general"]["experimental_predictive_model"] = serde_json::json!("350m_q4km");
+        let config: super::AppConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.zenzai.backend, "vulkan");
+        assert!(serde_json::to_value(config).unwrap()["general"]
+            .get("experimental_predictive_model")
+            .is_none());
+    }
+
     #[test]
     fn jev_conversion_is_opt_in_and_round_trips() {
         let mut general: super::GeneralConfig = serde_json::from_str("{}").unwrap();
@@ -879,6 +898,33 @@ mod tests {
                     None => env::remove_var("APPDATA"),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn appearance_legacy_defaults_and_palette_roundtrip() {
+        use crate::{AppearanceConfig, ColorTheme};
+        let mut legacy = serde_json::to_value(AppConfig::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("appearance");
+        let config: AppConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.appearance, AppearanceConfig::default());
+        let partial: AppearanceConfig = serde_json::from_str(r#"{"ime_theme":"forest"}"#).unwrap();
+        assert_eq!(partial.frontend_theme, ColorTheme::DarkBlue);
+        assert_eq!(partial.ime_theme, ColorTheme::Forest);
+        let palettes: serde_json::Value =
+            serde_json::from_str(include_str!("../themes.json")).unwrap();
+        assert_eq!(palettes.as_array().unwrap().len(), 6);
+        for palette in palettes.as_array().unwrap() {
+            let theme: ColorTheme = serde_json::from_value(palette["id"].clone()).unwrap();
+            let appearance = AppearanceConfig {
+                frontend_theme: theme,
+                ime_theme: ColorTheme::Paper,
+            };
+            let saved = serde_json::to_string(&appearance).unwrap();
+            assert_eq!(
+                serde_json::from_str::<AppearanceConfig>(&saved).unwrap(),
+                appearance
+            );
         }
     }
 
@@ -1342,6 +1388,8 @@ pub struct ZenzaiConfig {
     pub enable: bool,
     pub profile: String,
     pub backend: String,
+    #[serde(default = "runtime_assets::default_model")]
+    pub model: String,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -1450,16 +1498,15 @@ fn default_ai_assist_enabled() -> bool {
     true
 }
 
-fn default_predictive_model() -> String {
-    "230m_q4km".to_string()
-}
-
 fn default_ai_engine() -> String {
     "embedded".to_string()
 }
 
 fn default_ai_engine_port() -> u16 {
     18090
+}
+fn default_theme_color() -> String {
+    "blue".to_string()
 }
 
 fn default_live_conversion_reading_enabled() -> bool {
@@ -1481,9 +1528,30 @@ impl Default for ShortcutConfig {
     }
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorTheme {
+    #[default]
+    DarkBlue,
+    Graphite,
+    Forest,
+    Plum,
+    Sakura,
+    Paper,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct AppearanceConfig {
+    pub frontend_theme: ColorTheme,
+    pub ime_theme: ColorTheme,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub version: String,
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
     #[serde(default)]
     pub debug: DebugConfig,
     pub zenzai: ZenzaiConfig,
@@ -1505,11 +1573,13 @@ impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
             version: CONFIG_VERSION.to_string(),
+            appearance: AppearanceConfig::default(),
             debug: DebugConfig::default(),
             zenzai: ZenzaiConfig {
                 enable: true,
                 profile: "".to_string(),
                 backend: "vulkan".to_string(),
+                model: runtime_assets::default_model(),
             },
             shortcuts: ShortcutConfig::default(),
             general: GeneralConfig::default(),

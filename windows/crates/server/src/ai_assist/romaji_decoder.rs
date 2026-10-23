@@ -5,55 +5,7 @@
 /// 全角・半角アルファベットが含まれる入力を検出し、
 /// ローマ字打鍵列の隣接キーミスや母音抜けを補正したひらがな候補を返す。
 pub fn decode_floating_consonant_typo(raw_input: &str) -> Option<String> {
-    let has_ascii_or_fullwidth_alpha = raw_input.chars().any(|c| {
-        c.is_ascii_alphabetic()
-            || ('\u{FF21}'..='\u{FF3A}').contains(&c)
-            || ('\u{FF41}'..='\u{FF5A}').contains(&c)
-    });
-
-    if !has_ascii_or_fullwidth_alpha {
-        return None;
-    }
-
-    // 1. 全角英字・ひらがなをローマ字打鍵列に正規化
-    let mut normalized_tokens = Vec::new();
-    let chars: Vec<char> = raw_input.chars().collect();
-    let mut idx = 0;
-    while idx < chars.len() {
-        let c = chars[idx];
-        if ('\u{FF21}'..='\u{FF3A}').contains(&c) {
-            let ch = ((c as u32 - 0xFF21) as u8 + b'a') as char;
-            normalized_tokens.push(ch.to_string());
-            idx += 1;
-        } else if ('\u{FF41}'..='\u{FF5A}').contains(&c) {
-            let ch = ((c as u32 - 0xFF41) as u8 + b'a') as char;
-            normalized_tokens.push(ch.to_string());
-            idx += 1;
-        } else if c.is_ascii_alphabetic() {
-            normalized_tokens.push(c.to_ascii_lowercase().to_string());
-            idx += 1;
-        } else {
-            // 拗音 (きゃ, しゅ, ちょ 等) の2文字チェック
-            if idx + 1 < chars.len() {
-                let next_c = chars[idx + 1];
-                if let Some(r) = digraph_to_romaji(c, next_c) {
-                    normalized_tokens.push(r.to_string());
-                    idx += 2;
-                    continue;
-                }
-            }
-            // ひらがな1文字をローマ字に変換
-            let r = kana_char_to_romaji(c);
-            if !r.is_empty() {
-                normalized_tokens.push(r.to_string());
-            } else {
-                normalized_tokens.push(c.to_string());
-            }
-            idx += 1;
-        }
-    }
-
-    let raw_romaji = normalized_tokens.join("");
+    let raw_romaji = normalized_romaji(raw_input)?;
 
     // パターン 0: そのままローマ字変換するだけで辞書語になる場合 (例: こｎにちは -> konnitiha -> こんにちは)
     let direct_hira = romaji_to_hiragana_str(&raw_romaji);
@@ -105,6 +57,92 @@ pub fn decode_floating_consonant_typo(raw_input: &str) -> Option<String> {
     }
 
     None
+}
+
+fn normalized_romaji(raw_input: &str) -> Option<String> {
+    let has_ascii_or_fullwidth_alpha = raw_input.chars().any(|c| {
+        c.is_ascii_alphabetic()
+            || ('\u{FF21}'..='\u{FF3A}').contains(&c)
+            || ('\u{FF41}'..='\u{FF5A}').contains(&c)
+    });
+
+    if !has_ascii_or_fullwidth_alpha {
+        return None;
+    }
+
+    // 1. 全角英字・ひらがなをローマ字打鍵列に正規化
+    let mut normalized_tokens = Vec::new();
+    let chars: Vec<char> = raw_input.chars().collect();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let c = chars[idx];
+        if ('\u{FF21}'..='\u{FF3A}').contains(&c) {
+            let ch = ((c as u32 - 0xFF21) as u8 + b'a') as char;
+            normalized_tokens.push(ch.to_string());
+            idx += 1;
+        } else if ('\u{FF41}'..='\u{FF5A}').contains(&c) {
+            let ch = ((c as u32 - 0xFF41) as u8 + b'a') as char;
+            normalized_tokens.push(ch.to_string());
+            idx += 1;
+        } else if c.is_ascii_alphabetic() {
+            normalized_tokens.push(c.to_ascii_lowercase().to_string());
+            idx += 1;
+        } else {
+            // 拗音 (きゃ, しゅ, ちょ 等) の2文字チェック
+            if idx + 1 < chars.len() {
+                let next_c = chars[idx + 1];
+                if let Some(r) = digraph_to_romaji(c, next_c) {
+                    normalized_tokens.push(r.to_string());
+                    idx += 2;
+                    continue;
+                }
+            }
+            // ひらがな1文字をローマ字に変換
+            let r = kana_char_to_romaji(c);
+            if !r.is_empty() {
+                normalized_tokens.push(r.to_string());
+            } else {
+                normalized_tokens.push(c.to_string());
+            }
+            idx += 1;
+        }
+    }
+
+    Some(normalized_tokens.join(""))
+}
+
+/// Unique full-word repair supported by a single adjacent-key substitution.
+/// Never treats an unfinished terminal consonant or an all-Latin identifier as a typo.
+pub fn unique_adjacent_correction(raw_input: &str) -> Option<String> {
+    if !raw_input.chars().any(|c| ('ぁ'..='ん').contains(&c)) {
+        return None;
+    }
+    let raw = normalized_romaji(raw_input)?;
+    if raw
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphabetic() && !"aeioun".contains(c))
+    {
+        return None;
+    }
+    let chars: Vec<_> = raw.chars().collect();
+    let mut unique: Option<String> = None;
+    for i in 0..chars.len() {
+        for &adj in qwerty_adjacent_chars(chars[i]) {
+            let mut candidate = chars.clone();
+            candidate[i] = adj;
+            let reading = romaji_to_hiragana_str(&candidate.into_iter().collect::<String>());
+            let full_word = super::STANDARD_VOCAB.iter().any(|(r, _)| *r == reading)
+                || super::typo_variant::lookup_surface(&reading).is_some();
+            if full_word && reading != raw_input {
+                if unique.as_ref().is_some_and(|previous| *previous != reading) {
+                    return None;
+                }
+                unique = Some(reading);
+            }
+        }
+    }
+    unique
 }
 
 fn qwerty_adjacent_chars(c: char) -> &'static [char] {

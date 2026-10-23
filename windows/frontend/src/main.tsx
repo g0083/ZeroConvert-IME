@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { AppSidebar, settingsPages } from "@/components/app-sidebar";
 import { UpdateProvider } from "@/components/update-provider";
 import { General } from "@/pages/general";
+import { Appearance } from "@/pages/appearance";
 import { About } from "@/pages/about";
 import { Dictionary } from "@/pages/dictionary";
 import { Benchmark } from "@/pages/benchmark";
@@ -20,7 +21,7 @@ function SettingsLayout() {
     const headerRef = useRef<HTMLHeadingElement>(null);
     React.useEffect(() => { headerRef.current?.focus({ preventScroll: true }); }, [pathname]);
     return (
-        <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
+        <ThemeProvider>
             <UpdateProvider>
                 <SidebarProvider className="h-dvh min-h-0 overflow-hidden" style={{ "--sidebar-width": "14rem" } as React.CSSProperties}>
                     <AppSidebar />
@@ -49,6 +50,7 @@ const router = createBrowserRouter([{
         { path: "/benchmark", element: <Benchmark /> },
         { path: "/dictionary", element: <Dictionary /> },
         { path: "/advanced", element: <General key="advanced" page="advanced" /> },
+        { path: "/appearance", element: <Appearance /> },
         { path: "/about", element: <About /> },
         { path: "/zenzai", element: <Navigate to="/conversion" replace /> },
         { path: "/debug", element: <Navigate to="/advanced" replace /> },
