@@ -597,7 +597,7 @@ fn deferred_projection_decides_handledness_after_queued_mode_change() {
         &app_config,
         &romaji_lookup,
     )
-    .is_none());
+    .is_some());
 
     TextServiceFactory::apply_actions_to_deferred_projection(
         &mut projection,
@@ -752,14 +752,18 @@ fn deferred_projection_marks_backend_dependent_transitions_unreliable() {
             is_shift_key: false,
             shift_alphabet_shortcut: false,
         };
-        assert!(TextServiceFactory::plan_deferred_user_action(
-            &reset_composition,
-            &input,
-            &projection.mode,
-            &app_config,
-            &romaji_lookup,
-        )
-        .is_none());
+        let expected_handled = matches!(input.action, UserAction::Input(_));
+        assert_eq!(
+            TextServiceFactory::plan_deferred_user_action(
+                &reset_composition,
+                &input,
+                &projection.mode,
+                &app_config,
+                &romaji_lookup,
+            )
+            .is_some(),
+            expected_handled
+        );
     }
 }
 
@@ -3922,37 +3926,85 @@ fn temporary_latin_keeps_direct_append_when_raw_input_suffix_remains() {
 }
 
 #[test]
+#[ignore = "Requires an idle installed IME with the matching server build and corrector enabled"]
 fn test_live_server_okseri() {
-    let mut ipc = crate::engine::ipc_service::IPCService::new().unwrap();
-    let _ = ipc.clear_text();
-    let mut cands = Candidates::default();
-    for ch in ["o", "k", "s", "e", "r", "i"] {
-        println!("=== INPUT '{}' ===", ch);
-        match ipc.append_text_with_context(ch.to_string(), &cands) {
-            Ok(new_cands) => {
-                println!("hiragana: '{}'", new_cands.hiragana);
-                println!(
-                    "texts: {:?}",
-                    new_cands.texts.iter().take(5).collect::<Vec<_>>()
-                );
-                println!(
-                    "candidate_ids: {:?}",
-                    new_cands.candidate_ids.iter().take(5).collect::<Vec<_>>()
-                );
-                if let Some(idx) = new_cands.candidate_ids.iter().position(|&id| id == 999901) {
-                    println!("FOUND 999901 at idx {}: '{}'", idx, new_cands.texts[idx]);
-                } else {
-                    println!("NO 999901 found");
-                }
-                cands = new_cands;
-            }
-            Err(e) => {
-                println!("ERROR: {:?}", e);
-            }
-        }
+    use crate::engine::ipc_service::IPCService;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let mut ipc = IPCService::new().unwrap();
+    ipc.clear_text().unwrap();
+    let mut candidates = Candidates::default();
+    for ch in ['o', 'k', 's', 'e', 'r', 'i'] {
+        let start = Instant::now();
+        candidates = ipc
+            .append_text_with_context(ch.to_string(), &candidates)
+            .unwrap();
+        println!(
+            "key={ch} elapsed_us={} reading={:?}",
+            start.elapsed().as_micros(),
+            candidates.hiragana
+        );
+        assert!(
+            !candidates
+                .candidate_ids
+                .contains(&shared::ai_candidate::TYPO_CORRECTION),
+            "model work must not run inside AppendText"
+        );
     }
+    assert_eq!(candidates.hiragana, "おkせり");
+    let original = ipc.input_ledger_snapshot();
+    let (sender, receiver) = mpsc::channel();
+    let started = Instant::now();
+    let task = ipc.assist_candidates_background(
+        shared::proto::GetAssistCandidatesRequest {
+            reading: candidates.hiragana.clone(),
+            raw_input: "okseri".into(),
+            baseline: candidates.texts[0].clone(),
+            input_count: 6,
+            request_id: 1,
+            kind: 1,
+        },
+        sender,
+    );
+    let result = receiver
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
+    println!(
+        "assist elapsed_ms={} auto_apply={}",
+        started.elapsed().as_millis(),
+        result.auto_apply
+    );
+    let typo = result
+        .suggestions
+        .iter()
+        .find(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION)
+        .unwrap();
+    assert_eq!(typo.text, "おかえり");
+    assert!(result.auto_apply);
+    drop(task);
+    let mut corrected = ipc.replace_with_direct_surface(&typo.text).unwrap();
+    assert_eq!(corrected.hiragana, "おかえり");
+    for ch in ['m', 'a'] {
+        corrected = ipc
+            .append_text_with_context(ch.to_string(), &corrected)
+            .unwrap();
+    }
+    assert_eq!(corrected.hiragana, "おかえりま");
+    let removed = ipc.remove_text().unwrap();
+    assert_eq!(removed.candidates.hiragana, "おかえり");
+    assert_eq!(removed.raw_input, "おかえり");
+    ipc.move_cursor(-1).unwrap();
+    ipc.move_cursor(1).unwrap();
+    let restored = ipc.replace_from_snapshot(&original).unwrap();
+    assert_eq!(restored.hiragana, "おkせり");
+    let removed = ipc.remove_text().unwrap();
+    assert_eq!(removed.candidates.hiragana, "おkせ");
+    assert_eq!(removed.raw_input, "okse");
+    ipc.clear_text().unwrap();
 }
-
 
 #[test]
 fn test_tsf_flow_okseri() {
@@ -3968,17 +4020,16 @@ fn test_tsf_flow_okseri() {
             false,
             &config,
             false,
-        ).unwrap();
+        )
+        .unwrap();
         println!("KEY '{}' -> state: {:?}, actions: {:?}", ch, state, actions);
         // update composition state as client would
         composition.state = state;
     }
 }
 
-
-
-
 #[test]
+#[ignore = "Manually displays the installed IME UI; never run as an unattended unit test"]
 fn test_ui_show_pill() {
     let mut ipc = crate::engine::ipc_service::IPCService::new().unwrap();
     println!("Testing sending pill to UI...");

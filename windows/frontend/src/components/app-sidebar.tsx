@@ -1,4 +1,4 @@
-import { BookText, Cpu, Info, Keyboard, Settings2, SlidersHorizontal, TextCursorInput } from "lucide-react";
+import { BookText, Palette, Cpu, Info, Keyboard, Settings2, SlidersHorizontal, TextCursorInput } from "lucide-react";
 import { NavLink, useLocation } from "react-router";
 import {
     Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
@@ -13,6 +13,7 @@ export const settingsPages = [
     { title: "キーとローマ字", url: "/keys", icon: Keyboard },
     { title: "ユーザ辞書", url: "/dictionary", icon: BookText },
     { title: "ベンチマーク", url: "/benchmark", icon: Cpu },
+    { title: "外観・テーマ", url: "/appearance", icon: Palette },
     { title: "詳細設定", url: "/advanced", icon: Settings2 },
     { title: "ZeroConについて", url: "/about", icon: Info },
 ];

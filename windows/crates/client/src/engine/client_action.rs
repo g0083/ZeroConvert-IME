@@ -12,6 +12,8 @@ pub enum ClientAction {
     AppendTextDirect(String),
     CommitTextDirect(String),
     CommitWithText(String),
+    ApplyTypoCorrection(String),
+    UndoTypoCorrection,
     RestoreReconversionOriginal,
     RemoveText,
     ShrinkText(String),

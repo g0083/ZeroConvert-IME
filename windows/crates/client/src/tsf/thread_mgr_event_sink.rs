@@ -19,6 +19,7 @@ fn ensure_ipc_service_for_tsf_event(event: &str) {
 impl TextServiceFactory {
     pub fn set_keyboard_disabled_state(&self, disabled: bool) -> Result<()> {
         if disabled {
+            self.cancel_typo_assist();
             self.cancel_jev_conversion();
         }
         let (changed, ipc_service) = IMEState::set_keyboard_disabled_and_clone_ipc(disabled)?;

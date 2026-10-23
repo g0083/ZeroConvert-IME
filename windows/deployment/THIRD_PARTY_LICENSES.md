@@ -35,12 +35,12 @@ SOFTWARE.
 
 ---
 
-## 2. Zenz / zenz-v3.2 Neural Kana-Kanji Conversion Model (`zenz.gguf`, `ZeroCon Model v3.2`)
-- **Upstream Model**: `Miwa-Keita/zenz-v3.2-small-gguf` (`zenz-v3.2-small-iq4xs.gguf` / `zenz-v3.2-small-q4km.gguf`)
+## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model Standard / Nano)
+- **Upstream Model**: `Miwa-Keita/zenz-v3.2-small` (Standard) / `Miwa-Keita/zenz-v3.2-xsmall` (Nano)
 - **Author**: Miwa Keita (ensan-hcl)
 - **License**: Apache License 2.0
 - **Notice**:
-  - The neural conversion weights (`zenz.gguf`, presented in the UI as `ZeroCon Model v3.2`) are quantized from `Miwa-Keita/zenz-v3.2-small` and distributed under the terms of the [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
+  - The conversion and prediction weights (`models/zerocon-model-standard.gguf` and `models/zerocon-model-nano.gguf`) are Q4_K_M quantizations of the respective upstream models and distributed under the terms of the [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
 ---
 
@@ -77,11 +77,11 @@ copies or substantial portions of the Software.
 
 ---
 
-## 5. Neural Typo Corrector Model (`models/typo-corrector-xsmall-q4km.gguf`)
-- **Base Model**: `Miwa-Keita/zenz-v3.1-xsmall`
+## 5. corecctor / ZeroCon Model Corrector (`models/zerocon-model-corrector.gguf`)
+- **Base Model**: [Miwa-Keita/zenz-v3.1-xsmall](https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall)
 - **Original Author**: Miwa Keita (ensan-hcl)
 - **Base License**: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
 - **Derivative License**: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
 - **Notice**:
-  - `typo-corrector-xsmall-q4km.gguf` is fine-tuned from `Miwa-Keita/zenz-v3.1-xsmall` specifically for Japanese input typo correction, quantized to Q4_K_M.
+  - `corecctor` is the independently fine-tuned Japanese input typo correction model, distributed as ZeroCon Model Corrector (`zerocon-model-corrector.gguf`; legacy filename: `typo-corrector-xsmall-q4km.gguf`). It is fine-tuned from `Miwa-Keita/zenz-v3.1-xsmall` specifically for Japanese input typo correction, quantized to Q4_K_M.
   - In accordance with CC BY-SA 4.0, this derivative model is distributed under the terms of the [CC BY-SA 4.0 License](https://creativecommons.org/licenses/by-sa/4.0/).

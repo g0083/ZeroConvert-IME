@@ -67,43 +67,51 @@ impl IPCService {
     }
 
     fn new_inner(timeout: Option<Duration>) -> Result<Self> {
-        let pipe_path = shared::server_pipe_path()?;
-        let runtime = tokio::runtime::Runtime::new()?;
-        let connect_deadline = connect_deadline(timeout);
+        #[cfg(test)]
+        {
+            let _ = timeout;
+            anyhow::bail!("Unit tests must not connect to a running IME");
+        }
+        #[cfg(not(test))]
+        {
+            let pipe_path = shared::server_pipe_path()?;
+            let runtime = tokio::runtime::Runtime::new()?;
+            let connect_deadline = connect_deadline(timeout);
 
-        let endpoint = Endpoint::try_from("http://[::]:50051")?;
-        let connect = endpoint.connect_with_connector(service_fn(move |_| async move {
-            let started_at = Instant::now();
-            let client = loop {
-                match open_named_pipe_client(pipe_path) {
-                    Ok(client) => break client,
-                    Err(e)
-                        if should_retry_pipe_connect_error(
-                            e.raw_os_error(),
-                            started_at,
-                            timeout,
-                        ) => {}
-                    Err(e) => return Err(e),
+            let endpoint = Endpoint::try_from("http://[::]:50051")?;
+            let connect = endpoint.connect_with_connector(service_fn(move |_| async move {
+                let started_at = Instant::now();
+                let client = loop {
+                    match open_named_pipe_client(pipe_path) {
+                        Ok(client) => break client,
+                        Err(e)
+                            if should_retry_pipe_connect_error(
+                                e.raw_os_error(),
+                                started_at,
+                                timeout,
+                            ) => {}
+                        Err(e) => return Err(e),
+                    }
+
+                    time::sleep(IPC_RETRY_INTERVAL).await;
+                };
+
+                Ok::<_, std::io::Error>(TokioIo::new(client))
+            }));
+            let server_channel: tonic::transport::Channel = runtime.block_on(async {
+                match time::timeout(connect_deadline, connect).await {
+                    Ok(result) => result.map_err(anyhow::Error::from),
+                    Err(_) => Err(anyhow::anyhow!("settings IPC connect deadline exceeded")),
                 }
+            })?;
 
-                time::sleep(IPC_RETRY_INTERVAL).await;
-            };
+            let azookey_client = AzookeyServiceClient::new(server_channel);
 
-            Ok::<_, std::io::Error>(TokioIo::new(client))
-        }));
-        let server_channel: tonic::transport::Channel = runtime.block_on(async {
-            match time::timeout(connect_deadline, connect).await {
-                Ok(result) => result.map_err(anyhow::Error::from),
-                Err(_) => Err(anyhow::anyhow!("settings IPC connect deadline exceeded")),
-            }
-        })?;
-
-        let azookey_client = AzookeyServiceClient::new(server_channel);
-
-        Ok(Self {
-            azookey_client,
-            runtime: Arc::new(runtime),
-        })
+            Ok(Self {
+                azookey_client,
+                runtime: Arc::new(runtime),
+            })
+        }
     }
 }
 

@@ -320,6 +320,7 @@ pub(crate) enum ReconversionKeyTestResult {
 
 #[derive(Default, Clone, Debug)]
 pub struct Composition {
+    typo: typo::TypoState,
     pub preview: String, // text to be previewed
     pub suffix: String,  // text to be appended after preview
     pub raw_input: String,
@@ -1890,6 +1891,8 @@ impl TextServiceFactory {
             ClientAction::AppendTextDirect(_) => "AppendTextDirect",
             ClientAction::CommitTextDirect(_) => "CommitTextDirect",
             ClientAction::CommitWithText(_) => "CommitWithText",
+            ClientAction::ApplyTypoCorrection(_) => "ApplyTypoCorrection",
+            ClientAction::UndoTypoCorrection => "UndoTypoCorrection",
             ClientAction::RestoreReconversionOriginal => "RestoreReconversionOriginal",
             ClientAction::RemoveText => "RemoveText",
             ClientAction::MoveCursor(_) => "MoveCursor",
@@ -2086,12 +2089,17 @@ impl TextServiceFactory {
 
     /// 読み行のピル表示と Tab 確定で共通して使う AI アシスト候補の優先度解決。
     ///
-    /// 💡 もしかして (TYPO_CORRECTION) は「すでに入力した誤りを直す修正型」であり、
-    /// 提示しないまま確定されると誤字がそのまま本文に残る。一方 🔮 先読み
-    /// (PREDICTIVE) は「まだ打っていない未来を推測する拡張型」であり、提示できなくても
-    /// 次の入力停止で再計算される。つまり損失が非対称なので、💡 を優先して
-    /// 1つだけ提示する。表示と確定が同じ判定を使うことで、見た目と挙動がずれない。
-    fn ai_assist_priority_index(candidate_ids: &[u64]) -> Option<(usize, u64)> {
+    /// Use the evaluated, visible Tab target. The fallback preserves compatibility
+    /// with candidates from an older server that supplies no relevance metadata.
+    fn ai_assist_priority_index(
+        candidate_ids: &[u64],
+        preferred: Option<u64>,
+    ) -> Option<(usize, u64)> {
+        if let Some(id) = preferred {
+            if let Some(index) = candidate_ids.iter().position(|candidate| *candidate == id) {
+                return Some((index, id));
+            }
+        }
         if let Some(index) = candidate_ids
             .iter()
             .position(|&id| id == shared::ai_candidate::TYPO_CORRECTION)
@@ -2178,29 +2186,24 @@ impl TextServiceFactory {
         let mut augmented_reading = None;
         let base_reading = reading.unwrap_or(candidates.hiragana.as_str());
 
-        // 💡 もしかして と 🔮 先読み が同時に存在する場合は 💡 を表示する。
-        // 誤字補正はすでに入力した誤りを直す「修正型」なので放置すると誤字が確定される。
-        // 先読みは未来を推測する「拡張型」なので外しても次の停止で再計算される。
-        // この非対称な損失のため、優先度が高い方だけを1つ提示する。
-        if let Some((idx, kind)) = Self::ai_assist_priority_index(&candidates.candidate_ids) {
-            if kind == shared::ai_candidate::TYPO_CORRECTION {
-                let text = &candidates.texts[idx];
-                let aug = format!("{}\t💡 {} [Tab]", base_reading, text);
-                tracing::info!("[TypoDebug/Client] augmented_reading='{}'", aug);
-                augmented_reading = Some(aug);
-            } else {
-                let text = candidates
-                    .texts
-                    .get(idx)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        candidates
-                            .sub_texts
-                            .get(idx)
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(&candidates.texts[idx])
-                    });
-                augmented_reading = Some(format!("{}\t🔮 {} [Tab]", base_reading, text));
+        let applied = self.borrow()?.borrow_composition()?.typo.applied.clone();
+        if let Some(applied) = applied.as_ref().filter(|_| {
+            !candidates
+                .candidate_ids
+                .contains(&shared::ai_candidate::PREDICTIVE)
+        }) {
+            augmented_reading = Some(serde_json::json!({"reading": applied.source,
+                "assist": {"status":"applied", "source":applied.source, "replacement":applied.surface}}).to_string());
+        } else if let Some((idx, kind)) = Self::ai_assist_priority_index(
+            &candidates.candidate_ids,
+            self.borrow()?.borrow_composition()?.typo.primary_assist,
+        ) {
+            if let Some(text) = candidates.texts.get(idx) {
+                augmented_reading = Some(serde_json::json!({"reading":base_reading,
+                    "assist":{"status": if kind == shared::ai_candidate::TYPO_CORRECTION {"proposal"} else {"prediction"},
+                    "source":candidates.hiragana, "replacement":text,
+                        "continuation":self.borrow()?.borrow_composition()?.typo.prediction_continuation,
+                        "undoAvailable":applied.is_some()}}).to_string());
             }
         }
 
@@ -2211,7 +2214,7 @@ impl TextServiceFactory {
             visible
         };
         // NOTE: candidate_list_visible は呼び出し元の設定をそのまま維持する。
-        // 💡 もしかして (999901) は filtered_texts で候補一覧から除外されるため、
+        // 補正と先読みのヒントがあっても、
         // 候補ウィンドウ自体を強制非表示にして通常の変換候補が消える不具合を防ぐ。
         let reading_vertical_adjustment = if has_ai_assist_aug {
             reading_vertical_adjustment.or(Some(4))
@@ -2220,7 +2223,11 @@ impl TextServiceFactory {
         };
         let update_pos = if has_ai_assist_aug { true } else { update_pos };
 
-        let reading = if let Some(ref aug) = augmented_reading {
+        // English text already appears in the application. Clear the separate
+        // reading overlay on every update, including candidate navigation.
+        let reading = if IMEState::input_mode()? == InputMode::Latin {
+            Some("")
+        } else if let Some(ref aug) = augmented_reading {
             Some(aug.as_str())
         } else if let Some(r) = reading {
             if visible == Some(false) && r.is_empty() {
@@ -2268,7 +2275,7 @@ impl TextServiceFactory {
                 }
                 None
             };
-            // 💡 もしかして (999901) / 🔮 先読み (999902) は通常の変換候補ウィンドウの一覧からは除外する (Tab専用)
+            // Keep correction in the ordinary list with a label; prediction stays in the hint.
             let filtered_texts = if candidates
                 .candidate_ids
                 .iter()
@@ -2280,10 +2287,14 @@ impl TextServiceFactory {
                     .enumerate()
                     .filter_map(|(i, t)| {
                         let id = candidates.candidate_ids.get(i).copied().unwrap_or(0);
-                        if id == 999901 || id == 999902 {
+                        if id == shared::ai_candidate::PREDICTIVE {
                             None
                         } else {
-                            Some(t.clone())
+                            Some(if id == shared::ai_candidate::TYPO_CORRECTION {
+                                format!("{t} 〔補正〕")
+                            } else {
+                                t.clone()
+                            })
                         }
                     })
                     .collect::<Vec<_>>();
@@ -2407,13 +2418,17 @@ impl TextServiceFactory {
         app_config: &AppConfig,
         transition: &CompositionState,
     ) -> Result<()> {
-        let has_ai_assist = candidates
-            .candidate_ids
-            .iter()
-            .any(|&id| id == 999901 || id == 999902);
+        let temporary_latin = self.borrow()?.borrow_composition()?.temporary_latin
+            || IMEState::input_mode()? == InputMode::Latin;
+        let has_ai_assist = self.borrow()?.borrow_composition()?.typo.applied.is_some()
+            || candidates
+                .candidate_ids
+                .iter()
+                .any(|&id| id == 999901 || id == 999902);
         if app_config.general.jev_conversion
             && *transition == CompositionState::Composing
             && !has_ai_assist
+            && !temporary_latin
         {
             self.hide_candidate_window_ui(ipc_service)?;
             return Ok(());
@@ -2427,21 +2442,25 @@ impl TextServiceFactory {
         } else {
             Self::live_conversion_reading_vertical_adjustment_update(app_config, reading)
         };
-        let candidate_list_visible = if *transition != CompositionState::None {
+        let candidate_list_visible = if temporary_latin {
+            Some(true)
+        } else if *transition != CompositionState::None {
             Some(!app_config.general.show_candidate_window_after_space)
         } else {
             Some(false)
         };
-        let visible = if *transition == CompositionState::None {
+        let no_english_completion =
+            IMEState::input_mode()? == InputMode::Latin && candidates.texts.len() <= 1;
+        let visible = if *transition == CompositionState::None || no_english_completion {
             Some(false)
-        } else if has_ai_assist {
+        } else if temporary_latin || has_ai_assist {
             Some(true) // フローティングピル (ruby_window) を表示するために可視化
         } else if !app_config.general.show_candidate_window_after_space || reading.is_some() {
             Some(true)
         } else {
             None
         };
-        let update_pos = *transition != CompositionState::None || has_ai_assist;
+        let update_pos = *transition != CompositionState::None || has_ai_assist || temporary_latin;
         self.sync_candidate_window_update(
             ipc_service,
             candidates,
@@ -2696,7 +2715,8 @@ impl TextServiceFactory {
         live_conversion_history: &mut VecDeque<String>,
         ipc_service: &mut IPCService,
     ) -> Result<()> {
-        if app_config.general.jev_conversion
+        if self.borrow()?.borrow_composition()?.typo.hold_auto_commit
+            || app_config.general.jev_conversion
             || *transition != CompositionState::Composing
             || temporary_latin
             || has_reconversion_original
@@ -5282,6 +5302,9 @@ impl TextServiceFactory {
         romaji_lookup: &RomajiLookup,
         start_temporary_latin: bool,
     ) -> Option<(CompositionState, Vec<ClientAction>)> {
+        if *mode == InputMode::Latin {
+            return Self::plan_english_action(composition, action, is_shift_pressed);
+        }
         if composition.reconversion_original.is_some()
             && reconversion_action_requires_reading_state(action)
         {
@@ -5291,13 +5314,35 @@ impl TextServiceFactory {
             // mode changes, and commit-then-append input remain safe.
             return Some((composition.state.clone(), Vec::new()));
         }
+        if matches!(action, UserAction::Escape) && composition.typo.applied.is_some() {
+            return Some((
+                CompositionState::Composing,
+                vec![ClientAction::UndoTypoCorrection],
+            ));
+        }
+        if matches!(action, UserAction::Tab)
+            && composition.typo.applied.is_some()
+            && !composition
+                .candidates
+                .candidate_ids
+                .contains(&shared::ai_candidate::PREDICTIVE)
+        {
+            return Some((composition.state.clone(), Vec::new()));
+        }
         if matches!(action, UserAction::Tab) {
             // 読み行のピル表示と同じ優先度解決を使うため、Tab で確定される候補と
             // 画面に出ている候補が常に一致する。
-            if let Some((idx, _)) =
-                Self::ai_assist_priority_index(&composition.candidates.candidate_ids)
-            {
+            if let Some((idx, kind)) = Self::ai_assist_priority_index(
+                &composition.candidates.candidate_ids,
+                composition.typo.primary_assist,
+            ) {
                 if let Some(text) = composition.candidates.texts.get(idx) {
+                    if kind == shared::ai_candidate::TYPO_CORRECTION {
+                        return Some((
+                            CompositionState::Composing,
+                            vec![ClientAction::ApplyTypoCorrection(text.clone())],
+                        ));
+                    }
                     return Some((
                         CompositionState::None,
                         vec![
@@ -5795,7 +5840,9 @@ impl TextServiceFactory {
                 | ClientAction::AdjustBoundary(_)
                 | ClientAction::SetSelection(_)
                 | ClientAction::SetTextWithType(_)
-                | ClientAction::CommitWithText(_) => projection.reliable = false,
+                | ClientAction::CommitWithText(_)
+                | ClientAction::ApplyTypoCorrection(_)
+                | ClientAction::UndoTypoCorrection => projection.reliable = false,
                 ClientAction::SetIMEMode(mode) => {
                     projection.mode = mode.clone();
                     if projection.state == CompositionState::None {
@@ -6392,6 +6439,14 @@ impl TextServiceFactory {
                 UserAction::try_from(wparam.0)?
             };
 
+            if mode == InputMode::Latin
+                && composition.state == CompositionState::None
+                && matches!(action, UserAction::Input(ch) if ch.is_ascii_alphabetic())
+                && self.current_context_has_sensitive_input_scope()
+            {
+                return Ok(None);
+            }
+
             let deferred_user_action = DeferredUserAction {
                 action,
                 is_shift_pressed,
@@ -6939,6 +6994,7 @@ impl TextServiceFactory {
     }
 
     fn handle_external_composition_terminated(&self, terminated: Option<&ITfComposition>) {
+        self.cancel_typo_assist();
         self.cancel_jev_conversion();
         let is_current = self
             .borrow()
@@ -7020,6 +7076,7 @@ impl TextServiceFactory {
     }
 
     pub(crate) fn end_composition_for_tsf_event(&self) {
+        self.cancel_typo_assist();
         self.cancel_jev_conversion();
         // Collect queued learning while the candidate IDs and owner are still
         // valid. Focus loss may terminate a deferred terminal action.
@@ -7348,6 +7405,17 @@ impl TextServiceFactory {
         transition: CompositionState,
         config_snapshot: AppConfigSnapshot,
     ) -> Result<()> {
+        self.cancel_typo_assist();
+        if let [ClientAction::ApplyTypoCorrection(surface)] = actions {
+            self.apply_typo_correction(surface, true)?;
+            return self.begin_typo_assist();
+        }
+        if let [ClientAction::UndoTypoCorrection] = actions {
+            return self.undo_typo_correction();
+        }
+        // An ordinary edit ends the one-step undo affordance. The converter now
+        // owns the corrected direct input, so mapped deletion/cursor edits stay canonical.
+        self.finish_typo_undo_for_actions(actions)?;
         self.cancel_jev_conversion();
         let start_jev = actions
             .iter()
@@ -7518,6 +7586,7 @@ impl TextServiceFactory {
                     current_clause_consumed_prefix_restore = None;
                     current_clause_remainder_origin = None;
                     next_split_group_id = 0;
+                    self.borrow()?.borrow_mut_composition()?.typo = Default::default();
 
                     // Clear the UI before the fallible TSF edit. Otherwise a temporary
                     // edit-session failure can leave stale ruby and candidates visible
@@ -7541,6 +7610,7 @@ impl TextServiceFactory {
                     );
 
                     transition = CompositionState::Composing;
+                    self.borrow()?.borrow_mut_composition()?.typo = Default::default();
                     live_conversion_snapshots.clear();
                     live_conversion_history.clear();
                     corresponding_count = 0;
@@ -7649,6 +7719,7 @@ impl TextServiceFactory {
                 }
 
                 match action {
+                    ClientAction::ApplyTypoCorrection(_) | ClientAction::UndoTypoCorrection => {}
                     // Start only after all local state has been persisted below.
                     ClientAction::StartJevConversion => {}
                     ClientAction::StartComposition => {
@@ -7750,11 +7821,25 @@ impl TextServiceFactory {
                             terminal_ui_cleanup_sent_at,
                             action_index,
                         ) || followup_owns_ui_cleanup;
+                        let typo_acceptances = if !learning_blocked
+                            && !actions.iter().any(|entry| {
+                                matches!(
+                                    entry.action,
+                                    ClientAction::RemoveText
+                                        | ClientAction::RestoreReconversionOriginal
+                                )
+                            }) {
+                            self.typo_acceptances_for_commit(&format!("{preview}{suffix}"))
+                        } else {
+                            Vec::new()
+                        };
                         Self::run_terminal_action_cleanup(
                             skip_ui_cleanup,
                             || self.end_composition(),
                             || self.hide_candidate_window_ui(&mut ipc_service),
                         )?;
+                        ipc_service.record_typo_acceptances_background(typo_acceptances);
+                        self.borrow()?.borrow_mut_composition()?.typo = Default::default();
                         selection_index = 0;
                         corresponding_count = 0;
                         temporary_latin = false;
@@ -7973,6 +8058,25 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::AppendTextDirect(text) => {
+                        if mode == InputMode::Latin {
+                            raw_input.push_str(text);
+                            candidates = english::candidates(&raw_input);
+                            selection_index = 0;
+                            corresponding_count = raw_input.len() as i32;
+                            raw_hiragana = raw_input.clone();
+                            preview = raw_input.clone();
+                            suffix.clear();
+                            self.set_text(&preview, "")?;
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
+                            persist_local_state!();
+                            continue;
+                        }
                         Self::clear_clause_caches(
                             &mut clause_snapshots,
                             &mut future_clause_snapshots,
@@ -8112,6 +8216,25 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::RemoveText => {
+                        if mode == InputMode::Latin {
+                            raw_input.pop();
+                            candidates = english::candidates(&raw_input);
+                            selection_index = 0;
+                            corresponding_count = raw_input.len() as i32;
+                            raw_hiragana = raw_input.clone();
+                            preview = raw_input.clone();
+                            suffix.clear();
+                            self.set_text(&preview, "")?;
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
+                            persist_local_state!();
+                            continue;
+                        }
                         Self::clear_clause_caches(
                             &mut clause_snapshots,
                             &mut future_clause_snapshots,
@@ -8803,6 +8926,7 @@ impl TextServiceFactory {
                             None,
                         )?;
 
+                        self.borrow()?.borrow_mut_composition()?.typo = Default::default();
                         selection_index = 0;
                         corresponding_count = 0;
                         temporary_latin = false;
@@ -9353,6 +9477,19 @@ impl TextServiceFactory {
         if result.is_ok() && start_jev && self.begin_jev_conversion().is_err() {
             tracing::debug!("Jev request unavailable; retain KKC candidates");
         }
+        if result.is_ok() && !start_jev {
+            if let Ok(service) = self.borrow() {
+                if let Ok(mut state) = service.borrow_mut_composition() {
+                    if state.state == CompositionState::None {
+                        state.typo = Default::default();
+                    }
+                    if state.typo.applied.is_none() {
+                        state.typo.hold_auto_commit = false;
+                    }
+                }
+            }
+            let _ = self.begin_typo_assist();
+        }
 
         if result.is_err()
             && Self::terminal_ui_cleanup_required_after_failure(
@@ -9427,6 +9564,7 @@ impl TextServiceFactory {
 mod tests;
 
 mod jev;
+mod typo;
 
 #[cfg(test)]
 mod lifecycle_tests {
@@ -9474,19 +9612,19 @@ mod lifecycle_tests {
             shared::ai_candidate::PREDICTIVE,
         ];
         let (index, kind) =
-            TextServiceFactory::ai_assist_priority_index(&ids).expect("should resolve");
+            TextServiceFactory::ai_assist_priority_index(&ids, None).expect("should resolve");
         assert_eq!(index, 1);
         assert_eq!(kind, shared::ai_candidate::TYPO_CORRECTION);
 
         // 先読みしかない場合は先読みを選ぶ
         let ids = vec![0u64, shared::ai_candidate::PREDICTIVE];
         let (index, kind) =
-            TextServiceFactory::ai_assist_priority_index(&ids).expect("should resolve");
+            TextServiceFactory::ai_assist_priority_index(&ids, None).expect("should resolve");
         assert_eq!(index, 1);
         assert_eq!(kind, shared::ai_candidate::PREDICTIVE);
 
         // どちらも無ければ提示しない
-        assert!(TextServiceFactory::ai_assist_priority_index(&[0u64, 1u64]).is_none());
+        assert!(TextServiceFactory::ai_assist_priority_index(&[0u64, 1u64], None).is_none());
     }
 
     #[test]
@@ -9626,3 +9764,5 @@ mod lifecycle_tests {
         ));
     }
 }
+
+mod english;

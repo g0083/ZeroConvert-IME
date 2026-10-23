@@ -79,33 +79,36 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         font-size: 16px;
                         line-height: 1.35;
                         text-align: left;
-                        white-space: nowrap;
+                        white-space: normal;
                         overflow: visible;
                         user-select: none;
                         pointer-events: none;
                     }
-                    #reading {
-                        display: inline-block;
-                        max-width: 100%;
-                        overflow: hidden;
-                        text-overflow: ellipsis;
-                        vertical-align: middle;
-                    }
+                    #reading { display: block; max-width: 100%; }
+                    .reading-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
                     .ai-assist-pill {
-                        display: inline-block;
-                        margin-left: 8px;
-                        padding: 1px 7px;
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        margin-top: 4px;
+                        padding: 4px 7px;
                         border-radius: 6px;
                         font-size: 12px;
-                        font-weight: 600;
-                        vertical-align: middle;
+                        line-height: 1.5;
                         background-color: #EEF2FF;
                         color: #4338CA;
                         border: 1px solid #C7D2FE;
+                        box-sizing: border-box;
+                        white-space: normal;
                     }
+                    .assist-change { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+                    .assist-original { opacity: .8; }
+                    .assist-replacement { font-weight: 600; }
+                    .assist-replacement mark { background: #DDE5FF; color: inherit; border-radius: 2px; }
+                    .assist-action { flex-shrink: 0; white-space: nowrap; font-size: 11px; }
                     .ai-assist-tab {
                         display: inline-block;
-                        margin-left: 4px;
+                        margin-right: 3px;
                         padding: 0 4px;
                         font-size: 10px;
                         font-weight: bold;
@@ -119,9 +122,9 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         left: 0;
                         top: 0;
                         display: inline-block;
-                        max-width: none;
+                        width: max-content;
                         overflow: visible;
-                        white-space: nowrap;
+                        white-space: normal;
                         visibility: hidden;
                         pointer-events: none;
                     }
@@ -150,6 +153,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             color: #C7D2FE;
                             border-color: #4338CA;
                         }
+                        .assist-replacement mark { background: #4338CA; }
                         .ai-assist-tab {
                             background-color: #1E1B4B;
                             color: #E0E7FF;
@@ -161,6 +165,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                     let currentRequestId = 0;
                     let measureFrame = null;
                     let resizeObserver = null;
+                    const maxOverlayWidth = Math.max(160, Math.min(480, screen.availWidth - 16));
 
                     function cssPixels(style, property) {
                         const value = Number.parseFloat(style.getPropertyValue(property));
@@ -196,11 +201,13 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
 
                         const mainStyle = window.getComputedStyle(main);
                         const bodyStyle = window.getComputedStyle(body);
+                        const maxContentWidth = maxOverlayWidth - horizontalBox(mainStyle) - horizontalBox(bodyStyle);
+                        measurementElement.style.maxWidth = Math.max(80, maxContentWidth) + "px";
                         const measurementRect = measurementElement.getBoundingClientRect();
                         const bodyHorizontal = horizontalBox(bodyStyle);
                         const bodyVertical = verticalBox(bodyStyle);
                         const measurementWidth = Math.max(
-                            measurementElement.scrollWidth,
+                            Math.min(measurementElement.scrollWidth, maxContentWidth),
                             measurementRect.width
                         );
                         const desiredMainWidth = Math.max(
@@ -239,6 +246,20 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         });
                     }
 
+                    function correctionDiff(source, replacement) {
+                        const a = Array.from(source), b = Array.from(replacement);
+                        let start = 0, end = 0;
+                        while (start < a.length && start < b.length && a[start] === b[start]) start++;
+                        while (end < a.length - start && end < b.length - start && a[a.length-1-end] === b[b.length-1-end]) end++;
+                        const left = Math.max(0, start - 8), right = Math.min(b.length, b.length - end + 8);
+                        const before = (left ? '…' : '') + b.slice(left, start).join('');
+                        const changed = b.slice(start, b.length-end).join('');
+                        const after = b.slice(b.length-end, right).join('') + (right < b.length ? '…' : '');
+                        const originalRight = Math.min(a.length, a.length-end+8);
+                        return { original: (left ? '…' : '') + a.slice(left, originalRight).join('') + (originalRight < a.length ? '…' : ''),
+                            replacement: escapeHtml(before) + '<mark>' + escapeHtml(changed) + '</mark>' + escapeHtml(after) };
+                    }
+
                     function updateReading(reading, requestId) {
                         const readingElement = document.getElementById('reading');
                         const measurementElement = document.getElementById('measurement');
@@ -252,20 +273,45 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             : currentRequestId + 1;
                         const text = typeof reading === 'string' ? reading : '';
                         
-                        var parts = text.split('\t');
-                        var readingText = parts[0] || '';
-                        var assistText = parts[1] || '';
-
-                        if (assistText) {
-                            var cleanAssist = assistText.replace(' [Tab]', '');
-                            readingElement.innerHTML = escapeHtml(readingText) +
-                                '<span class="ai-assist-pill">' + escapeHtml(cleanAssist) +
-                                '<span class="ai-assist-tab">Tab</span></span>';
-                            measurementElement.textContent = readingText + '    ' + cleanAssist + ' Tab';
-                        } else {
-                            readingElement.textContent = readingText;
-                            measurementElement.textContent = readingText;
+                        let readingText = text, assist = null;
+                        // Structured presentation travels in the existing reading envelope.
+                        // Legacy tab hints remain readable during a rolling binary update.
+                        try {
+                            const value = JSON.parse(text);
+                            if (value && typeof value.reading === 'string' && value.assist) {
+                                readingText = value.reading;
+                                assist = value.assist;
+                            }
+                        } catch (_) {}
+                        if (!assist && text.includes('\t')) {
+                            const parts = text.split('\t');
+                            readingText = parts[0];
+                            assist = { status: parts[1].startsWith('🔮') ? 'prediction' : 'proposal',
+                                source: readingText, replacement: parts[1].replace(/^[💡🔮]\s*/u, '').replace(' [Tab]', '') };
                         }
+                        readingElement.innerHTML = '<span class="reading-text">' + escapeHtml(readingText) + '</span>';
+                        if (assist && typeof assist.replacement === 'string') {
+                            const applied = assist.status === 'applied';
+                            const prediction = assist.status === 'prediction';
+                            const diff = correctionDiff(String(assist.source || readingText), assist.replacement);
+                            const change = prediction ? escapeHtml(typeof assist.continuation === 'string' && assist.continuation ? assist.continuation : assist.replacement) :
+                                '<span class="assist-original">' + escapeHtml(diff.original) + '</span> → ' +
+                                '<span class="assist-replacement">' + diff.replacement + '</span>';
+                            readingElement.innerHTML += '<span class="ai-assist-pill" role="status">' +
+                                '<span class="assist-change">' + change + '</span>' +
+                                '<span class="assist-action">' + (applied ? '補正済み · ' : '') +
+                                '<span class="ai-assist-tab">' + (applied ? 'Esc' : 'Tab') + '</span>' +
+                                (applied ? '戻す' : prediction ? 'で確定' : 'で補正') + '</span></span>';
+                            if (prediction && assist.undoAvailable) {
+                                readingElement.innerHTML += '<span class="assist-action">補正済み · Escで戻す</span>';
+                            }
+                        }
+
+                        // Measure the actual styled badges, including their margins,
+                        // padding and borders. A plain-text approximation can be a few
+                        // pixels too narrow, causing the entire inline-block assist
+                        // pill to be replaced by the reading's ellipsis.
+                        measurementElement.innerHTML = readingElement.innerHTML;
 
                         scheduleMeasureRuby();
                     }

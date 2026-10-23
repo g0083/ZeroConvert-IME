@@ -15,21 +15,24 @@ export const About = () => {
                         </span>
                     </h2>
                     <p className="text-xs text-muted-foreground">
-                        超低遅延ニューラルかな漢字変換エンジン (ZeroCon AI / ZeroCon Model v3.2 搭載)
+                        ZeroCon Model によるかな漢字変換・先読みと、独自モデル corecctor によるタイポ補正
                     </p>
                 </div>
             </div>
 
-            <SettingsSection title="システム情報 & ハードウェア構成">
-                <SettingsRow label="ニューラル変換モデル" description="ZeroCon AI 量子化モデル">
+            <SettingsSection title="搭載モデルと動作環境">
+                <SettingsRow label="かな漢字変換・先読みモデル" description="ZeroCon Model（Q4_K_M量子化）">
                     <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-md border border-border/50">
-                        ZeroCon Model v3.2 Fast (IQ4_XS) / Standard (Q4_K_M)
+                        ZeroCon Model Standard / Nano
                     </span>
                 </SettingsRow>
-                <SettingsRow label="計算アクセラレータ" description="GPU 全 13 レイヤー完全オフロード">
+                <SettingsRow label="タイポ補正モデル" description="zenz-v3.1-xsmall をベースに、日本語入力のタイポ補正向けに独自に追加学習">
+                    <span className="text-sm font-medium text-foreground">corecctor（ZeroCon Model Corrector）</span>
+                </SettingsRow>
+                <SettingsRow label="推論バックエンド" description="設定とPCの対応状況に応じて選択">
                     <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
                         <Zap className="size-3.5" />
-                        <span>NVIDIA CUDA / Vulkan GPU アクセラレーション</span>
+                        <span>CPU / Vulkan / NVIDIA CUDA</span>
                     </div>
                 </SettingsRow>
                 <SettingsRow label="通信アーキテクチャ" description="プロセス間高速通信">
@@ -44,7 +47,7 @@ export const About = () => {
                 <div className="p-4 space-y-3 text-xs text-muted-foreground leading-relaxed">
                     <div className="flex items-center gap-2 text-foreground font-medium">
                         <ShieldCheck className="size-4 text-emerald-500" />
-                        <span>オープンソース・コンプライアンス準拠</span>
+                        <span>利用しているプロジェクトとモデル</span>
                     </div>
                     <p>
                         ZeroCon IME は、以下のオープンソースソフトウェア・言語モデル・辞書データの成果物を活用し、独自の高速化・ZeroCon AI 直結推論・ストリーミング自動確定・UIリデザインを施した派生ソフトウェアです。
@@ -55,6 +58,9 @@ export const About = () => {
                 </SettingsRow>
                 <SettingsRow label="Zenz / zenz-v3.2 (ZeroCon Model ベースモデル)" description="Copyright (c) Miwa Keita (ensan-hcl)">
                     <span className="text-xs font-mono text-muted-foreground">Apache-2.0</span>
+                </SettingsRow>
+                <SettingsRow label="zenz-v3.1-xsmall（corecctor のベースモデル）" description="Miwa Keita (ensan-hcl)。独自の追加学習・Q4_K_M量子化を施した ZeroCon Model Corrector も同ライセンスで配布します。">
+                    <span className="text-xs font-mono text-muted-foreground">CC BY-SA 4.0</span>
                 </SettingsRow>
                 <SettingsRow label="Dictionary (かな漢字変換辞書データ)" description="azooKey Dictionary / Mozc / IPAdic">
                     <span className="text-xs font-mono text-muted-foreground">Apache-2.0 / BSD-3-Clause</span>

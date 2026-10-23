@@ -45,11 +45,19 @@ const SERVER_EXIT_TIMEOUT_MS: u32 = 5_000;
 const WATCHDOG_RESTART_WAIT: Duration = Duration::from_millis(2_500);
 
 pub fn restart_server(config: &AppConfig) -> Result<()> {
-    if request_launcher_restart()? {
-        return Ok(());
+    #[cfg(test)]
+    {
+        let _ = config;
+        anyhow::bail!("Unit tests must not restart a running IME");
     }
+    #[cfg(not(test))]
+    {
+        if request_launcher_restart()? {
+            return Ok(());
+        }
 
-    restart_server_direct(config)
+        restart_server_direct(config)
+    }
 }
 
 fn restart_server_direct(config: &AppConfig) -> Result<()> {
@@ -248,7 +256,7 @@ fn start_server(server_path: &Path, config: &AppConfig) -> Result<()> {
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .context("Server executable directory not found")?;
-    let backend_path = install_dir.join(backend_dir(config));
+    let backend_path = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
     let path = prepend_to_path(&backend_path);
 
     Command::new(server_path)
@@ -262,14 +270,6 @@ fn start_server(server_path: &Path, config: &AppConfig) -> Result<()> {
         .with_context(|| format!("Failed to start {}", server_path.display()))?;
 
     Ok(())
-}
-
-fn backend_dir(config: &AppConfig) -> &'static str {
-    match config.zenzai.backend.as_str() {
-        "cuda" => "llama_cuda",
-        "vulkan" => "llama_vulkan",
-        _ => "llama_cpu",
-    }
 }
 
 fn zenzai_cpu_supported_env() -> &'static str {

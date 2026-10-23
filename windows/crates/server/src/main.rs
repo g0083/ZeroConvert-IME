@@ -36,28 +36,22 @@ mod ai_assist;
 use ai_assist::AiAssistConfig;
 
 const USE_ZENZAI: bool = true;
+static ASSIST_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 static JEV_CONVERSION_ENABLED: AtomicBool = AtomicBool::new(false);
 static AI_ASSIST_ENABLED: AtomicBool = AtomicBool::new(false);
-static PREDICTIVE_MODEL_IS_350M: AtomicBool = AtomicBool::new(false);
-static PREDICTIVE_MODEL_NAME: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 static AI_ENGINE_IS_LM_STUDIO: AtomicBool = AtomicBool::new(false);
 static LAST_CONTEXT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
 fn reload_ai_assist_from_settings(config: &AppConfig) {
+    ai_assist::corrector::clear_cache();
+    ai_assist::prediction::clear_cache();
     let enabled = config.general.experimental_ai_assist;
     AI_ASSIST_ENABLED.store(enabled, Ordering::Relaxed);
-    let model = config.general.experimental_predictive_model.clone();
-    if let Ok(mut guard) = PREDICTIVE_MODEL_NAME.write() {
-        *guard = model.clone();
-    }
-    let is_350m = model.contains("350");
-    PREDICTIVE_MODEL_IS_350M.store(is_350m, Ordering::Relaxed);
     let is_lm_studio = config.general.experimental_ai_engine == "lm_studio";
     AI_ENGINE_IS_LM_STUDIO.store(is_lm_studio, Ordering::Relaxed);
     eprintln!(
-        "[AI Assist] config loaded: enabled={}, model={}, engine={}",
+        "[AI Assist] config loaded: enabled={}, prediction=zerocon, corrector_engine={}",
         enabled,
-        model,
         if is_lm_studio {
             "lm_studio"
         } else {
@@ -70,94 +64,26 @@ fn reload_ai_assist_from_settings(config: &AppConfig) {
 ///
 /// 通常変換の 1 候補目と候補の順序は破壊せず、追加候補はリスト末尾 (あるいは
 /// 1 候補目の直後) に控えめに追加する。
-fn append_ai_assist_candidates(
-    hiragana_text: &str,
-    composing_raw: &str,
-    final_suggestions: &mut Vec<Suggestion>,
-) {
-    let ai_enabled = AI_ASSIST_ENABLED.load(Ordering::Relaxed);
-    eprintln!(
-        "[TypoDebug] append_ai_assist: ai_enabled={}, hiragana='{}', composing_raw='{}'",
-        ai_enabled, hiragana_text, composing_raw
-    );
-    if !ai_enabled || (hiragana_text.trim().is_empty() && composing_raw.trim().is_empty()) {
-        return;
-    }
-
+fn current_assist_config() -> AiAssistConfig {
     let is_lm_studio = AI_ENGINE_IS_LM_STUDIO.load(Ordering::Relaxed);
-    let model = PREDICTIVE_MODEL_NAME
-        .read()
-        .map(|m| m.clone())
-        .unwrap_or_else(|_| "230m_q4km".to_string());
-    let config = AiAssistConfig {
-        enabled: true,
-        predictive_model: if model.is_empty() {
-            "230m_q4km".to_string()
-        } else {
-            model
-        },
+    AiAssistConfig {
+        enabled: AI_ASSIST_ENABLED.load(Ordering::Relaxed),
         engine: if is_lm_studio {
             "lm_studio".to_string()
         } else {
             "embedded".to_string()
         },
-        lfm_port: if is_lm_studio { 1234 } else { 18090 },
-        zenzai_port: 8090,
-    };
-
-    let first_surface = final_suggestions
-        .first()
-        .map(|s| s.text.clone())
-        .unwrap_or_else(|| hiragana_text.to_string());
-    // 追加候補は変換全体の読みを置き換えるため、通常候補と同じ入力長を使う。
-    let whole_composition_count = final_suggestions
-        .first()
-        .map(|s| s.corresponding_count)
-        .unwrap_or(0);
-
-    let context = LAST_CONTEXT.read().map(|c| c.clone()).unwrap_or_default();
-
-    // 1. 強制変換の 1 候補目が固まる前に、AI アシスト候補を追加する。
-    //    💡 もしかして (誤字補正) は読み行のヒントとして最優先で提示される。
-    let targets = if !composing_raw.is_empty() && composing_raw != hiragana_text {
-        vec![hiragana_text, composing_raw]
-    } else {
-        vec![hiragana_text]
-    };
-    let mut found_typo = None;
-    for target in targets {
-        if let Some(suggestion) = ai_assist::fetch_typo_suggestion(&context, target, &config) {
-            found_typo = Some(suggestion);
-            break;
-        }
+        corrector_port: if is_lm_studio { 1234 } else { 18090 },
+        prediction_port: shared::PREDICTION_SERVER_PORT,
     }
-    let mut typo_candidate_added = false;
-    if let Some(suggestion) = found_typo {
-        if !suggestion.surface.is_empty() {
-            let subtext = if suggestion.learned {
-                "💡 学習済み".to_string()
-            } else {
-                "💡 もしかして".to_string()
-            };
-            // 💡 もしかして (999901) は変換候補リストを汚染せず、勝手に確定させないため末尾にTab専用として保持
-            eprintln!(
-                "[TypoDebug] PUSHED 999901: surface='{}', subtext='{}'",
-                suggestion.surface, subtext
-            );
-            final_suggestions.push(Suggestion {
-                text: suggestion.surface.clone(),
-                subtext,
-                corresponding_count: whole_composition_count,
-                candidate_id: shared::ai_candidate::TYPO_CORRECTION,
-            });
-            // 確定通知 (candidate_id 999901) と突き合わせるため候補を記憶する。
-            ai_assist::remember_typo_candidate(&suggestion);
-            typo_candidate_added = true;
-        }
-    }
+}
 
-    // 2. ⚡ 動的マクロ (日付・時刻・年号・インライン計算)
-    //    0ms で決定的に生成できるため、1 候補目の直後に差し込む。
+// Deterministic macro expansion stays immediate, including numeric expressions.
+fn append_local_macros(
+    hiragana_text: &str,
+    whole_composition_count: i32,
+    final_suggestions: &mut Vec<Suggestion>,
+) {
     let macro_candidates = ai_assist::current_expansions(hiragana_text);
     if !macro_candidates.is_empty() {
         let mut inserted = Vec::new();
@@ -176,7 +102,7 @@ fn append_ai_assist_candidates(
                 .into_iter()
                 .map(|text| Suggestion {
                     text,
-                    subtext: "⚡ 展開".to_string(),
+                    subtext: String::new(),
                     corresponding_count: whole_composition_count,
                     candidate_id: shared::ai_candidate::DYNAMIC_MACRO,
                 })
@@ -186,54 +112,101 @@ fn append_ai_assist_candidates(
             }
         }
     }
+}
 
-    // 3. 🔮 先読み (格助詞バイグラム → 連想予測)
-    //    共起語は 0ms で決定でき、予測補完より精度が高いため優先して提示する。
-    //
-    //    💡 もしかして (誤字補正) が提示済みなら先読みは作らない。誤字補正は
-    //    すでに入力した誤りを直す「修正型」で、放置すると誤字が確定される。一方
-    //    先読みは「まだ打っていない未来」を推測する「拡張型」で、提示できなくても
-    //    次の入力停止で再計算される。損失が非対称なので誤字補正を優先し、
-    //    画面には1つだけ提示する。先読みの生成を省略することで推論1回分を節約する。
-    if typo_candidate_added {
-        // 誤字補正を優先するため先読みは生成しない
-    } else if let Some(collocation) = ai_assist::find_collocation(hiragana_text) {
-        if !collocation.continuation.trim().is_empty()
-            && !final_suggestions.iter().any(|s| s.text == collocation.text)
+fn append_ai_assist_candidates(
+    context: &str,
+    hiragana_text: &str,
+    composing_raw: &str,
+    config: &AiAssistConfig,
+    final_suggestions: &mut Vec<Suggestion>,
+    kind: u32,
+) -> (u32, String) {
+    if !config.enabled || hiragana_text.is_empty() {
+        return (0, String::new());
+    }
+    let first_surface = final_suggestions
+        .first()
+        .map(|s| s.text.clone())
+        .unwrap_or_else(|| hiragana_text.to_string());
+    // 追加候補は変換全体の読みを置き換えるため、通常候補と同じ入力長を使う。
+    let whole_composition_count = final_suggestions
+        .first()
+        .map(|s| s.corresponding_count)
+        .unwrap_or(0);
+
+    // 1. Generate correction against the immutable normal-conversion snapshot.
+    //    Evidence is evaluated independently from the unchanged-surface prediction.
+    // The canonical reading preserves mixed kana/Latin. Never correct a second,
+    // all-Latin raw key sequence as though it were an independent Japanese input.
+    let _ = composing_raw;
+    let targets = [hiragana_text];
+    let mut found_typo = None;
+    for target in targets.into_iter().filter(|_| kind != 2) {
+        if let Some(suggestion) =
+            ai_assist::corrector::suggest_composition(context, target, &first_surface, config)
         {
-            final_suggestions.push(Suggestion {
-                text: collocation.text,
-                subtext: collocation.continuation,
-                corresponding_count: 0,
-                candidate_id: shared::ai_candidate::PREDICTIVE,
-            });
+            found_typo = Some(suggestion);
+            break;
         }
-    } else if let Some(pred) =
-        ai_assist::fetch_predictive_candidate(&context, &hiragana_text, &config)
-    {
-        if !pred.is_empty() {
-            let (full_text, continuation) =
-                if let Some(stripped) = pred.strip_prefix(&first_surface) {
-                    (pred.clone(), stripped.to_string())
-                } else {
-                    (format!("{}{}", first_surface, pred), pred.clone())
-                };
+    }
+    let mut relevance = 0;
+    let mut continuation = String::new();
+    if let Some(suggestion) = found_typo {
+        if !suggestion.surface.is_empty() && suggestion.surface != first_surface {
+            let subtext = if suggestion.learned {
+                "💡 学習済み".to_string()
+            } else {
+                "💡 もしかして".to_string()
+            };
+            // Preserve normal candidate order. The client decides whether to propose or apply.
+            final_suggestions.push(Suggestion {
+                text: suggestion.surface.clone(),
+                subtext,
+                corresponding_count: whole_composition_count,
+                candidate_id: shared::ai_candidate::TYPO_CORRECTION,
+            });
+            // 確定通知 (candidate_id 999901) と突き合わせるため候補を記憶する。
+            ai_assist::remember_typo_candidate(&suggestion);
+            relevance = if ai_assist::corrector::can_auto_apply_composition(
+                hiragana_text,
+                &first_surface,
+                &suggestion.surface,
+            ) {
+                100
+            } else if suggestion.learned {
+                70
+            } else {
+                30
+            };
+        }
+    }
 
-            if !continuation.trim().is_empty()
-                && !final_suggestions.iter().any(|s| s.text == full_text)
-            {
+    append_local_macros(hiragana_text, whole_composition_count, final_suggestions);
+
+    // Generate against the unchanged visible baseline, even if a correction exists.
+    if kind != 1 {
+        if let Some(prediction) =
+            ai_assist::prediction::suggest(context, hiragana_text, &first_surface, config)
+        {
+            let text = format!("{first_surface}{}", prediction.continuation);
+            if !final_suggestions.iter().any(|s| s.text == text) {
+                continuation = prediction.continuation;
+                relevance = relevance.max(prediction.relevance);
                 final_suggestions.push(Suggestion {
-                    text: full_text,
-                    subtext: continuation,
-                    corresponding_count: 0,
+                    text,
+                    subtext: continuation.clone(),
+                    corresponding_count: whole_composition_count,
                     candidate_id: shared::ai_candidate::PREDICTIVE,
                 });
             }
         }
     }
+    (relevance, continuation)
 }
 // Do not queue obsolete cloud work or hold the composition mutation lock.
 static JEV_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+static PREDICTION_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 const INPUT_STYLE_DIRECT: i32 = 1;
 const SERVER_LOG_FILE_NAME: &str = "server.log";
 const SERVER_PERFORMANCE_LOG_FILE_NAME: &str = "server-performance.tsv";
@@ -1618,8 +1591,7 @@ fn swift_reset_learning_memory() -> bool {
 /// の学習キャッシュには存在しない id なので、エンジンへは転送しない。
 fn handle_ai_assist_learning_commit(candidate_id: u64, surface: &str) -> bool {
     if candidate_id == shared::ai_candidate::PREDICTIVE {
-        // 実際に確定された先読み全文を履歴キャッシュへ記録する
-        ai_assist::record_user_committed_text(surface);
+        // Predictions are not dictionary candidates and have no learning store.
         return false;
     }
     if candidate_id != shared::ai_candidate::TYPO_CORRECTION {
@@ -1911,6 +1883,78 @@ fn release_composition_state() {
 
 #[tonic::async_trait]
 impl AzookeyService for MyAzookeyService {
+    async fn get_assist_candidates(
+        &self,
+        request: Request<shared::proto::GetAssistCandidatesRequest>,
+    ) -> Result<Response<shared::proto::GetAssistCandidatesResponse>, Status> {
+        // Same-session pipe access is checked by the transport. This is a read-only
+        // snapshot request: no composition lock or Swift FFI on the worker.
+        let request = request.into_inner();
+        let config = current_assist_config();
+        if !config.enabled
+            || !(2..=512).contains(&request.reading.chars().count())
+            || request.raw_input.chars().count() > 512
+            || request.baseline.chars().count() > 512
+            || request.input_count <= 0
+        {
+            return Ok(Response::new(
+                shared::proto::GetAssistCandidatesResponse::default(),
+            ));
+        }
+        let context = LAST_CONTEXT.read().map(|c| c.clone()).unwrap_or_default();
+        if request.kind > 2 {
+            return Err(Status::invalid_argument("unknown assistance kind"));
+        }
+        let slots = if request.kind == 2 {
+            &PREDICTION_REQUEST_SLOTS
+        } else {
+            &ASSIST_REQUEST_SLOTS
+        };
+        // Waiting here is cancellable by the RPC: only a live snapshot may start
+        // work after the previous bounded inference releases its permit.
+        let permit = slots
+            .acquire()
+            .await
+            .map_err(|_| Status::unavailable("assist stopped"))?;
+        let response = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut suggestions = vec![Suggestion {
+                text: request.baseline.clone(),
+                subtext: String::new(),
+                corresponding_count: request.input_count,
+                candidate_id: 0,
+            }];
+            let (relevance, continuation) = append_ai_assist_candidates(
+                &context,
+                &request.reading,
+                &request.raw_input,
+                &config,
+                &mut suggestions,
+                request.kind,
+            );
+            suggestions.remove(0);
+            let auto_apply = suggestions
+                .iter()
+                .find(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION)
+                .is_some_and(|s| {
+                    ai_assist::corrector::can_auto_apply_composition(
+                        &request.reading,
+                        &request.baseline,
+                        &s.text,
+                    )
+                });
+            shared::proto::GetAssistCandidatesResponse {
+                suggestions,
+                auto_apply,
+                relevance,
+                continuation,
+            }
+        })
+        .await
+        .map_err(|_| Status::internal("assist worker failed"))?;
+        Ok(Response::new(response))
+    }
+
     async fn rerank_candidates(
         &self,
         request: Request<shared::proto::RerankCandidatesRequest>,
@@ -2024,17 +2068,22 @@ impl AzookeyService for MyAzookeyService {
         );
 
         let mut final_suggestions = composed_text.suggestions;
-        let composing_raw = composing_text.text.clone();
+        let full_count = final_suggestions
+            .iter()
+            .map(|s| s.corresponding_count)
+            .max()
+            .unwrap_or(0);
+        append_local_macros(
+            composed_text
+                .hiragana
+                .as_deref()
+                .unwrap_or(&composing_text.text),
+            full_count,
+            &mut final_suggestions,
+        );
         let hiragana_text = composed_text
             .hiragana
             .unwrap_or_else(|| composing_text.text.clone());
-
-        eprintln!(
-            "[TypoDebug] append_text: input='{}', composing_raw='{}', hiragana_text='{}'",
-            input, composing_raw, hiragana_text
-        );
-
-        append_ai_assist_candidates(&hiragana_text, &composing_raw, &mut final_suggestions);
 
         Ok(Response::new(AppendTextResponse {
             composing_text: Some(ComposingText {
@@ -2111,11 +2160,22 @@ impl AzookeyService for MyAzookeyService {
         );
 
         let mut final_suggestions = composed_text.suggestions;
-        let composing_raw = composing_text.text.clone();
+        let full_count = final_suggestions
+            .iter()
+            .map(|s| s.corresponding_count)
+            .max()
+            .unwrap_or(0);
+        append_local_macros(
+            composed_text
+                .hiragana
+                .as_deref()
+                .unwrap_or(&composing_text.text),
+            full_count,
+            &mut final_suggestions,
+        );
         let hiragana_text = composed_text
             .hiragana
             .unwrap_or_else(|| composing_text.text.clone());
-        append_ai_assist_candidates(&hiragana_text, &composing_raw, &mut final_suggestions);
 
         Ok(Response::new(ReplaceCompositionResponse {
             composing_text: Some(ComposingText {
@@ -2924,6 +2984,47 @@ impl AzookeyService for MyAzookeyService {
         &self,
         request: Request<shared::proto::CommitLearningCandidateRequest>,
     ) -> Result<Response<shared::proto::CommitLearningCandidateResponse>, Status> {
+        if request.get_ref().candidate_id == shared::ai_candidate::PREDICTIVE {
+            PipeClient::authorize_connection(&request)?;
+            let feedback = request.into_inner();
+            if !(3..=512).contains(&feedback.surface.chars().count())
+                || feedback
+                    .surface
+                    .chars()
+                    .any(|c| c.is_control() || ('\u{EE00}'..='\u{EE02}').contains(&c))
+            {
+                return Err(Status::invalid_argument("invalid prediction feedback"));
+            }
+            // Late post-commit feedback must not reacquire composition ownership
+            // or interfere with the application that now has focus.
+            // Compatibility with older clients: acknowledge without learning.
+            return Ok(Response::new(
+                shared::proto::CommitLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                },
+            ));
+        }
+        if request.get_ref().candidate_id == shared::ai_candidate::TYPO_CORRECTION
+            && !request.get_ref().typo_reading.is_empty()
+        {
+            // Feedback is stateless. It must not claim/clear a newer composition
+            // when the client flushes a previous explicit acceptance after commit.
+            let feedback = request.into_inner();
+            if feedback.typo_reading.chars().count() <= 128
+                && feedback.surface.chars().count() <= 384
+            {
+                tokio::task::spawn_blocking(move || {
+                    ai_assist::record_learned_typo(&feedback.typo_reading, &feedback.surface)
+                })
+                .await
+                .map_err(|_| Status::internal("typo feedback failed"))?;
+            }
+            return Ok(Response::new(
+                shared::proto::CommitLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                },
+            ));
+        }
         let mut mutation_guard = self.mutation_lock.lock().await;
         mutation_guard.authorize(&request, true, release_composition_state)?;
         let request = request.into_inner();
@@ -3248,25 +3349,94 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod path_tests {
+    #[tokio::test]
+    async fn prediction_does_not_wait_for_correction_or_complete_unfinished_romaji() {
+        use shared::proto::azookey_service_server::AzookeyService;
+        super::AI_ASSIST_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _correction = super::ASSIST_REQUEST_SLOTS.acquire().await.unwrap();
+        let service = super::MyAzookeyService::default();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.get_assist_candidates(tonic::Request::new(
+                shared::proto::GetAssistCandidatesRequest {
+                    reading: "よろしくおねがいしn".into(),
+                    baseline: "よろしくお願いしn".into(),
+                    input_count: 20,
+                    kind: 2,
+                    ..Default::default()
+                },
+            )),
+        )
+        .await
+        .expect("prediction must not acquire the correction permit")
+        .unwrap()
+        .into_inner();
+        assert!(!response.auto_apply);
+        assert!(response.continuation.is_empty());
+        assert!(!response
+            .suggestions
+            .iter()
+            .any(|s| s.candidate_id == shared::ai_candidate::PREDICTIVE));
+        assert!(!response
+            .suggestions
+            .iter()
+            .any(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION));
+    }
+    #[tokio::test]
+    async fn assistance_generates_from_snapshot_without_waiting_for_composition_lock() {
+        use shared::proto::azookey_service_server::AzookeyService;
+        super::AI_ASSIST_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        let service = super::MyAzookeyService::default();
+        let _guard = service.mutation_lock.lock().await;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.get_assist_candidates(tonic::Request::new(
+                shared::proto::GetAssistCandidatesRequest {
+                    reading: "よろしくn".into(),
+                    raw_input: "yorosiku".into(),
+                    baseline: "よろしくn".into(),
+                    input_count: 8,
+                    request_id: 1,
+                    kind: 0,
+                },
+            )),
+        )
+        .await
+        .expect("assistance must not wait for Swift composition")
+        .unwrap()
+        .into_inner();
+        assert!(!response
+            .suggestions
+            .iter()
+            .any(|s| s.candidate_id == shared::ai_candidate::PREDICTIVE));
+        assert!(!response.auto_apply);
+    }
     #[test]
-    fn typo_correction_takes_priority_over_predictive() {
+    fn correction_does_not_suppress_prediction() {
         use std::sync::atomic::Ordering;
+        let _guard = super::ai_assist::prediction::tests::MODEL_TEST_LOCK
+            .lock()
+            .unwrap();
+        let (config, model) = super::ai_assist::prediction::tests::model_fixture([
+            "イタシマス。",
+            "おつれさまよろしくお願いいたします。",
+        ]);
 
         super::AI_ASSIST_ENABLED.store(true, Ordering::Relaxed);
-        // 「おつれさまよろしく」は TYPO_TABLE の前方一致 ("おつれさま" -> "お疲れ様") と
-        // 定型句キャッシュ ("よろしく" -> "いたします。") の両方に当たる入力。
-        // 誤字補正は修正型で放置すると誤字が確定されるため、先読みより優先して
-        // 提示し、先読み候補は生成しない。
+        // A correction and an unchanged-surface completion must coexist.
         let mut suggestions = vec![shared::proto::Suggestion {
-            text: "おつれさまよろしく".to_string(),
+            text: "おつれさまよろしくお願い".to_string(),
             subtext: String::new(),
             corresponding_count: 5,
             candidate_id: 0,
         }];
         super::append_ai_assist_candidates(
-            "おつれさまよろしく",
-            "おつれさまよろしく",
+            "",
+            "おつれさまよろしくおねがい",
+            "おつれさまよろしくおねがい",
+            &config,
             &mut suggestions,
+            0,
         );
 
         let ids: Vec<u64> = suggestions.iter().map(|s| s.candidate_id).collect();
@@ -3275,14 +3445,22 @@ mod path_tests {
             "typo correction should be offered, ids={ids:?}"
         );
         assert!(
-            !ids.contains(&shared::ai_candidate::PREDICTIVE),
-            "predictive must not be offered while a typo correction is shown, ids={ids:?}"
+            ids.contains(&shared::ai_candidate::PREDICTIVE),
+            "a weak correction must not suppress prediction, ids={ids:?}"
         );
+        assert_eq!(model.join().unwrap().len(), 2);
     }
 
     #[test]
     fn predictive_is_offered_when_no_typo_correction_exists() {
         use std::sync::atomic::Ordering;
+        let _guard = super::ai_assist::prediction::tests::MODEL_TEST_LOCK
+            .lock()
+            .unwrap();
+        let (config, model) = super::ai_assist::prediction::tests::model_fixture([
+            "イタシマス。",
+            "よろしくいたします。",
+        ]);
 
         super::AI_ASSIST_ENABLED.store(true, Ordering::Relaxed);
         let mut suggestions = vec![shared::proto::Suggestion {
@@ -3291,7 +3469,14 @@ mod path_tests {
             corresponding_count: 4,
             candidate_id: 0,
         }];
-        super::append_ai_assist_candidates("よろしく", "よろしく", &mut suggestions);
+        super::append_ai_assist_candidates(
+            "",
+            "よろしく",
+            "よろしく",
+            &config,
+            &mut suggestions,
+            0,
+        );
 
         let ids: Vec<u64> = suggestions.iter().map(|s| s.candidate_id).collect();
         assert!(
@@ -3302,6 +3487,7 @@ mod path_tests {
             !ids.contains(&shared::ai_candidate::TYPO_CORRECTION),
             "typo correction must not be offered without a typo, ids={ids:?}"
         );
+        assert_eq!(model.join().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -3355,7 +3541,7 @@ mod path_tests {
     use std::{ffi::OsStr, path::Path};
 
     #[tokio::test]
-    async fn unsupported_reconversion_does_not_claim_or_release_composition() {
+    async fn stateless_feedback_and_unsupported_reconversion_preserve_composition_owner() {
         use azookey_server::{PipeClient, TonicNamedPipeServer};
         use futures_core::Stream;
         use shared::proto::{
@@ -3395,6 +3581,34 @@ mod path_tests {
         let first = first_transport.connect_info();
         let second = second_transport.connect_info();
         let service = MyAzookeyService::default();
+        // Prediction acceptance can arrive after ClearText and after another
+        // connection starts composing. It never needs the mutation lock.
+        let feedback = shared::proto::CommitLearningCandidateRequest {
+            candidate_id: shared::ai_candidate::PREDICTIVE,
+            surface: "所有権の回帰確認です。".into(),
+            ..Default::default()
+        };
+        {
+            let mut owner = service.mutation_lock.lock().await;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                service.commit_learning_candidate(request(feedback.clone(), &first)),
+            )
+            .await
+            .expect("feedback must not wait for composition lock")
+            .unwrap();
+            owner
+                .authorize(&request((), &second), true, || {})
+                .expect("feedback must leave composition unclaimed");
+        }
+        service
+            .commit_learning_candidate(request(feedback, &first))
+            .await
+            .expect("feedback must not interfere with a different owner");
+        service
+            .clear_text(request(ClearTextRequest::default(), &second))
+            .await
+            .unwrap();
         {
             let _guard = service.mutation_lock.lock().await;
             let reply = tokio::time::timeout(

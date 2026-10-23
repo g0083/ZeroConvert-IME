@@ -1,5 +1,5 @@
 {
-  "originHash" : "44ebbf7642e3cc6d925253c093dd2a16e8ef5c3a140fea3078fbc63bddad808c",
+  "originHash" : "5313021ca2189c544d81debf5f4f4f9557344c855a4836d18649b4746f282587",
   "pins" : [
     {
       "identity" : "azookeykanakanjiconverter",
@@ -50,8 +50,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ensan-hcl/swift-tokenizers",
       "state" : {
-        "branch" : "feat/minimum",
-        "revision" : "407e51806c0c3354a9045f23859ed1704114e514"
+        "revision" : "4a606f66e0cc4d7d9f0197649e812f7fc86a4c34",
+        "version" : "0.0.1"
       }
     }
   ],

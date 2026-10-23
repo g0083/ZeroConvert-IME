@@ -5,6 +5,7 @@ These repository rules apply to Codex, OpenCode, Pi, and other coding agents. Ke
 ## Routing
 
 - Use `.agents/skills/azookey-dev-flow` for implementation and verification, `.agents/skills/azookey-pr` for an explicitly requested ordinary PR flow, and `.agents/skills/azookey-release` for release work.
+- For this workspace's local build, trial deployment, installer, and Git preservation rules, also follow [the root development workflow](../docs/development-workflow.md) and root `AGENTS.md`. `Build-Trial.bat` already applies its build; a source edit or successful test alone does not update the installed IME. Use one explicitly selected full package for both distribution testing and installer creation.
 - The authoritative high-signal reviewer procedure is [docs/agent-review.md](docs/agent-review.md); native adapters are in `.codex/agents/` and `.opencode/agents/`.
 - Version, release-channel, installer trust, and issue-close rules are in [docs/versioning-release.md](docs/versioning-release.md). VM operations use `python3 scripts/vm.py`; profiles and local values are documented by that interface and `.local/vm.json`.
 

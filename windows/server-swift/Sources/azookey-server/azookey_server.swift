@@ -674,6 +674,16 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
     return zenzaiEnabled && !normalizedBackend.isEmpty && normalizedBackend != "cpu"
 }
 
+@MainActor private func converterModelURL() -> URL {
+    let isNano = ["nano", "nano_q4km"].contains((config["model"] as? String) ?? "standard")
+    let filename = isNano ? "zerocon-model-nano.gguf" : "zerocon-model-standard.gguf"
+    let canonical = execURL.appendingPathComponent("models/" + filename)
+    if FileManager.default.fileExists(atPath: canonical.path) { return canonical }
+    let legacy = execURL.appendingPathComponent("models/" + (isNano ? "zenz-v3.2-xsmall-q4km.gguf" : "zenz-v3.2-small-q4km.gguf"))
+    if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
+    return execURL.appendingPathComponent("zenz.gguf")
+}
+
 @MainActor private func configureEngineRuntime(zenzaiEnabled: Bool) {
     let shouldOffloadToGpu = shouldOffloadZenzaiToGpu(
         zenzaiEnabled: zenzaiEnabled,
@@ -1158,7 +1168,7 @@ private func makeConvertRequestOptions(
 ) -> ConvertRequestOptions {
     return ConvertRequestOptions(
         requireJapanesePrediction: .disabled,
-        requireEnglishPrediction: .disabled,
+        requireEnglishPrediction: .autoMix,
         keyboardLanguage: .ja_JP,
         learningType: learningType,
         memoryDirectoryURL: learningMemoryDirectoryURL ?? runtimeDirectoryURL,
@@ -1175,7 +1185,7 @@ private func makeConvertRequestOptions(
             versionDependentMode: .v3(
                 .init(
                     profile: profile,
-                    leftSideContext: context
+                    leftSideContext: context.replacingOccurrences(of: " ", with: "\u{3000}")
                 )
             )
         ) : .off,
@@ -1205,6 +1215,7 @@ private struct ZenzaiSettings: Decodable {
     let enable: Bool?
     let profile: String?
     let backend: String?
+    let model: String?
 }
 
 private struct UserDictionarySettings: Decodable {
@@ -1886,7 +1897,7 @@ private func preferCursorPrefixBoundary(
         emojiDictionaryURL: execURL
             .appendingPathComponent("EmojiDictionary")
             .appendingPathComponent("emoji_all_E15.1.txt"),
-        zenzaiWeightURL: execURL.appendingPathComponent("zenz.gguf"),
+        zenzaiWeightURL: converterModelURL(),
         profile: (config["profile"] as? String) ?? "",
         learningType: currentLearningType,
         learningMemoryDirectoryURL: currentLearningMemoryDirectoryURL,
@@ -2180,7 +2191,7 @@ private let backgroundWarmupRunner = BackgroundWarmupRunner()
         emojiDictionaryURL: execURL
             .appendingPathComponent("EmojiDictionary")
             .appendingPathComponent("emoji_all_E15.1.txt"),
-        zenzaiWeightURL: execURL.appendingPathComponent("zenz.gguf"),
+        zenzaiWeightURL: converterModelURL(),
         profile: (config["profile"] as? String) ?? "",
         context: contextString,
         input: input,
@@ -2501,6 +2512,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     config["enable"] = false
     config["profile"] = ""
     config["backend"] = "cpu"
+    config["model"] = "standard"
     config["experimentalTypoCorrection"] = false
     setRoman2KanaInputStyle()
     currentLearningType = .inputAndOutput
@@ -2510,6 +2522,7 @@ func cursorPrefixBoundaryFirstClauseResults(
         serverLog("INFO", "LoadConfig: reading settingsPath=\(loadedSettingsPath.path)")
 
         if let zenzai = settings.zenzai {
+            config["model"] = zenzai.model ?? "standard"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
             }

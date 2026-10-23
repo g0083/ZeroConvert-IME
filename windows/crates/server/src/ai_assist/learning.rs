@@ -95,6 +95,7 @@ impl TypoLearningStore {
         let count = self
             .entries
             .get(reading)
+            .filter(|entry| entry.surface == surface)
             .map(|entry| entry.count.saturating_add(1))
             .unwrap_or(1);
         self.entries.insert(
@@ -292,6 +293,8 @@ mod tests {
 
         store.record("きんにちは", "こんにちは");
         assert_eq!(store.lookup("きんにちは").map(|e| e.count), Some(2));
+        store.record("きんにちは", "今日は");
+        assert_eq!(store.lookup("きんにちは").map(|e| e.count), Some(1));
         let _ = std::fs::remove_file(&path);
     }
 

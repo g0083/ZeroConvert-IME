@@ -166,6 +166,7 @@ struct ServerRecoveryState {
     restart_request_in_flight: AtomicBool,
     input_ledger: Mutex<InputLedger>,
     context_epoch: AtomicU64,
+    assist_context_revision: AtomicU64,
 }
 
 impl Default for ServerRecoveryState {
@@ -176,6 +177,7 @@ impl Default for ServerRecoveryState {
             restart_completed_generation: AtomicU64::new(0),
             restart_request_in_flight: AtomicBool::new(false),
             context_epoch: AtomicU64::new(0),
+            assist_context_revision: AtomicU64::new(0),
             input_ledger: Mutex::new(InputLedger {
                 operations: Vec::new(),
                 complete: true,
@@ -535,6 +537,74 @@ impl Drop for ClientInputTraceGuard {
 }
 
 impl IPCService {
+    pub(crate) fn assist_candidates_background(
+        &self,
+        request: shared::proto::GetAssistCandidatesRequest,
+        result: std::sync::mpsc::Sender<Option<shared::proto::GetAssistCandidatesResponse>>,
+    ) -> tokio::task::JoinHandle<()> {
+        let mut client = self.azookey_client.clone();
+        self.runtime.spawn(async move {
+            // A pause in typing starts work; subsequent keys cancel this task.
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let mut request = tonic::Request::new(request);
+            request.set_timeout(Duration::from_millis(1300));
+            let response = tokio::time::timeout(
+                Duration::from_millis(1400),
+                client.get_assist_candidates(request),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .map(tonic::Response::into_inner);
+            let _ = result.send(response);
+        })
+    }
+
+    pub(crate) fn replace_with_direct_surface(&mut self, text: &str) -> Result<Candidates> {
+        let ledger = InputLedger {
+            operations: vec![CompositionOperation::Append {
+                text: text.to_owned(),
+                input_style: INPUT_STYLE_DIRECT,
+            }],
+            complete: true,
+        };
+        self.send_replace_composition(&ledger, current_or_next_request_id())
+    }
+
+    pub(crate) fn replace_from_snapshot(
+        &mut self,
+        snapshot: &InputLedgerSnapshot,
+    ) -> Result<Candidates> {
+        anyhow::ensure!(
+            snapshot.0.complete,
+            "Cannot restore an incomplete input ledger"
+        );
+        self.send_replace_composition(&snapshot.0, current_or_next_request_id())
+    }
+
+    pub(crate) fn record_typo_acceptances_background(&self, accepted: Vec<(String, String)>) {
+        if accepted.is_empty() {
+            return;
+        }
+        let mut client = self.azookey_client.clone();
+        self.runtime.spawn(async move {
+            for (reading, surface) in accepted.into_iter().take(8) {
+                let request = shared::proto::CommitLearningCandidateRequest {
+                    candidate_id: shared::ai_candidate::TYPO_CORRECTION,
+                    commit_kind: 1,
+                    request_id: 0,
+                    surface,
+                    typo_reading: reading,
+                };
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    client.commit_learning_candidate(request),
+                )
+                .await;
+            }
+        });
+    }
+
     /// Cloud ranking is stateless and must never occupy the TSF input thread or recovery ledger.
     pub(crate) fn rerank_candidates_background(
         &self,
@@ -1268,6 +1338,7 @@ impl IPCService {
             commit_kind,
             request_id,
             surface: String::new(),
+            typo_reading: String::new(),
         });
         request.set_timeout(LEARNING_RPC_DEADLINE);
         let response = Self::block_on_server_rpc(
@@ -1626,6 +1697,17 @@ impl IPCService {
         (
             self.connection_id,
             self.recovery.context_epoch.load(Ordering::Acquire),
+        )
+    }
+
+    pub(crate) fn assist_snapshot_key(&self) -> (u64, u64, u64) {
+        let (connection, epoch) = self.context_cache_key();
+        (
+            connection,
+            epoch,
+            self.recovery
+                .assist_context_revision
+                .load(Ordering::Acquire),
         )
     }
 
@@ -2277,6 +2359,9 @@ impl IPCService {
     }
 
     pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
+        self.recovery
+            .assist_context_revision
+            .fetch_add(1, Ordering::AcqRel);
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
         let context_len = performance_start.map(|_| context.chars().count());
