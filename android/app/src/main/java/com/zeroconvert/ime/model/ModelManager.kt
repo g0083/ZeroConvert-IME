@@ -37,7 +37,8 @@ object ModelManager {
         val assetPath: String,
         val fileName: String,
         val displayName: String,
-        val expectedSize: Long
+        val expectedSize: Long,
+        val sha256: String
     )
 
     val BUILT_IN_MODELS = listOf(
@@ -45,23 +46,53 @@ object ModelManager {
             assetPath = "models/zenz-v3.2-xsmall-q4km.gguf",
             fileName = "zenz-v3.2-xsmall-q4km.gguf",
             displayName = "ZeroCon Model v3.2 Nano (Q4_K_M — 17.6MB)",
-            expectedSize = 18452288L
+            expectedSize = 18452288L,
+            sha256 = "e0d2d20ff3da5dc71ba8e0fdc14c70701aec01b52afe75eba8e1f2ec0780b26e"
         ),
         BuiltInModelSpec(
             assetPath = "zenz.gguf",
             fileName = "zenz.gguf",
             displayName = "ZeroCon Model v3.2 Nano Lite (Q3_K_M — 15.3MB)",
-            expectedSize = 16078208L
+            expectedSize = 16078208L,
+            sha256 = "25ee61bebdc7ada57d52a5b0d428eaeedc77df3b1ffa41fae291cc5cd8e752b2"
         ),
         BuiltInModelSpec(
             assetPath = "models/zenz-v3.2-small-q4km.gguf",
             fileName = "zenz-v3.2-small-q4km.gguf",
             displayName = "ZeroCon Model v3.2 Standard (Q4_K_M — 61.3MB)",
-            expectedSize = 64282688L
+            expectedSize = 64282688L,
+            sha256 = "94c290aa772ae9f66bca45842dd506dbedeba5ef6f67368189261ff7364f25f2"
         )
     )
 
     val DEFAULT_MODEL_SPEC = BUILT_IN_MODELS[0]
+
+    private const val CORRECTOR_SHA256 = "0641a5be4e7d9f563776275f9904b5cad9875e84e752d146949ead3c5ac7089a"
+
+    /** Separate directory: never offer the Corrector as an ordinary conversion model. */
+    fun ensureCorrector(context: Context): File? {
+        val dir = File(context.filesDir, "assist").apply { mkdirs() }
+        val destination = File(dir, "corrector-$CORRECTOR_SHA256.gguf")
+        fun hash(file: File): String = file.inputStream().use { input ->
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(65536)
+            while (true) { val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }
+        return try {
+            if (destination.isFile && hash(destination) == CORRECTOR_SHA256) return destination
+            val temporary = File(dir, "corrector.tmp")
+            context.assets.open("models/zerocon-model-corrector.gguf").use { input ->
+                temporary.outputStream().use { input.copyTo(it) }
+            }
+            check(hash(temporary) == CORRECTOR_SHA256) { "Corrector model checksum mismatch" }
+            check(temporary.renameTo(destination)) { "Cannot install Corrector model" }
+            destination
+        } catch (error: Exception) {
+            Log.w(TAG, "Corrector model unavailable", error)
+            null
+        }
+    }
 
     fun ensureBuiltInModel(context: Context, spec: BuiltInModelSpec): File {
         val destFile = if (spec.fileName == "zenz.gguf") {
@@ -74,18 +105,7 @@ object ModelManager {
             destFile.parentFile?.mkdirs()
         }
 
-        if (!destFile.exists() || destFile.length() != spec.expectedSize) {
-            Log.i(TAG, "Extracting built-in model ${spec.assetPath} to ${destFile.name}...")
-            val tmp = File(destFile.parentFile, "${destFile.name}.tmp")
-            context.assets.open(spec.assetPath).use { input ->
-                FileOutputStream(tmp).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            tmp.renameTo(destFile)
-            Log.i(TAG, "Extracted ${destFile.name}: ${destFile.length()} bytes")
-        }
-        return destFile
+        return VerifiedModelFile.ensure(destFile, spec.expectedSize, spec.sha256) { context.assets.open(spec.assetPath) }
     }
 
     fun getAvailableModels(context: Context): List<ModelInfo> {

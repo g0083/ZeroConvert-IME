@@ -1,15 +1,22 @@
 package com.zeroconvert.ime
 
 import android.content.ClipboardManager
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.database.ContentObserver
+import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.inputmethodservice.InputMethodService
 import android.util.Log
 import android.view.View
+import android.widget.Toast
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
@@ -20,11 +27,17 @@ import androidx.savedstate.*
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.zeroconvert.ime.azookey.input.ComposingText
 import com.zeroconvert.ime.azookey.input.InputStyle
+import com.zeroconvert.ime.assist.AssistRequestGate
+import com.zeroconvert.ime.assist.CorrectionSession
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.withLock
+import java.io.File
 
 data class InferenceSnapshot(
     val readingHiragana: String,
-    val aiSurface: String
+    val aiSurface: String,
+    val rawInputCount: Int = 0
 )
 
 data class AutoCommitCandidate(
@@ -36,7 +49,8 @@ data class AutoCommitCandidate(
 data class AutoCommitRewindRecord(
     val committedSurface: String,
     val committedReading: String,
-    val previousLeftContext: String
+    val previousLeftContext: String,
+    val originalInput: ComposingText? = null
 )
 
 class ZeroConvertInputMethodService : InputMethodService(),
@@ -53,16 +67,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_AI_PROFILE = "ai_profile"
         const val KEY_THEME_MODE = "theme_mode" // "system", "dark", "light"
         const val KEY_JAPANESE_LAYOUT = "japanese_keyboard_layout" // "FLICK_12KEY", "QWERTY"
+        const val KEY_KEY_HEIGHT_DP = "keyboard_key_height_dp" // int dp (40..64), default 46
         const val KEY_FLICK_ONLY = "flick_only" // boolean, default true
         const val KEY_VIBRATION_ENABLED = "vibration_enabled" // boolean, default true
         const val KEY_VIBRATION_DURATION = "vibration_duration" // int ms (5..50), default 15
         const val KEY_EXPERIMENTAL_AI_ASSIST = "experimental_ai_assist" // boolean, default true
-        const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // "rule_based", "230m_q4km", "350m_q4km"
+        const val KEY_AUTO_TYPO_CORRECTION = "auto_typo_correction" // boolean, default true
+        const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction" // Windows default: false
+        const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
+        const val KEY_CLIPBOARD_PINNED = "clipboard_pinned"
+        const val KEY_CLIPBOARD_RETENTION_HOURS = "clipboard_retention_hours"
+        const val KEY_SCREENSHOT_CAPTURE = "screenshot_capture_enabled"
 
         private const val MIN_READING_LEN_FOR_AUTO_COMMIT = 16
         private const val MIN_TAIL_UNCOMMITTED_READING_LEN = 7
         private const val STABLE_INFERENCE_COUNT = 5
-        private const val MAX_LEFT_CONTEXT_LEN = 40
+        private const val MAX_LEFT_CONTEXT_LEN = EditorContext.MAX_CODE_POINTS
 
         fun isKanjiOrKatakana(ch: Char): Boolean {
             val code = ch.code
@@ -90,7 +110,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         fun isNaturalAutoCommitPrefix(candidatePrefix: String, fullPreview: String): Boolean {
             if (!fullPreview.startsWith(candidatePrefix)) return false
             val remainder = fullPreview.substring(candidatePrefix.length)
-            if (remainder.isEmpty() || candidatePrefix.length < 3) return false
+            if (remainder.isEmpty() || candidatePrefix.length < 4) return false
             val lastChar = candidatePrefix.last()
             val nextChar = remainder.first()
             if (isJapaneseClausePunctuation(lastChar)) return true
@@ -100,7 +120,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             // This strictly prevents cutting inside inflected verbs (e.g. 変えられる -> 変 + えられる).
             val hasKanjiOrKatakana = candidatePrefix.any { isKanjiOrKatakana(it) }
             val endsWithHiragana = isHiraganaChar(lastChar)
-            val nextIsContentWord = isKanjiOrKatakana(nextChar) || isJapaneseClausePunctuation(nextChar)
+            val nextIsContentWord = isKanjiOrKatakana(nextChar)
             return hasKanjiOrKatakana && endsWithHiragana && nextIsContentWord
         }
 
@@ -113,7 +133,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
          */
         fun findStableAutoCommitPrefix(
             currentReading: String,
-            history: List<InferenceSnapshot>
+            history: List<InferenceSnapshot>,
+            safeRawBoundary: (Int) -> Boolean = { true }
         ): AutoCommitCandidate? {
             if (currentReading.length < MIN_READING_LEN_FOR_AUTO_COMMIT) return null
             if (hasTrailingIncompleteRomaji(currentReading)) return null
@@ -121,25 +142,25 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
             val currentAiSurface = history.last().aiSurface
             val maxCommitReadingLen = currentReading.length - MIN_TAIL_UNCOMMITTED_READING_LEN
-            if (maxCommitReadingLen < 3) return null
+            if (maxCommitReadingLen < 8) return null
 
-            val recent5 = history.takeLast(STABLE_INFERENCE_COUNT)
+            val distinctPreviews = mutableListOf<String>()
+            for (entry in history) if (distinctPreviews.lastOrNull() != entry.aiSurface) distinctPreviews.add(entry.aiSurface)
+            if (distinctPreviews.size < STABLE_INFERENCE_COUNT) return null
+            val recent5 = distinctPreviews.takeLast(STABLE_INFERENCE_COUNT)
             var bestCandidate: AutoCommitCandidate? = null
 
             for (snap in history) {
                 val l = snap.readingHiragana.length
                 val p = snap.aiSurface
-                if (l < 3 || l > maxCommitReadingLen) continue
+                if (l < 8 || l > maxCommitReadingLen) continue
+                if (!safeRawBoundary(l)) continue
                 if (!currentReading.startsWith(snap.readingHiragana)) continue
                 if (!isNaturalAutoCommitPrefix(p, currentAiSurface)) continue
 
                 // Check that across the last 5 consecutive AI inferences, the surface prefix P
                 // remained strictly stable.
-                val isStableAcrossRecent5 = recent5.all { recent ->
-                    recent.readingHiragana.startsWith(snap.readingHiragana) &&
-                        recent.aiSurface.startsWith(p) &&
-                        recent.aiSurface.length > p.length
-                }
+                val isStableAcrossRecent5 = recent5.all { recent -> recent.startsWith(p) && recent.length > p.length }
 
                 if (isStableAcrossRecent5) {
                     if (bestCandidate == null || l > bestCandidate.readingLength) {
@@ -154,6 +175,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
             return bestCandidate
         }
+
+        fun recordInferenceSnapshot(history: MutableList<InferenceSnapshot>, snapshot: InferenceSnapshot) {
+            val index = history.indexOfFirst { it.readingHiragana.length == snapshot.readingHiragana.length ||
+                (snapshot.rawInputCount > 0 && it.rawInputCount == snapshot.rawInputCount) }
+            if (index >= 0) history[index] = snapshot else history.add(snapshot)
+            while (history.size > 128) history.removeAt(0)
+        }
     }
 
     val isRealtimeInlineState = mutableStateOf(false)
@@ -162,23 +190,400 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val aiProfileState = mutableStateOf("")
     val themeModeState = mutableStateOf("system")
     val japaneseLayoutState = mutableStateOf(JapaneseInputLayout.FLICK_12KEY)
+    val keyboardKeyHeightState = mutableStateOf(46)
     val isFlickOnlyState = mutableStateOf(true)
     val isVibrationEnabledState = mutableStateOf(true)
     val vibrationDurationState = mutableStateOf(15)
     val isAiAssistEnabledState = mutableStateOf(true)
-    val predictiveModelState = mutableStateOf("rule_based")
+    val isAutoTypoCorrectionState = mutableStateOf(true)
+    val isDictionaryTypoCorrectionState = mutableStateOf(false)
+    val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
+    val aiAssistAdoptedState = mutableStateOf(false)
+    var savedOriginalSurface: String = ""
+    var savedOriginalReading: String = ""
+    private val corrections = CorrectionSession()
+    private val conversionRange = ConversionRangeSession()
+    val conversionRangeState = mutableStateOf("")
+    private var savedOriginalCandidates: List<Candidate> = emptyList()
+    private var savedOriginalResult = ""
+    private var savedOriginalInferredReading = ""
 
     fun isRealtimeInlineEnabled(): Boolean = isRealtimeInlineState.value
     fun isAiAssistEnabled(): Boolean = isAiAssistEnabledState.value
     fun getPredictiveModel(): String = predictiveModelState.value
 
-    fun adoptAiAssist() {
+    fun adoptAiAssist(explicit: Boolean = true) {
         val assist = aiAssistResultState.value ?: return
+        val ic = currentInputConnection ?: return
+        if (!isAiAssistEnabled() || isSensitiveInput() || isConfirming) return
+        val ticket = displayedAssistTicket ?: return
+        if (assistInputConnection !== ic || !requestGate.isCurrent(ticket, requestKey()) || !editorContextIsCurrent()) {
+            cancelPendingInference(edited = false)
+            return
+        }
+        if (!explicit && (!assist.autoApply || !isAutoTypoCorrectionState.value || !composingText.isAtEndIndex ||
+                hasSelectionInEditor || corrections.isApplied || assist.sourceReading != composingText.convertTargetBeforeCursor)) return
+        if (explicit) vibrateOnKeyPress()
+        when (assist.type) {
+            com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION -> {
+                val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
+                val preview = if (isRealtimeInlineEnabled()) {
+                    predictedCandidate.value.ifEmpty { composingText.convertTargetBeforeCursor } + suffix
+                } else composingText.convertTarget
+                savedOriginalSurface = preview
+                savedOriginalReading = composingText.convertTargetBeforeCursor
+                savedOriginalCandidates = candidatesList.filter { it.assist == null }
+                savedOriginalResult = lastInferredResult
+                savedOriginalInferredReading = lastInferredSurface
+                cancelPendingInference(edited = false)
+                if (!corrections.apply(composingText, assist.text, preview, explicit = explicit)) return
+                if (!setComposingPreview(ic, assist.text + suffix)) {
+                    corrections.revert(composingText)
+                    return
+                }
+                currentComposingSurface.value = composingText.convertTargetBeforeCursor
+                predictedCandidate.value = assist.text
+                lastInferredSurface = composingText.convertTargetBeforeCursor
+                lastInferredResult = assist.text
+                candidatesList.clear()
+                candidatesList.add(Candidate(assist.text, savedOriginalReading))
+                inferenceHistory.clear()
+                aiAssistAdoptedState.value = true
+                triggerDebouncedConversion(composingText.convertTargetBeforeCursor)
+            }
+            com.zeroconvert.ime.assist.AiAssistType.PREDICTION -> {
+                commitText(assist.text)
+            }
+        }
+    }
+
+    fun selectCandidate(candidate: Candidate) {
+        if (candidate !in candidatesList) return
+        if (conversionRange.active && candidate !in ConversionRangeSession.candidatesForRange(composingText, candidatesList)) return
+        if (candidate.assist != null) {
+            aiAssistResultState.value = candidate.assist
+            adoptAiAssist()
+        } else commitText(candidate.text, isExplicitSelection = true, committedCandidate = candidate)
+    }
+
+    fun revertAiAssist() {
+        if (!corrections.isApplied) return
+        val ic = currentInputConnection ?: return
         vibrateOnKeyPress()
-        val textToCommit = assist.text
-        currentInputConnection?.commitText(textToCommit, 1)
-        clearInput()
+        cancelPendingInference(edited = false)
+        // Only restore the internal snapshot after the editor accepted the undo.
+        if (!setComposingPreview(ic, savedOriginalSurface)) return
+        corrections.revert(composingText)
+        currentComposingSurface.value = composingText.convertTargetBeforeCursor
+        predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
+        lastInferredSurface = savedOriginalInferredReading
+        lastInferredResult = savedOriginalResult
+        candidatesList.clear()
+        candidatesList.addAll(savedOriginalCandidates)
+        inferenceHistory.clear()
+        aiAssistAdoptedState.value = false
+        aiAssistResultState.value = null
+    }
+
+    private fun extractAndAddEntities(text: String) {
+        val emailRegex = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+        val urlRegex = Regex("https?://[^\\s]+")
+        val phoneRegex = Regex("(?:(?:\\+?81[- ]?)?0\\d{1,4}[- ]?\\d{1,4}[- ]?\\d{3,4})")
+        val found = mutableSetOf<String>()
+        emailRegex.findAll(text).forEach { found.add(it.value) }
+        urlRegex.findAll(text).forEach { found.add(it.value) }
+        phoneRegex.findAll(text).forEach { found.add(it.value) }
+        found.forEach { entity ->
+            val type = when {
+                emailRegex.matches(entity) -> "email"
+                urlRegex.matches(entity) -> "url"
+                phoneRegex.matches(entity) -> "phone"
+                else -> "text"
+            }
+            addClipboardEntry(ClipboardEntry(text = entity, entityType = type, timestamp = System.currentTimeMillis()))
+        }
+    }
+
+    fun addClipboardEntry(entry: ClipboardEntry) {
+        val exists = clipboardHistory.any { it.text == entry.text && it.imageUri == entry.imageUri }
+        if (exists) return
+        clipboardHistory.add(0, entry)
+        trimClipboardHistory()
+        // A new clipboard item makes the suggestion visible again
+        isClipboardSuggestionDismissed.value = false
+    }
+
+    fun removeClipboardEntry(entry: ClipboardEntry) {
+        val idx = clipboardHistory.indexOfFirst { it.id == entry.id }
+        if (idx < 0) return
+        val removed = clipboardHistory.removeAt(idx)
+        if (removed.pinned) persistPinnedClipboard()
+    }
+
+    fun updateClipboardEntry(entry: ClipboardEntry, newText: String) {
+        val idx = clipboardHistory.indexOfFirst { it.id == entry.id }
+        if (idx < 0) return
+        clipboardHistory[idx] = clipboardHistory[idx].copy(text = newText, timestamp = System.currentTimeMillis())
+    }
+
+    fun clearClipboardHistory(keepPinned: Boolean = true) {
+        try {
+            val remaining = if (keepPinned) clipboardHistory.filter { it.pinned } else emptyList()
+            clipboardHistory.clear()
+            clipboardHistory.addAll(remaining)
+            persistPinnedClipboard()
+        } catch (e: Exception) {
+            Log.e(TAG, "clearClipboardHistory failed", e)
+        }
+    }
+
+    fun cleanupExpiredClipboard() {
+        val retention = clipboardRetentionHoursState.value
+        val expired = clipboardHistory.filter { it.isExpired(retention) }
+        expired.forEach { clipboardHistory.remove(it) }
+    }
+
+    fun setClipboardRetentionHours(hours: Int) {
+        clipboardRetentionHoursState.value = hours.coerceIn(1, 24)
+        getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit()
+            .putInt(KEY_CLIPBOARD_RETENTION_HOURS, clipboardRetentionHoursState.value).apply()
+        cleanupExpiredClipboard()
+    }
+
+    private var lastScreenshotCheck = System.currentTimeMillis()
+    private val seenScreenshotIds = mutableSetOf<Long>()
+    private var screenshotObserver: ContentObserver? = null
+    private var screenshotCaptureJob: Job? = null
+    private val maxClipboardImageCacheBytes = 64L * 1024L * 1024L
+
+    fun setScreenshotCaptureEnabled(enabled: Boolean) {
+        getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_SCREENSHOT_CAPTURE, enabled).apply()
+        if (enabled) registerScreenshotObserver() else unregisterScreenshotObserver()
+    }
+
+    private fun registerScreenshotObserver() {
+        if (screenshotObserver != null) return
+        screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                scheduleScreenshotCapture()
+            }
+        }
+        try {
+            contentResolver.registerContentObserver(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                true,
+                screenshotObserver!!
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register screenshot observer: ${e.message}")
+        }
+    }
+
+    private fun unregisterScreenshotObserver() {
+        screenshotObserver?.let {
+            try { contentResolver.unregisterContentObserver(it) } catch (_: Exception) {}
+        }
+        screenshotObserver = null
+        screenshotCaptureJob?.cancel()
+        screenshotCaptureJob = null
+    }
+
+    private fun scheduleScreenshotCapture() {
+        screenshotCaptureJob?.cancel()
+        screenshotCaptureJob = serviceScope.launch {
+            // Screenshot providers often emit several MediaStore changes for one capture.
+            delay(400)
+            val entries = withContext(Dispatchers.IO) { collectRecentScreenshots() }
+            entries.forEach(::addClipboardEntry)
+            if (entries.isNotEmpty()) cleanupClipboardImageCache()
+        }
+    }
+
+    private fun collectRecentScreenshots(): List<ClipboardEntry> {
+        if (!getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).getBoolean(KEY_SCREENSHOT_CAPTURE, true)) {
+            return emptyList()
+        }
+        val cutoff = lastScreenshotCheck
+        lastScreenshotCheck = System.currentTimeMillis()
+        val entries = mutableListOf<ClipboardEntry>()
+        try {
+            val projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.RELATIVE_PATH,
+                MediaStore.Images.Media.DATE_ADDED
+            )
+            val selection = "${MediaStore.Images.Media.DATE_ADDED} >= ?"
+            val selectionArgs = arrayOf((cutoff / 1000 - 5).toString())
+            contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                "${MediaStore.Images.Media.DATE_ADDED} DESC"
+            )?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val pathCol = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(nameCol) ?: continue
+                    val relPath = if (pathCol >= 0) cursor.getString(pathCol) else null
+                    val isScreenshot = name.contains("Screenshot", ignoreCase = true) ||
+                        name.contains("スクリーンショット", ignoreCase = true) ||
+                        (relPath != null && relPath.contains("creenshot", ignoreCase = true))
+                    if (!isScreenshot) continue
+                    val id = cursor.getLong(idCol)
+                    if (!seenScreenshotIds.add(id)) continue
+                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    val cached = cacheClipboardImage(uri)
+                    entries += ClipboardEntry(imageUri = cached ?: uri)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Screenshot capture failed: ${e.message}")
+        }
+        return entries
+    }
+
+    private fun trimClipboardHistory() {
+        while (clipboardHistory.count { !it.pinned } > 20) {
+            val idx = clipboardHistory.indexOfLast { !it.pinned }
+            if (idx >= 0) clipboardHistory.removeAt(idx) else break
+        }
+        cleanupClipboardImageCache()
+    }
+
+    private fun cleanupClipboardImageCache() {
+        val imageEntries = clipboardHistory.mapNotNull { entry ->
+            entry.imageUri?.lastPathSegment?.substringAfterLast('/')?.let { fileName ->
+                fileName to entry.pinned
+            }
+        }
+        val activeFileNames = imageEntries.map { it.first }.toSet()
+        val pinnedFileNames = imageEntries.filter { it.second }.map { it.first }.toSet()
+        serviceScope.launch(Dispatchers.IO) {
+            val directory = File(cacheDir, "clipboard_images")
+            directory.listFiles()?.forEach { file ->
+                if (file.name !in activeFileNames) file.delete()
+            }
+            var totalBytes = directory.listFiles()?.sumOf { it.length() } ?: 0L
+            val removedFileNames = mutableSetOf<String>()
+            directory.listFiles()
+                ?.filter { it.name !in pinnedFileNames }
+                ?.sortedBy { it.lastModified() }
+                ?.forEach { file ->
+                    val fileSize = file.length()
+                    if (totalBytes > maxClipboardImageCacheBytes && file.delete()) {
+                        totalBytes -= fileSize
+                        removedFileNames += file.name
+                    }
+                }
+            if (removedFileNames.isNotEmpty()) {
+                withContext(Dispatchers.Main) {
+                    clipboardHistory.removeAll { entry ->
+                        entry.imageUri?.lastPathSegment?.substringAfterLast('/') in removedFileNames
+                    }
+                }
+            }
+        }
+    }
+
+    fun toggleClipboardPin(entry: ClipboardEntry) {
+        val idx = clipboardHistory.indexOfFirst { it.id == entry.id }
+        if (idx < 0) return
+        val current = clipboardHistory[idx]
+        val updated = current.copy(pinned = !current.pinned)
+        clipboardHistory.removeAt(idx)
+        clipboardHistory.add(0, updated)
+        trimClipboardHistory()
+        persistPinnedClipboard()
+    }
+
+    private fun persistPinnedClipboard() {
+        val pinnedTexts = clipboardHistory.filter { it.pinned && it.text != null }.map { it.text!! }.toSet()
+        getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit().putStringSet(KEY_CLIPBOARD_PINNED, pinnedTexts).apply()
+    }
+
+    fun pasteClipboard(entry: ClipboardEntry, fromSuggestion: Boolean = false) {
+        vibrateOnKeyPress()
+        if (!composingText.isEmpty) {
+            confirmCurrent()
+        }
+        val ic = currentInputConnection ?: return
+        if (entry.text != null) {
+            ic.commitText(entry.text, 1)
+        } else if (entry.imageUri != null) {
+            commitClipboardImage(ic, entry.imageUri)
+        }
+        if (fromSuggestion) {
+            // The suggestion is shown only once; further pastes require opening the clipboard panel
+            isClipboardSuggestionDismissed.value = true
+        }
+    }
+
+    private fun commitClipboardImage(ic: android.view.inputmethod.InputConnection, uri: android.net.Uri) {
+        try {
+            val mime = contentResolver.getType(uri) ?: "image/*"
+            val supportedMimeTypes = currentInputEditorInfo?.contentMimeTypes.orEmpty()
+            if (supportedMimeTypes.none { android.content.ClipDescription.compareMimeTypes(mime, it) }) {
+                showImagePasteUnsupportedMessage()
+                return
+            }
+
+            val desc = android.content.ClipDescription("image", arrayOf(mime))
+            val info = android.view.inputmethod.InputContentInfo(uri, desc, null)
+            currentInputEditorInfo?.packageName?.let { packageName ->
+                grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val accepted = ic.commitContent(
+                info,
+                android.view.inputmethod.InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,
+                null
+            )
+            if (!accepted) showImagePasteUnsupportedMessage()
+        } catch (e: Exception) {
+            Log.w(TAG, "Image paste failed", e)
+            showImagePasteUnsupportedMessage()
+        }
+    }
+
+    private fun showImagePasteUnsupportedMessage() {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(this, "このアプリは画像貼り付けに対応していません", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Copies a clipboard image into the app cache so that it can be kept in the clipboard
+     * history (Gboard-like behaviour) and re-used even after the source app revokes the URI.
+     * Returns a content:// URI served by the app's FileProvider.
+     */
+    private fun cacheClipboardImage(uri: android.net.Uri): android.net.Uri? {
+        return try {
+            val dir = File(cacheDir, "clipboard_images")
+            if (!dir.exists()) dir.mkdirs()
+            val ext = when (contentResolver.getType(uri)) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                "image/gif" -> "gif"
+                else -> "jpg"
+            }
+            val target = File(dir, "clip_${System.currentTimeMillis()}.$ext")
+            contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: return null
+            androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                target
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to cache clipboard image: ${e.message}")
+            null
+        }
     }
 
     fun setRealtimeInlineEnabled(enabled: Boolean) {
@@ -248,8 +653,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private fun reloadPreferences() {
+        cancelPendingInference(edited = false)
         val prefs = sharedPreferences ?: getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
-        isRealtimeInlineState.value = prefs.getBoolean(KEY_REALTIME_INLINE, false)
+        isRealtimeInlineState.value = prefs.getBoolean(KEY_REALTIME_INLINE, true)
         isAutoCommitEnabledState.value = prefs.getBoolean(KEY_AUTO_COMMIT_ENABLED, true)
         isAutoCommitRewindState.value = prefs.getBoolean(KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, false)
         aiProfileState.value = prefs.getString(KEY_AI_PROFILE, "") ?: ""
@@ -261,13 +667,45 @@ class ZeroConvertInputMethodService : InputMethodService(),
             JapaneseInputLayout.FLICK_12KEY
         }
         isFlickOnlyState.value = prefs.getBoolean(KEY_FLICK_ONLY, true)
+        keyboardKeyHeightState.value = prefs.getInt(KEY_KEY_HEIGHT_DP, 46).coerceIn(40, 64)
         isVibrationEnabledState.value = prefs.getBoolean(KEY_VIBRATION_ENABLED, true)
         vibrationDurationState.value = prefs.getInt(KEY_VIBRATION_DURATION, 15)
         isAiAssistEnabledState.value = prefs.getBoolean(KEY_EXPERIMENTAL_AI_ASSIST, true)
-        predictiveModelState.value = prefs.getString(KEY_PREDICTIVE_MODEL, "rule_based") ?: "rule_based"
+        isAutoTypoCorrectionState.value = prefs.getBoolean(KEY_AUTO_TYPO_CORRECTION, true)
+        isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, false)
+        LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
+        predictiveModelState.value = "zerocon"
+        if (prefs.getBoolean(KEY_SCREENSHOT_CAPTURE, true)) {
+            registerScreenshotObserver()
+        } else {
+            unregisterScreenshotObserver()
+        }
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private data class PendingLearning(val reading: String, val surface: String, val english: Boolean,
+                                      val selection: ConversionCommitLearning? = null,
+                                      val previous: DictionarySegment? = null,
+                                      val historyRevision: Long = KanaKanjiConverter.learningHistoryRevision)
+    private var previousLearningSegment: DictionarySegment? = null
+    private val learningQueue = Channel<PendingLearning>(128)
+    private val learningWorker = serviceScope.launch(Dispatchers.IO) {
+        for (selection in learningQueue) {
+            if (!LearningPolicy.canWrite) continue
+            try {
+                if (selection.english) {
+                    EnglishWordDictionary.recordSelection(applicationContext, selection.reading, selection.surface)
+                } else {
+                    selection.selection?.let { KanaKanjiConverter.recordCommittedSelection(applicationContext, it,
+                        selection.previous, selection.historyRevision) }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.e(TAG, "Could not save committed selection", failure)
+            }
+        }
+    }
 
     // Lifecycle components for Jetpack Compose inside InputMethodService
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -283,19 +721,161 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val currentComposingSurface = mutableStateOf("")
     val predictedCandidate = mutableStateOf("")
     val candidatesList = mutableStateListOf<Candidate>()
-    val clipboardHistory = mutableStateListOf<String>()
+    val selectionAvailableState = mutableStateOf(false)
+    val selectedCharacterCountState = mutableStateOf<SelectionCharacterCount?>(null)
+    private val selectionCountGate = SelectionCountGate()
+    private var selectionCountJob: Job? = null
+    private val selectionCountMutex = kotlinx.coroutines.sync.Mutex()
+    private var reconverting = false
+    val clipboardHistory = mutableStateListOf<ClipboardEntry>()
+    val isClipboardSuggestionDismissed = mutableStateOf(false)
+    val clipboardRetentionHoursState = mutableStateOf(1)
+
+    // English (alphabet) composing buffer for predictive completion
+    var englishComposing: String = ""
 
     private val converter = KanaKanjiConverter()
     private var clipboardManager: ClipboardManager? = null
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private var inferenceJob: Job? = null
+    // AI assist (💡 typo / 🔮 prediction) runs off the main thread: it performs
+    // dictionary lookups through JNI, which must never block key handling.
+    private var aiAssistJob: Job? = null
     private var cachedLeftContext: String = ""
+    private val composingEditor = ComposingEditorState()
+    private val editorComposingPreview: String get() = composingEditor.preview
+    private val managedCursorKeys = mutableSetOf<Int>()
+    private val requestGate = AssistRequestGate()
+    private var displayedAssistTicket: AssistRequestGate.Ticket? = null
+    private var assistInputConnection: android.view.inputmethod.InputConnection? = null
+
+    private fun setManagedComposingText(connection: android.view.inputmethod.InputConnection?, text: CharSequence, cursor: Int): Boolean {
+        if (connection == null || !connection.setComposingText(text, cursor)) return false
+        composingEditor.recordPreview(text.toString())
+        return true
+    }
+
+    private fun setComposingPreview(connection: android.view.inputmethod.InputConnection?, text: String): Boolean {
+        if (connection == null) return false
+        val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
+        if (!text.endsWith(suffix)) return false
+        val position = text.length - suffix.length
+        if (position == text.length) return setManagedComposingText(connection, text, 1)
+        return composingEditor.write(object : ComposingEditorState.Editor {
+            override fun beginBatch() { connection.beginBatchEdit() }
+            override fun composing(text: String) = connection.setComposingText(text, 1)
+            override fun selectionEnd(): Int? {
+                val request = android.view.inputmethod.ExtractedTextRequest().apply {
+                    hintMaxChars = MAX_LEFT_CONTEXT_LEN * 2 + text.length
+                    hintMaxLines = 1
+                }
+                val extracted = connection.getExtractedText(request, 0) ?: return null
+                return ComposingEditorState.absoluteSelectionEnd(extracted.startOffset, extracted.selectionStart, extracted.selectionEnd)
+            }
+            override fun select(position: Int) = connection.setSelection(position, position)
+            override fun endBatch() { connection.endBatchEdit() }
+        }, text, position)
+    }
+
+    private fun readEditorLeftContext(): String? {
+        val connection = currentInputConnection ?: return null
+        val before = connection.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2 + editorComposingPreview.length, 0)?.toString()
+        return EditorContext.confirmedLeft(before, editorComposingPreview, composingEditor.cursor)
+    }
+
+    private fun editorContextIsCurrent(): Boolean = isSensitiveInput() || readEditorLeftContext() == cachedLeftContext
+
+    private fun requestKey() = AssistRequestGate.Key(
+        reading = composingText.convertTarget,
+        cursor = composingText.convertTargetCursorPosition,
+        context = cachedLeftContext,
+        profile = aiProfileState.value,
+        modelRevision = ZenzNative.modelRevision,
+        assistEnabled = isAiAssistEnabled(),
+        autoCorrectionEnabled = isAutoTypoCorrectionState.value,
+        predictionModel = getPredictiveModel(),
+        inputType = currentInputEditorInfo?.inputType ?: 0,
+        imeOptions = currentInputEditorInfo?.imeOptions ?: 0,
+        rawInput = composingText.input.map { it.copy() },
+        vocabularyRevision = com.zeroconvert.ime.assist.AssistVocabulary.revision,
+        conversionRange = conversionRange.active,
+        learningMode = LearningPolicy.mode.name,
+        dictionaryCorrectionEnabled = isDictionaryTypoCorrectionState.value
+    )
+
+    private fun cancelPendingInference(edited: Boolean = true) {
+        requestGate.invalidate()
+        ZenzNative.abort()
+        inferenceJob?.cancel()
+        aiAssistJob?.cancel()
+        aiAssistResultState.value = null
+        displayedAssistTicket = null
+        assistInputConnection = null
+        isConfirming = false
+        if (edited) {
+            if (conversionRange.active) clearCandidateList()
+            conversionRange.clear()
+            conversionRangeState.value = ""
+            corrections.edited()
+            aiAssistAdoptedState.value = false
+        }
+    }
+
+    private fun isSensitiveInput(): Boolean {
+        val info = currentInputEditorInfo ?: return true
+        return com.zeroconvert.ime.assist.InputPrivacy.isSensitive(info.inputType, info.imeOptions)
+    }
+
+    private fun recordCommittedCorrections(text: String) {
+        if (isSensitiveInput()) return
+        val accepted = corrections.committed(text)
+        if (accepted.isEmpty() || !LearningPolicy.canWrite) return
+        serviceScope.launch(Dispatchers.IO) {
+            for (entry in accepted) {
+                com.zeroconvert.ime.assist.TypoLearning.record(applicationContext, entry.reading, entry.surface)
+            }
+        }
+    }
 
     // Sliding-chunk auto-commit history & rewind state
     private val inferenceHistory = mutableListOf<InferenceSnapshot>()
     private var lastAutoCommitRewind: AutoCommitRewindRecord? = null
     private var canRewindOnNextBackspace: Boolean = false
     private var hasSelectionInEditor: Boolean = false
+
+    private fun clearSelectionCharacterCount() {
+        selectionCountJob?.cancel()
+        selectionCountJob = null
+        selectionCountGate.capture(-1, -1)
+        selectedCharacterCountState.value = null
+    }
+
+    private fun updateSelectionCharacterCount(start: Int, end: Int) {
+        selectionCountJob?.cancel()
+        selectionCountJob = null
+        val ticket = selectionCountGate.capture(start, end)
+        selectedCharacterCountState.value = ticket?.count
+        if (ticket == null || !ticket.count.canResolve || isSensitiveInput()) return
+        val connection = currentInputConnection ?: return
+        selectionCountJob = serviceScope.launch(Dispatchers.IO) {
+            // Dragging selection handles must not cause an editor query for every frame.
+            delay(75)
+            val resolved = selectionCountMutex.withLock {
+                ensureActive()
+                val selected = try { connection.getSelectedText(0) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: RuntimeException) { null }
+                ensureActive()
+                val requestContext = currentCoroutineContext()
+                ticket.count.resolve(selected) { !requestContext.isActive }
+            } ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (connection === currentInputConnection && selectionCountGate.isCurrent(ticket) && !isSensitiveInput()) {
+                    selectedCharacterCountState.value = resolved
+                }
+            }
+        }
+    }
 
     override fun onUpdateSelection(
         oldSelStart: Int,
@@ -306,10 +886,20 @@ class ZeroConvertInputMethodService : InputMethodService(),
         candidatesEnd: Int
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        hasSelectionInEditor = (newSelStart != newSelEnd)
-        if (hasSelectionInEditor && !composingText.isEmpty && (candidatesStart < 0 || candidatesEnd < 0)) {
+        val selected = newSelStart != newSelEnd
+        composingEditor.observeRange(candidatesStart, candidatesEnd)
+        val ownedSelection = composingEditor.ownsSelection(newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // An external cursor/selection move ends the managed composition. Never
+        // apply an automatic correction at a cursor that no longer owns this input.
+        if (!composingText.isEmpty && !ownedSelection && (newSelStart != candidatesEnd || newSelEnd != candidatesEnd)) {
             clearInput()
+            currentInputConnection?.finishComposingText()
+        } else if (selected) {
+            cancelPendingInference(edited = false)
         }
+        hasSelectionInEditor = selected
+        selectionAvailableState.value = selected
+        updateSelectionCharacterCount(newSelStart, newSelEnd)
     }
 
     override fun onCreate() {
@@ -323,19 +913,47 @@ class ZeroConvertInputMethodService : InputMethodService(),
         sharedPreferences?.registerOnSharedPreferenceChangeListener(prefsListener)
         reloadPreferences()
 
+        com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(this)
+
         // Init clipboard
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        // Restore pinned text entries
+        val pinnedTexts = getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+            .getStringSet(KEY_CLIPBOARD_PINNED, emptySet()) ?: emptySet()
+        pinnedTexts.forEach { t ->
+            if (t.isNotBlank()) clipboardHistory.add(ClipboardEntry(text = t, pinned = true))
+        }
+        clipboardRetentionHoursState.value = getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+            .getInt(KEY_CLIPBOARD_RETENTION_HOURS, 1)
+        cleanupExpiredClipboard()
         clipListener = ClipboardManager.OnPrimaryClipChangedListener {
             val clip = clipboardManager?.primaryClip
             if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).coerceToText(this).toString()
-                if (text.isNotBlank() && !clipboardHistory.contains(text)) {
-                    clipboardHistory.add(0, text)
-                    if (clipboardHistory.size > 20) clipboardHistory.removeLast()
+                for (i in 0 until clip.itemCount) {
+                    val item = clip.getItemAt(i)
+                    val uri = item.uri
+                    val clipMime = clip.description?.getMimeType(i)
+                    val resolvedMime = clipMime ?: uri?.let { contentResolver.getType(it) }
+                    val isImage = resolvedMime?.startsWith("image/") == true
+                    if (isImage && uri != null) {
+                        val cached = cacheClipboardImage(uri)
+                        addClipboardEntry(ClipboardEntry(imageUri = cached ?: uri))
+                    } else {
+                        val text = item.coerceToText(this).toString()
+                        if (text.isNotBlank()) {
+                            addClipboardEntry(ClipboardEntry(text = text))
+                            extractAndAddEntities(text)
+                        }
+                    }
                 }
             }
         }
         clipboardManager?.addPrimaryClipChangedListener(clipListener)
+
+        // Auto-capture screenshots into the clipboard (Gboard-like), when enabled.
+        if (getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).getBoolean(KEY_SCREENSHOT_CAPTURE, true)) {
+            registerScreenshotObserver()
+        }
 
         // Init ZeroCon AI Native model and dictionaries asynchronously
         serviceScope.launch(Dispatchers.IO) {
@@ -384,7 +1002,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     onCommitText = { text -> commitText(text, isExplicitSelection = true) },
                     onDeleteChar = { handleDelete() },
                     onEnter = { handleEnter() },
-                    onClearInput = { clearInput() }
+                    onClearInput = { clearInput() },
+                    onClipboardPaste = { entry, fromSuggestion -> pasteClipboard(entry, fromSuggestion) }
                 )
             }
         }
@@ -401,6 +1020,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         canRewindOnNextBackspace = false
 
         if (ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
+            ch == '？' || ch == '！' || ch == '．' || ch == '，' ||
             ch.isDigit() || ch in "!@#$%^&*()"
         ) {
             val punc = when (ch) {
@@ -419,15 +1039,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
         // Capture real confirmed left context ONLY at the start of input session
         if (composingText.isEmpty) {
             val ic = currentInputConnection
-            cachedLeftContext = (ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN, 0)?.toString() ?: "")
-                .takeLast(MAX_LEFT_CONTEXT_LEN)
+            cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
             inferenceHistory.clear()
             lastAutoCommitRewind = null
         }
 
         // Abort ongoing inference
-        ZenzNative.abort()
-        inferenceJob?.cancel()
+        cancelPendingInference()
 
         // Insert into azooKey ComposingText state machine
         composingText.insertAtCursorPosition(ch.toString(), InputStyle.ROMAN2KANA)
@@ -452,7 +1070,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
             composingText.convertTarget
         }
 
-        currentInputConnection?.setComposingText(tentativeDisplay, 1)
+        if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
+            clearCandidateList()
+            return
+        }
 
         // Trigger conversion query
         if (surface.isNotEmpty()) {
@@ -479,15 +1100,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
         // Capture real confirmed left context ONLY at the start of input session
         if (composingText.isEmpty) {
             val ic = currentInputConnection
-            cachedLeftContext = (ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN, 0)?.toString() ?: "")
-                .takeLast(MAX_LEFT_CONTEXT_LEN)
+            cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
             inferenceHistory.clear()
             lastAutoCommitRewind = null
         }
 
         // Abort ongoing inference
-        ZenzNative.abort()
-        inferenceJob?.cancel()
+        cancelPendingInference()
 
         // Insert direct kana into composingText
         composingText.insertAtCursorPosition(kana, InputStyle.DIRECT)
@@ -509,7 +1128,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
             composingText.convertTarget
         }
 
-        currentInputConnection?.setComposingText(tentativeDisplay, 1)
+        if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
+            clearCandidateList()
+            return
+        }
 
         if (surface.isNotEmpty()) {
             triggerDebouncedConversion(surface)
@@ -533,8 +1155,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (toggled == lastChar) return
 
         canRewindOnNextBackspace = false
-        ZenzNative.abort()
-        inferenceJob?.cancel()
+        cancelPendingInference()
 
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(toggled.toString(), InputStyle.DIRECT)
@@ -557,7 +1178,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
             composingText.convertTarget
         }
 
-        currentInputConnection?.setComposingText(tentativeDisplay, 1)
+        if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
+            clearCandidateList()
+            return
+        }
 
         if (newSurface.isNotEmpty()) {
             triggerDebouncedConversion(newSurface)
@@ -575,8 +1199,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (cursor <= 0) return
 
         canRewindOnNextBackspace = false
-        ZenzNative.abort()
-        inferenceJob?.cancel()
+        cancelPendingInference()
 
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(nextKana, InputStyle.DIRECT)
@@ -599,7 +1222,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
             composingText.convertTarget
         }
 
-        currentInputConnection?.setComposingText(tentativeDisplay, 1)
+        if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
+            clearCandidateList()
+            return
+        }
 
         if (newSurface.isNotEmpty()) {
             triggerDebouncedConversion(newSurface)
@@ -641,163 +1267,195 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private fun triggerDebouncedConversion(surface: String) {
+        cancelPendingInference(edited = false)
+        if (!isSensitiveInput()) readEditorLeftContext()?.let { cachedLeftContext = it }
+        // Capture every mutable input on the UI thread, before dispatching work.
+        val snapshot = composingText.clone()
+        val ticket = requestGate.capture(requestKey())
+        val connection = currentInputConnection ?: return
+        val context = cachedLeftContext
+        val profile = aiProfileState.value
+        val sensitive = isSensitiveInput()
+        val reconversion = reconverting
+        val rangeConversion = conversionRange.active
+        val fixedPrefix = corrections.fixedPrefix(surface)
+        val dictionaryCorrection = !sensitive && !reconversion && !rangeConversion && isDictionaryTypoCorrectionState.value
         inferenceJob = serviceScope.launch(Dispatchers.IO) {
             try {
-                // Debounce pause 50ms
                 delay(50)
-                if (!isActive) return@launch
-
                 KanaKanjiConverter.ensureInitialized(applicationContext)
-                val snapshot = composingText.clone()
-                val results = converter.requestCandidates(
-                    composingText = snapshot,
-                    leftContext = cachedLeftContext,
-                    enableAI = true,
-                    profile = aiProfileState.value
-                )
-                if (!isActive) return@launch
-
+                val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
+                    profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
+                    experimentalKeyboardCorrection = dictionaryCorrection).let {
+                    if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
+                }
+                ensureActive()
                 withContext(Dispatchers.Main) {
-                    if (!composingText.isEmpty) {
-                        val aiCand = results.firstOrNull { it.isAI }?.text ?: results.firstOrNull()?.text ?: ""
-
-                        // Record inference step in history for sliding-chunk auto-commit
-                        if (composingText.isAtEndIndex && surface.isNotEmpty() && aiCand.isNotEmpty() && !hasTrailingIncompleteRomaji(surface)) {
-                            val lastSnap = inferenceHistory.lastOrNull()
-                            if (lastSnap != null && lastSnap.readingHiragana == surface) {
-                                inferenceHistory[inferenceHistory.lastIndex] = InferenceSnapshot(surface, aiCand)
-                            } else {
-                                inferenceHistory.add(InferenceSnapshot(surface, aiCand))
-                            }
+                    if (connection !== currentInputConnection || !requestGate.isCurrent(ticket, requestKey()) || !editorContextIsCurrent()) {
+                        return@withContext
+                    }
+                    val aiCand = (results.firstOrNull { it.isAI } ?: results.firstOrNull())?.previewForReading(surface).orEmpty()
+                    if (composingText.isAtEndIndex && surface.isNotEmpty() && aiCand.isNotEmpty() &&
+                        !hasTrailingIncompleteRomaji(surface) && !corrections.holdsAutoCommit
+                    ) {
+                        recordInferenceSnapshot(inferenceHistory, InferenceSnapshot(surface, aiCand, snapshot.input.size))
+                    }
+                    if (!sensitive && !reconversion && !rangeConversion && isAutoCommitEnabled() && composingText.isAtEndIndex &&
+                        !corrections.holdsAutoCommit
+                    ) {
+                        val autoCommit = if (BuildConfig.WINDOWS_ENGINE) {
+                            com.zeroconvert.ime.engine.WindowsEngine.autoCommit(
+                                composingText.input.mapNotNull { (it.piece as? com.zeroconvert.ime.azookey.input.InputPiece.CharPiece)?.char }.joinToString(""),
+                                surface, inferenceHistory, composingText::isIndependentInputBoundary)
+                        } else findStableAutoCommitPrefix(surface, inferenceHistory, composingText::isIndependentInputBoundary)
+                        if (autoCommit != null && aiCand.startsWith(autoCommit.surfacePrefix)) {
+                            performAutoCommit(autoCommit, aiCand)
+                            return@withContext
                         }
-
-                        // Check Sliding-Chunk Auto-Commit if enabled
-                        val currentSurfaceNow = composingText.convertTargetBeforeCursor
-                        if (isAutoCommitEnabled() &&
-                            composingText.isAtEndIndex &&
-                            currentSurfaceNow == surface
-                        ) {
-                            val autoCommit = findStableAutoCommitPrefix(currentSurfaceNow, inferenceHistory)
-                            if (autoCommit != null && aiCand.startsWith(autoCommit.surfacePrefix)) {
-                                performAutoCommit(autoCommit, aiCand, results)
-                                return@withContext
-                            }
-                        }
-
-                        candidatesList.clear()
-                        candidatesList.addAll(results)
-
-                        val best = results.firstOrNull()?.text ?: ""
-                        predictedCandidate.value = best
-                        lastInferredSurface = surface
-                        lastInferredResult = best
-
-                        // Asynchronous AI Assist evaluation (💡 Typo / 🔮 Prediction)
-                        if (isAiAssistEnabled()) {
-                            val assist = com.zeroconvert.ime.assist.AiAssistManager.requestAiAssist(
-                                rawInput = surface,
-                                hiragana = surface,
-                                firstSurface = best,
-                                leftContext = cachedLeftContext,
-                                predictiveModelType = getPredictiveModel()
-                            )
-                            aiAssistResultState.value = assist
-                        } else {
-                            aiAssistResultState.value = null
-                        }
-
-                        // Only reflect into editor if user enabled real-time inline conversion
-                        if (isRealtimeInlineEnabled() && best.isNotEmpty()) {
-                            val currentSurface = composingText.convertTargetBeforeCursor
-                            if (currentSurface.startsWith(surface)) {
-                                val diff = currentSurface.substring(surface.length)
-
-                                val hasKanjiInBest = best.any { (it.code in 0x4E00..0x9FFF) || (it.code in 0x3400..0x4DBF) }
-                                val hasKanjiInPrev = lastInferredResult.any { (it.code in 0x4E00..0x9FFF) || (it.code in 0x3400..0x4DBF) }
-                                val isDowngradeToHiragana = (best == surface && hasKanjiInPrev && !hasKanjiInBest)
-
-                                if (!isDowngradeToHiragana) {
-                                    val display = best + diff
-                                    currentInputConnection?.setComposingText(display, 1)
+                    }
+                    val previousResult = lastInferredResult
+                    val best = results.firstOrNull()?.previewForReading(surface).orEmpty()
+                    candidatesList.clear()
+                    candidatesList.addAll(results)
+                    predictedCandidate.value = best
+                    lastInferredSurface = surface
+                    lastInferredResult = best
+                    if (!sensitive && !reconversion && !rangeConversion && isAiAssistEnabled()) {
+                        val allowCorrection = !corrections.isApplied && fixedPrefix.isEmpty()
+                        aiAssistJob = serviceScope.launch(Dispatchers.IO) {
+                            com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(applicationContext)
+                            com.zeroconvert.ime.assist.AiAssistManager.streamAiAssist(
+                                reading = surface,
+                                baseline = best,
+                                context = context,
+                                allowCorrection = allowCorrection
+                            ) { update ->
+                                ensureActive()
+                                withContext(Dispatchers.Main) assistUpdate@ {
+                                    if (connection !== currentInputConnection ||
+                                        !requestGate.isCurrent(ticket, requestKey()) || isSensitiveInput() || !editorContextIsCurrent()) return@assistUpdate
+                                    val suggestions = update.suggestions.filter { it.text != corrections.rejectedSurface }
+                                    val merged = ConversionCandidateMerge.withCorrection(candidatesList,
+                                        suggestions.firstOrNull { it.type == com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION })
+                                    candidatesList.clear()
+                                    candidatesList.addAll(merged)
+                                    val selected = update.selected?.takeIf { it.text != corrections.rejectedSurface }
+                                    aiAssistResultState.value = selected
+                                    displayedAssistTicket = if (suggestions.isNotEmpty()) ticket else null
+                                    assistInputConnection = if (suggestions.isNotEmpty()) connection else null
+                                    val automatic = update.automaticCorrection?.takeIf { it.text != corrections.rejectedSurface }
+                                    if (automatic != null && isAutoTypoCorrectionState.value) {
+                                        aiAssistResultState.value = automatic
+                                        adoptAiAssist(explicit = false)
+                                        // If automatic application is ineligible, retain the displayed tap target.
+                                        if (requestGate.isCurrent(ticket, requestKey())) aiAssistResultState.value = selected
+                                    }
                                 }
                             }
                         }
                     }
+                    if ((isRealtimeInlineEnabled() || rangeConversion) && best.isNotEmpty()) {
+                        val hasKanjiInPrevious = previousResult.any { it in '\u3400'..'\u9FFF' }
+                        val downgrade = best == surface && hasKanjiInPrevious &&
+                            best.none { it in '\u3400'..'\u9FFF' }
+                        if (!downgrade) {
+                            val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
+                            if (!setComposingPreview(connection, best + suffix)) {
+                                cancelPendingInference(edited = false)
+                                clearCandidateList()
+                            }
+                        }
+                    }
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "Error in triggerDebouncedConversion for '$surface'", t)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Conversion failed", error)
             }
         }
     }
 
     private fun performAutoCommit(
         autoCommit: AutoCommitCandidate,
-        fullAiSurface: String,
-        fullResults: List<Candidate>
+        fullAiSurface: String
     ) {
         val prefixSurface = autoCommit.surfacePrefix
         val readingLen = autoCommit.readingLength
         val committedReading = autoCommit.committedReading
+        if (!composingText.isIndependentInputBoundary(readingLen)) return
+        val originalInput = composingText.clone()
 
-        // 1. Save rewind state before modifying context
-        lastAutoCommitRewind = AutoCommitRewindRecord(
-            committedSurface = prefixSurface,
-            committedReading = committedReading,
-            previousLeftContext = cachedLeftContext
-        )
-        canRewindOnNextBackspace = true
+        val connection = currentInputConnection ?: return
+        connection.beginBatchEdit()
+        try {
+            if (!connection.commitText(prefixSurface, 1)) return
+            recordCommittedCorrections(prefixSurface)
 
-        // 2. Commit P to currentInputConnection
-        currentInputConnection?.commitText(prefixSurface, 1)
+            // 1. Save rewind state before modifying context
+            lastAutoCommitRewind = AutoCommitRewindRecord(
+                committedSurface = prefixSurface,
+                committedReading = committedReading,
+                previousLeftContext = cachedLeftContext,
+                originalInput = originalInput
+            )
+            canRewindOnNextBackspace = true
 
-        // 3. Remove the first L hiragana characters from composingText
-        composingText.prefixComplete(readingLen)
-        val remainingReading = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = remainingReading
+            // 3. Remove the first L hiragana characters from composingText
+            composingText.prefixComplete(readingLen)
+            val remainingReading = composingText.convertTargetBeforeCursor
+            currentComposingSurface.value = remainingReading
 
-        // 4. Append P to currentLeftContext (retaining up to the last 40 characters)
-        cachedLeftContext = (cachedLeftContext + prefixSurface).takeLast(MAX_LEFT_CONTEXT_LEN)
+            // 4. Retain bounded confirmed left context for the remaining input.
+            cachedLeftContext = EditorContext.bounded(cachedLeftContext + prefixSurface)
 
-        // 5. Reset inference history so subsequent auto-commit waits for 5 new stable inferences
-        inferenceHistory.clear()
+            // 5. Reset inference history so subsequent auto-commit waits for 5 new stable inferences
+            inferenceHistory.clear()
 
-        // 6. Update remaining composing text & candidate bar smoothly
-        val remainingAiSurface = fullAiSurface.removePrefix(prefixSurface)
-        if (remainingReading.isNotEmpty()) {
-            val remainingKatakana = KanaKanjiConverter.toKatakana(remainingReading)
-            inferenceHistory.add(InferenceSnapshot(remainingReading, remainingAiSurface))
+            // 6. Update remaining composing text & candidate bar smoothly
+            val remainingAiSurface = fullAiSurface.removePrefix(prefixSurface)
+            if (remainingReading.isNotEmpty()) {
+                val remainingKatakana = KanaKanjiConverter.toKatakana(remainingReading)
+                inferenceHistory.add(InferenceSnapshot(remainingReading, remainingAiSurface))
 
-            lastInferredSurface = remainingReading
-            lastInferredResult = remainingAiSurface
-            predictedCandidate.value = remainingAiSurface
+                lastInferredSurface = remainingReading
+                lastInferredResult = remainingAiSurface
+                predictedCandidate.value = remainingAiSurface
 
-            candidatesList.clear()
-            if (remainingAiSurface.isNotEmpty()) {
-                candidatesList.add(Candidate(text = remainingAiSurface, reading = remainingKatakana, cost = 1000f, isAI = true))
-            }
-            if (candidatesList.none { it.text == remainingReading }) {
-                candidatesList.add(Candidate(text = remainingReading, reading = remainingKatakana, cost = -100f, isAI = false))
-            }
+                candidatesList.clear()
+                if (remainingAiSurface.isNotEmpty()) {
+                    candidatesList.add(Candidate(text = remainingAiSurface, reading = remainingKatakana, cost = 1000f, isAI = true))
+                }
+                if (candidatesList.none { it.text == remainingReading }) {
+                    candidatesList.add(Candidate(text = remainingReading, reading = remainingKatakana, cost = -100f, isAI = false))
+                }
 
-            val display = if (isRealtimeInlineEnabled() && remainingAiSurface.isNotEmpty()) {
-                remainingAiSurface
+                val display = if (isRealtimeInlineEnabled() && remainingAiSurface.isNotEmpty()) {
+                    remainingAiSurface
+                } else {
+                    composingText.convertTarget
+                }
+                setManagedComposingText(currentInputConnection, display, 1)
+
+                // Trigger fresh conversion for the remaining tail with the updated left context
+                triggerDebouncedConversion(remainingReading)
             } else {
-                composingText.convertTarget
+                clearInput()
             }
-            currentInputConnection?.setComposingText(display, 1)
-
-            // Trigger fresh conversion for the remaining tail with the updated left context
-            triggerDebouncedConversion(remainingReading)
-        } else {
-            clearInput()
-        }
+        } finally { connection.endBatchEdit() }
     }
 
     fun handleDelete() {
         vibrateOnKeyPress()
         if (isConfirming) return
-        ZenzNative.abort()
-        inferenceJob?.cancel()
+        if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
+            revertAiAssist()
+            return
+        }
+        if (englishComposing.isNotEmpty()) {
+            handleEnglishDelete()
+            return
+        }
+        cancelPendingInference()
 
         // 1. If text is selected in the editor, delete the selection immediately
         val ic = currentInputConnection
@@ -821,16 +1479,21 @@ class ZeroConvertInputMethodService : InputMethodService(),
             canRewindOnNextBackspace = false
             lastAutoCommitRewind = null
 
-            // Delete committed surface P from editor
-            currentInputConnection?.deleteSurroundingText(rewindRecord.committedSurface.length, 0)
-
-            // Restore left context
+            val connection = currentInputConnection ?: return
+            val tailPreview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
+            connection.beginBatchEdit()
+            val rewindResult = try {
+                AutoCommitRewind.restore(rewindRecord, composingText.convertTarget, tailPreview, object : AutoCommitRewind.Editor {
+                    override fun beforeCursor(length: Int) = connection.getTextBeforeCursor(length, 0)?.toString()
+                    override fun composing(text: String) = setManagedComposingText(connection, text, 1)
+                    override fun deleteBefore(length: Int) = connection.deleteSurroundingText(length, 0)
+                    override fun commit(text: String) = connection.commitText(text, 1)
+                })
+            } finally { connection.endBatchEdit() }
+            if (rewindResult == AutoCommitRewind.Result.COMMITTED_FALLBACK) { clearInput(); return }
+            if (rewindResult != AutoCommitRewind.Result.RESTORED && rewindResult != AutoCommitRewind.Result.RESTORE_PENDING) return
             cachedLeftContext = rewindRecord.previousLeftContext
-
-            // Prepend committed reading back to composingText
-            val currentTail = composingText.convertTarget
-            composingText.stopComposition()
-            composingText.insertAtCursorPosition(rewindRecord.committedReading + currentTail, InputStyle.FROZEN)
+            composingText.restoreFrom(rewindRecord.originalInput ?: return)
 
             val restoredSurface = composingText.convertTargetBeforeCursor
             currentComposingSurface.value = restoredSurface
@@ -838,7 +1501,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             lastInferredResult = ""
             inferenceHistory.clear()
 
-            currentInputConnection?.setComposingText(composingText.convertTarget, 1)
+            setManagedComposingText(currentInputConnection, composingText.convertTarget, 1)
             if (restoredSurface.isNotEmpty()) {
                 triggerDebouncedConversion(restoredSurface)
             }
@@ -848,26 +1511,29 @@ class ZeroConvertInputMethodService : InputMethodService(),
         canRewindOnNextBackspace = false
 
         if (!composingText.isEmpty) {
-            composingText.deleteBackwardFromCursorPosition(1)
+            if (composingText.isAtStartIndex) { clearCandidateList(); return }
+            val previous = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
+            composingText.deleteBackwardFromCursorPosition(composingText.convertTargetCursorPosition - previous)
             val surface = composingText.convertTargetBeforeCursor
             currentComposingSurface.value = surface
-            // Remove snapshots longer than current surface
             inferenceHistory.removeAll { it.readingHiragana.length >= surface.length }
-
-            if (surface.isNotEmpty()) {
-                if (isRealtimeInlineEnabled() && lastInferredResult.isNotEmpty() && surface.startsWith(lastInferredSurface)) {
-                    val diff = surface.substring(lastInferredSurface.length)
-                    currentInputConnection?.setComposingText(lastInferredResult + diff, 1)
+            if (composingText.isEmpty) {
+                setManagedComposingText(currentInputConnection, "", 0)
+                currentInputConnection?.finishComposingText()
+                clearInput()
+            } else {
+                val inline = isRealtimeInlineEnabled()
+                val prefix = if (inline && lastInferredResult.isNotEmpty() && surface.startsWith(lastInferredSurface)) {
+                    lastInferredResult + surface.substring(lastInferredSurface.length)
                 } else {
                     lastInferredSurface = ""
                     lastInferredResult = ""
-                    currentInputConnection?.setComposingText(composingText.convertTarget, 1)
+                    surface
                 }
-                triggerDebouncedConversion(surface)
-            } else {
-                currentInputConnection?.setComposingText("", 0)
-                currentInputConnection?.finishComposingText()
-                clearInput()
+                val preview = ConversionRangeSession.preview(composingText, prefix, inline)
+                if (setComposingPreview(currentInputConnection, preview) && surface.isNotEmpty()) {
+                    triggerDebouncedConversion(surface)
+                } else clearCandidateList()
             }
         } else {
             val ok = currentInputConnection?.deleteSurroundingText(1, 0) ?: false
@@ -877,11 +1543,59 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
+    fun canBeginConversionRange(): Boolean = !isConfirming && !isSensitiveInput() && !reconverting &&
+        !corrections.holdsAutoCommit && !conversionRange.active && composingText.isAtEndIndex &&
+        composingText.convertTarget.codePointCount(0, composingText.convertTarget.length) in 2..128 &&
+        !hasTrailingIncompleteRomaji(composingText.convertTarget)
+
+    fun beginConversionRange() {
+        if (!canBeginConversionRange()) return
+        val connection = currentInputConnection ?: return
+        val preview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
+        if (!conversionRange.begin(composingText, preview)) return
+        if (!setComposingPreview(connection, composingText.convertTarget)) {
+            conversionRange.cancel(composingText)
+            return
+        }
+        refreshConversionRange()
+    }
+
+    fun canAdjustConversionRange(direction: Int): Boolean = conversionRange.canAdjust(composingText, direction)
+
+    fun adjustConversionRange(direction: Int) {
+        if (isConfirming || !conversionRange.active) return
+        if (conversionRange.adjust(composingText, direction)) refreshConversionRange()
+    }
+
+    fun cancelConversionRange() {
+        if (!conversionRange.active || isConfirming) return
+        val connection = currentInputConnection ?: return
+        val preview = conversionRange.originalPreview
+        if (!setManagedComposingText(connection, preview, 1)) return
+        conversionRange.cancel(composingText)
+        conversionRangeState.value = ""
+        clearCandidateList()
+        currentComposingSurface.value = composingText.convertTargetBeforeCursor
+        triggerDebouncedConversion(composingText.convertTargetBeforeCursor)
+    }
+
+    private fun refreshConversionRange() {
+        clearCandidateList()
+        lastAutoCommitRewind = null
+        canRewindOnNextBackspace = false
+        val reading = composingText.convertTargetBeforeCursor
+        conversionRangeState.value = reading + "｜" + composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
+        currentComposingSurface.value = reading
+        triggerDebouncedConversion(reading)
+    }
+
     fun handleCursorLeft() {
+        if (conversionRange.active) { adjustConversionRange(-1); return }
         vibrateOnKeyPress()
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
-            val moved = composingText.moveCursorFromCursorPosition(-1)
+            val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
+            val moved = composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
             if (moved != 0) {
                 updateComposingDisplayOnCursorMove()
             }
@@ -891,10 +1605,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleCursorRight() {
+        if (conversionRange.active) { adjustConversionRange(1); return }
         vibrateOnKeyPress()
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
-            val moved = composingText.moveCursorFromCursorPosition(1)
+            val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, 1)
+            val moved = composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
             if (moved != 0) {
                 updateComposingDisplayOnCursorMove()
             }
@@ -903,84 +1619,144 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    private fun updateComposingDisplayOnCursorMove() {
-        ZenzNative.abort()
-        inferenceJob?.cancel()
-
-        val surfaceBefore = composingText.convertTargetBeforeCursor
-        val fullSurface = composingText.convertTarget
-        currentComposingSurface.value = surfaceBefore
-
-        lastInferredSurface = ""
-        lastInferredResult = ""
-        inferenceHistory.clear()
-
-        // Preserve full surface text in composing region
-        currentInputConnection?.setComposingText(fullSurface, 1)
-
-        // Trigger conversion query ONLY for the range before cursor!
-        if (surfaceBefore.isNotEmpty()) {
-            triggerDebouncedConversion(surfaceBefore)
-        } else {
-            clearCandidateList()
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (!composingText.isEmpty && event.hasNoModifiers() &&
+            (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT || keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT)) {
+            managedCursorKeys.add(keyCode)
+            if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) handleCursorLeft() else handleCursorRight()
+            return true
         }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (managedCursorKeys.remove(keyCode)) return true
+        return super.onKeyUp(keyCode, event)
+    }
+
+    private fun updateComposingDisplayOnCursorMove() {
+        cancelPendingInference()
+        clearCandidateList()
+        val surfaceBefore = composingText.convertTargetBeforeCursor
+        currentComposingSurface.value = surfaceBefore
+        // Keep the full reading, with the real editor caret at the selected prefix boundary.
+        if (!setComposingPreview(currentInputConnection, composingText.convertTarget)) return
+        if (surfaceBefore.isNotEmpty()) triggerDebouncedConversion(surfaceBefore)
     }
 
     fun handleEnter() {
         if (isConfirming) return
-        if (!composingText.isEmpty) {
+        if (englishComposing.isNotEmpty()) {
+            commitEnglishBuffer(useTopCandidate = false)
+        } else if (!composingText.isEmpty) {
             confirmAsync()
         } else {
             sendKeyChar('\n')
         }
     }
 
-    fun confirmAsync(trailingText: String = "") {
-        vibrateOnKeyPress()
-        if (composingText.isEmpty) {
-            if (trailingText.isNotEmpty()) {
-                commitDirect(trailingText)
-            }
-            return
-        }
+    fun canReconvertSelection(): Boolean = selectionAvailableState.value && composingText.isEmpty && !isSensitiveInput()
 
-        if (isConfirming) return
-
-        val currentSurface = composingText.convertTargetBeforeCursor
-
-        // If the AI has already finished inference for the exact current surface, commit immediately (0ms latency)
-        if (currentSurface == lastInferredSurface && predictedCandidate.value.isNotEmpty()) {
-            val textToCommit = predictedCandidate.value + trailingText
-            currentInputConnection?.commitText(textToCommit, 1)
-            clearInput()
-            return
-        }
-
-        // Otherwise, wait for the AI conversion to complete before committing so trailing characters are never lost
-        isConfirming = true
-        val snapshot = composingText.clone()
-        val leftContext = cachedLeftContext
-        val profile = aiProfileState.value
-        inferenceJob?.cancel()
-
-        serviceScope.launch(Dispatchers.IO) {
+    fun reconvertSelection() {
+        if (!canReconvertSelection() || isConfirming) return
+        val connection = currentInputConnection ?: return
+        val selected = connection.getSelectedText(0)?.toString() ?: return
+        cancelPendingInference(edited = false)
+        val ticket = requestGate.capture(requestKey())
+        inferenceJob = serviceScope.launch(Dispatchers.IO) {
             try {
-                val results = converter.requestCandidates(snapshot, leftContext, enableAI = true, profile = profile)
-                val bestCandidate = results.firstOrNull()?.text ?: currentSurface
-                val textToCommit = bestCandidate + trailingText
-
-                withContext(Dispatchers.Main) {
-                    currentInputConnection?.commitText(textToCommit, 1)
-                    clearInput()
+                val plan = ReconversionPlan.create(selected) { input ->
+                    converter.requestCandidates(input, "", enableAI = false, personalize = true)
                 }
-            } catch (e: Exception) {
+                ensureActive()
                 withContext(Dispatchers.Main) {
-                    val fallback = currentSurface + trailingText
-                    currentInputConnection?.commitText(fallback, 1)
-                    clearInput()
+                    if (connection !== currentInputConnection || !requestGate.isCurrent(ticket, requestKey()) ||
+                        isSensitiveInput() || connection.getSelectedText(0)?.toString() != selected) return@withContext
+                    if (plan == null) {
+                        Toast.makeText(applicationContext, "選択した文字の読みを復元できませんでした", Toast.LENGTH_SHORT).show()
+                        return@withContext
+                    }
+                    if (!setManagedComposingText(connection, plan.original, 1)) return@withContext
+                    composingText.stopComposition()
+                    composingText.insertAtCursorPosition(plan.reading, InputStyle.DIRECT)
+                    reconverting = true
+                    hasSelectionInEditor = false
+                    selectionAvailableState.value = false
+                    clearSelectionCharacterCount()
+                    currentComposingSurface.value = plan.reading
+                    candidatesList.clear()
+                    candidatesList.addAll(plan.candidates)
+                    predictedCandidate.value = plan.original
+                    lastInferredSurface = plan.reading
+                    lastInferredResult = plan.original
+                    inferenceHistory.clear()
+                    requestGate.invalidate()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Reconversion failed", error)
+            }
+        }
+    }
+
+    fun confirmAsync(trailingText: String = "") {
+        if (isConfirming) return
+        if (composingText.isEmpty) {
+            if (trailingText.isNotEmpty()) commitDirect(trailingText)
+            return
+        }
+        val currentSurface = composingText.convertTargetBeforeCursor
+        if (currentSurface == lastInferredSurface && predictedCandidate.value.isNotEmpty() && editorContextIsCurrent()) {
+            val candidate = candidatesList.firstOrNull { it.text == predictedCandidate.value && it.assist == null }
+            commitText(predictedCandidate.value + trailingText, committedCandidate = candidate, trailingText = trailingText)
+            return
+        }
+        cancelPendingInference(edited = false)
+        if (!isSensitiveInput()) {
+            val actualContext = readEditorLeftContext()
+            if (actualContext == null) { clearInput(); return }
+            cachedLeftContext = actualContext
+        }
+        val snapshot = composingText.clone()
+        val connection = currentInputConnection ?: return
+        val ticket = requestGate.capture(requestKey())
+        val context = cachedLeftContext
+        val profile = aiProfileState.value
+        val sensitive = isSensitiveInput()
+        val reconversion = reconverting
+        val rangeConversion = conversionRange.active
+        val fixedPrefix = corrections.fixedPrefix(currentSurface)
+        val dictionaryCorrection = !sensitive && !reconversion && !rangeConversion && isDictionaryTypoCorrectionState.value
+        isConfirming = true
+        inferenceJob = serviceScope.launch(Dispatchers.IO) {
+            try {
+                val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
+                    profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
+                    experimentalKeyboardCorrection = dictionaryCorrection).let {
+                    if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
+                }
+                ensureActive()
+                withContext(Dispatchers.Main) {
+                    if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey()) && editorContextIsCurrent()) {
+                        isConfirming = false
+                        val candidate = results.firstOrNull()
+                        commitText((candidate?.text ?: currentSurface) + trailingText, committedCandidate = candidate, trailingText = trailingText)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey()) && editorContextIsCurrent()) {
+                        isConfirming = false
+                        commitText(currentSurface + trailingText)
+                    }
                 }
             } finally {
-                isConfirming = false
+                withContext(NonCancellable + Dispatchers.Main) {
+                    if (requestGate.isGenerationCurrent(ticket)) isConfirming = false
+                }
             }
         }
     }
@@ -995,41 +1771,154 @@ class ZeroConvertInputMethodService : InputMethodService(),
         clearInput()
     }
 
-    fun commitText(text: String, isExplicitSelection: Boolean = false) {
+    fun handleEnglishChar(ch: Char) {
         vibrateOnKeyPress()
         if (isConfirming) return
-        val surfaceBefore = composingText.convertTargetBeforeCursor
-        val surfaceAfter = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
-
-        if (isExplicitSelection && surfaceBefore.isNotEmpty()) {
-            KanaKanjiConverter.recordSelection(applicationContext, surfaceBefore, text)
+        if (ch == ' ') { handleEnglishSpace(); return }
+        if (!ch.isLetter()) {
+            if (englishComposing.isNotEmpty()) commitEnglishBuffer()
+            commitDirect(ch.toString())
+            return
         }
+        if (englishComposing.isEmpty()) {
+            val ic = currentInputConnection
+            cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
+        }
+        englishComposing += ch
+        currentComposingSurface.value = englishComposing
+        setManagedComposingText(currentInputConnection, englishComposing, 1)
+        triggerEnglishSuggestions(englishComposing)
+    }
 
-        if (surfaceAfter.isNotEmpty()) {
-            // Commit only the range before cursor with the selected candidate!
-            currentInputConnection?.commitText(text, 1)
-            cachedLeftContext = (cachedLeftContext + text).takeLast(MAX_LEFT_CONTEXT_LEN)
+    fun handleEnglishText(text: String) {
+        for (ch in text) handleEnglishChar(ch)
+    }
 
-            // Complete prefix of length surfaceBefore.length so that the suffix is preserved
-            composingText.prefixComplete(surfaceBefore.length)
+    fun handleEnglishDelete() {
+        if (isConfirming) return
+        if (englishComposing.isNotEmpty()) {
+            englishComposing = englishComposing.dropLast(1)
+            currentComposingSurface.value = englishComposing
+            if (englishComposing.isNotEmpty()) {
+                setManagedComposingText(currentInputConnection, englishComposing, 1)
+                triggerEnglishSuggestions(englishComposing)
+            } else {
+                setManagedComposingText(currentInputConnection, "", 1)
+                candidatesList.clear()
+                predictedCandidate.value = ""
+            }
+        } else {
+            currentInputConnection?.deleteSurroundingText(1, 0)
+        }
+    }
 
-            val remainingSurface = composingText.convertTarget
-            currentComposingSurface.value = remainingSurface
-            lastInferredSurface = ""
-            lastInferredResult = ""
-            inferenceHistory.clear()
-            canRewindOnNextBackspace = false
+    fun handleEnglishSpace() {
+        vibrateOnKeyPress()
+        if (englishComposing.isNotEmpty()) {
+            commitEnglishBuffer()
+        }
+        currentInputConnection?.commitText(" ", 1)
+    }
 
-            if (remainingSurface.isNotEmpty()) {
-                currentInputConnection?.setComposingText(remainingSurface, 1)
-                triggerDebouncedConversion(remainingSurface)
+    fun commitEnglishBuffer(useTopCandidate: Boolean = true) {
+        if (englishComposing.isEmpty()) return
+        val candidate = if (useTopCandidate) candidatesList.firstOrNull() else null
+        commitText(candidate?.text ?: englishComposing,
+            isExplicitSelection = candidate != null, committedCandidate = candidate)
+    }
+
+    private fun clearEnglishInput() {
+        englishComposing = ""
+        currentComposingSurface.value = ""
+        candidatesList.clear()
+        predictedCandidate.value = ""
+    }
+
+    private fun triggerEnglishSuggestions(prefix: String) {
+        if (isSensitiveInput()) {
+            candidatesList.clear()
+            predictedCandidate.value = ""
+            return
+        }
+        serviceScope.launch(Dispatchers.Default) {
+            delay(30)
+            if (englishComposing != prefix) return@launch
+            val cands = EnglishWordDictionary.suggest(applicationContext, prefix, 8)
+            withContext(Dispatchers.Main) {
+                if (englishComposing == prefix && !isSensitiveInput()) {
+                    candidatesList.clear()
+                    candidatesList.addAll(cands)
+                    predictedCandidate.value = cands.firstOrNull()?.text ?: ""
+                }
+            }
+        }
+    }
+
+    fun commitText(
+        text: String,
+        isExplicitSelection: Boolean = false,
+        committedCandidate: Candidate? = candidatesList.firstOrNull { it.text == text },
+        trailingText: String = ""
+    ) {
+        if (isConfirming) return
+        val connection = currentInputConnection ?: return
+        vibrateOnKeyPress()
+        val wasEnglish = englishComposing.isNotEmpty()
+        val englishReading = englishComposing
+        val consumed = committedCandidate?.engineConsumedReading
+            ?.takeIf { it in 1..composingText.convertTargetCursorPosition }
+            ?: composingText.convertTargetCursorPosition
+        val readingBefore = composingText.convertTarget.take(consumed)
+        val surfaceAfter = composingText.convertTarget.drop(consumed)
+        val selection = if (!wasEnglish) ConversionCommitLearning.capture(
+            readingBefore, text, committedCandidate, trailingText,
+            sensitive = isSensitiveInput(), correctionApplied = corrections.isApplied
+        ) else null
+        val learnEnglish = wasEnglish && isExplicitSelection && !isSensitiveInput() && LearningPolicy.canWrite
+        val previousLearningBefore = previousLearningSegment
+        val learningRevisionBefore = KanaKanjiConverter.learningHistoryRevision
+        cancelPendingInference(edited = false)
+        connection.beginBatchEdit()
+        try {
+            if (!connection.commitText(text, 1)) return
+            composingEditor.finishComposition()
+            conversionRange.clear()
+            conversionRangeState.value = ""
+            // A tap is not a training event. Only a successful editor commit is.
+            recordCommittedCorrections(text)
+            if (selection != null || learnEnglish) {
+                val event = if (learnEnglish) PendingLearning(englishReading, text, true)
+                    else PendingLearning(checkNotNull(selection).reading, selection.surface, false, selection,
+                        previousLearningBefore, learningRevisionBefore)
+                if (learningQueue.trySend(event).isFailure) {
+                    Log.w(TAG, "Selection learning queue is full or closed")
+                }
+            }
+            // Swift retains only the final lexical item until this composition ends.
+            previousLearningSegment = selection?.segments?.lastOrNull()
+            if (wasEnglish) {
+                clearEnglishInput()
+                return
+            }
+            if (surfaceAfter.isNotEmpty()) {
+                cachedLeftContext = EditorContext.bounded(cachedLeftContext + text)
+                composingText.prefixComplete(readingBefore.length)
+                corrections.edited()
+                aiAssistAdoptedState.value = false
+                val remainingSurface = composingText.convertTarget
+                val remainingReading = composingText.convertTargetBeforeCursor
+                currentComposingSurface.value = remainingReading
+                lastInferredSurface = ""
+                lastInferredResult = ""
+                inferenceHistory.clear()
+                canRewindOnNextBackspace = false
+                if (setComposingPreview(connection, remainingSurface) && remainingReading.isNotEmpty()) {
+                    triggerDebouncedConversion(remainingReading)
+                } else clearCandidateList()
             } else {
                 clearInput()
             }
-        } else {
-            currentInputConnection?.commitText(text, 1)
-            clearInput()
-        }
+        } finally { connection.endBatchEdit() }
     }
 
     private fun clearCandidateList() {
@@ -1042,15 +1931,26 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun clearInput() {
-        ZenzNative.abort()
-        inferenceJob?.cancel()
+        previousLearningSegment = null
+        cancelPendingInference()
+        corrections.clear()
+        reconverting = false
+        hasSelectionInEditor = false
+        selectionAvailableState.value = false
+        clearSelectionCharacterCount()
+        aiAssistAdoptedState.value = false
+        savedOriginalCandidates = emptyList()
+        savedOriginalSurface = ""
+        savedOriginalReading = ""
         composingText.stopComposition()
+        englishComposing = ""
         currentComposingSurface.value = ""
         predictedCandidate.value = ""
         lastInferredSurface = ""
         lastInferredResult = ""
         candidatesList.clear()
         cachedLeftContext = ""
+        composingEditor.clear()
         inferenceHistory.clear()
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
@@ -1063,6 +1963,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         reloadPreferences()
         clearInput()
+        hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
+        selectionAvailableState.value = hasSelectionInEditor
+        updateSelectionCharacterCount(info?.initialSelStart ?: -1, info?.initialSelEnd ?: -1)
+    }
+
+    override fun onStartInput(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
+        super.onStartInput(info, restarting)
+        clearInput()
+        hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
+        selectionAvailableState.value = hasSelectionInEditor
+        updateSelectionCharacterCount(info?.initialSelStart ?: -1, info?.initialSelEnd ?: -1)
+    }
+
+    override fun onFinishInput() {
+        clearInput()
+        super.onFinishInput()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -1073,9 +1989,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     override fun onDestroy() {
+        learningQueue.close()
         super.onDestroy()
         sharedPreferences?.unregisterOnSharedPreferenceChangeListener(prefsListener)
         clipListener?.let { clipboardManager?.removePrimaryClipChangedListener(it) }
+        unregisterScreenshotObserver()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         store.clear()
         serviceScope.cancel()

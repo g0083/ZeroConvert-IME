@@ -356,18 +356,7 @@ pub struct Composition {
     pub live_conversion_history: VecDeque<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct LiveConversionPrefixSnapshot {
-    pub raw_input_len: usize,
-    pub hiragana_len: usize,
-    pub preview: String,
-}
-
-const LIVE_CONVERSION_AUTO_COMMIT_MIN_TOTAL_HIRAGANA: usize = 16;
-const LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA: usize = 8;
-const LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA: usize = 7;
-const LIVE_CONVERSION_AUTO_COMMIT_MIN_PREFIX_CHARS: usize = 4;
-const LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS: usize = 5;
+pub use shared::conversion_policy::LiveConversionPrefixSnapshot;
 
 #[derive(Clone, Debug, PartialEq)]
 struct DeferredClientAction {
@@ -2473,101 +2462,16 @@ impl TextServiceFactory {
         )
     }
 
-    #[inline]
-    fn is_hiragana_char(ch: char) -> bool {
-        matches!(ch as u32, 0x3041..=0x3096 | 0x309D..=0x309F)
-    }
-
-    #[inline]
-    fn is_kanji_or_katakana_char(ch: char) -> bool {
-        matches!(
-            ch as u32,
-            0x30A1..=0x30FA
-                | 0x30FC..=0x30FF
-                | 0x3005..=0x3007
-                | 0x3400..=0x4DBF
-                | 0x4E00..=0x9FFF
-                | 0xF900..=0xFAFF
-                | 0x20000..=0x2FA1F
-        )
-    }
-
-    #[inline]
-    fn is_japanese_clause_punctuation_char(ch: char) -> bool {
-        matches!(ch, '、' | '。' | '，' | '．' | '！' | '？' | '!' | '?')
-    }
-
     pub(crate) fn raw_input_has_pending_romaji_tail(raw_input: &str, raw_hiragana: &str) -> bool {
-        if raw_hiragana
-            .chars()
-            .last()
-            .is_some_and(|ch| ch.is_ascii_alphabetic())
-        {
-            return true;
-        }
-        let mut rev = raw_input.chars().rev();
-        let Some(last) = rev.next() else {
-            return false;
-        };
-        if last.eq_ignore_ascii_case(&'n') {
-            let prev = rev.next();
-            return !prev.is_some_and(|ch| ch.eq_ignore_ascii_case(&'n') || ch == '\'');
-        }
-        last.is_ascii_alphabetic()
-            && !matches!(last.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
+        shared::conversion_policy::raw_input_has_pending_romaji_tail(raw_input, raw_hiragana)
     }
 
-    pub(crate) fn raw_input_split_breaks_romaji(raw_input: &str, split_char_index: usize) -> bool {
-        let chars: Vec<char> = raw_input.chars().collect();
-        if split_char_index == 0 || split_char_index >= chars.len() {
-            return true;
-        }
-        let last = chars[split_char_index - 1];
-        let next = chars[split_char_index];
-        if last.eq_ignore_ascii_case(&'n') {
-            let prev_is_n = split_char_index >= 2
-                && (chars[split_char_index - 2].eq_ignore_ascii_case(&'n')
-                    || chars[split_char_index - 2] == '\'');
-            if !prev_is_n
-                && matches!(
-                    next.to_ascii_lowercase(),
-                    'a' | 'i' | 'u' | 'e' | 'o' | 'y' | 'n'
-                )
-            {
-                return true;
-            }
-            return false;
-        }
-        last.is_ascii_alphabetic()
-            && !matches!(last.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
-    }
-
+    #[cfg(test)]
     pub(crate) fn is_natural_auto_commit_prefix(
         candidate_prefix: &str,
         full_preview: &str,
     ) -> bool {
-        let Some(remainder) = full_preview.strip_prefix(candidate_prefix) else {
-            return false;
-        };
-        if remainder.is_empty()
-            || candidate_prefix.chars().count() < LIVE_CONVERSION_AUTO_COMMIT_MIN_PREFIX_CHARS
-        {
-            return false;
-        }
-        let Some(last_char) = candidate_prefix.chars().last() else {
-            return false;
-        };
-        let Some(next_char) = remainder.chars().next() else {
-            return false;
-        };
-        if Self::is_japanese_clause_punctuation_char(last_char) {
-            return true;
-        }
-        candidate_prefix
-            .chars()
-            .any(Self::is_kanji_or_katakana_char)
-            && Self::is_hiragana_char(last_char)
-            && Self::is_kanji_or_katakana_char(next_char)
+        shared::conversion_policy::is_natural_auto_commit_prefix(candidate_prefix, full_preview)
     }
 
     pub(crate) fn record_live_conversion_prefix_snapshot(
@@ -2578,37 +2482,14 @@ impl TextServiceFactory {
         snapshots: &mut Vec<LiveConversionPrefixSnapshot>,
         history: &mut VecDeque<String>,
     ) {
-        if preview.is_empty()
-            || !suffix.is_empty()
-            || Self::raw_input_has_pending_romaji_tail(raw_input, raw_hiragana)
-        {
-            return;
-        }
-        let raw_input_len = raw_input.chars().count();
-        let hiragana_len = raw_hiragana.chars().count();
-        if raw_input_len == 0 || hiragana_len == 0 {
-            return;
-        }
-        if history.back().is_none_or(|last| last != preview) {
-            history.push_back(preview.to_string());
-            while history.len() > LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS {
-                history.pop_front();
-            }
-        }
-        if let Some(existing) = snapshots
-            .iter_mut()
-            .find(|snap| snap.raw_input_len == raw_input_len || snap.hiragana_len == hiragana_len)
-        {
-            existing.raw_input_len = raw_input_len;
-            existing.hiragana_len = hiragana_len;
-            existing.preview = preview.to_string();
-        } else {
-            snapshots.push(LiveConversionPrefixSnapshot {
-                raw_input_len,
-                hiragana_len,
-                preview: preview.to_string(),
-            });
-        }
+        shared::conversion_policy::record_live_conversion_prefix_snapshot(
+            raw_input,
+            raw_hiragana,
+            preview,
+            suffix,
+            snapshots,
+            history,
+        )
     }
 
     pub(crate) fn find_auto_commit_live_conversion_snapshot(
@@ -2619,28 +2500,14 @@ impl TextServiceFactory {
         snapshots: &[LiveConversionPrefixSnapshot],
         history: &VecDeque<String>,
     ) -> Option<LiveConversionPrefixSnapshot> {
-        let total_hiragana = raw_hiragana.chars().count();
-        if total_hiragana < LIVE_CONVERSION_AUTO_COMMIT_MIN_TOTAL_HIRAGANA
-            || !suffix.is_empty()
-            || Self::raw_input_has_pending_romaji_tail(raw_input, raw_hiragana)
-            || history.len() < LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS
-        {
-            return None;
-        }
-        snapshots
-            .iter()
-            .filter(|snap| {
-                snap.hiragana_len >= LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA
-                    && total_hiragana.saturating_sub(snap.hiragana_len)
-                        >= LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA
-                    && !Self::raw_input_split_breaks_romaji(raw_input, snap.raw_input_len)
-                    && Self::is_natural_auto_commit_prefix(&snap.preview, preview)
-                    && history.iter().all(|entry| {
-                        entry.starts_with(&snap.preview) && entry.len() > snap.preview.len()
-                    })
-            })
-            .max_by_key(|snap| snap.hiragana_len)
-            .cloned()
+        shared::conversion_policy::find_auto_commit_live_conversion_snapshot(
+            raw_input,
+            raw_hiragana,
+            preview,
+            suffix,
+            snapshots,
+            history,
+        )
     }
 
     pub(crate) fn rebase_live_conversion_auto_commit_state(

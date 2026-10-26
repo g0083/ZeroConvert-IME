@@ -30,6 +30,8 @@ llamaのライブラリ・CPU/CUDA/Vulkanランタイムと `zenz.gguf` はGit�
 
 ## Android
 
+編集・テスト・端末更新・署名/配布の手順は [Android開発手順](android-development.md)、エージェントルールは [android/AGENTS.md](../android/AGENTS.md) を参照する。
+
 JDK 17、Android SDK 34、NDK 27.1.12297006、CMake 3.22.1を用意する。`android/local.properties` は各PCで作成し、Gitには含めない。submoduleパッチ適用後、`android/` 内でGradleコマンドを実行する。
 
 GGUFモデルは `android/app/src/main/assets/zenz.gguf` と `assets/models/` に別途配置する。候補と名前・期待サイズは `model/ModelManager.kt` が正本。モデルのないクローンをそのまま動作品質検証に使わない。

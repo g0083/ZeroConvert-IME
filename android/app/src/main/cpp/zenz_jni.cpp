@@ -3,12 +3,16 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
+#include <chrono>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdarg>
 #include <android/log.h>
 #include "llama.h"
 
 #include "azookey_louds.h"
+#include "assist_jni.h"
 
 #define TAG "ZenzNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -16,6 +20,18 @@
 
 static std::mutex g_mutex;
 static std::atomic<bool> g_abort_flag{false};
+static long long g_normal_epoch = -1;
+static std::chrono::steady_clock::time_point g_normal_deadline;
+static bool normal_cancelled() {
+    return g_abort_flag.load() || assist_epoch() != g_normal_epoch ||
+        std::chrono::steady_clock::now() >= g_normal_deadline;
+}
+
+// Dedicated lock for dictionary access (LOUDS trees + txt3 shards).
+// Kept separate from g_mutex so that dictionary lookups (typo correction /
+// prediction assist) never serialize behind llama.cpp neural conversion.
+static std::mutex g_dict_mutex;
+static std::atomic<bool> g_dict_abort_flag{false};
 static struct llama_model * g_model = nullptr;
 static struct llama_context * g_ctx = nullptr;
 static const struct llama_vocab * g_vocab = nullptr;
@@ -86,7 +102,9 @@ static bool load_model_internal(const char * path) {
     bool is_small = (path_str.find("small") != std::string::npos && path_str.find("xsmall") == std::string::npos);
 
     struct llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = 256; // 256 tokens fits entirely in CPU cache
+    cparams.n_ctx = 1024;
+    cparams.n_batch = 128;
+    cparams.abort_callback = [](void *) { return normal_cancelled(); };
 
     // Maximize performance across mobile Big cores (ARM Cortex-A7xx/X):
     // 4 threads fully parallelizes matrix multiplication without over-subscribing LITTLE cores.
@@ -234,17 +252,21 @@ static jstring safe_new_string(JNIEnv *env, const std::string & utf8_str, const 
 
 JNIEXPORT jstring JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this */, jstring left_context, jstring reading_katakana, jstring profile_str) {
+    const auto request_epoch = assist_epoch();
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_ctx == nullptr || g_model == nullptr || g_vocab == nullptr) {
         file_log("ERROR: nativeConvert called but model/ctx/vocab is null!");
-        return safe_new_string(env, "");
+        return assist_to_java(env, "");
     }
 
     auto start_time = std::chrono::steady_clock::now();
 
-    const char * lc = left_context != nullptr ? env->GetStringUTFChars(left_context, nullptr) : nullptr;
-    const char * rk = reading_katakana != nullptr ? env->GetStringUTFChars(reading_katakana, nullptr) : nullptr;
-    const char * pr = profile_str != nullptr ? env->GetStringUTFChars(profile_str, nullptr) : nullptr;
+    const auto context_utf8 = assist_from_java(env, left_context);
+    const auto reading_utf8 = assist_from_java(env, reading_katakana);
+    const auto profile_utf8 = assist_from_java(env, profile_str);
+    const char * lc = context_utf8.c_str();
+    const char * rk = reading_utf8.c_str();
+    const char * pr = profile_utf8.c_str();
 
     // Format: optional \uEE03{profile} followed by \uEE02{leftContext}\uEE00{reading}\uEE01
     // UTF-8 bytes: \uEE00 -> \xEE\xB8\x80, \uEE01 -> \xEE\xB8\x81, \uEE02 -> \xEE\xB8\x82, \uEE03 -> \xEE\xB8\x83
@@ -264,116 +286,62 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
     prompt += "\xEE\xB8\x81";
 
     std::string reading_str = (rk != nullptr ? rk : "");
-    std::string lc_str = (lc != nullptr ? lc : "");
 
-    if (lc != nullptr) env->ReleaseStringUTFChars(left_context, lc);
-    if (rk != nullptr) env->ReleaseStringUTFChars(reading_katakana, rk);
-    if (pr != nullptr) env->ReleaseStringUTFChars(profile_str, pr);
 
-    // Reset sampler state
-    if (g_sampler != nullptr) {
-        llama_sampler_reset(g_sampler);
-    }
-
-    // Clear KV cache
-    llama_memory_t mem = llama_get_memory(g_ctx);
-    if (mem != nullptr) {
-        llama_memory_clear(mem, true);
-    }
-
-    // Tokenize
-    int32_t n_tokens_max = static_cast<int32_t>(prompt.length() + 32);
-    std::vector<llama_token> tokens(n_tokens_max);
-    int32_t n_tokens = llama_tokenize(g_vocab, prompt.c_str(), static_cast<int32_t>(prompt.length()), tokens.data(), n_tokens_max, false, true);
-
-    if (n_tokens <= 0) {
-        LOGE("Failed to tokenize prompt for reading: %s", reading_str.c_str());
-        return safe_new_string(env, reading_str, reading_str);
-    }
-
-    // Prefill
-    struct llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
-    if (llama_decode(g_ctx, batch) != 0) {
-        LOGE("llama_decode prefill failed");
-        return safe_new_string(env, reading_str, reading_str);
-    }
-
-    std::string result;
-    const int max_generate_tokens = 40;
-    char piece_buf[128];
-    int generated_count = 0;
-    llama_token last_token = -1;
-    int token_repeat_count = 0;
-    size_t max_allowed_chars = std::max<size_t>(1, count_utf8_chars(reading_str));
-
+    if (assist_epoch() != request_epoch || prompt.size() > 8192) return assist_to_java(env, "");
+    g_normal_epoch = request_epoch;
     g_abort_flag.store(false);
-
-    for (int i = 0; i < max_generate_tokens; ++i) {
-        if (g_abort_flag.load()) {
-            return safe_new_string(env, "");
-        }
-
-        llama_token token = llama_sampler_sample(g_sampler, g_ctx, -1);
-        llama_sampler_accept(g_sampler, token);
-
-        // Stop on EOS (2 = <s>, 3 = </s>)
-        if (token == llama_vocab_eos(g_vocab) || token == llama_vocab_eot(g_vocab) ||
-            token == 2 || token == 3) {
-            break;
-        }
-
-        // Loop detection: if same token repeats 2 or more times, break immediately
-        if (token == last_token) {
-            token_repeat_count++;
-            if (token_repeat_count >= 1) { // 2nd occurrence of identical token
-                break;
-            }
-        } else {
-            last_token = token;
-            token_repeat_count = 0;
-        }
-
-        int n_piece = llama_token_to_piece(g_vocab, token, piece_buf, sizeof(piece_buf), 0, false);
-        if (n_piece > 0) {
-            std::string piece(piece_buf, n_piece);
-            // If piece contains Zenz control tokens, PUA prefix (\xEE\xB8), or newline, stop generation
-            if (piece.find("\xEE\xB8") != std::string::npos ||
-                piece.find('\n') != std::string::npos ||
-                piece.find("<s>") != std::string::npos ||
-                piece.find("</s>") != std::string::npos) {
-                break;
-            }
-            result += piece;
-        }
-
-        // Stop if result length reaches or exceeds the reading character count
-        if (count_utf8_chars(result) >= max_allowed_chars) {
-            break;
-        }
-
-        generated_count++;
-        struct llama_batch next_batch = llama_batch_get_one(&token, 1);
-        if (llama_decode(g_ctx, next_batch) != 0) {
-            break;
-        }
+    g_normal_deadline = start_time + std::chrono::milliseconds(1200);
+    llama_sampler_reset(g_sampler);
+    llama_memory_clear(llama_get_memory(g_ctx), true);
+    const int max_generate_tokens = std::clamp(static_cast<int>(count_utf8_chars(reading_str) * 3 + 16), 32, 384);
+    std::vector<llama_token> tokens(prompt.size() + 32);
+    const int n_tokens = llama_tokenize(g_vocab, prompt.data(), static_cast<int>(prompt.size()), tokens.data(), static_cast<int>(tokens.size()), false, true);
+    if (n_tokens <= 0 || n_tokens + max_generate_tokens > static_cast<int>(llama_n_ctx(g_ctx))) return assist_to_java(env, "");
+    for (int start = 0; start < n_tokens;) {
+        if (normal_cancelled()) return assist_to_java(env, "");
+        int count = std::min(n_tokens - start, static_cast<int>(llama_n_batch(g_ctx)));
+        auto batch = llama_batch_get_one(tokens.data() + start, count);
+        if (llama_decode(g_ctx, batch) != 0) return assist_to_java(env, "");
+        start += count;
     }
-
-    auto end_time = std::chrono::steady_clock::now();
-    long long elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-
-    LOGI("Convert [%lld ms, %d tok]: reading='%s' -> result='%s'",
-         elapsed_ms, generated_count, reading_str.c_str(), result.c_str());
-
-    return safe_new_string(env, result, reading_str);
+    std::string result;
+    for (int i = 0; i < max_generate_tokens; ++i) {
+        if (normal_cancelled()) return assist_to_java(env, "");
+        auto token = llama_sampler_sample(g_sampler, g_ctx, -1);
+        if (llama_vocab_is_eog(g_vocab, token)) return assist_to_java(env, result);
+        llama_sampler_accept(g_sampler, token);
+        std::vector<char> piece(256);
+        int size = llama_token_to_piece(g_vocab, token, piece.data(), static_cast<int>(piece.size()), 0, false);
+        if (size < 0 && size >= -8192) {
+            piece.resize(-size);
+            size = llama_token_to_piece(g_vocab, token, piece.data(), static_cast<int>(piece.size()), 0, false);
+        }
+        if (size < 0) return assist_to_java(env, "");
+        result.append(piece.data(), size);
+        size_t stop = std::string::npos;
+        for (const auto * marker : {"</s>", "<s>", "\n", "\r", "\xEE\xB8\x80", "\xEE\xB8\x81", "\xEE\xB8\x82", "\xEE\xB8\x83"}) {
+            stop = std::min(stop, result.find(marker));
+        }
+        if (stop != std::string::npos) return assist_to_java(env, result.substr(0, stop));
+        if (result.size() > 8192 || std::any_of(result.begin(), result.end(), [](unsigned char c) { return c < 32; })) return assist_to_java(env, "");
+        auto next = llama_batch_get_one(&token, 1);
+        if (llama_decode(g_ctx, next) != 0) return assist_to_java(env, "");
+    }
+    // A token/latency budget is not a word boundary. Fall back to dictionary candidates.
+    return assist_to_java(env, "");
 }
 
 JNIEXPORT void JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeAbort(JNIEnv * /* env */, jobject /* this */) {
+    assist_abort();
     g_abort_flag.store(true);
+    g_dict_abort_flag.store(true);
 }
 
 JNIEXPORT void JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeClose(JNIEnv * /* env */, jobject /* this */) {
+    assist_close();
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_sampler != nullptr) {
         llama_sampler_free(g_sampler);
@@ -391,6 +359,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeClose(JNIEnv * /* env */, jobject /* t
 
 JNIEXPORT jboolean JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeInitDict(JNIEnv *env, jobject /* this */, jstring dict_dir) {
+    std::lock_guard<std::mutex> lock(g_dict_mutex);
     if (dict_dir == nullptr) return JNI_FALSE;
     const char * dd = env->GetStringUTFChars(dict_dir, nullptr);
     if (!dd) return JNI_FALSE;
@@ -401,26 +370,114 @@ Java_com_zeroconvert_ime_ZenzNative_nativeInitDict(JNIEnv *env, jobject /* this 
 
 JNIEXPORT jstring JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeLookupDict(
-    JNIEnv *env, jobject /* this */, jstring reading, jboolean prefix_search, jint max_count) {
+    JNIEnv *env, jobject /* this */, jstring reading, jboolean prefix_search, jint max_count, jintArray keyboard_ends,
+    jobjectArray user_readings, jobjectArray user_words,
+    jobjectArray learned_readings, jobjectArray learned_words, jintArray learned_ids, jfloatArray learned_scores) {
     if (reading == nullptr) return safe_new_string(env, "");
-    const char * rd = env->GetStringUTFChars(reading, nullptr);
-    if (!rd) return safe_new_string(env, "");
-
-    auto results = g_dictionary.lookup(rd, prefix_search == JNI_TRUE, (int)max_count);
-    env->ReleaseStringUTFChars(reading, rd);
-
-    // Encode to string: word\truby\tcost\n...
-    std::string out;
-    for (const auto& item : results) {
-        out += item.word;
-        out += '\t';
-        out += item.ruby;
-        out += '\t';
-        out += std::to_string(item.cost);
-        out += '\n';
+    const auto epoch = assist_epoch();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    const auto rd = assist_from_java(env, reading);
+    std::vector<int> keyboardSurfaceEnds;
+    if (keyboard_ends != nullptr) {
+        const auto count = env->GetArrayLength(keyboard_ends);
+        if (count > 0 && count <= 512) {
+            std::vector<jint> values(count);
+            env->GetIntArrayRegion(keyboard_ends, 0, count, values.data());
+            keyboardSurfaceEnds.assign(values.begin(), values.end());
+        }
     }
 
-    return safe_new_string(env, out, "");
+    std::vector<azookey::DicdataElement> userEntries;
+    if (user_readings != nullptr && user_words != nullptr) {
+        const auto count = env->GetArrayLength(user_readings);
+        if (count <= 50 && count == env->GetArrayLength(user_words)) {
+            for (jsize index = 0; index < count; ++index) {
+                if (epoch != assist_epoch()) return env->NewStringUTF("\x01");
+                auto ruby = static_cast<jstring>(env->GetObjectArrayElement(user_readings, index));
+                auto word = static_cast<jstring>(env->GetObjectArrayElement(user_words, index));
+                if (ruby != nullptr && word != nullptr) {
+                    userEntries.push_back({assist_from_java(env, word), assist_from_java(env, ruby),
+                        -5.0f - static_cast<float>(index) * 0.01f, 1288, 1288, 501});
+                }
+                if (ruby != nullptr) env->DeleteLocalRef(ruby);
+                if (word != nullptr) env->DeleteLocalRef(word);
+            }
+        }
+    }
+
+    if (learned_readings != nullptr && learned_words != nullptr && learned_ids != nullptr && learned_scores != nullptr) {
+        const auto count = env->GetArrayLength(learned_readings);
+        if (count <= 65536 && count == env->GetArrayLength(learned_words) && count == env->GetArrayLength(learned_scores) &&
+            count * 3 == env->GetArrayLength(learned_ids)) {
+            std::vector<jint> ids(count * 3);
+            std::vector<jfloat> scores(count);
+            if (count > 0) {
+                env->GetIntArrayRegion(learned_ids, 0, count * 3, ids.data());
+                env->GetFloatArrayRegion(learned_scores, 0, count, scores.data());
+            }
+            for (jsize index = 0; index < count; ++index) {
+                if (epoch != assist_epoch() || std::chrono::steady_clock::now() >= deadline) return env->NewStringUTF("\x01");
+                const auto lcid = ids[index * 3], rcid = ids[index * 3 + 1], mid = ids[index * 3 + 2];
+                if (lcid < 0 || lcid > 1319 || rcid < 0 || rcid > 1319 || mid < 0 || mid > 502 || !std::isfinite(scores[index])) continue;
+                auto ruby = static_cast<jstring>(env->GetObjectArrayElement(learned_readings, index));
+                auto word = static_cast<jstring>(env->GetObjectArrayElement(learned_words, index));
+                if (ruby != nullptr && word != nullptr) {
+                    userEntries.push_back({assist_from_java(env, word), assist_from_java(env, ruby), scores[index], lcid, rcid, mid});
+                }
+                if (ruby != nullptr) env->DeleteLocalRef(ruby);
+                if (word != nullptr) env->DeleteLocalRef(word);
+            }
+        }
+    }
+
+    // Serialize dictionary access: AzooKeyDictionary caches LOUDS trees / txt3
+    // shards in unordered_maps that are mutated on cache misses, so concurrent
+    // lookups would otherwise be a data race.
+    std::string out;
+    {
+        std::unique_lock<std::mutex> lock(g_dict_mutex, std::try_to_lock);
+        if (!lock.owns_lock() || epoch != assist_epoch()) return env->NewStringUTF("\x01");
+        g_dict_abort_flag.store(false);
+        const auto cancelled = [&]() { return epoch != assist_epoch() || std::chrono::steady_clock::now() >= deadline; };
+        auto results = g_dictionary.lookup(rd, prefix_search == JNI_TRUE, std::clamp((int)max_count, 1, 64), &g_dict_abort_flag, cancelled, keyboardSurfaceEnds, userEntries);
+
+        if (g_dict_abort_flag.load() || cancelled()) {
+            // The lookup was interrupted and the result set is incomplete.
+            // Signal this explicitly so the caller can discard the partial
+            // result instead of memoizing it.
+            // NOTE: NewStringUTF is used directly because safe_new_string()
+            // strips control characters, which would erase the marker.
+            return env->NewStringUTF("\x01");
+        }
+
+        const auto hex = [](const std::string& value) {
+            static const char* digits = "0123456789abcdef";
+            std::string result;
+            for (unsigned char byte : value) { result += digits[byte >> 4]; result += digits[byte & 15]; }
+            return result;
+        };
+        // Keep morphology and span readings; fields containing lexical text are hex encoded.
+        for (const auto& item : results) {
+            out += item.word;
+            out += '\t';
+            out += item.ruby;
+            out += '\t';
+            out += std::to_string(item.cost);
+            out += '\t';
+            const auto segments = item.segments.empty() ? std::vector<azookey::LexicalSegment>{
+                {item.word, item.ruby, item.cost, item.lcid, item.rcid, item.mid}} : item.segments;
+            for (const auto& segment : segments) {
+                if (out.back() != '\t') out += '|';
+                out += hex(segment.ruby) + ":" + hex(segment.word) + ":" + std::to_string(segment.lcid) + ":" +
+                    std::to_string(segment.rcid) + ":" + std::to_string(segment.mid) + ":" + std::to_string(segment.cost) + ":" +
+                    std::to_string(segment.correctionKind) + ":" + std::to_string(segment.originalStart) + ":" +
+                    std::to_string(segment.originalEnd) + ":" + hex(segment.lexicalRuby.empty() ? segment.ruby : segment.lexicalRuby);
+            }
+            out += '\n';
+        }
+    }
+
+    return assist_to_java(env, out);
 }
 
 } // extern "C"

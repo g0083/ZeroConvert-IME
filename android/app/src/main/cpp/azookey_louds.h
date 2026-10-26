@@ -5,8 +5,23 @@
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
+#include <atomic>
+#include <functional>
 
 namespace azookey {
+
+struct LexicalSegment {
+    std::string word;
+    std::string ruby;
+    float cost;
+    int lcid;
+    int rcid;
+    int mid;
+    int correctionKind = 0;
+    int originalStart = -1;
+    int originalEnd = -1;
+    std::string lexicalRuby;
+};
 
 struct DicdataElement {
     std::string word;
@@ -15,6 +30,8 @@ struct DicdataElement {
     int lcid;
     int rcid;
     int mid;
+    std::vector<LexicalSegment> segments;
+    int correctionKind = 0;
 };
 
 class LOUDS {
@@ -50,7 +67,13 @@ public:
     ~AzooKeyDictionary();
 
     bool init(const std::string& dictionaryDir);
-    std::vector<DicdataElement> lookup(const std::string& katakanaRuby, bool prefixSearch = true, int maxCount = 30);
+    // abortFlag: when non-null, checked during the lattice build / Viterbi
+    // search so that a superseded lookup can be interrupted early.
+    std::vector<DicdataElement> lookup(const std::string& katakanaRuby, bool prefixSearch = true, int maxCount = 30,
+                                        const std::atomic<bool>* abortFlag = nullptr,
+                                        const std::function<bool()>& cancelled = {},
+                                        const std::vector<int>& keyboardSurfaceEnds = {},
+                                        const std::vector<DicdataElement>& userEntries = {});
 
 private:
     std::string m_dictDir;

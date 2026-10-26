@@ -6,6 +6,26 @@ import org.junit.Test
 class AutoCommitAndPipelineTest {
 
     @Test
+    fun shortPrefixAndParticleBeforePunctuationAreNotSafeBoundaries() {
+        assertFalse(ZeroConvertInputMethodService.isNaturalAutoCommitPrefix("私は", "私は学校へ行く"))
+        assertFalse(ZeroConvertInputMethodService.isNaturalAutoCommitPrefix("私は学校に", "私は学校に、明日行く"))
+    }
+
+    @Test
+    fun stableButShortReadingPrefixMustRemainUncommitted() {
+        val history = listOf(
+            InferenceSnapshot("がっこうに", "学校に"),
+            InferenceSnapshot("がっこうにいって", "学校に行って"),
+            InferenceSnapshot("がっこうにいってべん", "学校に行って勉"),
+            InferenceSnapshot("がっこうにいってべんきょう", "学校に行って勉強"),
+            InferenceSnapshot("がっこうにいってべんきょうして", "学校に行って勉強して"),
+            InferenceSnapshot("がっこうにいってべんきょうしています", "学校に行って勉強しています")
+        )
+        // Only the five-character reading prefix is stable through the last five snapshots.
+        assertNull(ZeroConvertInputMethodService.findStableAutoCommitPrefix(history.last().readingHiragana, history))
+    }
+
+    @Test
     fun testIsNaturalAutoCommitPrefix() {
         // Natural clause boundary ending in Hiragana particle, followed by next Kanji
         assertTrue(

@@ -1,5 +1,8 @@
 # 実装構成・実行手順
 
+2026-10-24追記: WindowsのSwift/Rustを直接利用するAndroid `:rebuilt` を追加。
+従来Androidの独立実装と区別し、[新構成](android-shared-engine.md) を参照する。
+
 2026-10-22のローカルコード・設定を確認し、ソース整理後のパスに更新した記録。Windows/Androidのフルビルド・IME起動は未検証。移行時の保全・検証結果は [setup.md](setup.md)、詳細な探索先は [file-map.md](file-map.md)。
 
 ## 技術スタックと境界

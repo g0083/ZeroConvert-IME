@@ -2,6 +2,8 @@
 
 2026-10-23に現在のbat・PowerShell・Git状態を確認して作成。詳細なオプションや検証結果は [配布手順](local-installer.md)、今回の巻き戻りと復旧は [復旧記録](windows-source-recovery.md) を参照。
 
+ビルド・試験IME・インストーラーの説明はWindows用。Androidの修正・テスト・端末更新・配布は [Android開発手順](android-development.md) を使う。後半のGit保全の考え方は両プラットフォームに適用する。
+
 ## 最初に区別する四つの状態
 
 | 状態 | 意味 | 主な保存先 |

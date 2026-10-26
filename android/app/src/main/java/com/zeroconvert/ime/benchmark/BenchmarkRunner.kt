@@ -266,7 +266,8 @@ object BenchmarkRunner {
         for (i in items.indices) {
             val item = items[i]
             val t0 = System.currentTimeMillis()
-            val correction = com.zeroconvert.ime.assist.TypoCorrectionEngine.findCorrection(item.rawInput, item.context)
+            val correction = com.zeroconvert.ime.assist.ModelCorrector(ZenzNative.assistSession())
+                .suggest(item.context, item.rawInput, item.rawInput)?.text
             val latency = (System.currentTimeMillis() - t0).toDouble()
             totalLatency += latency
 
@@ -369,7 +370,8 @@ object BenchmarkRunner {
             val t0 = System.currentTimeMillis()
             val pred = com.zeroconvert.ime.assist.PredictiveAssistEngine.findPrediction(
                 currentSurface = item.partialInput,
-                hiraganaReading = KanaKanjiConverter.toHiragana(item.partialInput),
+                hiraganaReading = com.zeroconvert.ime.assist.ReadingCheck.readingForSurface(item.partialInput)
+                    ?: KanaKanjiConverter.toHiragana(item.partialInput),
                 context = item.context
             )
             val latency = (System.currentTimeMillis() - t0).toDouble()

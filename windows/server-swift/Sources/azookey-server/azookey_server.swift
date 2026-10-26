@@ -675,6 +675,9 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
 }
 
 @MainActor private func converterModelURL() -> URL {
+    if let embeddedPath = config["embeddedModelPath"] as? String {
+        return URL(filePath: embeddedPath)
+    }
     let isNano = ["nano", "nano_q4km"].contains((config["model"] as? String) ?? "standard")
     let filename = isNano ? "zerocon-model-nano.gguf" : "zerocon-model-standard.gguf"
     let canonical = execURL.appendingPathComponent("models/" + filename)
@@ -867,6 +870,11 @@ struct LearningCandidateCache {
         batches[location.batchIndex]!.isProtected = true
         protectedSlotCount += candidateCount
         return true
+    }
+
+    func isLearningTarget(_ candidateId: UInt64) -> Bool {
+        guard let location = candidateLocation(for: candidateId) else { return false }
+        return batches[location.batchIndex]!.candidates[location.candidateIndex].isLearningTarget
     }
 
     mutating func consume(_ candidateId: UInt64) -> Candidate? {

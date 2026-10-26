@@ -8,6 +8,7 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 | --- | --- |
 | `windows/` | Rust/SwiftのWindows IMEとTauri設定アプリ |
 | `android/` | Kotlin/JNIのAndroid IME |
+| `engine/` | WindowsのSwift/Rustを直接利用するAndroid向け共通エンジン |
 | `training/` | LoRA・全層学習、マージ、GGUF変換補助 |
 | `benchmarks/` | 評価・解析、`research/` に研究用試作 |
 | `data/` | 共有評価データと学習データ生成コード |
@@ -20,7 +21,12 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 エージェントの入口は [AGENTS.md](AGENTS.md)。詳細は [構成](docs/architecture.md)、[探索ガイド](docs/file-map.md)、[セットアップ](docs/setup.md) を参照してください。
 
-機能編集からこのPCの試験IMEへの反映、インストーラー作成、Gitでの保存までの流れは [開発・反映・Gitの手順](docs/development-workflow.md) にまとめています。普段は `Build-Trial.bat` だけでビルドと適用まで行い、配布時は確認した同じ完全パッケージからインストーラーを作ります。
+Windowsの機能編集からこのPCの試験IMEへの反映、インストーラー作成、Gitでの保存までの流れは [開発・反映・Gitの手順](docs/development-workflow.md) にまとめています。普段は `Build-Trial.bat` だけでビルドと適用まで行い、配布時は確認した同じ完全パッケージからインストーラーを作ります。
+
+Androidの修正・Gradleテスト・端末へのAPK更新・署名と配布は [Android開発手順](docs/android-development.md)、エージェント向けルールは [android/AGENTS.md](android/AGENTS.md) を参照してください。APKをビルドする操作と端末へインストールする操作は別です。
+
+Windowsのロジックを共用する新しいAndroid版は `:rebuilt`、ビルド入口は `Build-Android.bat`。
+既存のキーボードを引き継ぐ構造と更新手順は [Android新構成](docs/android-shared-engine.md) を参照してください。
 
 ## 開始手順
 

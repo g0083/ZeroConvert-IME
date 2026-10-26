@@ -26,9 +26,15 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -395,6 +401,7 @@ fun Japanese12KeyFlickLayout(
     actionKeyBg: Color,
     textColor: Color,
     palette: ZeroConPalette,
+    rowHeight: Dp,
     isFlickOnly: Boolean = true,
     onKanaInput: (String) -> Unit,
     onReplaceLastKana: (String) -> Unit,
@@ -471,7 +478,7 @@ fun Japanese12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Box(
@@ -537,7 +544,7 @@ fun Japanese12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 RepeatingIconButton(
@@ -612,7 +619,7 @@ fun Japanese12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 RepeatingIconButton(
@@ -680,13 +687,14 @@ fun Japanese12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Aa1Button(
                     mode = KeyboardMode.JAPANESE,
                     modifier = Modifier.weight(1.05f),
                     actionKeyBg = actionKeyBg,
+                    fillAvailableHeight = true,
                     onClick = onCycleMode
                 )
 
@@ -760,6 +768,7 @@ fun English12KeyFlickLayout(
     actionKeyBg: Color,
     textColor: Color,
     palette: ZeroConPalette,
+    rowHeight: Dp,
     isFlickOnly: Boolean = true,
     onCommitText: (String) -> Unit,
     onReplaceLastCommittedText: (String, Int) -> Unit = { _, _ -> },
@@ -847,7 +856,7 @@ fun English12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Box(
@@ -913,7 +922,7 @@ fun English12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 RepeatingIconButton(
@@ -988,7 +997,7 @@ fun English12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 RepeatingIconButton(
@@ -1056,13 +1065,14 @@ fun English12KeyFlickLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Aa1Button(
                     mode = KeyboardMode.ENGLISH,
                     modifier = Modifier.weight(1.05f),
                     actionKeyBg = actionKeyBg,
+                    fillAvailableHeight = true,
                     onClick = onCycleMode
                 )
 
@@ -1136,6 +1146,7 @@ fun FlickNumericPadLayout(
     actionKeyBg: Color,
     textColor: Color,
     palette: ZeroConPalette,
+    rowHeight: Dp,
     isFlickOnly: Boolean = true,
     onCommitText: (String) -> Unit,
     onReplaceLastCommittedText: (String, Int) -> Unit = { _, _ -> },
@@ -1198,7 +1209,7 @@ fun FlickNumericPadLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 RepeatingIconButton(
@@ -1263,7 +1274,7 @@ fun FlickNumericPadLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 RepeatingIconButton(
@@ -1332,7 +1343,7 @@ fun FlickNumericPadLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Box(
@@ -1406,13 +1417,14 @@ fun FlickNumericPadLayout(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(rowHeight),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Aa1Button(
                     mode = KeyboardMode.NUMERIC,
                     modifier = Modifier.weight(1.05f),
                     actionKeyBg = actionKeyBg,
+                    fillAvailableHeight = true,
                     onClick = onCycleMode
                 )
 
@@ -1498,13 +1510,21 @@ fun FlickKeyCell(
     var cellCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val density = LocalDensity.current
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxHeight()
             .padding(horizontal = 3.dp, vertical = 2.5.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (isActionKey) actionKeyBg else bgColor)
             .onGloballyPositioned { cellCoordinates = it }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${keyDef.label}を入力"
+                role = Role.Button
+                onClick {
+                    currentOnFlickComplete(keyDef, FlickDirection.CENTER)
+                    true
+                }
+            }
             .pointerInput(keyDef) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -1552,6 +1572,18 @@ fun FlickKeyCell(
             },
         contentAlignment = Alignment.Center
     ) {
+        // At the minimum user-selected height the original fixed text metrics no
+        // longer leave enough room for both lines.  Keep this decision inside the
+        // shared key component so the IME and the settings preview stay identical.
+        val isCompactKey = maxHeight < 44.dp
+        val mainTextSize = when {
+            keyDef.label.length > 2 && isCompactKey -> 12.sp
+            keyDef.label.length > 2 -> 14.sp
+            isCompactKey -> 17.sp
+            else -> 19.sp
+        }
+        val subTextSize = if (isCompactKey) 7.sp else 8.5.sp
+
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1560,14 +1592,14 @@ fun FlickKeyCell(
             Text(
                 text = keyDef.label,
                 color = textColor,
-                fontSize = if (keyDef.label.length > 2) 14.sp else 19.sp,
+                fontSize = mainTextSize,
                 fontWeight = FontWeight.Bold
             )
             if (keyDef.subText.isNotEmpty()) {
                 Text(
                     text = keyDef.subText,
                     color = textColor.copy(alpha = 0.5f),
-                    fontSize = 8.5.sp,
+                    fontSize = subTextSize,
                     fontWeight = FontWeight.Normal,
                     maxLines = 1
                 )

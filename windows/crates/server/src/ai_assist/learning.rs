@@ -169,8 +169,7 @@ fn now_millis() -> u64 {
 
 /// 学習ストアの既定パス。
 pub fn learning_store_path() -> Option<PathBuf> {
-    shared::AppConfig::settings_path()
-        .ok()
+    super::runtime::settings_path()
         .and_then(|settings| settings.parent().map(|root| root.join(LEARNING_FILENAME)))
 }
 
@@ -209,6 +208,9 @@ pub struct LearnedMatch {
 ///
 /// 語句一致は 3 文字以上を要求し、短い断片の偶然の一致で誤補正しない。
 pub fn lookup_learned_typo(reading: &str) -> Option<LearnedMatch> {
+    if !super::runtime::read_learning() {
+        return None;
+    }
     let trimmed = reading.trim();
     if trimmed.chars().count() < 2 {
         return None;

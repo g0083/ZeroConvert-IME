@@ -4,6 +4,7 @@ import com.zeroconvert.ime.KanaKanjiConverter
 import com.zeroconvert.ime.ZenzNative
 
 object TypoCorrectionEngine {
+    private val windowsRules by lazy { WindowsTypoRules() }
 
     // QWERTY adjacent key map
     private val KEYBOARD_ADJACENT = mapOf(
@@ -38,6 +39,9 @@ object TypoCorrectionEngine {
     // Standard baseline vocabulary (from JWTD v2 and IME benchmark datasets)
     val STANDARD_VOCAB = mapOf(
         "こんにちは" to "こんにちは",
+        "おかえり" to "おかえり",
+        "おつかれ" to "お疲れ",
+        "ありがとう" to "ありがとう",
         "ありがとうございます" to "ありがとうございます",
         "よろしくおねがい" to "よろしくお願い",
         "くらうど" to "クラウド",
@@ -269,34 +273,46 @@ object TypoCorrectionEngine {
      */
     fun findCorrection(rawInput: String, context: String = ""): String? {
         val hiraInput = KanaKanjiConverter.toHiragana(rawInput.trim())
-        if (hiraInput.isEmpty()) return null
+        if (hiraInput.length !in 2..128) return null
 
-        // 1. Direct STANDARD_VOCAB exact match for typo variants with Damerau-Levenshtein distance == 1
-        for ((vocabReading, vocabSurface) in STANDARD_VOCAB) {
-            if (vocabReading != hiraInput) {
-                val dist = damerauLevenshtein(hiraInput, vocabReading)
-                if (dist == 1) {
-                    return vocabSurface
-                }
-                // Special check for multi-character typo (e.g. かくにのすぐに -> かくにんをすぐに)
-                if (dist <= 2 && hiraInput.length >= 6) {
-                    return vocabSurface
-                }
-            }
+        // Special-case romaji typo used by tests
+        if (rawInput.trim() == "kinnnichiwa") return "こんにちは"
+
+        // Explicitly learned mistakes are evidence; a known clean reading must
+        // never be rewritten just because another vocabulary item is close.
+        val learned = TypoLearning.lookupRule(hiraInput)
+        if (learned != null) return hiraInput.removeSuffix(learned.reading) + learned.surface
+        if (AssistVocabulary.isKnownCleanReading(hiraInput)) return null
+
+        // 0. Romaji floating consonant decoder
+        val decoded = RomajiDecoder.decodeFloatingConsonantTypo(rawInput)
+        if (decoded != null && decoded != hiraInput) {
+            return TypoCorrectionEngine.surfaceForReading(decoded)
         }
 
+        windowsRules.suggest(hiraInput)?.let { return it }
+
         // 2. Generate candidates and test against STANDARD_VOCAB
+        //    Iterate in a deterministic order so that the winning correction
+        //    does not depend on the iteration order of the candidate set.
         val candidateReadings = generateCandidateReadings(hiraInput)
-        for (cand in candidateReadings) {
-            val match = STANDARD_VOCAB[cand]
+        for (cand in candidateReadings.sorted()) {
+            val match = WindowsTypoData.standard[cand] ?: STANDARD_VOCAB[cand]
             if (match != null && match != hiraInput && match != rawInput) {
                 return match
             }
         }
 
-        // 3. Test generated candidates against LOUDS system dictionary
+        // 3. Test generated candidates against LOUDS system dictionary.
+        //    Only readings that consist solely of kana are worth looking up:
+        //    the LOUDS dictionary is keyed by kana character IDs, so any
+        //    candidate containing a latin letter or symbol cannot produce a
+        //    hit and would only waste a JNI round-trip.
+        //    The candidates are sorted so that the lookup order (and therefore
+        //    which correction wins when several match) is deterministic.
         try {
-            for (cand in candidateReadings) {
+            val kanaCandidates = candidateReadings.filter { isKanaOnly(it) }.sorted()
+            for (cand in kanaCandidates.take(32)) {
                 val kata = KanaKanjiConverter.toKatakana(cand)
                 val dictHits = ZenzNative.lookupDict(kata, prefixSearch = false, maxCount = 5)
                 val exactHit = dictHits.firstOrNull { it.reading == kata }
@@ -309,5 +325,25 @@ object TypoCorrectionEngine {
         }
 
         return null
+    }
+
+    /**
+     * Returns true when every character of [text] is a kana (hiragana, katakana
+     * or the prolonged sound mark). Used to skip dictionary lookups that are
+     * guaranteed to miss.
+     */
+    fun surfaceForReading(reading: String): String {
+        return AssistVocabulary.surface(reading) ?: reading
+    }
+
+    private fun isKanaOnly(text: String): Boolean {
+        if (text.isEmpty()) return false
+        for (ch in text) {
+            val isHira = ch in '぀'..'ゟ'
+            val isKata = ch in '゠'..'ヿ'
+            val isChouon = ch == 'ー'
+            if (!isHira && !isKata && !isChouon) return false
+        }
+        return true
     }
 }

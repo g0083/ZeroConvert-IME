@@ -16,6 +16,7 @@ add_subdirectory(llama.cpp)
 
 add_library(zenz_jni SHARED
     zenz_jni.cpp
+    assist_jni.cpp
     azookey_louds.cpp
 )
 

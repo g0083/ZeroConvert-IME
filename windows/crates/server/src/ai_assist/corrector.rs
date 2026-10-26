@@ -4,7 +4,7 @@ use super::*;
 use std::collections::VecDeque;
 
 const MAX_INPUT: usize = 128;
-type CacheKey = (String, u16, String, String);
+type CacheKey = (String, u16, String, String, u64);
 static CACHE: Mutex<VecDeque<(CacheKey, String)>> = Mutex::new(VecDeque::new());
 
 pub fn clear_cache() {
@@ -124,6 +124,7 @@ fn infer(context: &str, input: &str, config: &AiAssistConfig) -> Option<String> 
         config.corrector_port,
         context.into(),
         input.into(),
+        runtime::backend_revision(),
     );
     if let Some(surface) = CACHE
         .lock()

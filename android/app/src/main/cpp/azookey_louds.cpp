@@ -2,6 +2,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <unordered_set>
 #include <android/log.h>
 
@@ -10,6 +11,16 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 namespace azookey {
+
+#include "keyboard_typo_dictionary.inc"
+
+// AzooKeyKanaKanjiConverter's CIDData/MIDData and DicdataElement.BOSData/EOSData.
+static constexpr int BOS_CID = 0;
+static constexpr int EOS_CID = 1316;
+static constexpr int BOUNDARY_MID = 500;
+// DicdataStore.maxlength limits each dictionary word, not the entire composition.
+static constexpr int MAX_WORD_SPAN = 20;
+static constexpr int MAX_COMPOSITION_LENGTH = 512;
 
 static std::string char32ToUtf8(char32_t cp) {
     std::string out;
@@ -418,9 +429,16 @@ std::vector<DicdataElement> AzooKeyDictionary::parseLoudstxt3(
     return results;
 }
 
-std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakanaRuby, bool prefixSearch, int maxCount) {
+std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakanaRuby, bool prefixSearch, int maxCount,
+                                                    const std::atomic<bool>* abortFlag,
+                                                    const std::function<bool()>& cancelled,
+                                                    const std::vector<int>& keyboardSurfaceEnds,
+                                                    const std::vector<DicdataElement>& userEntries) {
     std::vector<DicdataElement> candidates;
     if (katakanaRuby.empty()) return candidates;
+
+    auto aborted = [&]() { return (abortFlag != nullptr && abortFlag->load()) || (cancelled && cancelled()); };
+    if (aborted()) return candidates;
 
     std::vector<char32_t> chars = utf8ToUtf32(katakanaRuby);
     if (chars.empty()) return candidates;
@@ -432,7 +450,7 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
         if (it != m_char2id.end()) {
             charIds.push_back(it->second);
         } else {
-            return candidates;
+            charIds.push_back(255); // Swift character2charId's missing-character sentinel.
         }
     }
 
@@ -441,17 +459,26 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
 
     // 1. Multi-morpheme & Single-word N-Best Viterbi Beam Search across lattice [0..N]
     //    (Matches AzooKeyKanaKanjiConverter LOUDS + cb + mm scoring)
-    if (!m_cbRows.empty() && N >= 1 && N <= 32) {
+    if (!m_cbRows.empty() && N >= 1 && N <= MAX_COMPOSITION_LENGTH) {
         std::vector<std::vector<std::vector<DicdataElement>>> lattice(
-            N, std::vector<std::vector<DicdataElement>>(N + 1));
+            N, std::vector<std::vector<DicdataElement>>(MAX_WORD_SPAN + 1));
 
         for (int i = 0; i < N; i++) {
+            if (aborted()) return candidates;
+            // getWiseDicdata's single-character literal paths retain unknown text
+            // while allowing dictionary conversion on either side of it.
+            const auto literal = char32ToUtf8(chars[i]);
+            if (chars[i] >= U'ァ' && chars[i] <= U'ヶ') {
+                lattice[i][1].push_back({char32ToUtf8(chars[i] - 0x60), literal, -13.0f, 1288, 1288, 501});
+            }
+            lattice[i][1].push_back({literal, literal, -14.0f, 1288, 1288, 501});
             std::string ident = char32ToUtf8(chars[i]);
             auto louds = loadLOUDS(ident);
             if (!louds) continue;
 
             int node = 1;
-            for (int j = i + 1; j <= N; j++) {
+            for (int j = i + 1; j <= std::min(N, i + MAX_WORD_SPAN); j++) {
+                if (aborted()) return candidates;
                 node = louds->stepNodeIndex(node, charIds[j - 1]);
                 if (node < 0) break;
                 int shard = node >> 11;
@@ -462,7 +489,77 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
                         return a.cost > b.cost;
                     });
                     if (entries.size() > 24) entries.resize(24);
-                    lattice[i][j] = std::move(entries);
+                    auto& target = lattice[i][j - i];
+                    target.insert(target.end(), std::make_move_iterator(entries.begin()), std::make_move_iterator(entries.end()));
+                }
+            }
+        }
+
+        // Registered words participate at every matching internal span, using
+        // the same noun IDs and insertion-order values as the Swift server.
+        for (const auto& entry : userEntries) {
+            if (aborted()) return candidates;
+            const auto ruby = utf8ToUtf32(entry.ruby);
+            const int length = static_cast<int>(ruby.size());
+            if (length < 1 || length > MAX_WORD_SPAN) continue;
+            for (int start = 0; start + length <= N; ++start) {
+                if (std::equal(ruby.begin(), ruby.end(), chars.begin() + start)) {
+                    lattice[start][length].push_back(entry);
+                }
+            }
+        }
+
+        if (keyboardSurfaceEnds.size() == chars.size()) {
+            for (int start = 0; start < N; ++start) {
+                if (aborted()) return candidates;
+                const int end = std::clamp(keyboardSurfaceEnds[start], start, std::min(N, start + MAX_WORD_SPAN));
+                if (end <= start) continue;
+
+                // Fixed dictionary entries are exact spans inside a roman-input run.
+                for (const auto& entry : keyboardTypoEntries) {
+                    const auto ruby = utf8ToUtf32(entry.ruby);
+                    const int next = start + static_cast<int>(ruby.size());
+                    if (next <= end && std::equal(ruby.begin(), ruby.end(), chars.begin() + start)) {
+                        lattice[start][next - start].push_back(entry);
+                    }
+                }
+
+                // Swift KeyboardTypoCorrection.correctedPrefixes: one rewrite per prefix.
+                std::vector<char32_t> output;
+                int kind = 0;
+                for (int index = start; index < end;) {
+                    const auto hira = [](char32_t ch) { return ch >= U'ァ' && ch <= U'ヶ'; };
+                    if (kind == 0 && index + 3 < end) {
+                        const auto a = chars[index], b = chars[index + 1], c = chars[index + 2], d = chars[index + 3];
+                        if (hira(a) && a != U'ッ' && b == U'ッ' && c == U'ッ' && hira(d) && d != U'ッ') {
+                            output.insert(output.end(), {a, U'ッ', d}); kind = 1; index += 4;
+                        } else if (hira(a) && a != U'ン' && b == U'ン' && c == U'ン' && d != U'ン') {
+                            char32_t tail = d;
+                            switch (d) {
+                                case U'ア': tail = U'ナ'; break; case U'イ': tail = U'ニ'; break;
+                                case U'ウ': tail = U'ヌ'; break; case U'エ': tail = U'ネ'; break;
+                                case U'オ': tail = U'ノ'; break; default: break;
+                            }
+                            output.insert(output.end(), {a, U'ン', tail}); kind = 2; index += 4;
+                        } else output.push_back(chars[index++]);
+                    } else output.push_back(chars[index++]);
+                    if (!kind) continue;
+                    if (aborted()) return candidates;
+                    auto correctedLouds = loadLOUDS(char32ToUtf8(output.front()));
+                    if (!correctedLouds) continue;
+                    std::vector<uint8_t> ids;
+                    for (auto ch : output) {
+                        auto found = m_char2id.find(ch);
+                        if (found == m_char2id.end()) { ids.clear(); break; }
+                        ids.push_back(found->second);
+                    }
+                    if (ids.empty()) continue;
+                    const int node = correctedLouds->searchNodeIndex(ids);
+                    if (node < 0) continue;
+                    auto entries = parseLoudstxt3(char32ToUtf8(output.front()), node >> 11, {node & 2047});
+                    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.cost > b.cost; });
+                    if (entries.size() > 24) entries.resize(24);
+                    for (auto& entry : entries) { entry.correctionKind = kind; lattice[start][index - start].push_back(std::move(entry)); }
                 }
             }
         }
@@ -472,17 +569,19 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
             int rcid;
             int mid;
             std::string surface;
+            std::vector<LexicalSegment> segments;
         };
 
         const int BEAM_WIDTH = 24;
         std::vector<std::vector<ViterbiState>> dp(N + 1);
-        // BOS: rcid = 1316, mid = 500
-        dp[0].push_back({0.0f, 1316, 500, ""});
+        dp[0].push_back({0.0f, BOS_CID, BOUNDARY_MID, "", {}});
 
         for (int i = 0; i < N; i++) {
+            if (aborted()) return candidates;
             if (dp[i].empty()) continue;
-            for (int j = i + 1; j <= N; j++) {
-                const auto& edges = lattice[i][j];
+            for (int j = i + 1; j <= std::min(N, i + MAX_WORD_SPAN); j++) {
+                if (aborted()) return candidates;
+                const auto& edges = lattice[i][j - i];
                 if (edges.empty()) continue;
                 auto& nextStates = dp[j];
                 for (const auto& st : dp[i]) {
@@ -490,7 +589,12 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
                         float cc = getCCValue(st.rcid, e.lcid);
                         float mm = getMMValue(st.mid, e.mid);
                         float nextScore = st.score + e.cost + cc + mm;
-                        nextStates.push_back({nextScore, e.rcid, e.mid, st.surface + e.word});
+                        auto segments = st.segments;
+                        std::string originalRuby;
+                        for (int index = i; index < j; ++index) originalRuby += char32ToUtf8(chars[index]);
+                        segments.push_back({e.word, originalRuby, e.cost, e.lcid, e.rcid, e.mid,
+                                            e.correctionKind, i, j, e.ruby});
+                        nextStates.push_back({nextScore, e.rcid, e.mid, st.surface + e.word, std::move(segments)});
                     }
                 }
                 if ((int)nextStates.size() > BEAM_WIDTH * 3) {
@@ -539,10 +643,10 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
             }
         }
 
-        // Connect to EOS (lcid = 1317, mid = 500)
+        // Close the sentence with the same EOS entry as the Swift dictionary.
         if (!dp[N].empty()) {
             for (auto& st : dp[N]) {
-                st.score += getCCValue(st.rcid, 1317) + getMMValue(st.mid, 500);
+                st.score += getCCValue(st.rcid, EOS_CID) + getMMValue(st.mid, BOUNDARY_MID);
             }
             std::sort(dp[N].begin(), dp[N].end(), [](const ViterbiState& a, const ViterbiState& b) {
                 return a.score > b.score;
@@ -554,7 +658,7 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
                 if (seenFullWords.insert(st.surface).second) {
                     // Normalized cost so full-span Viterbi candidates sort in exact Viterbi rank order
                     float normCost = 100.0f - (float)rank * 0.5f;
-                    candidates.push_back({st.surface, katakanaRuby, normCost, 0, 0, st.mid});
+                    candidates.push_back({st.surface, katakanaRuby, normCost, 0, 0, st.mid, st.segments});
                     rank++;
                     if ((int)candidates.size() >= maxCount) break;
                 }
@@ -562,21 +666,23 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
         }
 
         // Also include any remaining direct full-span single-word entries not already in top Viterbi beam
-        for (const auto& e : lattice[0][N]) {
+        if (N <= MAX_WORD_SPAN) for (const auto& e : lattice[0][N]) {
             if ((int)candidates.size() >= maxCount) break;
             if (seenFullWords.insert(e.word).second) {
-                candidates.push_back({e.word, katakanaRuby, e.cost, e.lcid, e.rcid, e.mid});
+                candidates.push_back({e.word, katakanaRuby, e.cost, e.lcid, e.rcid, e.mid,
+                    {{e.word, katakanaRuby, e.cost, e.lcid, e.rcid, e.mid, e.correctionKind, 0, N, e.ruby}}});
             }
         }
     }
 
     // 2. Prefix completion search (single-word completions longer than katakanaRuby)
+    if (aborted()) return candidates;
     std::string firstIdent = char32ToUtf8(chars[0]);
     auto louds = loadLOUDS(firstIdent);
     if (louds) {
         int exactNode = louds->searchNodeIndex(charIds);
         std::vector<int> prefixNodes;
-        if (m_cbRows.empty() && exactNode > 0) {
+        if (exactNode > 0) {
             prefixNodes.push_back(exactNode);
         }
         if (prefixSearch && exactNode > 0) {
@@ -591,6 +697,7 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
             }
             std::vector<DicdataElement> prefixEntries;
             for (const auto& pair : shardMap) {
+                if (aborted()) return candidates;
                 auto entries = parseLoudstxt3(firstIdent, pair.first, pair.second);
                 prefixEntries.insert(prefixEntries.end(), entries.begin(), entries.end());
             }
