@@ -593,7 +593,7 @@ private func elapsedPerformanceMilliseconds(since start: TimeInterval) -> Int {
 
 func applicationDataDirectoryURL(
     appDataPath: String?,
-    temporaryDirectoryURL: URL
+    temporaryDirectoryURL: @autoclosure () -> URL
 ) -> URL {
     if let appDataPath,
        !appDataPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -601,7 +601,7 @@ func applicationDataDirectoryURL(
             .appendingPathComponent("Azookey", isDirectory: true)
     }
 
-    return temporaryDirectoryURL.appendingPathComponent("Azookey", isDirectory: true)
+    return temporaryDirectoryURL().appendingPathComponent("Azookey", isDirectory: true)
 }
 
 private func applicationDataDirectoryURL() -> URL {
@@ -613,11 +613,11 @@ private func applicationDataDirectoryURL() -> URL {
 
 func engineRuntimeDirectoryURL(
     appDataPath: String?,
-    temporaryDirectoryURL: URL
+    temporaryDirectoryURL: @autoclosure () -> URL
 ) -> URL {
     applicationDataDirectoryURL(
         appDataPath: appDataPath,
-        temporaryDirectoryURL: temporaryDirectoryURL
+        temporaryDirectoryURL: temporaryDirectoryURL()
     ).appendingPathComponent("EngineRuntime", isDirectory: true)
 }
 
@@ -1155,11 +1155,34 @@ private func learningCandidateOutput(_ candidate: Candidate) -> String {
     return prioritized
 }
 
+// Bundled emoji resources are immutable until Initialize/restart. Parsing the
+// entire file for every key is unnecessary I/O and allocation on both hosts.
+struct EmojiTextReplacerCache {
+    private var resourceURL: URL?
+    private var replacer: TextReplacer?
+
+    mutating func value(
+        for url: URL,
+        load: (URL) -> TextReplacer = { url in TextReplacer { url } }
+    ) -> TextReplacer {
+        if resourceURL == url, let replacer { return replacer }
+        let loaded = load(url)
+        resourceURL = url
+        replacer = loaded
+        return loaded
+    }
+
+    mutating func reset() { resourceURL = nil; replacer = nil }
+}
+
+@MainActor private var emojiTextReplacerCache = EmojiTextReplacerCache()
+
 private func makeConvertRequestOptions(
     context: String,
     zenzaiEnabled: Bool,
     runtimeDirectoryURL: URL,
     emojiDictionaryURL: URL,
+    textReplacer: TextReplacer? = nil,
     zenzaiWeightURL: URL,
     profile: String,
     learningType: LearningType = .nothing,
@@ -1173,7 +1196,7 @@ private func makeConvertRequestOptions(
         learningType: learningType,
         memoryDirectoryURL: learningMemoryDirectoryURL ?? runtimeDirectoryURL,
         sharedContainerURL: runtimeDirectoryURL,
-        textReplacer: .init {
+        textReplacer: textReplacer ?? .init {
             return emojiDictionaryURL
         },
         specialCandidateProviders: nil,
@@ -1890,13 +1913,15 @@ private func preferCursorPrefixBoundary(
     zenzaiEnabled: Bool
 ) -> ConvertRequestOptions {
     configureEngineRuntime(zenzaiEnabled: zenzaiEnabled)
+    let emojiURL = execURL
+        .appendingPathComponent("EmojiDictionary")
+        .appendingPathComponent("emoji_all_E15.1.txt")
     return makeConvertRequestOptions(
         context: context,
         zenzaiEnabled: zenzaiEnabled,
         runtimeDirectoryURL: converterRuntimeDirectoryURL(),
-        emojiDictionaryURL: execURL
-            .appendingPathComponent("EmojiDictionary")
-            .appendingPathComponent("emoji_all_E15.1.txt"),
+        emojiDictionaryURL: emojiURL,
+        textReplacer: emojiTextReplacerCache.value(for: emojiURL),
         zenzaiWeightURL: converterModelURL(),
         profile: (config["profile"] as? String) ?? "",
         learningType: currentLearningType,
@@ -2639,6 +2664,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     let path = String(cString: path)
     serverLog("INFO", "Initialize: start path=\(path) use_zenzai=\(use_zenzai)")
     execURL = URL(filePath: path)
+    emojiTextReplacerCache.reset()
     converterDictionaryURL = execURL.appendingPathComponent("Dictionary")
     converterPreloadDictionary = true
     ensureConverterRuntimeDirectory()
