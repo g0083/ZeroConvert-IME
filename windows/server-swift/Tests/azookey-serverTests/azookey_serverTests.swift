@@ -204,6 +204,62 @@ private func writeReverseDictionaryFixture(
     #expect(!directory.path.hasPrefix(installDirectory.path + "/"))
 }
 
+@Test func engineRuntimeDirectoryDoesNotResolveUnusedTemporaryDirectory() {
+    var temporaryLookups = 0
+    func temporaryDirectory() -> URL {
+        temporaryLookups += 1
+        return URL(filePath: #"C:\Users\test\AppData\Local\Temp"#)
+    }
+    let appData = #"C:\Users\test\AppData\Roaming"#
+    _ = applicationDataDirectoryURL(appDataPath: appData, temporaryDirectoryURL: temporaryDirectory())
+    let runtime = engineRuntimeDirectoryURL(appDataPath: appData, temporaryDirectoryURL: temporaryDirectory())
+    #expect(temporaryLookups == 0)
+    #expect(runtime.lastPathComponent == "EngineRuntime")
+}
+
+@Test func engineRuntimeDirectoryResolvesTemporaryDirectoryOnlyForFallback() {
+    var temporaryLookups = 0
+    func temporaryDirectory() -> URL {
+        temporaryLookups += 1
+        return URL(filePath: #"C:\Users\test\AppData\Local\Temp"#)
+    }
+    let runtime = engineRuntimeDirectoryURL(appDataPath: "  ", temporaryDirectoryURL: temporaryDirectory())
+    #expect(temporaryLookups == 1)
+    #expect(runtime.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "Temp")
+    _ = applicationDataDirectoryURL(appDataPath: nil, temporaryDirectoryURL: temporaryDirectory())
+    #expect(temporaryLookups == 2)
+}
+
+@Test func emojiTextReplacerCacheReusesParsedResultsAndReloadsAfterReset() throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("emoji-cache-\(UUID().uuidString).txt")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try "😀\tえがお\t\n".write(to: file, atomically: true, encoding: .utf8)
+    var cache = EmojiTextReplacerCache()
+    var reads = 0
+    func load(_ url: URL) -> TextReplacer { reads += 1; return TextReplacer { url } }
+    let first = cache.value(for: file, load: load)
+    try "😃\tえがお\t\n".write(to: file, atomically: true, encoding: .utf8)
+    let repeated = cache.value(for: file, load: load)
+    #expect(reads == 1)
+    #expect(first.getSearchResult(query: "えがお", target: [.emoji]).map(\.text) == ["😀"])
+    #expect(repeated.getSearchResult(query: "えがお", target: [.emoji]) == first.getSearchResult(query: "えがお", target: [.emoji]))
+    cache.reset()
+    #expect(cache.value(for: file, load: load).getSearchResult(query: "えがお", target: [.emoji]).map(\.text) == ["😃"])
+    #expect(reads == 2)
+}
+
+@Test func emojiTextReplacerCacheDoesNotReuseAnotherResource() {
+    var cache = EmojiTextReplacerCache()
+    var reads = 0
+    func load(_ url: URL) -> TextReplacer { reads += 1; return .empty }
+    let first = URL(filePath: "/emoji/resource-a.txt")
+    let second = URL(filePath: "/emoji/resource-b.txt")
+    _ = cache.value(for: first, load: load)
+    _ = cache.value(for: first, load: load)
+    _ = cache.value(for: second, load: load)
+    #expect(reads == 2)
+}
+
 private func testConvertRequestOptions(
     memoryURL: URL,
     experimentalKeyboardTypoCorrection: Bool = false
