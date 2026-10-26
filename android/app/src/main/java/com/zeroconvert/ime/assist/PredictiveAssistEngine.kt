@@ -1,85 +1,39 @@
 package com.zeroconvert.ime.assist
 
 import com.zeroconvert.ime.KanaKanjiConverter
+import com.zeroconvert.ime.ZenzNative
+
+class ModelPredictor(private val inference: AssistInference, private val restore: (String) -> String? = ReadingCheck::readingForSurface) {
+    private fun useful(text: String) = text.codePointSize() in 2..48 && !text.hasUnsafeTokens() && text.any { it.isLetterOrDigit() }
+
+    fun suggest(context: String, reading: String, surface: String): AiAssistResult? {
+        if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
+            return com.zeroconvert.ime.engine.WindowsEngine.assist("prediction", context, reading, surface, inference)
+        }
+        if (surface.codePointSize() < 2 || reading.codePointSize() !in 1..512 ||
+            context.any { it in '\uEE00'..'\uEE0F' } || (reading + surface).hasUnsafeTokens() || reading.last().let { it in 'a'..'z' || it in 'A'..'Z' }) return null
+        val modelReading = if (reading.any { it in '\u3400'..'\u9FFF' }) restore(surface) ?: return null else reading
+        val left = context.map { if (it == ' ' || it.isISOControl()) '　' else it }.joinToString("").tailCodePoints(256)
+        val target = KanaKanjiConverter.toKatakana(modelReading)
+        val extension = inference.complete(AssistModel.PREDICTION, "\uEE02$left\uEE00$target", 24, 800)
+        if (extension.stopReason in setOf("cancelled", "busy", "error", "unavailable", "timeout")) return null
+        val generated = extension.text.trim()
+        val boundary = generated.indices.firstOrNull { index -> generated[index] in "、。！？!?" && generated.take(index).count { it.isLetterOrDigit() } >= 2 }
+        val continuation = if (boundary != null) generated.take(boundary + 1) else generated.takeIf { extension.finished } ?: return null
+        if (!useful(continuation) || !continuation.all { it in 'ぁ'..'ゖ' || it in 'ァ'..'ヶ' || it in "ー、。！？!?・" }) return null
+        val extended = target + KanaKanjiConverter.toKatakana(continuation)
+        val conversion = inference.complete(AssistModel.PREDICTION, "\uEE02$left\uEE00$extended\uEE01", (extended.codePointSize() * 3 + 16).coerceIn(32, 256), 1000)
+        val completed = conversion.text.trim()
+        if (!conversion.finished || !completed.startsWith(surface)) return null
+        val suffix = completed.removePrefix(surface)
+        if (!useful(suffix) || suffix.contains(surface)) return null
+        if (listOf("この記事", "その記事", "上記", "前述").any { it in suffix && it !in context && it !in surface }) return null
+        return AiAssistResult(AiAssistType.PREDICTION, surface + suffix, "🔮 ${(surface + suffix).take(30)}", 60, reading, suffix)
+    }
+}
 
 object PredictiveAssistEngine {
-
-    // Common Japanese predictive phrases and completions (Prefix -> Continuation)
-    private val PREDICTIVE_PHRASES = listOf(
-        "いつもお世話に" to "なっております。",
-        "よろしくお願い" to "いたします。",
-        "お疲れ様" to "でした。",
-        "ご確認のほど" to "よろしくお願いいたします。",
-        "ご連絡いただき" to "ありがとうございます。",
-        "現在原因を調査" to "中です。",
-        "機能の実装が完了" to "いたしました。",
-        "進捗状況をご報告" to "いたします。",
-        "メンテナンス作業は無事終了" to "しました。",
-        "最新バージョンを公開" to "しました。",
-        "ご都合のよろしい" to "日時をご教示ください。",
-        "日程の調整を" to "お願いできますでしょうか。",
-        "お忙しいところ恐縮ですが、" to "ご確認をお願いいたします。",
-        "添付の資料を" to "ご覧ください。",
-        "出欠のご連絡を" to "お願いいたします。",
-        "プルリクエストを" to "作成しました。",
-        "デプロイが正常に" to "完了しました。",
-        "エラーログを" to "確認してください。",
-        "タイポの修正と" to "リファクタリングを行いました。",
-        "エンドポイントの仕様を" to "変更しました。",
-        "承知いた" to "しました。",
-        "今からそちらへ" to "向かいます。",
-        "ぜひ参加させて" to "いただきます。",
-        "電車が遅延しているため、" to "少し遅れます。",
-        "助かりました、" to "ありがとうございます！",
-        "傘を持って" to "いったほうがいいですよ。",
-        "近くのラーメン屋に" to "行きませんか？",
-        "大会議室が空いて" to "います。",
-        "精一杯頑張り" to "ますのでよろしくお願いいたします。",
-        "一日中晴れの" to "予報です。",
-        "ありがとうございます" to "ございました。",
-        "何卒よろしく" to "お願い申し上げます。",
-        "お手数をおかけ" to "いたしますが、よろしくお願いいたします。",
-        "ご検討のほど" to "よろしくお願いいたします。"
-    )
-
-    /**
-     * Finds a predictive completion based on the current surface and context.
-     * Returns the full completed text to commit (e.g. "いつもお世話になっております。")
-     */
-    fun findPrediction(
-        currentSurface: String,
-        hiraganaReading: String,
-        context: String,
-        modelType: String = "rule_based"
-    ): String? {
-        val trimmedSurface = currentSurface.trim()
-        val trimmedHira = hiraganaReading.trim()
-        if (trimmedSurface.isEmpty() && trimmedHira.isEmpty()) return null
-
-        // 1. Check exact phrase prefix match
-        for ((prefix, continuation) in PREDICTIVE_PHRASES) {
-            if (trimmedSurface.isNotEmpty() && prefix.startsWith(trimmedSurface) && trimmedSurface.length >= 2) {
-                // If user typed a partial prefix, complete the full sentence
-                return prefix + continuation
-            }
-            if (trimmedSurface == prefix || trimmedSurface.endsWith(prefix)) {
-                return trimmedSurface + continuation
-            }
-            // Check reading match
-            val prefixHira = KanaKanjiConverter.toHiragana(prefix)
-            if (trimmedHira.isNotEmpty() && prefixHira.startsWith(trimmedHira) && trimmedHira.length >= 3) {
-                return prefix + continuation
-            }
-        }
-
-        // 2. Context-combined check (e.g. context: "取引先への返信で、" + partial: "いつもお世話に")
-        val combined = context + trimmedSurface
-        for ((prefix, continuation) in PREDICTIVE_PHRASES) {
-            if (combined.endsWith(prefix)) {
-                return trimmedSurface + continuation
-            }
-        }
-
-        return null
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun findPrediction(currentSurface: String, hiraganaReading: String, context: String, modelType: String = "zerocon"): String? =
+        ModelPredictor(ZenzNative.assistSession()).suggest(context, hiraganaReading, currentSurface)?.text
 }

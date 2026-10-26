@@ -12,7 +12,7 @@ pub struct Prediction {
     pub relevance: u32,
 }
 
-type CacheKey = (u16, String, String, String);
+type CacheKey = (u16, String, String, String, u64);
 static CACHE: Mutex<Vec<(CacheKey, Prediction)>> = Mutex::new(Vec::new());
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 struct Flight;
@@ -109,6 +109,7 @@ pub fn suggest(
         context.clone(),
         reading.to_owned(),
         surface.to_owned(),
+        super::runtime::backend_revision(),
     );
     if let Some(cached) = CACHE
         .lock()

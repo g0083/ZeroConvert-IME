@@ -157,6 +157,14 @@ class ComposingText(
         return boundaries
     }
 
+    /** Test a raw-input boundary without freezing or otherwise mutating the input. */
+    fun isIndependentInputBoundary(surfaceIndex: Int): Boolean {
+        if (surfaceIndex !in 0..convertTarget.length) return false
+        if (surfaceIndex > 0 && surfaceIndex < convertTarget.length &&
+            Character.isHighSurrogate(convertTarget[surfaceIndex - 1]) && Character.isLowSurrogate(convertTarget[surfaceIndex])) return false
+        return getIndependentSegmentBoundaries().any { it.surfaceIndex == surfaceIndex }
+    }
+
     /**
      * Finds the index in `input` corresponding to `targetSurfaceIndex`.
      * If the cursor falls in the middle of a roman-to-kana conversion unit,
@@ -305,10 +313,38 @@ class ComposingText(
         )
     }
 
+    /** Exclusive code-point ends of roman-input runs; 0 marks direct/frozen input. */
+    fun keyboardTypoSurfaceEnds(): IntArray {
+        val converted = mutableListOf<ConvertTargetElement>()
+        for (element in input) updateConvertTargetElements(converted, element)
+        if (converted.joinToString("") { it.string.joinToString("") } != convertTarget) return IntArray(0)
+        val count = convertTargetBeforeCursor.codePointCount(0, convertTargetBeforeCursor.length)
+        if (count !in 1..512) return IntArray(0)
+        val result = IntArray(count)
+        var start = 0
+        for (element in converted) {
+            val text = element.string.joinToString("")
+            val end = minOf(count, start + text.codePointCount(0, text.length))
+            if (element.inputStyle == InputStyle.ROMAN2KANA) for (index in start until end) result[index] = end
+            start = end
+            if (start >= count) break
+        }
+        return result
+    }
+
     fun stopComposition() {
         input.clear()
         convertTarget = ""
         convertTargetCursorPosition = 0
+    }
+
+    /** Restore raw input as well as its surface; undo must not turn romaji into frozen kana. */
+    fun restoreFrom(snapshot: ComposingText) {
+        if (snapshot === this) return
+        input.clear()
+        input.addAll(snapshot.input.map { it.copy() })
+        convertTarget = snapshot.convertTarget
+        convertTargetCursorPosition = snapshot.convertTargetCursorPosition
     }
 
     fun clone(): ComposingText {

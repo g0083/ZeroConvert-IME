@@ -22,6 +22,7 @@ pub mod learning;
 pub mod prediction;
 mod reading_check;
 pub mod romaji_decoder;
+pub mod runtime;
 pub mod typo_variant;
 
 pub use dynamic_macro::{current_expansions, expand_dynamic_macros, MacroCandidate, MacroKind};
@@ -221,13 +222,16 @@ impl Default for AiAssistConfig {
             enabled: false,
             engine: "embedded".to_string(),
             corrector_port: 18090,
-            prediction_port: shared::PREDICTION_SERVER_PORT,
+            prediction_port: runtime::PREDICTION_SERVER_PORT,
         }
     }
 }
 
 /// 超軽量HTTP POSTリクエスト（依存関係不要・即座にタイムアウト可能）
 fn simple_http_post(port: u16, path: &str, body_json: &Value, timeout_ms: u64) -> Option<Value> {
+    if let Some(response) = runtime::complete_override(port, path, body_json, timeout_ms) {
+        return response;
+    }
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let addr = format!("127.0.0.1:{}", port);
     let mut stream =

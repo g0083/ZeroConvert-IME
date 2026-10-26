@@ -33,6 +33,9 @@ class KanaKanjiConverter {
         private val userDictEntries = mutableListOf<UserDictEntry>()
         // LinkedHashMap in access/insertion order: readingHiragana -> selectedSurface
         private val learningMemory = LinkedHashMap<String, String>()
+        private var morphologyLearning: MorphologyLearningStore? = null
+        private val learningHistoryEpoch = java.util.concurrent.atomic.AtomicLong()
+        internal val learningHistoryRevision: Long get() = learningHistoryEpoch.get()
 
         fun toKatakana(hiragana: String): String {
             val sb = StringBuilder(hiragana.length)
@@ -60,6 +63,7 @@ class KanaKanjiConverter {
 
         @Synchronized
         fun ensureInitialized(context: Context) {
+            LearningPolicy.mode = LearningMode.from(context.getSharedPreferences("ime_settings", Context.MODE_PRIVATE).getString(LearningPolicy.KEY, null))
             if (!isEmojiLoaded) {
                 loadEmojiDictionary(context)
                 isEmojiLoaded = true
@@ -103,6 +107,13 @@ class KanaKanjiConverter {
         }
 
         private fun loadUserData(context: Context) {
+            if (morphologyLearning == null) {
+                try {
+                    val alphabet = context.assets.open("dictionary/louds/charID.chid").bufferedReader(Charsets.UTF_8)
+                        .use { it.readText() }.codePoints().toArray().toSet()
+                    morphologyLearning = MorphologyLearningStore(java.io.File(context.filesDir, "conversion-learning-v1.bin"), alphabet)
+                } catch (failure: Exception) { Log.e(TAG, "Could not load morphology memory", failure) }
+            }
             val prefs = context.getSharedPreferences(PREFS_USER_DATA, Context.MODE_PRIVATE)
             userDictEntries.clear()
             val dictJson = prefs.getString(KEY_USER_DICT, null)
@@ -122,6 +133,7 @@ class KanaKanjiConverter {
                 }
             }
 
+            publishAssistVocabulary()
             learningMemory.clear()
             val learnJson = prefs.getString(KEY_LEARNING_MEM, null)
             if (!learnJson.isNullOrEmpty()) {
@@ -142,6 +154,7 @@ class KanaKanjiConverter {
         }
 
         private fun saveUserDict(context: Context) {
+            publishAssistVocabulary()
             val arr = JSONArray()
             for (entry in userDictEntries) {
                 val obj = JSONObject()
@@ -172,6 +185,10 @@ class KanaKanjiConverter {
             return userDictEntries.toList()
         }
 
+        private fun publishAssistVocabulary() {
+            com.zeroconvert.ime.assist.AssistVocabulary.replaceUserEntries(userDictEntries.map { it.reading to it.word })
+        }
+
         @Synchronized
         fun addUserDictEntry(context: Context, reading: String, word: String): Boolean {
             ensureInitialized(context)
@@ -194,6 +211,7 @@ class KanaKanjiConverter {
         @Synchronized
         fun recordSelection(context: Context, readingHiragana: String, surface: String) {
             ensureInitialized(context)
+            if (!LearningPolicy.canWrite) return
             val normReading = toHiragana(readingHiragana.trim())
             val normSurface = surface.trim()
             if (normReading.isEmpty() || normSurface.isEmpty()) return
@@ -207,7 +225,28 @@ class KanaKanjiConverter {
         }
 
         @Synchronized
+        internal fun recordCommittedSelection(context: Context, selection: ConversionCommitLearning,
+                                             previous: DictionarySegment? = null,
+                                             expectedRevision: Long = learningHistoryRevision) {
+            ensureInitialized(context)
+            if (!LearningPolicy.canWrite || expectedRevision != learningHistoryRevision) return
+            if (BuildConfig.WINDOWS_ENGINE && selection.engineCandidateId.isNotEmpty()) {
+                com.zeroconvert.ime.engine.WindowsEngine.commit(selection.engineCandidateId)
+            }
+            recordSelection(context, selection.reading, selection.surface)
+            morphologyLearning?.takeIf { it.available && selection.segments.isNotEmpty() }?.let { store ->
+                store.memory.record(selection.segments, previous)
+                store.save()
+            }
+        }
+
+        @Synchronized
+        private fun learnedEntries(reading: String): List<MorphologyLearningMemory.Entry> =
+            if (LearningPolicy.canRead) morphologyLearning?.takeIf { it.available }?.memory?.matching(reading).orEmpty() else emptyList()
+
+        @Synchronized
         fun getLearnedSurface(readingHiragana: String): String? {
+            if (!LearningPolicy.canRead) return null
             return learningMemory[toHiragana(readingHiragana)]
         }
 
@@ -220,8 +259,11 @@ class KanaKanjiConverter {
         @Synchronized
         fun clearLearningMemory(context: Context) {
             ensureInitialized(context)
+            learningHistoryEpoch.incrementAndGet()
+            if (BuildConfig.WINDOWS_ENGINE) com.zeroconvert.ime.engine.WindowsEngine.resetLearning()
             learningMemory.clear()
             saveLearningMemory(context)
+            morphologyLearning?.clear()
         }
 
         @Synchronized
@@ -250,24 +292,47 @@ class KanaKanjiConverter {
         composingText: ComposingText,
         leftContext: String,
         enableAI: Boolean = true,
-        profile: String = ""
+        profile: String = "",
+        personalize: Boolean = true,
+        fixedSurfacePrefix: String = "",
+        experimentalKeyboardCorrection: Boolean = false
     ): List<Candidate> = withContext(Dispatchers.Default) {
         val hiragana = composingText.convertTargetBeforeCursor
         if (hiragana.isEmpty()) return@withContext emptyList()
 
+        // A manually accepted correction is already a surface, not a new reading.
+        // Convert only new input after it, keeping the exact chosen spelling.
+        if (fixedSurfacePrefix.isNotEmpty() && hiragana.startsWith(fixedSurfacePrefix)) {
+            val tail = composingText.clone().prefixToCursorPosition()
+            tail.prefixComplete(fixedSurfacePrefix.length)
+            if (tail.isEmpty) return@withContext listOf(Candidate(fixedSurfacePrefix, toKatakana(hiragana)))
+            return@withContext requestCandidates(
+                tail, leftContext + fixedSurfacePrefix, enableAI, profile, personalize,
+                experimentalKeyboardCorrection = experimentalKeyboardCorrection
+            ).map { it.copy(text = fixedSurfacePrefix + it.text,
+                reading = if (BuildConfig.WINDOWS_ENGINE) toKatakana(fixedSurfacePrefix + toHiragana(it.reading)) else toKatakana(hiragana),
+                segments = emptyList(), learningAllowed = it.isLearningTarget,
+                engineConsumedReading = it.engineConsumedReading?.let { consumed -> fixedSurfacePrefix.length + consumed }) }
+        }
+
+        if (BuildConfig.WINDOWS_ENGINE) {
+            return@withContext com.zeroconvert.ime.engine.WindowsEngine.candidates(composingText, leftContext,
+                enableAI, profile, personalize, experimentalKeyboardCorrection)
+        }
         val katakana = toKatakana(hiragana)
         val candidates = mutableListOf<Candidate>()
 
         // 1. Learning Memory Override (#1 priority when user previously selected a candidate for this exact reading)
-        val learned = getLearnedSurface(hiragana)
+        val learned = if (personalize) getLearnedSurface(hiragana) else null
         if (!learned.isNullOrEmpty()) {
             candidates.add(Candidate(text = learned, reading = katakana, cost = 2000f, isAI = false))
         }
 
         // 2. User Dictionary exact & prefix matches
-        val exactUserWords = synchronized(Companion) {
-            userDictEntries.filter { it.reading == hiragana }.map { it.word }
+        val userEntriesSnapshot = synchronized(Companion) {
+            if (personalize) userDictEntries.toList() else emptyList()
         }
+        val exactUserWords = userEntriesSnapshot.filter { it.reading == hiragana }.map { it.word }
         for (w in exactUserWords) {
             if (candidates.none { it.text == w }) {
                 candidates.add(Candidate(text = w, reading = katakana, cost = 1500f, isAI = false))
@@ -275,22 +340,15 @@ class KanaKanjiConverter {
         }
 
         // 3. ZeroCon AI neural conversion (Runs on llama.cpp with \uEE03 profile / user-dict hints)
-        var aiCandidateText: String? = null
+        var modelCandidate: Candidate? = null
         if (enableAI) {
             try {
                 val effectiveProfile = buildEffectiveProfile(hiragana, profile)
-                var aiResult = ZenzNative.convert(leftContext, katakana, effectiveProfile)
-                // Limit candidate length to reading length (avoiding runaway loops like 周周周...)
-                if (aiResult.length > hiragana.length) {
-                    aiResult = aiResult.take(hiragana.length)
-                }
-                // Collapse immediate identical character loops (e.g. 周周 -> 周)
-                aiResult = aiResult.replace(Regex("(.)\\1+"), "$1")
+                val aiResult = ZenzNative.convert(leftContext, katakana, effectiveProfile)
 
-                if (aiResult.isNotEmpty() && aiResult != katakana && aiResult != hiragana) {
-                    aiCandidateText = aiResult
+                if (ConversionCandidateMerge.validSurface(aiResult, hiragana) && aiResult != katakana && aiResult != hiragana) {
                     if (candidates.none { it.text == aiResult }) {
-                        candidates.add(Candidate(text = aiResult, reading = katakana, cost = 1000f, isAI = true))
+                        modelCandidate = Candidate(text = aiResult, reading = katakana, cost = 1000f, isAI = true)
                     }
                 }
             } catch (t: Throwable) {
@@ -300,15 +358,23 @@ class KanaKanjiConverter {
 
         // 4. LOUDS System Dictionary Lookup (Exact, Multi-Morpheme Viterbi & Prefix matches)
         try {
-            val dictResults = ZenzNative.lookupDict(katakana, prefixSearch = true, maxCount = 30)
+            val keyboardEnds = if (experimentalKeyboardCorrection) composingText.keyboardTypoSurfaceEnds() else null
+            val dictResults = ZenzNative.lookupDict(katakana, prefixSearch = true, maxCount = 30,
+                keyboardEnds = keyboardEnds, userEntries = userEntriesSnapshot,
+                learnedEntries = if (personalize) learnedEntries(katakana) else emptyList())
             val exactDictResults = dictResults.filter { it.reading == katakana }
             val prefixDictResults = dictResults.filter { it.reading != katakana }
-
-            for (item in exactDictResults) {
-                if (item.text != aiCandidateText && candidates.none { it.text == item.text }) {
-                    candidates.add(item)
+            for (index in candidates.indices) {
+                if (candidates[index].segments.isEmpty()) {
+                    exactDictResults.firstOrNull { it.text == candidates[index].text }?.let { lexical ->
+                        candidates[index] = candidates[index].copy(segments = lexical.segments,
+                            learningAllowed = candidates[index].isLearningTarget && lexical.isLearningTarget)
+                    }
                 }
             }
+
+            ConversionCandidateMerge.appendDistinct(candidates,
+                ConversionCandidateMerge.mergeModelAndDictionary(modelCandidate, exactDictResults, hiragana))
 
             // 5. Emoji Dictionary candidates right after top AI / exact dictionary candidates
             val emojis = lookupEmojis(hiragana)
@@ -319,13 +385,10 @@ class KanaKanjiConverter {
             }
 
             // 6. Remaining prefix dictionary matches
-            for (item in prefixDictResults) {
-                if (item.text != aiCandidateText && candidates.none { it.text == item.text }) {
-                    candidates.add(item)
-                }
-            }
+            ConversionCandidateMerge.appendDistinct(candidates, prefixDictResults)
         } catch (t: Throwable) {
             Log.e(TAG, "Dictionary lookup error for '$katakana'", t)
+            modelCandidate?.let { ConversionCandidateMerge.appendDistinct(candidates, listOf(it)) }
         }
 
         // 7. Fallback standard candidates (Hiragana & Katakana)

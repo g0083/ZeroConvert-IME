@@ -121,10 +121,7 @@ fn dictionary() -> Option<&'static ReverseDictionary> {
     static DICTIONARY: OnceLock<Option<ReverseDictionary>> = OnceLock::new();
     DICTIONARY
         .get_or_init(|| {
-            let path = std::env::current_exe()
-                .ok()?
-                .parent()?
-                .join("Dictionary/Reverse/reverse-v2.bin");
+            let path = super::runtime::reverse_dictionary_path()?;
             ReverseDictionary::from_bytes(std::fs::read(path).ok()?)
         })
         .as_ref()

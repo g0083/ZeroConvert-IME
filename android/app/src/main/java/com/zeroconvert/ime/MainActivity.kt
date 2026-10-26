@@ -2,11 +2,17 @@ package com.zeroconvert.ime
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Build
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,9 +26,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
@@ -30,7 +40,10 @@ import com.zeroconvert.ime.model.ModelInfo
 import com.zeroconvert.ime.model.ModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
@@ -87,10 +100,40 @@ fun MainScreen(
 
     var testText by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
+
+    fun isKeyboardEnabled(): Boolean =
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.enabledInputMethodList?.any { it.packageName == context.packageName } == true
+    fun isKeyboardSelected(): Boolean =
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.contains(context.packageName) == true
+
+    var keyboardEnabled by remember { mutableStateOf(isKeyboardEnabled()) }
+    var keyboardSelected by remember { mutableStateOf(isKeyboardSelected()) }
+
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                keyboardEnabled = isKeyboardEnabled()
+                keyboardSelected = isKeyboardSelected()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(Unit) {
+        while (!keyboardSelected) {
+            delay(500)
+            keyboardEnabled = isKeyboardEnabled()
+            keyboardSelected = isKeyboardSelected()
+        }
+    }
     val coroutineScope = rememberCoroutineScope()
 
     var isRealtimeInline by remember {
-        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_REALTIME_INLINE, false))
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_REALTIME_INLINE, true))
     }
     var japaneseLayout by remember {
         mutableStateOf(
@@ -104,6 +147,9 @@ fun MainScreen(
         mutableStateOf(
             imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_FLICK_ONLY, true)
         )
+    }
+    var keyboardKeyHeight by remember {
+        mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_KEY_HEIGHT_DP, 46).coerceIn(40, 64))
     }
     var isVibrationEnabled by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_VIBRATION_ENABLED, true))
@@ -120,20 +166,78 @@ fun MainScreen(
     var isAiAssistEnabled by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST, true))
     }
-    var predictiveModel by remember {
-        mutableStateOf(imePrefs.getString(ZeroConvertInputMethodService.KEY_PREDICTIVE_MODEL, "rule_based") ?: "rule_based")
+    var isDictionaryTypoCorrection by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, false))
     }
+    var learningMode by remember { mutableStateOf(LearningMode.from(imePrefs.getString(LearningPolicy.KEY, null))) }
+    var learningMenuExpanded by remember { mutableStateOf(false) }
+    var isAutoTypoCorrection by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, true))
+    }
+
     var aiProfile by remember {
         mutableStateOf(imePrefs.getString(ZeroConvertInputMethodService.KEY_AI_PROFILE, "") ?: "")
     }
-
-    var userDictList by remember {
-        mutableStateOf(KanaKanjiConverter.getUserDictionary(context))
+    var clipboardRetention by remember {
+        mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_RETENTION_HOURS, 1))
     }
+    var screenshotCapture by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, true))
+    }
+    val screenshotPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        android.Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    val screenshotPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            android.widget.Toast.makeText(
+                context,
+                "スクリーンショットの自動保存には写真へのアクセスを許可してください",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+    var showScreenshotPermissionRationale by remember { mutableStateOf(false) }
+    LaunchedEffect(screenshotCapture) {
+        if (screenshotCapture && context.checkSelfPermission(screenshotPermission) != PackageManager.PERMISSION_GRANTED) {
+            showScreenshotPermissionRationale = true
+        }
+    }
+
+    if (showScreenshotPermissionRationale) {
+        AlertDialog(
+            onDismissRequest = { showScreenshotPermissionRationale = false },
+            title = { Text("写真へのアクセスを許可") },
+            text = {
+                Text(
+                    "スクリーンショットをキーボードのクリップボード履歴へ自動保存するため、写真と動画へのアクセスが必要です。保存対象はスクリーンショットだけです。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showScreenshotPermissionRationale = false
+                    screenshotPermissionLauncher.launch(screenshotPermission)
+                }) { Text("許可する") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScreenshotPermissionRationale = false }) { Text("後で") }
+            }
+        )
+    }
+
+    var userDictList by remember { mutableStateOf<List<UserDictEntry>>(emptyList()) }
     var newDictReading by remember { mutableStateOf("") }
     var newDictWord by remember { mutableStateOf("") }
-    var learningCount by remember {
-        mutableStateOf(KanaKanjiConverter.getLearningCount(context))
+    var learningCount by remember { mutableStateOf(0) }
+    LaunchedEffect(context) {
+        val loaded = withContext(Dispatchers.IO) {
+            KanaKanjiConverter.getUserDictionary(context) to KanaKanjiConverter.getLearningCount(context)
+        }
+        userDictList = loaded.first
+        learningCount = loaded.second
     }
 
     var benchmarkProgress by remember {
@@ -205,23 +309,26 @@ fun MainScreen(
         ) {
             Button(
                 onClick = onEnableKeyboard,
-                modifier = Modifier.weight(1f).height(46.dp),
+                modifier = Modifier.weight(1f).height(52.dp),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent)
             ) {
-                Text("1. キーボードを有効化", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("1. キーボードを有効化", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2)
             }
 
-            Button(
-                onClick = onSelectKeyboard,
-                modifier = Modifier.weight(1f).height(46.dp),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-            ) {
-                Text("2. 入力方法を選択", fontSize = 13.sp, color = palette.textPrimary, fontWeight = FontWeight.Medium)
+            if (keyboardEnabled) {
+                Button(
+                    onClick = onSelectKeyboard,
+                    modifier = Modifier.weight(1f).height(52.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
+                ) {
+                    Text("2. 入力方法を選択", fontSize = 13.sp, color = palette.textPrimary, fontWeight = FontWeight.Medium, maxLines = 2)
+                }
             }
         }
 
+        if (keyboardSelected) {
         // --- Input Test Area ---
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -299,7 +406,9 @@ fun MainScreen(
                                     text = "12キー（フリック）",
                                     color = if (is12Key) Color.White else palette.textPrimary,
                                     fontSize = 13.sp,
-                                    fontWeight = if (is12Key) FontWeight.Bold else FontWeight.Medium
+                                    fontWeight = if (is12Key) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
@@ -321,14 +430,141 @@ fun MainScreen(
                                     text = "QWERTY（ローマ字）",
                                     color = if (isQwerty) Color.White else palette.textPrimary,
                                     fontSize = 13.sp,
-                                    fontWeight = if (isQwerty) FontWeight.Bold else FontWeight.Medium
+                                    fontWeight = if (isQwerty) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
                     }
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+                // Render at the device keyboard's real width, then scale the entire
+                // result uniformly. Reflowing it into this narrower settings card would
+                // otherwise change key proportions and clip the flick helper text.
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
+                    val previewScale = (maxWidth / realKeyboardWidth).coerceAtMost(1f)
+                    val realKeyboardHeight = (keyboardKeyHeight * 5 + 35).dp
+                    val density = LocalDensity.current
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(realKeyboardHeight * previewScale)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(palette.canvas)
+                    ) {
+                        Layout(
+                            content = {
+                                CompositionLocalProvider(LocalKeyboardKeyHeight provides keyboardKeyHeight.dp) {
+                                    Box(
+                                        modifier = Modifier
+                                            .requiredWidth(realKeyboardWidth)
+                                            .height(realKeyboardHeight)
+                                            .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
+                                    ) {
+                                if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
+                                    Japanese12KeyFlickLayout(
+                                        keyBgColor = palette.keyNormal,
+                                        actionKeyBg = palette.keyModifier,
+                                        textColor = palette.textPrimary,
+                                        palette = palette,
+                                        rowHeight = (keyboardKeyHeight * (52f / 46f)).dp,
+                                        isFlickOnly = isFlickOnly,
+                                        onKanaInput = {},
+                                        onReplaceLastKana = {},
+                                        onToggleDakuten = {},
+                                        onDelete = {},
+                                        onSpace = {},
+                                        onEnter = {},
+                                        onCycleMode = {},
+                                        onOpenSymbols = {},
+                                        onOpenEmoji = {},
+                                        onCursorLeft = {},
+                                        onCursorRight = {}
+                                    )
+                                } else {
+                                    JapaneseQwertyLayout(
+                                        isShifted = false,
+                                        keyBgColor = palette.keyNormal,
+                                        actionKeyBg = palette.keyModifier,
+                                        textColor = palette.textPrimary,
+                                        onKeyPress = {},
+                                        onShiftToggle = {},
+                                        onDelete = {},
+                                        onSpace = {},
+                                        onEnter = {},
+                                        onCycleMode = {},
+                                        onOpenEmoji = {},
+                                        isComposing = false,
+                                        onCursorLeft = {},
+                                        onCursorRight = {}
+                                    )
+                                }
+                            }
+                                }
+                            }
+                        ) { measurables, constraints ->
+                            val realWidthPx = with(density) { realKeyboardWidth.roundToPx() }
+                            val realHeightPx = with(density) { realKeyboardHeight.roundToPx() }
+                            val keyboard = measurables.single().measure(Constraints.fixed(realWidthPx, realHeightPx))
+                            val previewHeightPx = (realHeightPx * previewScale).roundToInt()
+                                .coerceIn(constraints.minHeight, constraints.maxHeight)
+                            layout(constraints.maxWidth, previewHeightPx) {
+                                keyboard.placeWithLayer(0, 0) {
+                                    scaleX = previewScale
+                                    scaleY = previewScale
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 0b. Flick Only Switch
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "キーの高さ",
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "${keyboardKeyHeight} dp",
+                            color = palette.primaryAccent,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Slider(
+                        value = keyboardKeyHeight.toFloat(),
+                        onValueChange = { value ->
+                            keyboardKeyHeight = value.toInt().coerceIn(40, 64)
+                            imePrefs.edit()
+                                .putInt(ZeroConvertInputMethodService.KEY_KEY_HEIGHT_DP, keyboardKeyHeight)
+                                .apply()
+                        },
+                        valueRange = 40f..64f,
+                        steps = 23,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.primaryAccent,
+                            activeTrackColor = palette.primaryAccent,
+                            inactiveTrackColor = palette.keyModifier
+                        )
+                    )
+                    Text(
+                        text = "QWERTYと12キーのキーボード全体の高さに反映されます。",
+                        color = palette.textSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -474,6 +710,23 @@ fun MainScreen(
 
                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
 
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("学習と履歴の使用", color = palette.textPrimary, fontSize = 13.sp)
+                    Box {
+                        TextButton(onClick = { learningMenuExpanded = true }) { Text(learningMode.label) }
+                        DropdownMenu(expanded = learningMenuExpanded, onDismissRequest = { learningMenuExpanded = false }) {
+                            LearningMode.entries.forEach { mode ->
+                                DropdownMenuItem(text = { Text(mode.label) }, onClick = {
+                                    learningMode = mode
+                                    learningMenuExpanded = false
+                                    imePrefs.edit().putString(LearningPolicy.KEY, mode.storageValue).apply()
+                                })
+                            }
+                        }
+                    }
+                }
+
                 // 1. Streaming Auto-Commit Toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -588,6 +841,22 @@ fun MainScreen(
 
                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("ローマ字入力の辞書補正（実験的）", color = palette.textPrimary, fontSize = 13.sp)
+                        Text("促音・撥音の重複や登録済みの誤入力を通常候補に加えます。フリック入力は対象外です。",
+                            color = palette.textSecondary, fontSize = 11.sp)
+                    }
+                    Switch(checked = isDictionaryTypoCorrection, onCheckedChange = { checked ->
+                        isDictionaryTypoCorrection = checked
+                        imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, checked).apply()
+                    })
+                }
+
                 // 3b. Experimental AI Assist (Typo Correction & Predictive Assist) Toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -621,9 +890,9 @@ fun MainScreen(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (isAiAssistEnabled) {
-                                "【ON (推奨)】入力中の打ち間違いを検知した「💡もしかして」や、文脈に応じた「🔮先読み」候補を原文バナー横にインライン表示。ワンタップで確定置換できます。"
+                                "【ON】誤入力の補正や文脈に応じた先読みを表示します。補正はタップで採用し、確定前ならBackspaceで元に戻せます。先読みはタップで確定します。"
                             } else {
-                                "【OFF】AI補正・先読み候補を表示せず、標準の変換辞書のみを使用します。"
+                                "【OFF】補正・先読み候補を表示しません。通常のかな漢字変換は引き続き使用できます。"
                             },
                             color = if (isAiAssistEnabled) palette.primaryAccentSoft else palette.textSecondary,
                             fontSize = 11.sp,
@@ -646,57 +915,23 @@ fun MainScreen(
                 }
 
                 if (isAiAssistEnabled) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp, bottom = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "先読み（🔮）推論エンジン",
-                            fontSize = 12.sp,
-                            color = palette.textPrimary,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            val engines = listOf(
-                                "rule_based" to "ルールベース\n(高速・省電力)",
-                                "230m_q4km" to "230M Q4_K_M\n(軽量・推奨)",
-                                "350m_q4km" to "350M Q4_K_M\n(高精度・RAM 6G+)"
-                            )
-                            for ((engineKey, label) in engines) {
-                                val isSel = (predictiveModel == engineKey)
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (isSel) palette.primaryAccent else palette.keyModifier,
-                                    border = BorderStroke(1.dp, if (isSel) palette.primaryAccentSoft else palette.borderSubtle),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clickable {
-                                            predictiveModel = engineKey
-                                            imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_PREDICTIVE_MODEL, engineKey).apply()
-                                        }
-                                ) {
-                                    Box(
-                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            color = if (isSel) Color.White else palette.textPrimary,
-                                            fontSize = 11.sp,
-                                            lineHeight = 14.sp,
-                                            textAlign = TextAlign.Center,
-                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    }
-                                }
-                            }
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("根拠のある誤入力を自動補正", color = palette.textPrimary, fontSize = 13.sp)
+                            Text("採用・確定の実績や一意な打鍵修正を使用します。確定前なら元に戻せます。",
+                                color = palette.textSecondary, fontSize = 11.sp)
                         }
+                        Switch(checked = isAutoTypoCorrection, onCheckedChange = { enabled ->
+                            isAutoTypoCorrection = enabled
+                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, enabled).apply()
+                        })
                     }
+                    Text(
+                        text = "先読みは選択中のZeroCon変換モデルを使用します。誤入力補正は専用Correctorモデルを使用します。",
+                        fontSize = 12.sp,
+                        color = palette.textSecondary,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
                 }
 
                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
@@ -789,6 +1024,46 @@ fun MainScreen(
             }
         }
 
+        // --- Clipboard Settings Card ---
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = palette.surface),
+            border = BorderStroke(1.dp, palette.borderSubtle),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(text = "クリップボード設定", fontWeight = FontWeight.Bold, color = palette.textPrimary, fontSize = 15.sp)
+                Text(text = "保持時間: ${clipboardRetention}時間", color = palette.textSecondary, fontSize = 12.sp)
+                Slider(
+                    value = clipboardRetention.toFloat(),
+                    onValueChange = { v ->
+                        clipboardRetention = v.toInt().coerceIn(1, 24)
+                        imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_RETENTION_HOURS, clipboardRetention).apply()
+                    },
+                    valueRange = 1f..24f,
+                    steps = 22,
+                    colors = SliderDefaults.colors(thumbColor = palette.primaryAccent, activeTrackColor = palette.primaryAccent, inactiveTrackColor = palette.keyModifier)
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = "スクリーンショットを自動保存", fontWeight = FontWeight.SemiBold, color = palette.textPrimary, fontSize = 13.sp)
+                        Text(text = "新しいスクリーンショットをクリップボード履歴に自動追加します。", color = palette.textSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = screenshotCapture,
+                        onCheckedChange = { checked ->
+                            if (checked && context.checkSelfPermission(screenshotPermission) != PackageManager.PERMISSION_GRANTED) {
+                                showScreenshotPermissionRationale = true
+                            }
+                            screenshotCapture = checked
+                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, checked).apply()
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = palette.primaryAccent, uncheckedThumbColor = palette.textSecondary, uncheckedTrackColor = palette.keyModifier)
+                    )
+                }
+            }
+        }
+
         // --- User Dictionary & Learning Memory Card ---
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -859,10 +1134,20 @@ fun MainScreen(
                     )
                     Button(
                         onClick = {
-                            if (KanaKanjiConverter.addUserDictEntry(context, newDictReading, newDictWord)) {
-                                userDictList = KanaKanjiConverter.getUserDictionary(context)
-                                newDictReading = ""
-                                newDictWord = ""
+                            val reading = newDictReading
+                            val word = newDictWord
+                            coroutineScope.launch {
+                                val updated = withContext(Dispatchers.IO) {
+                                    if (KanaKanjiConverter.addUserDictEntry(context, reading, word))
+                                        KanaKanjiConverter.getUserDictionary(context) else null
+                                }
+                                if (updated != null) {
+                                    userDictList = updated
+                                    if (newDictReading == reading && newDictWord == word) {
+                                        newDictReading = ""
+                                        newDictWord = ""
+                                    }
+                                }
                             }
                         },
                         modifier = Modifier.height(48.dp),
@@ -916,8 +1201,12 @@ fun MainScreen(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .clickable {
-                                            KanaKanjiConverter.removeUserDictEntry(context, entry)
-                                            userDictList = KanaKanjiConverter.getUserDictionary(context)
+                                            coroutineScope.launch {
+                                                userDictList = withContext(Dispatchers.IO) {
+                                                    KanaKanjiConverter.removeUserDictEntry(context, entry)
+                                                    KanaKanjiConverter.getUserDictionary(context)
+                                                }
+                                            }
                                         }
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
@@ -950,8 +1239,12 @@ fun MainScreen(
                     }
                     Button(
                         onClick = {
-                            KanaKanjiConverter.clearLearningMemory(context)
-                            learningCount = KanaKanjiConverter.getLearningCount(context)
+                            coroutineScope.launch {
+                                learningCount = withContext(Dispatchers.IO) {
+                                    KanaKanjiConverter.clearLearningMemory(context)
+                                    KanaKanjiConverter.getLearningCount(context)
+                                }
+                            }
                         },
                         modifier = Modifier.height(36.dp),
                         shape = RoundedCornerShape(8.dp),
@@ -1401,6 +1694,7 @@ fun MainScreen(
             }
         }
 
+        }
         Spacer(modifier = Modifier.height(16.dp))
     }
 }

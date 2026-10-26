@@ -1,5 +1,13 @@
 package com.zeroconvert.ime.assist
 
+import com.zeroconvert.ime.ZenzNative
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CancellationException
+
 enum class AiAssistType {
     TYPO_CORRECTION, // 💡 もしかして
     PREDICTION       // 🔮 先読み
@@ -8,55 +16,64 @@ enum class AiAssistType {
 data class AiAssistResult(
     val type: AiAssistType,
     val text: String,
-    val label: String
+    val label: String,
+    val relevance: Int = 30,
+    val sourceReading: String = "",
+    val continuation: String = "",
+    val autoApply: Boolean = false
 )
 
 object AiAssistManager {
-
+    @Suppress("UNUSED_PARAMETER")
     suspend fun requestAiAssist(
         rawInput: String,
         hiragana: String,
         firstSurface: String,
         leftContext: String,
-        predictiveModelType: String = "rule_based"
-    ): AiAssistResult? {
-        val cleanHira = hiragana.trim()
-        val cleanRaw = rawInput.trim()
-        if (cleanHira.isEmpty() && cleanRaw.isEmpty()) return null
-
-        // 1. Typo Correction has priority (💡 もしかして)
-        val typoFix = TypoCorrectionEngine.findCorrection(
-            rawInput = if (cleanHira.isNotEmpty()) cleanHira else cleanRaw,
-            context = leftContext
-        )
-        if (typoFix != null && typoFix != firstSurface && typoFix != cleanHira) {
-            return AiAssistResult(
-                type = AiAssistType.TYPO_CORRECTION,
-                text = typoFix,
-                label = "💡 $typoFix"
-            )
+        predictiveModelType: String = "zerocon",
+        allowCorrection: Boolean = true,
+        inference: AssistInference = ZenzNative.assistSession()
+    ): AiAssistResult? = coroutineScope {
+        val reading = hiragana.trim()
+        if (reading.isEmpty()) return@coroutineScope null
+        val correction = async(Dispatchers.IO) {
+            if (allowCorrection) ModelCorrector(inference).suggest(leftContext, reading, firstSurface) else null
         }
+        val prediction = async(Dispatchers.IO) {
+            ModelPredictor(inference).suggest(leftContext, reading, firstSurface.ifEmpty { reading })
+        }
+        choose(correction.await(), prediction.await())
+    }
 
-        // 2. Predictive Assist (🔮 先読み)
-        val prediction = PredictiveAssistEngine.findPrediction(
-            currentSurface = firstSurface.ifEmpty { cleanHira },
-            hiraganaReading = cleanHira,
-            context = leftContext,
-            modelType = predictiveModelType
-        )
-        if (prediction != null && prediction != firstSurface && prediction != cleanHira) {
-            val displayLabel = if (prediction.length > 15) {
-                prediction.take(14) + "…"
-            } else {
-                prediction
+    fun choose(correction: AiAssistResult?, prediction: AiAssistResult?): AiAssistResult? =
+        listOfNotNull(correction, prediction).maxWithOrNull(compareBy<AiAssistResult> { it.relevance }
+            .thenBy { it.type == AiAssistType.PREDICTION })
+
+    suspend fun streamAiAssist(
+        reading: String,
+        baseline: String,
+        context: String,
+        allowCorrection: Boolean,
+        inference: AssistInference = ZenzNative.assistSession(),
+        onUpdate: suspend (AssistUpdate) -> Unit
+    ) = coroutineScope {
+        val results = Channel<Pair<AiAssistType, AiAssistResult?>>(2)
+        fun worker(type: AiAssistType, generate: () -> AiAssistResult?) = launch(Dispatchers.IO) {
+            val result = try { generate() } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) { null }
+            results.send(type to result)
+        }
+        worker(AiAssistType.TYPO_CORRECTION) {
+            if (allowCorrection) ModelCorrector(inference).suggest(context, reading, baseline) else null
+        }
+        worker(AiAssistType.PREDICTION) { ModelPredictor(inference).suggest(context, reading, baseline) }
+        val presentation = AssistPresentation()
+        try {
+            repeat(2) {
+                val (type, result) = results.receive()
+                onUpdate(presentation.complete(type, result))
             }
-            return AiAssistResult(
-                type = AiAssistType.PREDICTION,
-                text = prediction,
-                label = "🔮 $displayLabel"
-            )
-        }
-
-        return null
+        } finally { results.cancel() }
     }
 }

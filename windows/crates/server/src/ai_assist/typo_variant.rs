@@ -156,13 +156,11 @@ pub fn load_user_vocabulary(path: &Path) -> Result<usize, String> {
 
 /// ユーザー追加語彙の既定パス。
 pub fn user_vocabulary_path() -> Option<PathBuf> {
-    shared::AppConfig::settings_path()
-        .ok()
-        .and_then(|settings| {
-            settings
-                .parent()
-                .map(|root| root.join(USER_VOCABULARY_FILENAME))
-        })
+    super::runtime::settings_path().and_then(|settings| {
+        settings
+            .parent()
+            .map(|root| root.join(USER_VOCABULARY_FILENAME))
+    })
 }
 
 /// 読みに対応する表記をインデックスから検索する。

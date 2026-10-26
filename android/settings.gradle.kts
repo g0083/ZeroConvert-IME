@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "ZeroConvert-IME"
 include(":app")
+include(":rebuilt")

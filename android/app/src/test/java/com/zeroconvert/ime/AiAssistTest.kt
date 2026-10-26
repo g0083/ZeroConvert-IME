@@ -11,6 +11,13 @@ import org.junit.Test
 class AiAssistTest {
 
     @Test
+    fun cleanKnownReadingsNeverTurnIntoNeighbouringVocabulary() {
+        for (reading in TypoCorrectionEngine.STANDARD_VOCAB.keys) {
+            assertNull("Clean reading must remain unchanged: $reading", TypoCorrectionEngine.findCorrection(reading))
+        }
+    }
+
+    @Test
     fun testDamerauLevenshteinDistance() {
         assertEquals(0, TypoCorrectionEngine.damerauLevenshtein("こんにちは", "こんにちは"))
         assertEquals(1, TypoCorrectionEngine.damerauLevenshtein("きんにちは", "こんにちは")) // substitution
@@ -47,52 +54,67 @@ class AiAssistTest {
     }
 
     @Test
-    fun testPredictiveAssistEngine() {
-        // 1. Business greeting prefix
-        val p1 = PredictiveAssistEngine.findPrediction("いつもお世話に", "いつもおせわに", "")
-        assertNotNull(p1)
-        assertEquals("いつもお世話になっております。", p1)
-
-        // 2. Business request
-        val p2 = PredictiveAssistEngine.findPrediction("よろしくお願い", "よろしくおねがい", "")
-        assertNotNull(p2)
-        assertEquals("よろしくお願いいたします。", p2)
-
-        // 3. Status reporting
-        val p3 = PredictiveAssistEngine.findPrediction("進捗状況をご報告", "しんちょくじょうきょうをごほうこく", "")
-        assertNotNull(p3)
-        assertEquals("進捗状況をご報告いたします。", p3)
-
-        // 4. Tech / engineering
-        val p4 = PredictiveAssistEngine.findPrediction("プルリクエストを", "ぷるりくえすとを", "")
-        assertNotNull(p4)
-        assertEquals("プルリクエストを作成しました。", p4)
+    fun modelUnavailableDoesNotReturnCannedPhrases() {
+        assertNull(PredictiveAssistEngine.findPrediction("いつもお世話に", "いつもおせわに", ""))
+        assertNull(PredictiveAssistEngine.findPrediction("よろしくお願い", "よろしくおねがい", ""))
     }
 
     @Test
-    fun testAiAssistManagerPriority() = runBlocking {
-        // Typo correction must have priority over prediction when typo is detected
-        val assistTypo = AiAssistManager.requestAiAssist(
-            rawInput = "おつくれさま",
-            hiragana = "おつくれさま",
-            firstSurface = "おつくれ様",
-            leftContext = ""
-        )
-        assertNotNull(assistTypo)
-        assertEquals(AiAssistType.TYPO_CORRECTION, assistTypo?.type)
-        assertEquals("お疲れ様", assistTypo?.text)
-        assertTrue(assistTypo?.label?.startsWith("💡") == true)
+    fun offlineCorrectionStillWorksWithoutPredictionModel() = runBlocking {
+        val assist = AiAssistManager.requestAiAssist("おつくれさま", "おつくれさま", "おつくれ様", "")
+        assertEquals(AiAssistType.TYPO_CORRECTION, assist?.type)
+        assertEquals("お疲れ様", assist?.text)
+    }
 
-        // Clean input without typo gets predictive continuation
-        val assistPred = AiAssistManager.requestAiAssist(
-            rawInput = "いつもお世話に",
-            hiragana = "いつもおせわに",
-            firstSurface = "いつもお世話に",
-            leftContext = ""
+    /**
+     * The typo correction result must be stable across repeated invocations.
+     *
+     * The candidate readings are generated into a Set, so an unsorted iteration
+     * order would make the winning correction depend on hash ordering. The
+     * engine sorts the candidates before testing them, which must keep the
+     * outcome deterministic.
+     */
+    @Test
+    fun testTypoCorrectionIsDeterministic() {
+        val inputs = listOf(
+            "きんにちは",
+            "おつくれさま",
+            "けか",
+            "がこう",
+            "かたん",
+            "てそと",
+            "さびす",
+            "くらおど",
+            "じかんわ",
+            "かさおさす"
         )
-        assertNotNull(assistPred)
-        assertEquals(AiAssistType.PREDICTION, assistPred?.type)
-        assertEquals("いつもお世話になっております。", assistPred?.text)
-        assertTrue(assistPred?.label?.startsWith("🔮") == true)
+        for (input in inputs) {
+            val first = TypoCorrectionEngine.findCorrection(input)
+            repeat(20) {
+                assertEquals(
+                    "Correction for '$input' must be deterministic",
+                    first,
+                    TypoCorrectionEngine.findCorrection(input)
+                )
+            }
+        }
+    }
+
+    /**
+     * Readings that cannot possibly exist in the LOUDS dictionary (because they
+     * contain characters outside the kana set) must still be corrected through
+     * the vocabulary based path.
+     *
+     * This guards the dictionary-lookup fast path: filtering out non-kana
+     * candidates may not change the outcome of a correction.
+     */
+    @Test
+    fun testTypoCorrectionIgnoresNonKanaCandidatesOnly() {
+        // Romanised input must still be corrected via the generated kana candidates.
+        assertEquals("こんにちは", TypoCorrectionEngine.findCorrection("kinnnichiwa"))
+        // Pure kana input must still be corrected.
+        assertEquals("お疲れ様", TypoCorrectionEngine.findCorrection("おつくれさま"))
+        // A reading with no correction available must return null (no false positive).
+        assertNull(TypoCorrectionEngine.findCorrection("ぞぎぞぎ"))
     }
 }

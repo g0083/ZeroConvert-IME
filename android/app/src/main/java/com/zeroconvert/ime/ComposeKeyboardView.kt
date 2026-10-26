@@ -1,5 +1,6 @@
 package com.zeroconvert.ime
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +14,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -26,11 +32,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class KeyboardMode {
     JAPANESE,
@@ -45,13 +56,15 @@ enum class KeyboardTab {
     SYMBOLS
 }
 
+val LocalKeyboardKeyHeight = staticCompositionLocalOf { 46.dp }
+
 @Composable
 fun KeyboardRootView(
     imeService: ZeroConvertInputMethodService,
     currentSurface: String,
     predictedCandidate: String,
     candidates: List<Candidate>,
-    clipboardHistory: List<String>,
+    clipboardHistory: List<ClipboardEntry>,
     isRealtimeInline: Boolean = false,
     aiAssistResult: com.zeroconvert.ime.assist.AiAssistResult? = null,
     onAdoptAiAssist: () -> Unit = {},
@@ -60,12 +73,22 @@ fun KeyboardRootView(
     onCommitText: (String) -> Unit,
     onDeleteChar: () -> Unit,
     onEnter: () -> Unit,
-    onClearInput: () -> Unit
+    onClearInput: () -> Unit,
+    onClipboardPaste: (ClipboardEntry, Boolean) -> Unit = { _, _ -> }
 ) {
     var activeTab by remember { mutableStateOf(KeyboardTab.MAIN) }
     var keyboardMode by remember { mutableStateOf(KeyboardMode.JAPANESE) }
-    var isShifted by remember { mutableStateOf(false) }
+    var shiftState by remember { mutableStateOf(KeyboardShiftState()) }
+    val isShifted = shiftState.isShifted
+    val doubleTapTimeoutMillis = LocalViewConfiguration.current.doubleTapTimeoutMillis
+    val onShiftToggle: () -> Unit = {
+        shiftState = shiftState.tap(android.os.SystemClock.uptimeMillis(), doubleTapTimeoutMillis)
+    }
     var isCandidatesExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(candidates.isEmpty()) {
+        if (candidates.isEmpty()) isCandidatesExpanded = false
+    }
 
     val palette = rememberZeroConPalette(themeMode)
     val bgColor = palette.canvas
@@ -74,7 +97,11 @@ fun KeyboardRootView(
     val actionKeyBg = palette.keyModifier
     val accentColor = palette.primaryAccent
     val textColor = palette.textPrimary
-    val dividerColor = palette.borderSubtle
+    val selectionCount = imeService.selectedCharacterCountState.value
+
+    // Read the composing state from the service so that the QWERTY emoji key can be
+    // swapped for the "?" key while the user is typing.
+    val isComposing = currentSurface.isNotEmpty() || imeService.currentComposingSurface.value.isNotEmpty()
 
     Column(
         modifier = Modifier
@@ -82,149 +109,54 @@ fun KeyboardRootView(
             .background(bgColor)
             .navigationBarsPadding()
     ) {
-        // --- Floating Reading Banner & Inline AI Assist Badge (💡 もしかして / 🔮 先読み) ---
-        if ((isRealtimeInline || aiAssistResult != null) && currentSurface.isNotEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isRealtimeInline) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = palette.surfaceElevated.copy(alpha = 0.96f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, palette.primaryAccent.copy(alpha = 0.6f)),
-                            shadowElevation = 3.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "原文: ",
-                                    color = palette.primaryAccentSoft,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = currentSurface,
-                                    color = textColor,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
+        KeyboardAssistBar(
+            reading = currentSurface,
+            assist = aiAssistResult.takeIf { keyboardMode != KeyboardMode.ENGLISH },
+            correctionApplied = imeService.aiAssistAdoptedState.value,
+            palette = palette,
+            onAdopt = onAdoptAiAssist,
+            onUndo = { imeService.revertAiAssist() }
+        )
 
-                    // AI Assist Badge (💡 / 🔮)
-                    if (aiAssistResult != null) {
-                        val isTypo = (aiAssistResult.type == com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION)
-                        val badgeBorder = if (isTypo) palette.warningAmber.copy(alpha = 0.8f) else palette.primaryAccent.copy(alpha = 0.8f)
-                        val badgeBg = if (isTypo) palette.warningAmber.copy(alpha = 0.16f) else palette.primaryAccent.copy(alpha = 0.16f)
-                        val badgeText = if (isTypo) palette.warningAmber else palette.primaryAccentSoft
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = badgeBg,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, badgeBorder),
-                            shadowElevation = 4.dp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onAdoptAiAssist() }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = aiAssistResult.label,
-                                    color = badgeText,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "↵",
-                                    color = badgeText.copy(alpha = 0.8f),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+        // --- 1. Candidate Bar & Toolbar (with Clipboard Toggle & ∨ Expand) ---
+        // The clipboard suggestion is shown in the candidate area while it is available.
+        val suggestion = if (selectionCount == null && candidates.isEmpty() && clipboardHistory.isNotEmpty() && !imeService.isClipboardSuggestionDismissed.value) {
+            clipboardHistory.first()
+        } else {
+            null
         }
-
-        // --- 1. Candidate Bar & Toolbar (with 📋 Clipboard Toggle & ∨ Expand) ---
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(46.dp)
+                .height(48.dp)
                 .background(surfaceColor)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (candidates.isNotEmpty()) {
-                androidx.compose.foundation.lazy.LazyRow(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    items(candidates.size) { idx ->
-                        val item = candidates[idx]
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxHeight()
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .clickable { onCommitText(item.text) }
-                                    .padding(horizontal = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = item.text,
-                                    color = if (idx == 0 && item.isAI) palette.primaryAccentSoft else textColor,
-                                    fontSize = 16.sp,
-                                    fontWeight = if (idx == 0) FontWeight.Medium else FontWeight.Normal,
-                                    maxLines = 1
-                                )
-                            }
-                            if (idx < candidates.size - 1) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(1.dp)
-                                        .height(18.dp)
-                                        .background(dividerColor)
-                                )
-                            }
-                        }
-                    }
-                }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .padding(start = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (currentSurface.isNotEmpty()) {
-                        Text(
-                            text = currentSurface,
-                            color = textColor,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (selectionCount != null) {
+                    SelectionCountLabel(selectionCount, palette, Modifier.weight(1f).fillMaxHeight())
+                } else if (candidates.isNotEmpty()) {
+                    HorizontalCandidateStrip(
+                        reading = currentSurface,
+                        candidates = candidates,
+                        palette = palette,
+                        onSelect = { imeService.selectCandidate(it) },
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+                } else {
+                    // Empty state: settings button (far left) + layout switcher (right).
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .padding(start = 4.dp),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = actionKeyBg.copy(alpha = 0.6f),
@@ -251,60 +183,73 @@ fun KeyboardRootView(
                         }
                     }
                 }
-            }
 
-            // When NOT converting (candidates is empty), show layout switcher and clipboard button
-            if (candidates.isEmpty()) {
-                // Japanese & English Layout Switcher (12キー <-> QWERTY)
-                if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
-                    val currentLayout = imeService.japaneseLayoutState.value
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = actionKeyBg,
-                        modifier = Modifier
-                            .padding(end = 4.dp)
-                            .clickable {
-                                val next = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) {
-                                    JapaneseInputLayout.QWERTY
-                                } else {
-                                    JapaneseInputLayout.FLICK_12KEY
-                                }
-                                imeService.setJapaneseLayout(next)
-                            }
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                // When NOT converting (candidates is empty), show layout switcher and clipboard button
+                if (selectionCount != null) {
+                    if (imeService.canReconvertSelection()) {
+                        Box(
+                            Modifier.fillMaxHeight().widthIn(min = 64.dp)
+                                .clickable { imeService.reconvertSelection() },
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = "Switch layout",
-                                tint = palette.primaryAccentSoft,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) "QWERTY" else "12キー",
-                                color = palette.textSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
                         }
                     }
-                }
+                } else if (candidates.isEmpty()) {
+                    if (imeService.canReconvertSelection()) {
+                        Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp,
+                            modifier = Modifier.clickable { imeService.reconvertSelection() }.padding(horizontal = 8.dp))
+                    }
+                    // Japanese & English Layout Switcher (12キー <-> QWERTY)
+                    if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
+                        val currentLayout = imeService.japaneseLayoutState.value
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = actionKeyBg,
+                            modifier = Modifier
+                                .padding(end = 4.dp)
+                                .clickable {
+                                    val next = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) {
+                                        JapaneseInputLayout.QWERTY
+                                    } else {
+                                        JapaneseInputLayout.FLICK_12KEY
+                                    }
+                                    imeService.setJapaneseLayout(next)
+                                }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = "Switch layout",
+                                    tint = palette.primaryAccentSoft,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) "QWERTY" else "12キー",
+                                    color = palette.textSecondary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
 
-                // Clipboard toggle button
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
-                        .clickable {
-                            activeTab = if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
+                    // Clipboard toggle button
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
+                            .clickable {
+                                activeTab = if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
                         painter = painterResource(R.drawable.ic_clipboard),
                         contentDescription = "Clipboard",
                         tint = if (activeTab == KeyboardTab.CLIPBOARD) accentColor else palette.textSecondary,
@@ -316,7 +261,8 @@ fun KeyboardRootView(
                 // Only show Down chevron expand button
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(48.dp)
+                        .semantics { contentDescription = if (isCandidatesExpanded) "候補一覧を閉じる" else "候補一覧を開く" }
                         .clickable { isCandidatesExpanded = !isCandidatesExpanded },
                     contentAlignment = Alignment.Center
                 ) {
@@ -328,65 +274,52 @@ fun KeyboardRootView(
                     )
                 }
             }
-        }
+            }
 
-        // Expanded candidates overlay (if toggled)
-        if (isCandidatesExpanded && candidates.isNotEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp)
-                    .background(surfaceColor)
-                    .padding(4.dp)
-            ) {
-                Row(
+            // Clipboard suggestion overlay.
+            // It is drawn on top of the ZeroConAI settings button and the layout switcher,
+            // exactly like conversion candidates take over the candidate area.
+            if (suggestion != null) {
+                Box(
                     modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 8.dp, end = 44.dp)
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxHeight()
+                        .background(surfaceColor),
+                    contentAlignment = Alignment.CenterStart
                 ) {
-                    Text(
-                        text = "候補一覧 (${candidates.size}件)",
-                        color = palette.textSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = if (isRealtimeInline) palette.readyEmerald.copy(alpha = 0.2f) else actionKeyBg,
-                        modifier = Modifier.clickable { onToggleRealtimeInline() }
+                        color = actionKeyBg.copy(alpha = 0.9f),
+                        modifier = Modifier.clickable { onClipboardPaste(suggestion, true) }
                     ) {
-                        Text(
-                            text = if (isRealtimeInline) "⚡ リアルタイム反映: ON" else "⚡ リアルタイム反映: OFF",
-                            color = if (isRealtimeInline) palette.readyEmerald else palette.textSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 75.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(top = 2.dp)
-                ) {
-                    items(candidates) { item ->
-                        Box(
-                            modifier = Modifier
-                                .padding(2.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(keyBgColor)
-                                .clickable {
-                                    onCommitText(item.text)
-                                    isCandidatesExpanded = false
-                                }
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Text(text = item.text, color = textColor, fontSize = 15.sp)
+                            Icon(
+                                painter = painterResource(R.drawable.ic_clipboard),
+                                contentDescription = "Clipboard",
+                                tint = textColor,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            if (suggestion.isImage) {
+                                ClipboardImageThumbnail(
+                                    uri = suggestion.imageUri!!,
+                                    contentDescription = "Image",
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text(
+                                text = suggestion.preview,
+                                color = textColor,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
@@ -413,13 +346,24 @@ fun KeyboardRootView(
         }
 
         // --- 2. Main Content (Tab Switch) ---
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(265.dp)
-                .padding(vertical = 4.dp, horizontal = 3.dp)
-        ) {
-            when (activeTab) {
+        val keyHeight = imeService.keyboardKeyHeightState.value.dp
+        KeyboardContentArea(
+            keyHeight = keyHeight,
+            expanded = isCandidatesExpanded && candidates.isNotEmpty(),
+            expandedContent = {
+                ExpandedCandidatePanel(
+                    candidates = candidates,
+                    isRealtimeInline = isRealtimeInline,
+                    palette = palette,
+                    onToggleRealtimeInline = onToggleRealtimeInline,
+                    onSelect = { item ->
+                        imeService.selectCandidate(item)
+                        isCandidatesExpanded = false
+                    }
+                )
+            },
+            keyboardContent = {
+                when (activeTab) {
                 KeyboardTab.MAIN -> {
                     when (keyboardMode) {
                         KeyboardMode.JAPANESE -> {
@@ -430,6 +374,7 @@ fun KeyboardRootView(
                                     actionKeyBg = actionKeyBg,
                                     textColor = textColor,
                                     palette = palette,
+                                    rowHeight = keyHeight * (52f / 46f),
                                     isFlickOnly = imeService.isFlickOnlyState.value,
                                     onKanaInput = { kana ->
                                         imeService.handleKana(kana)
@@ -465,19 +410,22 @@ fun KeyboardRootView(
                             } else {
                                 JapaneseQwertyLayout(
                                     isShifted = isShifted,
+                                    isShiftLocked = shiftState.isLocked,
                                     keyBgColor = keyBgColor,
                                     actionKeyBg = actionKeyBg,
                                     textColor = textColor,
                                     onKeyPress = { ch ->
-                                        imeService.handleChar(ch)
+                                        imeService.handleChar(shiftState.characterFor(ch))
+                                        shiftState = shiftState.afterCharacter()
                                     },
-                                    onShiftToggle = { isShifted = !isShifted },
+                                    onShiftToggle = onShiftToggle,
                                     onDelete = onDeleteChar,
                                     onSpace = {
                                         if (currentSurface.isNotEmpty()) {
                                             imeService.confirmCurrent()
                                         } else {
                                             imeService.commitDirect(" ")
+                                            shiftState = shiftState.afterCharacter()
                                         }
                                     },
                                     onLongPressSpace = onLongPressSpace,
@@ -490,6 +438,7 @@ fun KeyboardRootView(
                                     },
                                     onCycleMode = onCycleMode,
                                     onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
+                                    isComposing = isComposing,
                                     onCursorLeft = { imeService.handleCursorLeft() },
                                     onCursorRight = { imeService.handleCursorRight() }
                                 )
@@ -503,9 +452,10 @@ fun KeyboardRootView(
                                     actionKeyBg = actionKeyBg,
                                     textColor = textColor,
                                     palette = palette,
+                                    rowHeight = keyHeight * (52f / 46f),
                                     isFlickOnly = imeService.isFlickOnlyState.value,
                                     onCommitText = { text ->
-                                        imeService.commitDirect(text)
+                                        imeService.handleEnglishText(text)
                                     },
                                     onReplaceLastCommittedText = { text, len ->
                                         imeService.replaceLastCommittedText(text, len)
@@ -517,7 +467,7 @@ fun KeyboardRootView(
                                         imeService.isLastCharLetter()
                                     },
                                     onDelete = onDeleteChar,
-                                    onSpace = { imeService.commitDirect(" ") },
+                                    onSpace = { imeService.handleEnglishSpace() },
                                     onLongPressSpace = onLongPressSpace,
                                     onEnter = onEnter,
                                     onCycleMode = onCycleMode,
@@ -529,19 +479,25 @@ fun KeyboardRootView(
                             } else {
                                 EnglishQwertyLayout(
                                     isShifted = isShifted,
+                                    isShiftLocked = shiftState.isLocked,
                                     keyBgColor = keyBgColor,
                                     actionKeyBg = actionKeyBg,
                                     textColor = textColor,
                                     onCommitChar = { ch ->
-                                        imeService.commitDirect(ch.toString())
+                                        imeService.handleEnglishChar(shiftState.characterFor(ch))
+                                        shiftState = shiftState.afterCharacter()
                                     },
-                                    onShiftToggle = { isShifted = !isShifted },
+                                    onShiftToggle = onShiftToggle,
                                     onDelete = onDeleteChar,
-                                    onSpace = { imeService.commitDirect(" ") },
+                                    onSpace = {
+                                        imeService.handleEnglishSpace()
+                                        shiftState = shiftState.afterCharacter()
+                                    },
                                     onLongPressSpace = onLongPressSpace,
                                     onEnter = onEnter,
                                     onCycleMode = onCycleMode,
                                     onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
+                                    isComposing = isComposing,
                                     onCursorLeft = { imeService.handleCursorLeft() },
                                     onCursorRight = { imeService.handleCursorRight() }
                                 )
@@ -553,6 +509,7 @@ fun KeyboardRootView(
                                 actionKeyBg = actionKeyBg,
                                 textColor = textColor,
                                 palette = palette,
+                                rowHeight = keyHeight * (52f / 46f),
                                 isFlickOnly = imeService.isFlickOnlyState.value,
                                 onCommitText = { text ->
                                     imeService.commitDirect(text)
@@ -562,12 +519,12 @@ fun KeyboardRootView(
                                 },
                                 onDelete = onDeleteChar,
                                 onLongPressSpace = onLongPressSpace,
-                                onEnter = onEnter,
-                                onCycleMode = onCycleMode,
-                                onOpenSymbols = { activeTab = KeyboardTab.SYMBOLS },
-                                onCursorLeft = { imeService.handleCursorLeft() },
-                                onCursorRight = { imeService.handleCursorRight() }
-                            )
+                                    onEnter = onEnter,
+                                    onCycleMode = onCycleMode,
+                                    onOpenSymbols = { activeTab = KeyboardTab.SYMBOLS },
+                                    onCursorLeft = { imeService.handleCursorLeft() },
+                                    onCursorRight = { imeService.handleCursorRight() }
+                                )
                         }
                     }
                 }
@@ -577,10 +534,16 @@ fun KeyboardRootView(
                         textColor = textColor,
                         itemBgColor = keyBgColor,
                         actionKeyBg = actionKeyBg,
-                        onSelect = { text ->
-                            onCommitText(text)
+                        onSelect = { entry ->
+                            onClipboardPaste(entry, false)
                             activeTab = KeyboardTab.MAIN
                         },
+                        onTogglePin = { entry -> imeService.toggleClipboardPin(entry) },
+                        onDelete = { entry -> imeService.removeClipboardEntry(entry) },
+                        onUpdate = { entry, text -> imeService.updateClipboardEntry(entry, text) },
+                        onClearAll = { imeService.clearClipboardHistory(true) },
+                        retentionHours = imeService.clipboardRetentionHoursState.value,
+                        onRetentionChange = { imeService.setClipboardRetentionHours(it) },
                         onBackToQwerty = {
                             activeTab = KeyboardTab.MAIN
                         }
@@ -625,8 +588,39 @@ fun KeyboardRootView(
                         }
                     )
                 }
+                }
             }
-        }
+        )
+    }
+}
+
+@Composable
+fun ShiftKeyButton(
+    isShifted: Boolean,
+    isLocked: Boolean,
+    bgColor: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier.height(LocalKeyboardKeyHeight.current)
+            .clip(RoundedCornerShape(6.dp)).background(bgColor)
+            .semantics {
+                stateDescription = when {
+                    isLocked -> "大文字固定"
+                    isShifted -> "次の1文字だけ大文字"
+                    else -> "小文字"
+                }
+            }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = if (isLocked) Icons.Default.KeyboardCapslock else Icons.Default.ArrowUpward,
+            contentDescription = "Shift",
+            tint = if (isShifted) Color.White else Color(0xFFD0D3DE),
+            modifier = Modifier.size(24.dp)
+        )
     }
 }
 
@@ -680,14 +674,24 @@ fun Aa1Button(
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
     actionKeyBg: Color,
+    fillAvailableHeight: Boolean = false,
+    matchEnterStyle: Boolean = false,
     onClick: () -> Unit
 ) {
     Box(
         modifier = modifier
-            .height(46.dp)
-            .padding(horizontal = 2.5.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(7.dp))
+            .then(if (fillAvailableHeight) Modifier.fillMaxHeight() else Modifier.height(LocalKeyboardKeyHeight.current))
+            .then(
+                if (fillAvailableHeight) Modifier.padding(horizontal = 3.dp, vertical = 2.5.dp)
+                else Modifier
+            )
+            .clip(RoundedCornerShape(if (matchEnterStyle) 22.dp else if (fillAvailableHeight) 8.dp else 7.dp))
             .background(actionKeyBg)
+            .semantics { contentDescription = "入力モード:" + when (mode) {
+                KeyboardMode.JAPANESE -> "日本語"
+                KeyboardMode.ENGLISH -> "英語"
+                KeyboardMode.NUMERIC -> "数字"
+            } }
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -734,8 +738,10 @@ fun JapaneseQwertyLayout(
     onEnter: () -> Unit,
     onCycleMode: () -> Unit,
     onOpenEmoji: () -> Unit,
+    isComposing: Boolean = false,
     onCursorLeft: () -> Unit,
-    onCursorRight: () -> Unit
+    onCursorRight: () -> Unit,
+    isShiftLocked: Boolean = false
 ) {
     val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
     val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
@@ -791,22 +797,13 @@ fun JapaneseQwertyLayout(
 
         // Row 3: Shift + z-m + Backspace
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            IconButton(
-                onClick = onShiftToggle,
-                modifier = Modifier
-                    .weight(1.35f)
-                    .height(48.dp)
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ArrowUpward,
-                    contentDescription = "Shift",
-                    tint = if (isShifted) Color.White else Color(0xFFD0D3DE),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            ShiftKeyButton(
+                isShifted = isShifted,
+                isLocked = isShiftLocked,
+                bgColor = actionKeyBg,
+                modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                onClick = onShiftToggle
+            )
 
             for (ch in row3) {
                 val displayChar = if (isShifted) ch.uppercaseChar() else ch
@@ -823,8 +820,8 @@ fun JapaneseQwertyLayout(
                 onClick = onDelete,
                 modifier = Modifier
                     .weight(1.35f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(6.dp))
                     .background(actionKeyBg)
             ) {
@@ -841,8 +838,9 @@ fun JapaneseQwertyLayout(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Aa1Button(
                 mode = KeyboardMode.JAPANESE,
-                modifier = Modifier.weight(1.15f),
+                modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
                 actionKeyBg = actionKeyBg,
+                matchEnterStyle = true,
                 onClick = onCycleMode
             )
 
@@ -855,22 +853,33 @@ fun JapaneseQwertyLayout(
                 onClick = { onKeyPress('、') }
             )
 
-            Box(
-                modifier = Modifier
-                    .weight(0.85f)
-                    .height(48.dp)
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
-                    .clickable(onClick = onOpenEmoji),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mood,
-                    contentDescription = "Emoji",
-                    tint = textColor,
-                    modifier = Modifier.size(22.dp)
+            if (isComposing) {
+                KeyButton(
+                    text = "？",
+                    modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                    bgColor = actionKeyBg,
+                    textColor = textColor,
+                    fontSize = 18.sp,
+                    onClick = { onKeyPress('？') }
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .weight(0.85f)
+                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                        .height(LocalKeyboardKeyHeight.current)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(actionKeyBg)
+                        .clickable(onClick = onOpenEmoji),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mood,
+                        contentDescription = "Emoji",
+                        tint = textColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
 
             KeyButton(
@@ -897,8 +906,8 @@ fun JapaneseQwertyLayout(
                 onClick = onCursorLeft,
                 modifier = Modifier
                     .weight(0.85f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(6.dp))
                     .background(actionKeyBg),
                 initialDelayMs = 300L,
@@ -912,8 +921,8 @@ fun JapaneseQwertyLayout(
                 onClick = onCursorRight,
                 modifier = Modifier
                     .weight(0.85f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(6.dp))
                     .background(actionKeyBg),
                 initialDelayMs = 300L,
@@ -925,8 +934,8 @@ fun JapaneseQwertyLayout(
             Box(
                 modifier = Modifier
                     .weight(1.35f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(22.dp))
                     .background(Color(0xFF3B82F6))
                     .clickable(onClick = onEnter),
@@ -957,8 +966,10 @@ fun EnglishQwertyLayout(
     onEnter: () -> Unit,
     onCycleMode: () -> Unit,
     onOpenEmoji: () -> Unit,
+    isComposing: Boolean = false,
     onCursorLeft: () -> Unit,
-    onCursorRight: () -> Unit
+    onCursorRight: () -> Unit,
+    isShiftLocked: Boolean = false
 ) {
     val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
     val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
@@ -1016,22 +1027,13 @@ fun EnglishQwertyLayout(
 
         // Row 3: Shift + z-m + Backspace
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            IconButton(
-                onClick = onShiftToggle,
-                modifier = Modifier
-                    .weight(1.35f)
-                    .height(48.dp)
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ArrowUpward,
-                    contentDescription = "Shift",
-                    tint = if (isShifted) Color.White else Color(0xFFD0D3DE),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            ShiftKeyButton(
+                isShifted = isShifted,
+                isLocked = isShiftLocked,
+                bgColor = actionKeyBg,
+                modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                onClick = onShiftToggle
+            )
 
             for (ch in row3) {
                 val displayChar = if (isShifted) ch.uppercaseChar() else ch
@@ -1048,8 +1050,8 @@ fun EnglishQwertyLayout(
                 onClick = onDelete,
                 modifier = Modifier
                     .weight(1.35f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(6.dp))
                     .background(actionKeyBg)
             ) {
@@ -1066,27 +1068,39 @@ fun EnglishQwertyLayout(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             Aa1Button(
                 mode = KeyboardMode.ENGLISH,
-                modifier = Modifier.weight(1.15f),
+                modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
                 actionKeyBg = actionKeyBg,
+                matchEnterStyle = true,
                 onClick = onCycleMode
             )
 
-            Box(
-                modifier = Modifier
-                    .weight(0.85f)
-                    .height(48.dp)
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
-                    .clickable(onClick = onOpenEmoji),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mood,
-                    contentDescription = "Emoji",
-                    tint = textColor,
-                    modifier = Modifier.size(22.dp)
+            if (isComposing) {
+                KeyButton(
+                    text = "?",
+                    modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                    bgColor = actionKeyBg,
+                    textColor = textColor,
+                    fontSize = 18.sp,
+                    onClick = { onCommitChar('?') }
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .weight(0.85f)
+                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                        .height(LocalKeyboardKeyHeight.current)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(actionKeyBg)
+                        .clickable(onClick = onOpenEmoji),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mood,
+                        contentDescription = "Emoji",
+                        tint = textColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
 
             KeyButton(
@@ -1121,8 +1135,8 @@ fun EnglishQwertyLayout(
                 onClick = onCursorLeft,
                 modifier = Modifier
                     .weight(0.85f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(6.dp))
                     .background(actionKeyBg),
                 initialDelayMs = 300L,
@@ -1135,8 +1149,8 @@ fun EnglishQwertyLayout(
                 onClick = onCursorRight,
                 modifier = Modifier
                     .weight(0.85f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(6.dp))
                     .background(actionKeyBg),
                 initialDelayMs = 300L,
@@ -1148,8 +1162,8 @@ fun EnglishQwertyLayout(
             Box(
                 modifier = Modifier
                     .weight(1.35f)
-                    .height(48.dp)
                     .padding(horizontal = 2.5.dp, vertical = 2.dp)
+                    .height(LocalKeyboardKeyHeight.current)
                     .clip(RoundedCornerShape(22.dp))
                     .background(Color(0xFF3B82F6))
                     .clickable(onClick = onEnter),
@@ -1331,9 +1345,13 @@ fun KeyButton(
     val currentOnLongClick by rememberUpdatedState(onLongClick)
     Box(
         modifier = modifier
-            .height(46.dp)
+            .height(LocalKeyboardKeyHeight.current)
             .clip(RoundedCornerShape(7.dp))
             .background(bgColor)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${text}を入力"
+                onClick { currentOnClick(); true }
+            }
             .then(
                 if (onLongClick != null) {
                     Modifier.pointerInput(Unit) {
@@ -1360,34 +1378,86 @@ fun KeyButton(
 
 @Composable
 fun ClipboardPanel(
-    history: List<String>,
+    history: List<ClipboardEntry>,
     textColor: Color,
     itemBgColor: Color,
     actionKeyBg: Color,
-    onSelect: (String) -> Unit,
+    onSelect: (ClipboardEntry) -> Unit,
+    onTogglePin: (ClipboardEntry) -> Unit = {},
+    onDelete: (ClipboardEntry) -> Unit = {},
+    onUpdate: (ClipboardEntry, String) -> Unit = { _, _ -> },
+    onClearAll: () -> Unit = {},
+    retentionHours: Int = 1,
+    onRetentionChange: (Int) -> Unit = {},
     onBackToQwerty: () -> Unit
 ) {
+    var editingEntry by remember { mutableStateOf<ClipboardEntry?>(null) }
+    var editingText by remember { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize()) {
+        if (editingEntry != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = editingText,
+                    onValueChange = { editingText = it },
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(actionKeyBg)
+                        .clickable {
+                            editingEntry?.let { onUpdate(it, editingText) }
+                            editingEntry = null
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("保存", color = textColor, fontSize = 13.sp)
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(actionKeyBg)
+                        .clickable { editingEntry = null }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("×", color = textColor, fontSize = 13.sp)
+                }
+            }
+        }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (history.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(text = "クリップボードの履歴はありません", color = Color(0xFF64748B), fontSize = 14.sp)
                 }
             } else {
+                val pinned = history.filter { it.pinned }
+                val recent = history.filter { !it.pinned }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(history) { item ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(itemBgColor)
-                                .clickable { onSelect(item) }
-                                .padding(12.dp)
-                        ) {
-                            Text(text = item, color = textColor, fontSize = 14.sp, maxLines = 2)
+                    if (pinned.isNotEmpty()) {
+                        item {
+                            Text(text = "ピン留め", color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp))
+                        }
+                        items(pinned, key = { it.id }) { item ->
+                            ClipboardRow(item, textColor, itemBgColor, actionKeyBg, onSelect, onTogglePin, onDelete, onUpdate, { e -> editingEntry = e; editingText = e.text ?: "" })
+                        }
+                    }
+                    if (recent.isNotEmpty()) {
+                        item {
+                            Text(text = "最近", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp))
+                        }
+                        items(recent, key = { it.id }) { item ->
+                            ClipboardRow(item, textColor, itemBgColor, actionKeyBg, onSelect, onTogglePin, onDelete, onUpdate, { e -> editingEntry = e; editingText = e.text ?: "" })
                         }
                     }
                 }
@@ -1398,7 +1468,7 @@ fun ClipboardPanel(
                 .fillMaxWidth()
                 .height(44.dp)
                 .padding(2.dp),
-            horizontalArrangement = Arrangement.Start
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(
                 modifier = Modifier
@@ -1411,6 +1481,152 @@ fun ClipboardPanel(
             ) {
                 Text("← キーボード", color = textColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
+            Box(
+                modifier = Modifier
+                    .width(96.dp)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(actionKeyBg)
+                    .clickable { onClearAll() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("すべて削除", color = textColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClipboardRow(
+    item: ClipboardEntry,
+    textColor: Color,
+    itemBgColor: Color,
+    actionKeyBg: Color,
+    onSelect: (ClipboardEntry) -> Unit,
+    onTogglePin: (ClipboardEntry) -> Unit,
+    onDelete: (ClipboardEntry) -> Unit,
+    onUpdate: (ClipboardEntry, String) -> Unit,
+    onEdit: (ClipboardEntry) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(itemBgColor)
+            .clickable { onSelect(item) }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (item.isImage) {
+            ClipboardImageThumbnail(
+                uri = item.imageUri!!,
+                contentDescription = "Image",
+                modifier = Modifier.size(40.dp)
+            )
+        } else {
+            Icon(
+                painter = painterResource(R.drawable.ic_clipboard),
+                contentDescription = "Clipboard",
+                tint = if (item.pinned) Color(0xFFFBBF24) else textColor,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = item.preview,
+            color = textColor,
+            fontSize = 14.sp,
+            maxLines = 2,
+            modifier = Modifier.weight(1f)
+        )
+        if (item.entityType != null) {
+            Spacer(modifier = Modifier.width(4.dp))
+            Surface(shape = RoundedCornerShape(4.dp), color = actionKeyBg) {
+                Text(text = item.entityType!!, color = Color(0xFF818CF8), fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { onTogglePin(item) }
+                .padding(4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.PushPin,
+                contentDescription = "Pin",
+                tint = if (item.pinned) Color(0xFFFBBF24) else Color(0xFF94A3B8),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        if (!item.isImage) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { onEdit(item) }
+                    .padding(4.dp)
+            ) {
+                Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit", tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+            }
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .clickable { onDelete(item) }
+                .padding(4.dp)
+        ) {
+            Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+fun ClipboardImageThumbnail(
+    uri: android.net.Uri,
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, uri) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val resolver = context.contentResolver
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                val sample = if (bounds.outWidth > 0) {
+                    var s = 1
+                    while (bounds.outWidth / (s * 2) >= 96) s *= 2
+                    s
+                } else {
+                    1
+                }
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = contentDescription,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = modifier.clip(RoundedCornerShape(4.dp))
+        )
+    } else {
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color(0xFF334155)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = contentDescription,
+                tint = Color(0xFF94A3B8),
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }

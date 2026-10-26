@@ -3205,6 +3205,7 @@ impl AzookeyService for MyAzookeyService {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ai_assist::runtime::configure_settings_resolver(|| AppConfig::settings_path().ok());
     shared::enable_redirection_guard().map_err(std::io::Error::other)?;
     install_panic_hook();
     let log_paths = reload_server_logging_from_settings();

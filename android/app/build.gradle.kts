@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,8 +16,9 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        buildConfigField("boolean", "WINDOWS_ENGINE", "false")
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.zeroconvert.ime.PortInstrumentationRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -58,6 +61,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -103,3 +107,28 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     testImplementation("junit:junit:4.13.2")
 }
+
+val verifyAssistAssets by tasks.registering {
+    val corrector = layout.projectDirectory.file("src/main/assets/models/zerocon-model-corrector.gguf")
+    val reverse = layout.projectDirectory.file("src/main/assets/dictionary/reverse-v2.bin")
+    val catalog = rootProject.file("../windows/deployment/model-catalog.json")
+    inputs.files(corrector, reverse, catalog)
+    doLast {
+        check(corrector.asFile.isFile && reverse.asFile.isFile) {
+            "Run scripts/prepare-android-assist-assets.ps1 before building Android."
+        }
+        val models = (groovy.json.JsonSlurper().parse(catalog) as Map<*, *>)["models"] as List<*>
+        val expected = models.map { it as Map<*, *> }.single { it["id"] == "corrector" }["sha256"]
+        val digest = MessageDigest.getInstance("SHA-256")
+        corrector.asFile.inputStream().use { input ->
+            val buffer = ByteArray(65536)
+            while (true) { val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
+        }
+        check(digest.digest().joinToString("") { "%02x".format(it) } == expected) { "Corrector SHA-256 mismatch" }
+        reverse.asFile.inputStream().use { input ->
+            val magic = ByteArray(4)
+            check(input.read(magic) == 4 && magic.contentEquals("AZR2".toByteArray())) { "Invalid reverse dictionary" }
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyAssistAssets) }
