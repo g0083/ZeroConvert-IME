@@ -678,13 +678,10 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
     if let embeddedPath = config["embeddedModelPath"] as? String {
         return URL(filePath: embeddedPath)
     }
-    let isNano = ["nano", "nano_q4km"].contains((config["model"] as? String) ?? "standard")
-    let filename = isNano ? "zerocon-model-nano.gguf" : "zerocon-model-standard.gguf"
-    let canonical = execURL.appendingPathComponent("models/" + filename)
-    if FileManager.default.fileExists(atPath: canonical.path) { return canonical }
-    let legacy = execURL.appendingPathComponent("models/" + (isNano ? "zenz-v3.2-xsmall-q4km.gguf" : "zenz-v3.2-small-q4km.gguf"))
-    if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
-    return execURL.appendingPathComponent("zenz.gguf")
+    let model = (config["model"] as? String) ?? "nano_v4_iq4_emb8"
+    let isQ8 = ["nano_v4_q8", "standard", "standard_q4km"].contains(model)
+    let filename = isQ8 ? "zerocon-nano-v4-q8_0.gguf" : "zerocon-nano-v4-iq4nl-emb8.gguf"
+    return execURL.appendingPathComponent("models/" + filename)
 }
 
 @MainActor private func configureEngineRuntime(zenzaiEnabled: Bool) {
@@ -2555,7 +2552,7 @@ func cursorPrefixBoundaryFirstClauseResults(
         serverLog("INFO", "LoadConfig: reading settingsPath=\(loadedSettingsPath.path)")
 
         if let zenzai = settings.zenzai {
-            config["model"] = zenzai.model ?? "standard"
+            config["model"] = zenzai.model ?? "nano_v4_iq4_emb8"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
             }

@@ -35,12 +35,14 @@ SOFTWARE.
 
 ---
 
-## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model Standard / Nano)
-- **Upstream Model**: `Miwa-Keita/zenz-v3.2-small` (Standard) / `Miwa-Keita/zenz-v3.2-xsmall` (Nano)
+## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model Nano v4)
+- **Upstream Model**: `Miwa-Keita/zenz-v3.2-xsmall` (base), with a fine-tuned `Miwa-Keita/zenz-v3.2-small` teacher
 - **Author**: Miwa Keita (ensan-hcl)
 - **License**: Apache License 2.0
 - **Notice**:
-  - The conversion and prediction weights (`models/zerocon-model-standard.gguf` and `models/zerocon-model-nano.gguf`) are Q4_K_M quantizations of the respective upstream models and distributed under the terms of the [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
+  - `models/zerocon-nano-v4-iq4nl-emb8.gguf` and `models/zerocon-nano-v4-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall`, trained with rank-64 DoRA and target-corrected dual-anchor distillation from a fine-tuned Standard v3 teacher.
+  - The IQ4_NL variant blends the learned update at 85% and protects input/output tensors with Q8_0. The Q8_0 variant uses the full learned update.
+  - Both models are distributed under the terms of the [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
 ---
 
@@ -78,10 +80,10 @@ copies or substantial portions of the Software.
 ---
 
 ## 5. corecctor / ZeroCon Model Corrector (`models/zerocon-model-corrector.gguf`)
-- **Base Model**: [Miwa-Keita/zenz-v3.1-xsmall](https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall)
+- **Base Model**: `zenz-v3.2-xsmall` (self-contained reconstruction from upstream `zenz-v3.2-xsmall-q5km.gguf`)
 - **Original Author**: Miwa Keita (ensan-hcl)
-- **Base License**: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
-- **Derivative License**: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
+- **Base License**: Apache License, Version 2.0
+- **Derivative License**: Apache License, Version 2.0
 - **Notice**:
-  - `corecctor` is the independently fine-tuned Japanese input typo correction model, distributed as ZeroCon Model Corrector (`zerocon-model-corrector.gguf`; legacy filename: `typo-corrector-xsmall-q4km.gguf`). It is fine-tuned from `Miwa-Keita/zenz-v3.1-xsmall` specifically for Japanese input typo correction, quantized to Q4_K_M.
-  - In accordance with CC BY-SA 4.0, this derivative model is distributed under the terms of the [CC BY-SA 4.0 License](https://creativecommons.org/licenses/by-sa/4.0/).
+  - `corecctor` is the independently fine-tuned Japanese input typo correction model, distributed as ZeroCon Model Corrector (`zerocon-model-corrector.gguf`; legacy filename: `typo-corrector-xsmall-q4km.gguf`). It is fine-tuned from `zenz-v3.2-xsmall` (Apache-2.0) specifically for Japanese input typo correction, quantized to Q4_K_M.
+  - Distributed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).

@@ -13,7 +13,7 @@
     "enable": true,
     "profile": "",
     "backend": "vulkan",
-    "model": "standard"
+    "model": "nano_v4_iq4_emb8"
   },
   "shortcuts": {
     "ctrl_space_toggle": true,

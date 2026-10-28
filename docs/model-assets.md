@@ -1,18 +1,25 @@
 # ZeroConモデルとバックエンドの配置
 
-配布用モデルの正本は `artifacts/models/zerocon/`。インストール後は `{app}/models/` に同じ3ファイルを配置する。
+通常変換・先読みの選択肢はWindows・Android共通で次の2種類。新規導入はIQ4_emb8を既定とする。
 
-| 表示名 | 配布ファイル名 | 元のファイル名 | 容量 |
-| --- | --- | --- | --- |
-| ZeroCon Model Standard | `zerocon-model-standard.gguf` | `zenz-v3.2-small-q4km.gguf` | 64,282,688 bytes |
-| ZeroCon Model Nano | `zerocon-model-nano.gguf` | `zenz-v3.2-xsmall-q4km.gguf` | 18,452,288 bytes |
-| ZeroCon Model Corrector | `zerocon-model-corrector.gguf` | `typo-corrector-xsmall-q4km.gguf`（現在の動作版） | 18,452,384 bytes |
+| 設定ID | 配布ファイル名 | 容量 |
+|---|---|---:|
+| `nano_v4_iq4_emb8` | `zerocon-nano-v4-iq4nl-emb8.gguf` | 19,602,048 bytes |
+| `nano_v4_q8` | `zerocon-nano-v4-q8_0.gguf` | 29,039,232 bytes |
 
-合計101,187,360 bytes。重みの内容やGGUFメタデータは変更せず、配布名と配置を統一する。由来とSHA-256は `windows/deployment/model-catalog.json` に固定する。名前が同じ実験版でもハッシュが異なる場合は自動採用しない。
+IQ4_emb8はNano v4のBlend85版。内部IQ4_NL、入力埋め込み・出力Q8_0。Q8は100%マージのQ8_0。どちらもzenz-v3.2-xsmallを追加学習したApache-2.0派生モデル。SHA-256・元ファイル名・補正専用モデルの情報は `windows/deployment/model-catalog.json` を正本とする。
 
-`Build-Package.bat`（およびパッケージを新規作成する `Build-Installer.bat`）は `sync-distribution-models.ps1` を呼び、正本がない場合だけ指定した依存保管先または `artifacts/models/` からハッシュが一致する重みを集約する。正本が変わっていれば停止する。モデル更新時はカタログの由来・ハッシュも更新する。実験用の別量子化版・学習出力、稼働中のIME、過去のインストーラー出力は自動削除しない。既存の学習・評価スクリプトの参照を保持するためである。ローカルの `artifacts/models/model-inventory.json` には現存ファイルとハッシュ・配布役割の対応を記録する。
+Corrector（corecctor）とKeyboard Priorは通常変換に混ぜず、補正専用として維持する。旧Standard/Nanoの重みやローカルの研究モデルは自動削除しないが、新規パッケージへは入れない。
 
-変換・先読みは設定 `zenzai.model` の `standard` / `nano` で重みを選ぶ。Correctorの独自モデル名は **corecctor**。`Miwa-Keita/zenz-v3.1-xsmall` を日本語入力のタイポ補正向けに追加学習し、Q4_K_Mに量子化したモデルで、ベースモデルと派生モデルはCC BY-SA 4.0。表記と帰属は `windows/deployment/THIRD_PARTY_LICENSES.md` を参照。Correctorは補正専用で、変換モデルの選択肢には混ぜない。従来の `standard_q4km` / `nano_q4km` や旧ファイル名も読み取り互換を残す。モデル切り替えは設定保存とサーバー再起動で行い、Program Filesの重みやAppDataのミラーへコピーしない。新規配布にはルートの `zenz.gguf` を入れない。
+## 配置と移行
+
+Windowsの正本は `artifacts/models/zerocon/`、インストール先は `{app}/models/`。`windows/scripts/sync-distribution-models.ps1` がハッシュ一致する生成済みモデルを集約し、`Build-Package.bat`も同じ処理を利用する。選択は `zenzai.model` へ保存し、サーバー再起動で反映する。
+
+旧 `standard` / `standard_q4km` はQ8へ、旧 `nano` / `nano_q4km` はIQ4_emb8へ読み替える。旧重みや `zenz.gguf` を新しいNano v4として扱うフォールバックはしない。モデル未配置なら新しい配布資産を準備する。
+
+Androidは `scripts/prepare-android-conversion-models.ps1` でハッシュ検証後に `android/app/src/main/assets/models/` へコピーする。`:app` と現行の `:rebuilt` は同じ2種類を梱包し、Gradleの `verifyConversionModels` でサイズ・ハッシュを検査する。旧assetsはローカルに残してAPKの同期対象から除外する。既存の管理下Standard選択はQ8、Nano/Lite選択はIQ4_emb8へ移行する。ユーザーがインポートした別パスのモデルや補正履歴は保持する。
+
+モデル重みはGit対象外。clone後はカタログと一致する重みを別途用意する。コピー・ビルド・実IMEへの適用・端末更新は別操作である。
 
 ## バックエンド
 

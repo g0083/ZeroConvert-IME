@@ -1,0 +1,27 @@
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
+// Both Android hosts ship the same two conversion models as Windows.
+def catalog = rootProject.file('../windows/deployment/model-catalog.json')
+def assets = rootProject.file('app/src/main/assets/models')
+def verify = tasks.register('verifyConversionModels') {
+    inputs.file(catalog)
+    inputs.files(fileTree(assets) { include 'zerocon-nano-v4-*.gguf' })
+    doLast {
+        def models = new JsonSlurper().parse(catalog).models.findAll { it.id.startsWith('nano_v4_') }
+        assert models*.id.toSet() == ['nano_v4_iq4_emb8', 'nano_v4_q8'].toSet()
+        models.each { model ->
+            def source = new File(assets, model.filename)
+            assert source.isFile(): 'Run scripts/prepare-android-conversion-models.ps1 before building.'
+            assert source.length() == model.bytes: "Wrong model size: ${model.filename}"
+            def digest = MessageDigest.getInstance('SHA-256')
+            source.withInputStream { stream ->
+                byte[] buffer = new byte[65536]
+                int count
+                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            assert digest.digest().encodeHex().toString() == model.sha256: "Wrong model hash: ${model.filename}"
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn(verify) }

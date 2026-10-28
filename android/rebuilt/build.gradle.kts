@@ -6,7 +6,12 @@ plugins {
 }
 
 val sharedHostAssets by tasks.registering(Sync::class) {
-    from("../app/src/main/assets") { exclude("dictionary/reverse-v2.bin") }
+    from("../app/src/main/assets") {
+        exclude("dictionary/reverse-v2.bin")
+        exclude { it.file.extension == "gguf" && it.file.name !in setOf(
+            "zerocon-nano-v4-iq4nl-emb8.gguf", "zerocon-nano-v4-q8_0.gguf", "zerocon-model-corrector.gguf"
+        ) }
+    }
     into(layout.buildDirectory.dir("sharedHostAssets"))
 }
 
@@ -176,6 +181,7 @@ tasks.matching { it.name == "packageDebug" || it.name == "packageRelease" }.conf
 tasks.withType<Test>().configureEach {
     filter {
         includeTestsMatching("com.zeroconvert.ime.SharedEngineInputTest")
+        includeTestsMatching("com.zeroconvert.ime.ConversionModelSelectionTest")
         includeTestsMatching("com.zeroconvert.ime.ComposingTextTest")
         includeTestsMatching("com.zeroconvert.ime.FlickInputAndModifierTest")
         includeTestsMatching("com.zeroconvert.ime.KeyboardShiftStateTest")
@@ -184,3 +190,5 @@ tasks.withType<Test>().configureEach {
         includeTestsMatching("com.zeroconvert.ime.SelectionCharacterCountTest")
     }
 }
+
+apply(from = rootProject.file("verify-conversion-models.gradle"))

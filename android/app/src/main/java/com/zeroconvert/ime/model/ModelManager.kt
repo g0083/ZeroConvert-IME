@@ -43,31 +43,24 @@ object ModelManager {
 
     val BUILT_IN_MODELS = listOf(
         BuiltInModelSpec(
-            assetPath = "models/zenz-v3.2-xsmall-q4km.gguf",
-            fileName = "zenz-v3.2-xsmall-q4km.gguf",
-            displayName = "ZeroCon Model v3.2 Nano (Q4_K_M — 17.6MB)",
-            expectedSize = 18452288L,
-            sha256 = "e0d2d20ff3da5dc71ba8e0fdc14c70701aec01b52afe75eba8e1f2ec0780b26e"
+            assetPath = "models/${ConversionModelSelection.IQ4}",
+            fileName = ConversionModelSelection.IQ4,
+            displayName = "ZeroCon Model Nano v4 IQ4_emb8 (18.7 MiB)",
+            expectedSize = 19602048L,
+            sha256 = "31724c4189d8f8fcec90544d1695d42a8c4e7a870d645384e7284f2cc8891f30"
         ),
         BuiltInModelSpec(
-            assetPath = "zenz.gguf",
-            fileName = "zenz.gguf",
-            displayName = "ZeroCon Model v3.2 Nano Lite (Q3_K_M — 15.3MB)",
-            expectedSize = 16078208L,
-            sha256 = "25ee61bebdc7ada57d52a5b0d428eaeedc77df3b1ffa41fae291cc5cd8e752b2"
-        ),
-        BuiltInModelSpec(
-            assetPath = "models/zenz-v3.2-small-q4km.gguf",
-            fileName = "zenz-v3.2-small-q4km.gguf",
-            displayName = "ZeroCon Model v3.2 Standard (Q4_K_M — 61.3MB)",
-            expectedSize = 64282688L,
-            sha256 = "94c290aa772ae9f66bca45842dd506dbedeba5ef6f67368189261ff7364f25f2"
+            assetPath = "models/${ConversionModelSelection.Q8}",
+            fileName = ConversionModelSelection.Q8,
+            displayName = "ZeroCon Model Nano v4 Q8 (27.7 MiB)",
+            expectedSize = 29039232L,
+            sha256 = "a89fe90fc29431279834773cdbe7c9afeba30722ee986327b300bf4b334c0e0f"
         )
     )
 
     val DEFAULT_MODEL_SPEC = BUILT_IN_MODELS[0]
 
-    private const val CORRECTOR_SHA256 = "0641a5be4e7d9f563776275f9904b5cad9875e84e752d146949ead3c5ac7089a"
+    private const val CORRECTOR_SHA256 = "dd87dbdc1a04cb4391f8429e6a1addc3c65d824996dd465e96803a5c1411fe2e"
 
     /** Separate directory: never offer the Corrector as an ordinary conversion model. */
     fun ensureCorrector(context: Context): File? {
@@ -108,10 +101,23 @@ object ModelManager {
         return VerifiedModelFile.ensure(destFile, spec.expectedSize, spec.sha256) { context.assets.open(spec.assetPath) }
     }
 
+    /** Resolve only managed selections; user-imported paths remain intact. */
+    fun selectedBuiltInSpec(context: Context, savedPath: String?): BuiltInModelSpec? {
+        if (savedPath.isNullOrEmpty()) return DEFAULT_MODEL_SPEC
+        val file = File(savedPath)
+        val managed = file.absolutePath == File(context.filesDir, "zenz.gguf").absolutePath ||
+            file.parentFile?.absolutePath == getModelsDir(context).absolutePath
+        if (!managed) return null
+        val replacement = ConversionModelSelection.replacement(file.name) ?: return null
+        return BUILT_IN_MODELS.find { it.fileName == replacement }
+    }
+
     fun getAvailableModels(context: Context): List<ModelInfo> {
         val list = mutableListOf<ModelInfo>()
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val selectedPath = prefs.getString(KEY_PATH, null)
+        val savedPath = prefs.getString(KEY_PATH, null)
+        val selectedSpec = selectedBuiltInSpec(context, savedPath)
+        val selectedPath = selectedSpec?.let { File(getModelsDir(context), it.fileName).absolutePath } ?: savedPath
 
         val builtInFiles = mutableSetOf<String>()
 
@@ -125,7 +131,7 @@ object ModelManager {
             builtInFiles.add(file.name)
 
             val isSel = if (selectedPath == null) {
-                // Default to Q4_K_M if no selection yet
+                // Default to Nano v4 IQ4_emb8 if no selection yet
                 spec.fileName == DEFAULT_MODEL_SPEC.fileName
             } else {
                 selectedPath == file.absolutePath
@@ -144,7 +150,7 @@ object ModelManager {
 
         // 2. User imported models in files/models/
         val modelsDir = getModelsDir(context)
-        val files = modelsDir.listFiles { f -> f.isFile && f.name.endsWith(".gguf") && !builtInFiles.contains(f.name) }
+        val files = modelsDir.listFiles { f -> f.isFile && f.name.endsWith(".gguf") && !builtInFiles.contains(f.name) && f.name !in ConversionModelSelection.retiredFiles }
         if (files != null) {
             for (f in files.sortedBy { it.name }) {
                 val isSel = (selectedPath == f.absolutePath)

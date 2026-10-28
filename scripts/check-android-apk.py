@@ -44,7 +44,19 @@ def main():
             if hashlib.sha256(shared_reverse).digest() != hashlib.sha256(
                 (ROOT / 'engine/build/assets/shared-engine/Dictionary/Reverse/reverse-v2.bin').read_bytes()).digest():
                 raise ValueError(f'{apk.name}: wrong shared reverse dictionary')
+            catalog = json.loads((ROOT / 'windows/deployment/model-catalog.json').read_text(encoding='utf-8'))
+            specs = [m for m in catalog['models'] if m['id'].startswith('nano_v4_') or m['id'] == 'corrector']
+            expected_models = {'assets/models/' + m['filename'] for m in specs}
+            actual_models = {name for name in names if name.endswith('.gguf')}
+            if actual_models != expected_models:
+                raise ValueError(f'{apk.name}: unexpected model set: {actual_models ^ expected_models}')
+            for spec in specs:
+                payload = archive.read('assets/models/' + spec['filename'])
+                if len(payload) != spec['bytes'] or hashlib.sha256(payload).hexdigest() != spec['sha256']:
+                    raise ValueError(f'{apk.name}: model differs from catalog: {spec["filename"]}')
             for model in (ROOT / 'android/app/src/main/assets').rglob('*.gguf'):
+                if 'assets/' + model.relative_to(ROOT / 'android/app/src/main/assets').as_posix() not in expected_models:
+                    continue
                 name = 'assets/' + model.relative_to(ROOT / 'android/app/src/main/assets').as_posix()
                 if hashlib.sha256(archive.read(name)).digest() != hashlib.sha256(model.read_bytes()).digest():
                     raise ValueError(f'{apk.name}: model was changed or omitted: {name}')

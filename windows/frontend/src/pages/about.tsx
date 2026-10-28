@@ -21,9 +21,9 @@ export const About = () => {
             </div>
 
             <SettingsSection title="搭載モデルと動作環境">
-                <SettingsRow label="かな漢字変換・先読みモデル" description="ZeroCon Model（Q4_K_M量子化）">
+                <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4：省メモリのIQ4_NL_emb8と高精度のQ8_0">
                     <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-md border border-border/50">
-                        ZeroCon Model Standard / Nano
+                        ZeroCon Model Nano v4 IQ4_emb8 / Q8
                     </span>
                 </SettingsRow>
                 <SettingsRow label="タイポ補正モデル" description="zenz-v3.1-xsmall をベースに、日本語入力のタイポ補正向けに独自に追加学習">

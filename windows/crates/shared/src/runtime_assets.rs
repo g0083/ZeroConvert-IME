@@ -1,39 +1,36 @@
 //! Asset names and locations shared by launcher and settings. No downloads here.
 use std::path::{Path, PathBuf};
 
-pub const STANDARD: &str = "zerocon-model-standard.gguf";
-pub const NANO: &str = "zerocon-model-nano.gguf";
+pub const NANO_IQ4: &str = "zerocon-nano-v4-iq4nl-emb8.gguf";
+pub const NANO_Q8: &str = "zerocon-nano-v4-q8_0.gguf";
 pub const CORRECTOR: &str = "zerocon-model-corrector.gguf";
 pub const CUDA_VERSION: &str = "cuda-b4846-cu12.4";
 
 pub fn default_model() -> String {
-    "standard".into()
+    "nano_v4_iq4_emb8".into()
+}
+
+pub fn canonical_model_id(id: &str) -> Option<&'static str> {
+    match id {
+        "nano_v4_iq4_emb8" | "nano" | "nano_q4km" => Some("nano_v4_iq4_emb8"),
+        "nano_v4_q8" | "standard" | "standard_q4km" => Some("nano_v4_q8"),
+        _ => None,
+    }
 }
 
 pub fn model_filename(id: &str) -> Option<&'static str> {
-    match id {
-        "standard" | "standard_q4km" => Some(STANDARD),
-        "nano" | "nano_q4km" => Some(NANO),
+    match canonical_model_id(id) {
+        Some("nano_v4_iq4_emb8") => Some(NANO_IQ4),
+        Some("nano_v4_q8") => Some(NANO_Q8),
         _ => None,
     }
 }
 
 pub fn converter_model(install: &Path, id: &str) -> PathBuf {
-    let filename = model_filename(id).unwrap_or(STANDARD);
-    let canonical = install.join("models").join(filename);
-    if canonical.is_file() {
-        return canonical;
-    }
-    // Compatibility with older installations; new packages contain only canonical names.
-    let legacy = install.join("models").join(if filename == NANO {
-        "zenz-v3.2-xsmall-q4km.gguf"
-    } else {
-        "zenz-v3.2-small-q4km.gguf"
-    });
-    if legacy.is_file() || filename == NANO {
-        return legacy;
-    }
-    install.join("zenz.gguf")
+    // Migrate old selection IDs, but never silently load retired model weights.
+    install
+        .join("models")
+        .join(model_filename(id).unwrap_or(NANO_IQ4))
 }
 
 pub fn corrector_model(install: &Path) -> PathBuf {
@@ -73,32 +70,33 @@ mod tests {
     use super::*;
     #[test]
     fn roles_are_distinct_and_unknown_models_are_rejected() {
-        assert_eq!(model_filename("nano_q4km"), Some(NANO));
-        assert_eq!(model_filename("standard"), Some(STANDARD));
+        assert_eq!(model_filename("nano_q4km"), Some(NANO_IQ4));
+        assert_eq!(model_filename("standard"), Some(NANO_Q8));
+        assert_eq!(model_filename("nano_v4_q8"), Some(NANO_Q8));
         assert_eq!(model_filename("corrector"), None);
         assert_eq!(model_filename("../arbitrary"), None);
-        assert_ne!(NANO, CORRECTOR);
+        assert_ne!(NANO_IQ4, CORRECTOR);
     }
 
     #[test]
     fn canonical_models_are_selected_without_copying_the_active_weights() {
         let root = std::env::temp_dir().join(format!("zerocon-model-paths-{}", std::process::id()));
         std::fs::create_dir_all(root.join("models")).unwrap();
-        for name in [STANDARD, NANO, CORRECTOR] {
+        for name in [NANO_Q8, NANO_IQ4, CORRECTOR] {
             std::fs::write(root.join("models").join(name), []).unwrap();
         }
         assert_eq!(
             converter_model(&root, "standard"),
-            root.join("models").join(STANDARD)
+            root.join("models").join(NANO_Q8)
         );
         assert_eq!(
             converter_model(&root, "nano"),
-            root.join("models").join(NANO)
+            root.join("models").join(NANO_IQ4)
         );
         assert_eq!(corrector_model(&root), root.join("models").join(CORRECTOR));
-        std::fs::remove_file(root.join("models").join(NANO)).unwrap();
+        std::fs::remove_file(root.join("models").join(NANO_IQ4)).unwrap();
         assert!(!converter_model(&root, "nano").is_file());
-        for name in [STANDARD, CORRECTOR] {
+        for name in [NANO_Q8, CORRECTOR] {
             std::fs::remove_file(root.join("models").join(name)).unwrap();
         }
         std::fs::remove_dir(root.join("models")).unwrap();
@@ -106,9 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn old_settings_without_model_load_with_standard_default() {
+    fn settings_without_model_load_with_nano_v4_default() {
         let config: crate::ZenzaiConfig =
             serde_json::from_str(r#"{"enable":true,"profile":"","backend":"vulkan"}"#).unwrap();
-        assert_eq!(config.model, "standard");
+        assert_eq!(config.model, "nano_v4_iq4_emb8");
     }
 }
