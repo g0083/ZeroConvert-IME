@@ -16,18 +16,18 @@ struct Choice {
 
 const CHOICES: [Choice; 2] = [
     Choice {
-        id: "standard",
-        name: "ZeroCon Model Standard",
-        filename: shared::runtime_assets::STANDARD,
-        legacy: "zenz-v3.2-small-q4km.gguf",
-        description: "標準モデル · Q4_K_M",
+        id: "nano_v4_iq4_emb8",
+        name: "ZeroCon Model Nano v4 IQ4_emb8",
+        filename: shared::runtime_assets::NANO_IQ4,
+        legacy: "zerocon-nano-v4-blend85-iq4nl-emb8.gguf",
+        description: "省メモリ · IQ4_NL / 入出力Q8_0 · 18.7 MiB",
     },
     Choice {
-        id: "nano",
-        name: "ZeroCon Model Nano",
-        filename: shared::runtime_assets::NANO,
-        legacy: "zenz-v3.2-xsmall-q4km.gguf",
-        description: "軽量モデル · Q4_K_M",
+        id: "nano_v4_q8",
+        name: "ZeroCon Model Nano v4 Q8",
+        filename: shared::runtime_assets::NANO_Q8,
+        legacy: shared::runtime_assets::NANO_Q8,
+        description: "高精度 · Q8_0 · 27.7 MiB",
     },
 ];
 
@@ -49,11 +49,8 @@ pub struct ModelListResponse {
 }
 
 pub fn source_for(id: &str, directories: &[PathBuf]) -> Result<PathBuf, String> {
-    let id = match id {
-        "standard_q4km" => "standard",
-        "nano_q4km" => "nano",
-        other => other,
-    };
+    let id = shared::runtime_assets::canonical_model_id(id)
+        .ok_or_else(|| format!("Unknown model_id: {id}"))?;
     let choice = CHOICES
         .iter()
         .find(|choice| choice.id == id)

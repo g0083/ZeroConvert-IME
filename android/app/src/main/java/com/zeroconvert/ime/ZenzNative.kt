@@ -186,22 +186,16 @@ object ZenzNative {
             val savedPath = prefs.getString("selected_model_path", null)
             val savedName = prefs.getString("selected_model_name", null)
 
-            val modelFile = if (!savedPath.isNullOrEmpty() && File(savedPath).exists()) {
-                val f = File(savedPath)
-                val builtInMatch = ModelManager.BUILT_IN_MODELS.find { it.fileName == f.name }
-                currentModelName = builtInMatch?.displayName ?: savedName ?: f.name
-                val managedPath = builtInMatch?.let { spec ->
-                    if (spec.fileName == "zenz.gguf") File(context.filesDir, spec.fileName)
-                    else File(context.filesDir, "models/${spec.fileName}")
-                }
-                if (builtInMatch != null && f.canonicalPath == managedPath?.canonicalPath) {
-                    ModelManager.ensureBuiltInModel(context, builtInMatch)
-                } else f
+            val builtIn = ModelManager.selectedBuiltInSpec(context, savedPath)
+            val modelFile = if (builtIn != null) {
+                currentModelName = builtIn.displayName
+                ModelManager.ensureBuiltInModel(context, builtIn)
+            } else if (!savedPath.isNullOrEmpty() && File(savedPath).isFile) {
+                currentModelName = savedName ?: File(savedPath).name
+                File(savedPath)
             } else {
-                val spec = ModelManager.DEFAULT_MODEL_SPEC
-                val defaultFile = ModelManager.ensureBuiltInModel(context, spec)
-                currentModelName = spec.displayName
-                defaultFile
+                currentModelName = ModelManager.DEFAULT_MODEL_SPEC.displayName
+                ModelManager.ensureBuiltInModel(context, ModelManager.DEFAULT_MODEL_SPEC)
             }
 
             val logFile = File(context.filesDir, "zenz_debug.log")
@@ -209,6 +203,8 @@ object ZenzNative {
                 else nativeInit(modelFile.absolutePath, logFile.absolutePath)
             if (isInitialized) {
                 converterPath = modelFile.absolutePath
+                prefs.edit().putString("selected_model_path", modelFile.absolutePath)
+                    .putString("selected_model_name", currentModelName).apply()
                 modelEpoch.incrementAndGet()
                 try {
                     correctorPath = ModelManager.ensureCorrector(context)?.absolutePath.orEmpty()

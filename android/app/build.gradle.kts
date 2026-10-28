@@ -5,6 +5,15 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val bundledModelAssets by tasks.registering(Sync::class) {
+    from("src/main/assets") {
+        exclude { it.file.extension == "gguf" && it.file.name !in setOf(
+            "zerocon-nano-v4-iq4nl-emb8.gguf", "zerocon-nano-v4-q8_0.gguf", "zerocon-model-corrector.gguf"
+        ) }
+    }
+    into(layout.buildDirectory.dir("bundledModelAssets"))
+}
+
 android {
     namespace = "com.zeroconvert.ime"
     compileSdk = 34
@@ -75,6 +84,8 @@ android {
         }
     }
 
+    sourceSets.getByName("main").assets.setSrcDirs(listOf(bundledModelAssets.map { it.destinationDir }))
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -132,3 +143,6 @@ val verifyAssistAssets by tasks.registering {
     }
 }
 tasks.named("preBuild").configure { dependsOn(verifyAssistAssets) }
+
+tasks.named("preBuild").configure { dependsOn(bundledModelAssets) }
+apply(from = rootProject.file("verify-conversion-models.gradle"))

@@ -739,12 +739,9 @@ fn switch_model(state: tauri::State<AppState>, model_id: String) -> Result<Strin
     stop_benchmark_server();
     let base = state.settings.lock().map_err(|e| e.to_string())?.clone();
     let mut updated = base.clone();
-    updated.zenzai.model = match model_id.as_str() {
-        "nano_q4km" => "nano",
-        "standard_q4km" => "standard",
-        other => other,
-    }
-    .into();
+    updated.zenzai.model = shared::runtime_assets::canonical_model_id(&model_id)
+        .ok_or_else(|| format!("Unknown model_id: {model_id}"))?
+        .into();
     update_config_impl(&state, base, updated)?;
     drop(model_update);
     restart_server_impl(&state)

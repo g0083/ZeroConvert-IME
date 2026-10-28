@@ -790,7 +790,12 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("azookey-prediction-spec-{}", std::process::id()));
         std::fs::create_dir_all(path.join("llama_vulkan")).unwrap();
-        std::fs::write(path.join("zenz.gguf"), []).unwrap();
+        std::fs::create_dir_all(path.join("models")).unwrap();
+        std::fs::write(
+            path.join("models").join(shared::runtime_assets::NANO_IQ4),
+            [],
+        )
+        .unwrap();
         std::fs::write(path.join("llama_vulkan/llama-server.exe"), []).unwrap();
         let mut config = shared::AppConfig::default();
         config.general.experimental_ai_assist = true;
@@ -804,13 +809,17 @@ mod tests {
             std::fs::write(path.join(directory).join("llama-server.exe"), []).unwrap();
             config.zenzai.backend = backend.into();
             let spec = super::prediction_server_spec(&path, &config).unwrap();
-            assert_eq!(spec.model, path.join("zenz.gguf"));
+            assert_eq!(
+                spec.model,
+                path.join("models").join(shared::runtime_assets::NANO_IQ4)
+            );
             assert_eq!(spec.backend, path.join(super::backend_dir(&config)));
             assert_eq!(spec.backend, path.join(directory));
         }
         config.general.experimental_ai_assist = false;
         assert!(super::prediction_server_spec(&path, &config).is_none());
-        std::fs::remove_file(path.join("zenz.gguf")).unwrap();
+        std::fs::remove_file(path.join("models").join(shared::runtime_assets::NANO_IQ4)).unwrap();
+        std::fs::remove_dir(path.join("models")).unwrap();
         for directory in ["llama_vulkan", "llama_cuda", "llama_cpu"] {
             std::fs::remove_file(path.join(directory).join("llama-server.exe")).unwrap();
             std::fs::remove_dir(path.join(directory)).unwrap();
