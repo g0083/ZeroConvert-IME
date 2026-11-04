@@ -60,7 +60,7 @@ fun HorizontalCandidateStrip(
             modifier = modifier.semantics { contentDescription = "変換候補一覧" },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            items(candidates.size, key = { candidates[it].itemKey }) { index ->
+            items(candidates.size, key = { "${it}_${candidates[it].itemKey}" }) { index ->
                 val item = candidates[index]
                 Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
                     Box(
@@ -222,7 +222,8 @@ fun ExpandedCandidatePanel(
             columns = GridCells.Adaptive(minSize = 100.dp),
             modifier = Modifier.fillMaxWidth().weight(1f)
         ) {
-            items(candidates, key = { it.itemKey }) { item ->
+            items(candidates.size, key = { "${it}_${candidates[it].itemKey}" }) { index ->
+                val item = candidates[index]
                 Box(
                     modifier = Modifier.padding(2.dp).height(48.dp)
                         .clip(RoundedCornerShape(6.dp)).background(palette.keyNormal)

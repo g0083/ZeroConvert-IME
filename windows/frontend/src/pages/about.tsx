@@ -11,23 +11,23 @@ export const About = () => {
                     <h2 className="text-lg font-semibold tracking-tight text-foreground flex items-center gap-2">
                         ZeroCon IME (Windows)
                         <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/60">
-                            v3.2.0
+                            v0.2.2
                         </span>
                     </h2>
                     <p className="text-xs text-muted-foreground">
-                        ZeroCon Model によるかな漢字変換・先読みと、独自モデル corecctor によるタイポ補正
+                        ZeroCon Model Nano v4 によるかな漢字変換・先読みと、メインモデル統合による高速タイポ補正
                     </p>
                 </div>
             </div>
 
             <SettingsSection title="搭載モデルと動作環境">
-                <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4：省メモリのIQ4_NL_emb8と高精度のQ8_0">
+                <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4：省メモリのIQ4_NL_emb8（18.7 MiB）と高精度のQ8_0（27.7 MiB）。タイポ補正・先読みも1モデルで統合処理">
                     <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-md border border-border/50">
                         ZeroCon Model Nano v4 IQ4_emb8 / Q8
                     </span>
                 </SettingsRow>
-                <SettingsRow label="タイポ補正モデル" description="zenz-v3.1-xsmall をベースに、日本語入力のタイポ補正向けに独自に追加学習">
-                    <span className="text-sm font-medium text-foreground">corecctor（ZeroCon Model Corrector）</span>
+                <SettingsRow label="タイポ補正アーキテクチャ" description="独立Corrector常駐を撤廃し、Nano v4 内部で読み尤度判定・表層リランキング・漢字変換を一気通貫処理（正解率78.0% / 実質86.7%、CPU p50: 2.3ms）">
+                    <span className="text-sm font-medium text-foreground">メインモデル統合タイポ補正 (v0.2.2)</span>
                 </SettingsRow>
                 <SettingsRow label="推論バックエンド" description="設定とPCの対応状況に応じて選択">
                     <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">

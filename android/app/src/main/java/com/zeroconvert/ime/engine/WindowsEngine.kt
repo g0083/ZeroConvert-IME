@@ -163,13 +163,16 @@ object WindowsEngine {
         catch (failure: Exception) { atomic.failWrite(stream); throw failure }
     }
 
-    private fun configure(ai: Boolean, profile: String, personalize: Boolean, dictionaryCorrection: Boolean) {
+    private fun configure(ai: Boolean, profile: String, personalize: Boolean, dictionaryCorrection: Boolean,
+                          predictiveConversion: Boolean = true) {
         val users = JSONArray()
         if (personalize) KanaKanjiConverter.getUserDictionary(application).forEach {
             users.put(JSONObject().put("reading", it.reading).put("word", it.word))
         }
         val settings = JSONObject().put("zenzai", JSONObject().put("enable", ai).put("backend", "cpu").put("profile", profile))
-            .put("general", JSONObject().put("experimental_typo_correction", dictionaryCorrection))
+            .put("general", JSONObject()
+                .put("experimental_typo_correction", dictionaryCorrection)
+                .put("predictive_conversion", predictiveConversion))
             .put("learning", JSONObject().put("mode", if (!personalize) "disabled" else when (LearningPolicy.mode) {
                 LearningMode.DISABLED -> "disabled"; LearningMode.READ_ONLY -> "read_only"; else -> "enabled"
             })).put("user_dictionary", JSONObject().put("entries", users)).toString()
@@ -189,7 +192,8 @@ object WindowsEngine {
     }
 
     suspend fun candidates(input: ComposingText, context: String, ai: Boolean, profile: String,
-                           personalize: Boolean, dictionaryCorrection: Boolean): List<Candidate> {
+                           personalize: Boolean, dictionaryCorrection: Boolean,
+                           predictiveConversion: Boolean = true): List<Candidate> {
         val queued = System.nanoTime()
         val epoch = nativeConversionEpoch()
         return withContext(dispatcher) {
@@ -197,7 +201,7 @@ object WindowsEngine {
             if (epoch != nativeConversionEpoch()) throw CancellationException("Superseded conversion")
             val dequeued = System.nanoTime()
             check(ready) { "Shared conversion engine is not ready" }
-            configure(ai, profile, personalize, dictionaryCorrection)
+            configure(ai, profile, personalize, dictionaryCorrection, predictiveConversion)
             ensureActive()
             val configured = System.nanoTime()
             val elements = JSONArray()
@@ -224,7 +228,7 @@ object WindowsEngine {
                     isAI = ai, learningAllowed = candidate.getBoolean("learningAllowed"),
                     engineCandidateId = candidate.getString("candidateId").takeUnless { it == "0" }.orEmpty(),
                     engineConsumedReading = consumed)
-            }
+            }.distinctBy { it.text to it.engineConsumedReading }
             val macros = JSONArray(assistRequest(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor)))
             converted + (0 until macros.length()).map { macros.getString(it) }
                 .filter { text -> converted.none { it.text == text } }

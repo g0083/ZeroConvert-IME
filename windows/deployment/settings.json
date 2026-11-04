@@ -22,6 +22,10 @@
     "eisu_toggle": false,
     "reconversion_key": "win_slash"
   },
+  "clipboard": {
+    "trigger_key": "ctrl_b",
+    "retention_hours": 1
+  },
   "general": {
     "jev_conversion": false,
     "punctuation_style": "touten_kuten",

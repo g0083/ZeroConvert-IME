@@ -131,6 +131,7 @@ private let embeddedPerformance = EmbeddedPerformance()
         return ["cancelled": true]
     }
     var result: [[String: Any]] = []
+    var seenKeys = Set<String>()
     let boundaries = snapshot.inputIndexToSurfaceIndexMap()
     for index in 0..<Int(length) {
         guard let candidate = candidates[index]?.pointee else { continue }
@@ -140,6 +141,8 @@ private let embeddedPerformance = EmbeddedPerformance()
         let consumedUtf16 = reading[..<end].utf16.count
         let text = candidate.text.map { String(cString: $0) } ?? ""
         let suffix = candidate.subtext.map { String(cString: $0) } ?? ""
+        let key = "\(consumedUtf16):\(text)"
+        guard seenKeys.insert(key).inserted else { continue }
         result.append(["text": text, "suffix": suffix, "candidateId": String(candidate.candidateId),
                        "correspondingCount": candidate.correspondingCount,
                        "consumedReadingUtf16": consumedUtf16,

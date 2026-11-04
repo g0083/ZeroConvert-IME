@@ -169,6 +169,9 @@ fun MainScreen(
     var isDictionaryTypoCorrection by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, false))
     }
+    var isPredictiveConversion by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, true))
+    }
     var learningMode by remember { mutableStateOf(LearningMode.from(imePrefs.getString(LearningPolicy.KEY, null))) }
     var learningMenuExpanded by remember { mutableStateOf(false) }
     var isAutoTypoCorrection by remember {
@@ -858,6 +861,22 @@ fun MainScreen(
                     Switch(checked = isDictionaryTypoCorrection, onCheckedChange = { checked ->
                         isDictionaryTypoCorrection = checked
                         imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, checked).apply()
+                    })
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("予測変換", color = palette.textPrimary, fontSize = 13.sp)
+                        Text("入力途中の読みから単語・フレーズの候補を提示します（デフォルト: オン）。",
+                            color = palette.textSecondary, fontSize = 11.sp)
+                    }
+                    Switch(checked = isPredictiveConversion, onCheckedChange = { checked ->
+                        isPredictiveConversion = checked
+                        imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, checked).apply()
                     })
                 }
 

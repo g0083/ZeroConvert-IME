@@ -75,6 +75,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_EXPERIMENTAL_AI_ASSIST = "experimental_ai_assist" // boolean, default true
         const val KEY_AUTO_TYPO_CORRECTION = "auto_typo_correction" // boolean, default true
         const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction" // Windows default: false
+        const val KEY_PREDICTIVE_CONVERSION = "predictive_conversion" // boolean, Android default: true, Windows default: false
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
         const val KEY_CLIPBOARD_PINNED = "clipboard_pinned"
         const val KEY_CLIPBOARD_RETENTION_HOURS = "clipboard_retention_hours"
@@ -197,6 +198,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isAiAssistEnabledState = mutableStateOf(true)
     val isAutoTypoCorrectionState = mutableStateOf(true)
     val isDictionaryTypoCorrectionState = mutableStateOf(false)
+    val isPredictiveConversionState = mutableStateOf(true)
     val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
     val aiAssistAdoptedState = mutableStateOf(false)
@@ -211,6 +213,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun isRealtimeInlineEnabled(): Boolean = isRealtimeInlineState.value
     fun isAiAssistEnabled(): Boolean = isAiAssistEnabledState.value
+    fun isPredictiveConversionEnabled(): Boolean = isPredictiveConversionState.value
     fun getPredictiveModel(): String = predictiveModelState.value
 
     fun adoptAiAssist(explicit: Boolean = true) {
@@ -675,6 +678,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isAiAssistEnabledState.value = prefs.getBoolean(KEY_EXPERIMENTAL_AI_ASSIST, true)
         isAutoTypoCorrectionState.value = prefs.getBoolean(KEY_AUTO_TYPO_CORRECTION, true)
         isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, false)
+        isPredictiveConversionState.value = prefs.getBoolean(KEY_PREDICTIVE_CONVERSION, true)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
         predictiveModelState.value = "zerocon"
         clipboardSuggestionMinutesState.value = ClipboardSuggestionPolicy.normalizeMinutes(
@@ -1295,7 +1299,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 KanaKanjiConverter.ensureInitialized(applicationContext)
                 val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
-                    experimentalKeyboardCorrection = dictionaryCorrection).let {
+                    experimentalKeyboardCorrection = dictionaryCorrection,
+                    predictiveConversion = isPredictiveConversionEnabled()).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
                 ensureActive()
@@ -1755,7 +1760,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             try {
                 val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
-                    experimentalKeyboardCorrection = dictionaryCorrection).let {
+                    experimentalKeyboardCorrection = dictionaryCorrection,
+                    predictiveConversion = isPredictiveConversionEnabled()).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
                 ensureActive()

@@ -21,6 +21,14 @@ import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config"
 type WidthMode = "half" | "full";
 type LearningMode = "enabled" | "read_only" | "disabled";
 type ReconversionKey = "convert" | "shift_convert" | "space" | "win_slash" | "disabled";
+type ClipboardConfigState = {
+    trigger_key: string;
+    retention_hours: number;
+};
+const DEFAULT_CLIPBOARD_CONFIG: ClipboardConfigState = {
+    trigger_key: "ctrl_b",
+    retention_hours: 1,
+};
 type GeneralConfigState = {
     punctuation_style: string;
     symbol_style: string;
@@ -34,6 +42,7 @@ type GeneralConfigState = {
     show_live_conversion_reading: boolean;
     live_conversion_reading_vertical_adjustment: number;
     jev_conversion: boolean;
+    predictive_conversion: boolean;
     experimental_ai_assist: boolean;
     experimental_ai_engine: string;
     auto_commit_live_conversion: boolean;
@@ -58,6 +67,7 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     show_live_conversion_reading: true,
     live_conversion_reading_vertical_adjustment: 4,
     jev_conversion: false,
+    predictive_conversion: false,
     experimental_ai_assist: true,
     experimental_ai_engine: "embedded",
     auto_commit_live_conversion: true,
@@ -160,6 +170,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
         ctrlSpaceToggle: true, altBackquoteToggle: true, eisuToggle: false,
         reconversionKey: "win_slash" as ReconversionKey,
     });
+    const [clipboardValue, setClipboardValue] = useState(DEFAULT_CLIPBOARD_CONFIG);
     const [generalValue, setGeneralValue] = useState(DEFAULT_GENERAL_CONFIG);
     const [widthGroups, setWidthGroups] = useState(DEFAULT_WIDTH_GROUPS);
     const [learningMode, setLearningMode] = useState<LearningMode>("enabled");
@@ -182,6 +193,11 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                 eisuToggle: shortcuts.eisu_toggle ?? false,
                 reconversionKey: normalizeReconversionKey(shortcuts.reconversion_key),
             });
+            const clipboard = data.clipboard ?? {};
+            setClipboardValue({
+                trigger_key: clipboard.trigger_key ?? "ctrl_b",
+                retention_hours: typeof clipboard.retention_hours === "number" ? clipboard.retention_hours : 1,
+            });
             setGeneralValue(normalizeGeneralConfig(data.general));
             setLearningMode(normalizeLearningMode(data.learning?.mode));
             setWidthGroups(normalizeWidthGroups(data.character_width?.groups));
@@ -197,6 +213,18 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             config.general[key] = nextValue;
         });
         if (data) setGeneralValue(normalizeGeneralConfig(data.general));
+    };
+    const updateClipboardConfig = async <K extends keyof ClipboardConfigState>(key: K, nextValue: ClipboardConfigState[K]) => {
+        const data = await saveConfigWithToast((config) => {
+            config.clipboard = config.clipboard ?? {};
+            config.clipboard[key] = nextValue;
+        });
+        if (data?.clipboard) {
+            setClipboardValue({
+                trigger_key: data.clipboard.trigger_key ?? "ctrl_b",
+                retention_hours: typeof data.clipboard.retention_hours === "number" ? data.clipboard.retention_hours : 1,
+            });
+        }
     };
     const updateShortcut = async (key: string, nextValue: boolean | ReconversionKey) => {
         const data = await saveConfigWithToast((config) => {
@@ -325,6 +353,9 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     <SettingsRow label="Space / Tab まで候補を非表示" htmlFor="candidate-delay">
                         <Switch id="candidate-delay" checked={generalValue.show_candidate_window_after_space} onCheckedChange={(value) => void updateGeneralConfig("show_candidate_window_after_space", value)} />
                     </SettingsRow>
+                    <SettingsRow label="予測変換" description="入力途中の読みから単語・フレーズの予測変換候補を提示します（デフォルト: オフ）" htmlFor="predictive-conversion">
+                        <Switch id="predictive-conversion" checked={generalValue.predictive_conversion} onCheckedChange={(value) => void updateGeneralConfig("predictive_conversion", value)} />
+                    </SettingsRow>
                     <SettingsRow label="ライブ変換中の読みを表示" htmlFor="live-reading">
                         <Switch id="live-reading" checked={generalValue.show_live_conversion_reading} onCheckedChange={(value) => void updateGeneralConfig("show_live_conversion_reading", value)} />
                     </SettingsRow>
@@ -379,6 +410,31 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                 </SettingsSection>
             </>}
             {page === "keys" && <>
+                <SettingsSection title="クリップボード">
+                    <SettingsRow label="起動キー" description="画面上のどこからでもクリップボード履歴を呼び出すショートカットキーを設定します。" htmlFor="clipboard-trigger-key">
+                        <Select value={clipboardValue.trigger_key} onValueChange={(value) => void updateClipboardConfig("trigger_key", value)}>
+                            <SelectTrigger id="clipboard-trigger-key"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="ctrl_b">Ctrl + B (デフォルト)</SelectItem>
+                                <SelectItem value="ctrl_shift_v">Ctrl + Shift + V</SelectItem>
+                                <SelectItem value="alt_v">Alt + V</SelectItem>
+                                <SelectItem value="ctrl_q">Ctrl + Q</SelectItem>
+                                <SelectItem value="disabled">無効</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </SettingsRow>
+                    <SettingsRow label="履歴の保持時間" description="未固定のクリップボード履歴を保持する期間です。ピン留めした項目は常に保持されます。" htmlFor="clipboard-retention-hours">
+                        <Select value={String(clipboardValue.retention_hours)} onValueChange={(value) => void updateClipboardConfig("retention_hours", Number(value))}>
+                            <SelectTrigger id="clipboard-retention-hours"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="1">1時間 (デフォルト)</SelectItem>
+                                <SelectItem value="3">3時間</SelectItem>
+                                <SelectItem value="24">24時間</SelectItem>
+                                <SelectItem value="0">無制限 (消去しない)</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </SettingsRow>
+                </SettingsSection>
                 <SettingsSection title="英数・かな切り替え">
                     {([
                         ["ctrl_space_toggle", "ctrlSpaceToggle", "Ctrl + Space"],
@@ -406,19 +462,19 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             </>}
             {page === "advanced" && <>
                 <SettingsSection title="タイポ補正と先読み">
-                    <SettingsRow label="タイポ補正モデル" description="日本語入力のタイポ補正に特化して独自に追加学習した corecctor を搭載。入力と左文脈から補正候補を生成します。">
-                        <span className="text-sm font-medium">corecctor（ZeroCon Model Corrector）</span>
+                    <SettingsRow label="タイポ補正モデル" description="Nano v4 メインモデルに統合。読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で高速処理します。">
+                        <span className="text-sm font-medium">ZeroCon Model Nano v4（メインモデル統合）</span>
                     </SettingsRow>
-                    <SettingsRow label="タイポ補正・先読みを使う" description="corecctor によるタイポ補正と、ZeroCon Model による続きの先読みを有効にします。補正・先読み候補はTabキーで採用できます。" htmlFor="ai-assist">
+                    <SettingsRow label="タイポ補正・先読みを使う" description="Nano v4 メインモデルによる統合タイポ補正と続きの先読みを有効にします。補正・先読み候補はTabキーで採用できます。" htmlFor="ai-assist">
                         <Switch id="ai-assist" checked={generalValue.experimental_ai_assist} onCheckedChange={(value) => void updateGeneralConfig("experimental_ai_assist", value)} />
                     </SettingsRow>
                     {generalValue.experimental_ai_assist && (
                         <>
-                            <SettingsRow label="タイポ補正の実行方法" description="通常は内蔵エンジンが corecctor を自動起動します。LM Studioは開発者向けの接続先です。" htmlFor="ai-engine">
+                            <SettingsRow label="タイポ補正の実行方法" description="通常は内蔵推論エンジンが自動処理します。LM Studioは開発者向けの接続先です。" htmlFor="ai-engine">
                                 <Select value={generalValue.experimental_ai_engine || "embedded"} onValueChange={(value) => void updateGeneralConfig("experimental_ai_engine", value)}>
                                     <SelectTrigger id="ai-engine" className="w-64"><SelectValue /></SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="embedded">内蔵推論エンジン (推奨・自動起動)</SelectItem>
+                                        <SelectItem value="embedded">内蔵推論エンジン (推奨・メインモデル統合)</SelectItem>
                                         <SelectItem value="lm_studio">LM Studio (検証・デバッグ用)</SelectItem>
                                     </SelectContent>
                                 </Select>

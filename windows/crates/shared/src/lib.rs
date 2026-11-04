@@ -691,6 +691,8 @@ pub struct GeneralConfig {
     pub live_conversion_reading_vertical_adjustment: i32,
     #[serde(default)]
     pub experimental_typo_correction: bool,
+    #[serde(default)]
+    pub predictive_conversion: bool,
     #[serde(default = "default_ai_assist_enabled")]
     pub experimental_ai_assist: bool,
     #[serde(default = "default_ai_engine")]
@@ -722,6 +724,7 @@ impl Default for GeneralConfig {
             live_conversion_reading_vertical_adjustment:
                 LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT,
             experimental_typo_correction: false,
+            predictive_conversion: false,
             experimental_ai_assist: true,
             experimental_ai_engine: default_ai_engine(),
             experimental_ai_engine_port: default_ai_engine_port(),
@@ -829,6 +832,26 @@ mod tests {
         assert!(serde_json::to_value(config).unwrap()["general"]
             .get("experimental_predictive_model")
             .is_none());
+    }
+
+    #[test]
+    fn clipboard_config_defaults_and_round_trips() {
+        let default_config = super::AppConfig::default();
+        assert_eq!(default_config.clipboard.trigger_key, "ctrl_b");
+        assert_eq!(default_config.clipboard.retention_hours, 1);
+
+        let deserialized: super::ClipboardConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(deserialized.trigger_key, "ctrl_b");
+        assert_eq!(deserialized.retention_hours, 1);
+
+        let custom: super::ClipboardConfig =
+            serde_json::from_str(r#"{"trigger_key":"ctrl_shift_v","retention_hours":24}"#).unwrap();
+        assert_eq!(custom.trigger_key, "ctrl_shift_v");
+        assert_eq!(custom.retention_hours, 24);
+
+        let json = serde_json::to_string(&default_config).unwrap();
+        let restored: super::AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.clipboard, default_config.clipboard);
     }
 
     #[test]
@@ -992,6 +1015,19 @@ mod tests {
         let enabled: GeneralConfig =
             serde_json::from_str(r#"{"experimental_typo_correction":true}"#).unwrap();
         assert!(enabled.experimental_typo_correction);
+    }
+
+    #[test]
+    fn predictive_conversion_defaults_to_off() {
+        let default_config = GeneralConfig::default();
+        assert!(!default_config.predictive_conversion);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.predictive_conversion);
+
+        let enabled: GeneralConfig =
+            serde_json::from_str(r#"{"predictive_conversion":true}"#).unwrap();
+        assert!(enabled.predictive_conversion);
     }
 
     #[test]
@@ -1452,6 +1488,31 @@ pub struct ShortcutConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct ClipboardConfig {
+    #[serde(default = "default_clipboard_trigger_key")]
+    pub trigger_key: String,
+    #[serde(default = "default_clipboard_retention_hours")]
+    pub retention_hours: u32,
+}
+
+fn default_clipboard_trigger_key() -> String {
+    "ctrl_b".to_string()
+}
+
+fn default_clipboard_retention_hours() -> u32 {
+    1
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            trigger_key: default_clipboard_trigger_key(),
+            retention_hours: default_clipboard_retention_hours(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct DebugConfig {
     #[serde(default)]
     pub server_log_enabled: bool,
@@ -1603,6 +1664,8 @@ pub struct AppConfig {
     pub user_dictionary: UserDictionaryConfig,
     #[serde(default)]
     pub learning: LearningConfig,
+    #[serde(default)]
+    pub clipboard: ClipboardConfig,
 }
 
 impl Default for AppConfig {
@@ -1624,6 +1687,7 @@ impl Default for AppConfig {
             character_width: CharacterWidthConfig::default(),
             user_dictionary: UserDictionaryConfig::default(),
             learning: LearningConfig::default(),
+            clipboard: ClipboardConfig::default(),
         }
     }
 }

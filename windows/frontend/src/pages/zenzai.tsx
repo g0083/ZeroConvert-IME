@@ -208,7 +208,7 @@ export const Zenzai = () => {
                 </p>
                 {loadState === "error" && <Button variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>再試行</Button>}
             </div> : <>
-                <SettingsRow label="利用モデル" description="漢字変換と先読みで使うモデルを選択します。タイポ補正には独自モデル corecctor（ZeroCon Model Corrector）を使います。" htmlFor="zenzai-model">
+                <SettingsRow label="利用モデル" description="漢字変換・タイポ補正・先読みを統合処理するモデルを選択します（Nano v4 IQ4_emb8 / Q8）。" htmlFor="zenzai-model">
                     <Select value={activeModelId} disabled={runtimeApplying || cudaInstalling || isSwitchingModel || models.length === 0} onValueChange={(modelId) => void handleModelChange(modelId)}>
                         <SelectTrigger id="zenzai-model" className="w-[320px]">
                             <SelectValue placeholder="モデルを選択" />

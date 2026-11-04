@@ -23,6 +23,7 @@ class KanaKanjiConverter {
         private const val KEY_USER_DICT = "user_dict_json"
         private const val KEY_LEARNING_MEM = "learning_memory_json"
         private const val MAX_LEARNING_ENTRIES = 500
+        private const val MAX_OUTPUTS_PER_RUBY = 5
 
         @Volatile
         private var isEmojiLoaded = false
@@ -31,8 +32,8 @@ class KanaKanjiConverter {
         @Volatile
         private var isUserDataLoaded = false
         private val userDictEntries = mutableListOf<UserDictEntry>()
-        // LinkedHashMap in access/insertion order: readingHiragana -> selectedSurface
-        private val learningMemory = LinkedHashMap<String, String>()
+        // LinkedHashMap in access/insertion order: readingHiragana -> selectedSurfaces (most recent at 0)
+        private val learningMemory = LinkedHashMap<String, MutableList<String>>()
         private var morphologyLearning: MorphologyLearningStore? = null
         private val learningHistoryEpoch = java.util.concurrent.atomic.AtomicLong()
         internal val learningHistoryRevision: Long get() = learningHistoryEpoch.get()
@@ -142,9 +143,16 @@ class KanaKanjiConverter {
                     val keys = obj.keys()
                     while (keys.hasNext()) {
                         val k = keys.next()
-                        val v = obj.optString(k, "")
-                        if (k.isNotEmpty() && v.isNotEmpty()) {
-                            learningMemory[k] = v
+                        val v = obj.opt(k)
+                        if (v is JSONArray) {
+                            val list = mutableListOf<String>()
+                            for (i in 0 until v.length()) {
+                                val s = v.optString(i, "")
+                                if (s.isNotEmpty() && !list.contains(s)) list.add(s)
+                            }
+                            if (list.isNotEmpty()) learningMemory[k] = list
+                        } else if (v is String && v.isNotEmpty()) {
+                            learningMemory[k] = mutableListOf(v)
                         }
                     }
                 } catch (e: Exception) {
@@ -170,8 +178,12 @@ class KanaKanjiConverter {
 
         private fun saveLearningMemory(context: Context) {
             val obj = JSONObject()
-            for ((k, v) in learningMemory) {
-                obj.put(k, v)
+            for ((k, list) in learningMemory) {
+                val arr = JSONArray()
+                for (s in list) {
+                    arr.put(s)
+                }
+                obj.put(k, arr)
             }
             context.getSharedPreferences(PREFS_USER_DATA, Context.MODE_PRIVATE)
                 .edit()
@@ -215,8 +227,13 @@ class KanaKanjiConverter {
             val normReading = toHiragana(readingHiragana.trim())
             val normSurface = surface.trim()
             if (normReading.isEmpty() || normSurface.isEmpty()) return
-            learningMemory.remove(normReading)
-            learningMemory[normReading] = normSurface
+            val list = learningMemory.remove(normReading) ?: mutableListOf()
+            list.remove(normSurface)
+            list.add(0, normSurface)
+            while (list.size > MAX_OUTPUTS_PER_RUBY) {
+                list.removeAt(list.size - 1)
+            }
+            learningMemory[normReading] = list
             while (learningMemory.size > MAX_LEARNING_ENTRIES) {
                 val eldestKey = learningMemory.keys.firstOrNull() ?: break
                 learningMemory.remove(eldestKey)
@@ -247,7 +264,13 @@ class KanaKanjiConverter {
         @Synchronized
         fun getLearnedSurface(readingHiragana: String): String? {
             if (!LearningPolicy.canRead) return null
-            return learningMemory[toHiragana(readingHiragana)]
+            return learningMemory[toHiragana(readingHiragana)]?.firstOrNull()
+        }
+
+        @Synchronized
+        fun getLearnedSurfaces(readingHiragana: String): List<String> {
+            if (!LearningPolicy.canRead) return emptyList()
+            return learningMemory[toHiragana(readingHiragana)]?.toList() ?: emptyList()
         }
 
         @Synchronized
@@ -264,6 +287,25 @@ class KanaKanjiConverter {
             learningMemory.clear()
             saveLearningMemory(context)
             morphologyLearning?.clear()
+        }
+
+        @Synchronized
+        internal fun recordSelectionForTest(readingHiragana: String, surface: String) {
+            val normReading = toHiragana(readingHiragana.trim())
+            val normSurface = surface.trim()
+            if (normReading.isEmpty() || normSurface.isEmpty()) return
+            val list = learningMemory.remove(normReading) ?: mutableListOf()
+            list.remove(normSurface)
+            list.add(0, normSurface)
+            while (list.size > MAX_OUTPUTS_PER_RUBY) {
+                list.removeAt(list.size - 1)
+            }
+            learningMemory[normReading] = list
+        }
+
+        @Synchronized
+        internal fun clearLearningMemoryForTest() {
+            learningMemory.clear()
         }
 
         @Synchronized
@@ -295,7 +337,8 @@ class KanaKanjiConverter {
         profile: String = "",
         personalize: Boolean = true,
         fixedSurfacePrefix: String = "",
-        experimentalKeyboardCorrection: Boolean = false
+        experimentalKeyboardCorrection: Boolean = false,
+        predictiveConversion: Boolean = true
     ): List<Candidate> = withContext(Dispatchers.Default) {
         val hiragana = composingText.convertTargetBeforeCursor
         if (hiragana.isEmpty()) return@withContext emptyList()
@@ -308,7 +351,8 @@ class KanaKanjiConverter {
             if (tail.isEmpty) return@withContext listOf(Candidate(fixedSurfacePrefix, toKatakana(hiragana)))
             return@withContext requestCandidates(
                 tail, leftContext + fixedSurfacePrefix, enableAI, profile, personalize,
-                experimentalKeyboardCorrection = experimentalKeyboardCorrection
+                experimentalKeyboardCorrection = experimentalKeyboardCorrection,
+                predictiveConversion = predictiveConversion
             ).map { it.copy(text = fixedSurfacePrefix + it.text,
                 reading = if (BuildConfig.WINDOWS_ENGINE) toKatakana(fixedSurfacePrefix + toHiragana(it.reading)) else toKatakana(hiragana),
                 segments = emptyList(), learningAllowed = it.isLearningTarget,
@@ -317,15 +361,31 @@ class KanaKanjiConverter {
 
         if (BuildConfig.WINDOWS_ENGINE) {
             return@withContext com.zeroconvert.ime.engine.WindowsEngine.candidates(composingText, leftContext,
-                enableAI, profile, personalize, experimentalKeyboardCorrection)
+                enableAI, profile, personalize, experimentalKeyboardCorrection,
+                predictiveConversion = predictiveConversion)
         }
         val katakana = toKatakana(hiragana)
         val candidates = mutableListOf<Candidate>()
 
         // 1. Learning Memory Override (#1 priority when user previously selected a candidate for this exact reading)
-        val learned = if (personalize) getLearnedSurface(hiragana) else null
-        if (!learned.isNullOrEmpty()) {
+        val learnedList = if (personalize) getLearnedSurfaces(hiragana) else emptyList()
+        for (learned in learnedList) {
             candidates.add(Candidate(text = learned, reading = katakana, cost = 2000f, isAI = false))
+        }
+
+        // 1.1 Prefix Suggestion from Learning Memory (proactive suggestion for 2+ char prefixes)
+        if (personalize && predictiveConversion && hiragana.length >= 2) {
+            val prefixMatches = synchronized(Companion) {
+                learningMemory.entries
+                    .filter { (r, _) -> r.startsWith(hiragana) && r != hiragana }
+                    .flatMap { (r, list) -> list.map { r to it } }
+                    .take(3)
+            }
+            for ((r, word) in prefixMatches) {
+                if (candidates.none { it.text == word }) {
+                    candidates.add(Candidate(text = word, reading = toKatakana(r), cost = 1200f, isAI = false))
+                }
+            }
         }
 
         // 2. User Dictionary exact & prefix matches
@@ -359,7 +419,7 @@ class KanaKanjiConverter {
         // 4. LOUDS System Dictionary Lookup (Exact, Multi-Morpheme Viterbi & Prefix matches)
         try {
             val keyboardEnds = if (experimentalKeyboardCorrection) composingText.keyboardTypoSurfaceEnds() else null
-            val dictResults = ZenzNative.lookupDict(katakana, prefixSearch = true, maxCount = 30,
+            val dictResults = ZenzNative.lookupDict(katakana, prefixSearch = predictiveConversion, maxCount = 30,
                 keyboardEnds = keyboardEnds, userEntries = userEntriesSnapshot,
                 learnedEntries = if (personalize) learnedEntries(katakana) else emptyList())
             val exactDictResults = dictResults.filter { it.reading == katakana }
@@ -399,6 +459,6 @@ class KanaKanjiConverter {
             candidates.add(Candidate(text = katakana, reading = katakana, cost = -101f, isAI = false))
         }
 
-        candidates
+        candidates.distinctBy { it.text to it.reading }
     }
 }
