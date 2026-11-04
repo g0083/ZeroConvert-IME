@@ -1,10 +1,10 @@
 //! Keyboard-channel correction on the assistance worker. Never mutates Swift.
-//! The native child owns the prior model/dictionary; each request has a deadline.
+//! The native child owns the active conversion model/dictionary; each request has a deadline.
 use super::{corrector, reading_check, runtime, simple_http_post, AiAssistConfig, TypoSuggestion};
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -20,6 +20,7 @@ struct Worker {
     child: Child,
     input: ChildStdin,
     output: mpsc::Receiver<String>,
+    model: PathBuf,
 }
 
 impl Drop for Worker {
@@ -29,19 +30,149 @@ impl Drop for Worker {
     }
 }
 
+fn repo_root_from_manifest() -> Option<PathBuf> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest.ancestors() {
+        if ancestor.join("windows/native/keyboard-prior").is_dir() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+fn find_worker_executable(root: &Path) -> Option<PathBuf> {
+    if let Some(repo) = repo_root_from_manifest() {
+        let target_dir = repo.join("windows/target/keyboard-prior");
+        if let Ok(entries) = std::fs::read_dir(&target_dir) {
+            let mut candidates: Vec<_> = entries
+                .filter_map(Result::ok)
+                .map(|e| e.path().join("keyboard-prior.exe"))
+                .filter(|p| p.is_file())
+                .collect();
+            candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+            if let Some(latest) = candidates.pop() {
+                return Some(latest);
+            }
+        }
+    }
+    let installed = root.join("llama_cpu/keyboard-prior.exe");
+    if installed.is_file() {
+        return Some(installed);
+    }
+    if let Some(repo) = repo_root_from_manifest() {
+        let trial = repo.join("ZeroConvertIME-windows/llama_cpu/keyboard-prior.exe");
+        if trial.is_file() {
+            return Some(trial);
+        }
+    }
+    None
+}
+
+fn find_runtime_dir(root: &Path, executable: &Path) -> PathBuf {
+    let installed = root.join("llama_cpu");
+    if installed.join("llama.dll").is_file() {
+        return installed;
+    }
+    if let Some(repo) = repo_root_from_manifest() {
+        for rel in [
+            "ZeroConvertIME-windows/llama_cpu",
+            "artifacts/runtime/windows/llama_cpu",
+        ] {
+            let candidate = repo.join(rel);
+            if candidate.join("llama.dll").is_file() {
+                return candidate;
+            }
+        }
+    }
+    if let Some(parent) = executable.parent() {
+        if parent.join("llama.dll").is_file() {
+            return parent.to_path_buf();
+        }
+    }
+    installed
+}
+
+fn ensure_executable_with_dlls(executable: &Path, runtime_dir: &Path) -> PathBuf {
+    let Some(parent) = executable.parent() else {
+        return executable.to_path_buf();
+    };
+    if parent == runtime_dir {
+        return executable.to_path_buf();
+    }
+    if let Ok(entries) = std::fs::read_dir(runtime_dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let src = entry.path();
+            if src
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
+            {
+                if let Some(name) = src.file_name() {
+                    let dst = parent.join(name);
+                    if !dst.is_file() {
+                        let _ = std::fs::copy(&src, &dst);
+                    }
+                }
+            }
+        }
+    }
+    executable.to_path_buf()
+}
+
+fn resolve_active_model(root: &Path) -> Option<PathBuf> {
+    let selected_id = runtime::settings_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| {
+            v.get("zenzai")
+                .and_then(|z| z.get("model"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "nano_v4_iq4_emb8".to_owned());
+    let filename = match selected_id.as_str() {
+        "nano_v4_q8" | "standard" | "standard_q4km" => "zerocon-nano-v4-q8_0.gguf",
+        _ => "zerocon-nano-v4-iq4nl-emb8.gguf",
+    };
+    for candidate in [
+        root.join("models").join(filename),
+        root.join("models/zerocon-nano-v4-iq4nl-emb8.gguf"),
+        root.join("models/zerocon-nano-v4-q8_0.gguf"),
+        root.join("models/zerocon-model-keyboard-prior.gguf"),
+    ] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    let repo_root = repo_root_from_manifest()?;
+    for candidate in [
+        repo_root.join("artifacts/models").join(filename),
+        repo_root.join("ZeroConvertIME-windows/models").join(filename),
+        repo_root.join("artifacts/models/zerocon-nano-v4-iq4nl-emb8.gguf"),
+    ] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 impl Worker {
     fn start(root: &Path, dictionary: &Path) -> Option<Self> {
-        let executable = root.join("llama_cpu/keyboard-prior.exe");
-        let model = root.join("models/zerocon-model-keyboard-prior.gguf");
-        if !executable.is_file() || !model.is_file() || !dictionary.is_file() {
+        let executable = find_worker_executable(root)?;
+        let model = resolve_active_model(root)?;
+        if !dictionary.is_file() {
             return None;
         }
-        let mut command = Command::new(executable);
+        let runtime_dir = find_runtime_dir(root, &executable);
+        let executable = ensure_executable_with_dlls(&executable, &runtime_dir);
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        let mut command = Command::new(&executable);
         command
-            .arg("--hybrid")
-            .arg(model)
+            .arg("--assist")
+            .arg(&model)
             .arg(dictionary)
-            .current_dir(root.join("llama_cpu"))
+            .current_dir(&runtime_dir)
+            .env("PATH", format!("{};{existing_path}", runtime_dir.display()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -66,6 +197,7 @@ impl Worker {
             child,
             input,
             output: receive,
+            model,
         };
         worker
             .output
@@ -75,10 +207,31 @@ impl Worker {
         Some(worker)
     }
 
-    fn request(&mut self, keys: &str) -> Option<Value> {
-        writeln!(self.input, "{keys}").ok()?;
+    fn request(
+        &mut self,
+        raw: &str,
+        input_hira: &str,
+        context: &str,
+        timeout_ms: u64,
+    ) -> Option<Value> {
+        let clean_raw: String = raw
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+            .collect();
+        let clean_input: String = input_hira
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+            .collect();
+        let clean_ctx: String = context
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+            .collect();
+        writeln!(self.input, "{clean_raw}\t{clean_input}\t{clean_ctx}").ok()?;
         self.input.flush().ok()?;
-        let response = self.output.recv_timeout(Duration::from_millis(250)).ok()?;
+        let response = self
+            .output
+            .recv_timeout(Duration::from_millis(timeout_ms))
+            .ok()?;
         serde_json::from_str(&response).ok()
     }
 }
@@ -107,7 +260,11 @@ pub fn prewarm() {
             return;
         };
         if let Ok(mut slot) = WORKER.lock() {
-            if slot.is_none() {
+            let desired = resolve_active_model(&root);
+            if slot
+                .as_ref()
+                .is_none_or(|w| desired.as_ref().is_some_and(|m| &w.model != m))
+            {
                 *slot = Worker::start(&root, &dictionary);
             }
         }
@@ -138,7 +295,7 @@ fn validated_reading(response: &Value, input: &str) -> Option<String> {
         || !(2..=128).contains(&reading.chars().count())
         || !reading
             .chars()
-            .all(|c| ('ぁ'..='ゖ').contains(&c) || c == 'ー')
+            .all(|c| ('ぁ'..='ゖ').contains(&c) || "ー、。！？!?".contains(c))
     {
         return None;
     }
@@ -150,6 +307,71 @@ fn legacy_full_word_repair(input: &str) -> bool {
         super::STANDARD_VOCAB.iter().any(|(r, _)| *r == reading)
             || super::typo_variant::lookup_surface(&reading).is_some()
     })
+}
+
+/// Repair reading via candidate search + main conversion model likelihood scoring.
+/// If the worker is cold and `wait_for_worker` is true (e.g. offline evaluation),
+/// starts the worker synchronously; in live IME (`wait_for_worker = false`),
+/// triggers `prewarm()` and returns immediately.
+pub fn repair_reading(
+    context: &str,
+    input: &str,
+    raw: &str,
+    wait_for_worker: bool,
+) -> Option<Option<String>> {
+    let norm = normalize_reading(input);
+    let char_count = norm.chars().count();
+    if !(2..=128).contains(&char_count)
+        || norm.chars().any(|c| ('一'..='鿿').contains(&c))
+        || norm
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_alphabetic() && !"aeiou".contains(c.to_ascii_lowercase()))
+    {
+        return None;
+    }
+    let valid_raw = if (4..=64).contains(&raw.len()) && raw.bytes().all(|c| c.is_ascii_lowercase())
+    {
+        raw
+    } else {
+        ""
+    };
+    let response = if wait_for_worker {
+        let mut slot = WORKER.lock().ok()?;
+        if slot.is_none() {
+            if let (Some(dictionary), Some(root)) = (
+                runtime::reverse_dictionary_path(),
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(Path::to_owned)),
+            ) {
+                *slot = Worker::start(&root, &dictionary);
+            }
+        }
+        let result = slot.as_mut()?.request(valid_raw, &norm, context, 30000);
+        if result.is_none() {
+            *slot = None;
+        }
+        result?
+    } else {
+        let mut slot = WORKER.try_lock().ok()?;
+        if slot.is_none() {
+            drop(slot);
+            prewarm();
+            return None;
+        }
+        let result = slot.as_mut()?.request(valid_raw, &norm, context, 350);
+        if result.is_none() {
+            *slot = None;
+            drop(slot);
+            prewarm();
+        }
+        result?
+    };
+    if response.get("observed")?.as_str()? != norm {
+        return None;
+    }
+    Some(validated_reading(&response, input))
 }
 
 pub fn suggest(
@@ -169,22 +391,7 @@ pub fn suggest(
         return None;
     }
     let started = Instant::now();
-    let response = {
-        let mut slot = WORKER.try_lock().ok()?;
-        let result = slot.as_mut()?.request(raw);
-        // A late response cannot be consumed by the next snapshot. Drop the
-        // process and its pipes after failure; restart separately from typing.
-        if result.is_none() {
-            *slot = None;
-            drop(slot);
-            prewarm();
-        }
-        result?
-    };
-    if response.get("observed")?.as_str()? != normalize_reading(input) {
-        return None;
-    }
-    let Some(reading) = validated_reading(&response, input) else {
+    let Some(reading) = repair_reading(context, input, raw, false)? else {
         return Some(None);
     };
     let remaining = 450u64

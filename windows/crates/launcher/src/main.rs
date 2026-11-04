@@ -65,11 +65,6 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    let ai_exe_path = exe_path.clone();
-    let _ai_handle = thread::spawn(move || {
-        watch_ai_server_process(&ai_exe_path);
-    });
-
     let prediction_path = exe_path.clone();
     let _prediction_handle = thread::spawn(move || watch_prediction_server(&prediction_path));
 
@@ -1211,6 +1206,7 @@ fn watch_assist_server(install_dir: &Path, corrector: bool) {
     }
 }
 
+#[allow(dead_code)]
 fn watch_ai_server_process(install_dir: &Path) {
     watch_assist_server(install_dir, true);
 }
