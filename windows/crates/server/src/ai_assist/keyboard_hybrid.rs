@@ -443,11 +443,12 @@ pub fn suggest(
         let Some(payload) = corrector::payload(context, reading) else {
             continue;
         };
-        if let Some(surface) = simple_http_post(config.prediction_port, "/completion", &payload, remaining)
-            .and_then(|r| {
-                corrector::completed_surface(&r, reading, payload["n_predict"].as_u64()?)
-            })
-            .filter(|s| reading_check::has_same_reading(s, reading))
+        if let Some(surface) =
+            simple_http_post(config.prediction_port, "/completion", &payload, remaining)
+                .and_then(|r| {
+                    corrector::completed_surface(&r, reading, payload["n_predict"].as_u64()?)
+                })
+                .filter(|s| reading_check::has_same_reading(s, reading))
         {
             return Some(Some(TypoSuggestion {
                 surface: surface.clone(),
