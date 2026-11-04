@@ -2,6 +2,18 @@
 
 Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減らす日本語IMEを開発しています。現在はタイポ補正の安定動作と先読み精度の改善に取り組んでいます。Android実装とモデル学習・評価コードも同じリポジトリで管理します。
 
+## 📥 すぐに試す（最新リリース）
+
+最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.2.0)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
+
+| プラットフォーム | 配布ファイル | 説明 |
+|---|---|---|
+| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.2.0.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.0/ZeroConvert-IME-setup-v0.2.0.exe) | インストーラーを実行するだけでモデル・エンジン一式を自動セットアップ |
+| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.2.0-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.0/ZeroConvert-IME-v0.2.0-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK |
+| **Android (実機推奨)** | [**ZeroConvert-IME-v0.2.0-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.0/ZeroConvert-IME-v0.2.0-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK |
+
+> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.2.0)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.2.0) をご覧ください。
+
 ## 変換操作を減らす、独自のZeroCon Model Nano v4
 
 ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall** を出発点に、文脈に応じた漢字選択、専門語・四字熟語、複合文節、英数字や空白の保持を強化した派生モデルです。Windows・Androidともに通常変換モデルを次の2種類に統一しています。
