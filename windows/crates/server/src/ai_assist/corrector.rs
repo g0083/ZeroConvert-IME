@@ -255,27 +255,43 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
         } else {
             input.to_owned()
         };
-        if let Some(worker_decision) =
-            super::keyboard_hybrid::repair_reading(&context, &repair_input, "", wait_for_worker)
+        if let Some(readings) =
+            super::keyboard_hybrid::repair_readings(&context, &repair_input, "", wait_for_worker)
         {
-            if let Some(reading) = worker_decision {
-                let surface = match infer(&context, &reading, config) {
-                    Some(s) if reading_check::has_same_reading(&s, &reading) => s,
-                    Some(_) => return None,
-                    None => {
-                        typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone())
-                    }
-                };
-                return (katakana_to_hiragana(&surface) != katakana_to_hiragana(input)).then_some(
-                    TypoSuggestion {
-                        surface: surface.clone(),
-                        token_reading: input.into(),
-                        token_surface: surface,
-                        learned: false,
-                    },
-                );
+            if readings.is_empty() {
+                return None;
             }
-            return None;
+            let mut saw_invalid_surface = false;
+            for reading in &readings {
+                match infer(&context, reading, config) {
+                    Some(s) if reading_check::has_same_reading(&s, reading) => {
+                        return (katakana_to_hiragana(&s) != katakana_to_hiragana(input))
+                            .then_some(TypoSuggestion {
+                                surface: s.clone(),
+                                token_reading: input.into(),
+                                token_surface: s,
+                                learned: false,
+                            });
+                    }
+                    Some(_) => {
+                        saw_invalid_surface = true;
+                    }
+                    None => {}
+                }
+            }
+            if saw_invalid_surface {
+                return None;
+            }
+            let reading = &readings[0];
+            let surface = typo_variant::lookup_surface(reading).unwrap_or_else(|| reading.clone());
+            return (katakana_to_hiragana(&surface) != katakana_to_hiragana(input)).then_some(
+                TypoSuggestion {
+                    surface: surface.clone(),
+                    token_reading: input.into(),
+                    token_surface: surface,
+                    learned: false,
+                },
+            );
         }
     }
     match infer(&context, input, config) {

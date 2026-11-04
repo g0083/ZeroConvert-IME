@@ -286,22 +286,45 @@ fn normalize_reading(text: &str) -> String {
         .collect()
 }
 
-fn validated_reading(response: &Value, input: &str) -> Option<String> {
-    let observed = response.get("observed")?.as_str()?;
-    let reading = response.get("reading")?.as_str()?;
-    let gain = response.get("gain")?.as_f64()?;
-    if normalize_reading(input) != observed
-        || reading == observed
-        || !gain.is_finite()
-        || gain < 37.
-        || !(2..=128).contains(&reading.chars().count())
-        || !reading
+fn is_valid_reading_str(reading: &str, observed: &str) -> bool {
+    reading != observed
+        && (2..=128).contains(&reading.chars().count())
+        && reading
             .chars()
             .all(|c| ('ぁ'..='ゖ').contains(&c) || "ー、。！？!?".contains(c))
+}
+
+fn validated_readings(response: &Value, input: &str) -> Vec<String> {
+    let Some(observed) = response.get("observed").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let Some(reading) = response.get("reading").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let Some(gain) = response.get("gain").and_then(Value::as_f64) else {
+        return Vec::new();
+    };
+    if normalize_reading(input) != observed
+        || !gain.is_finite()
+        || gain < 37.
+        || !is_valid_reading_str(reading, observed)
     {
-        return None;
+        return Vec::new();
     }
-    Some(reading.to_owned())
+    let mut out = vec![reading.to_owned()];
+    if let Some(alt) = response
+        .get("alt_reading")
+        .and_then(Value::as_str)
+        .filter(|alt| *alt != reading && is_valid_reading_str(alt, observed))
+    {
+        out.push(alt.to_owned());
+    }
+    out
+}
+
+#[cfg(test)]
+fn validated_reading(response: &Value, input: &str) -> Option<String> {
+    validated_readings(response, input).into_iter().next()
 }
 
 fn legacy_full_word_repair(input: &str) -> bool {
@@ -312,15 +335,13 @@ fn legacy_full_word_repair(input: &str) -> bool {
 }
 
 /// Repair reading via candidate search + main conversion model likelihood scoring.
-/// If the worker is cold and `wait_for_worker` is true (e.g. offline evaluation),
-/// starts the worker synchronously; in live IME (`wait_for_worker = false`),
-/// triggers `prewarm()` and returns immediately.
-pub fn repair_reading(
+/// Returns up to 2 ranked reading candidates when the worker finishes in time.
+pub fn repair_readings(
     context: &str,
     input: &str,
     raw: &str,
     wait_for_worker: bool,
-) -> Option<Option<String>> {
+) -> Option<Vec<String>> {
     let norm = normalize_reading(input);
     let char_count = norm.chars().count();
     if !(2..=128).contains(&char_count)
@@ -373,7 +394,20 @@ pub fn repair_reading(
     if response.get("observed")?.as_str()? != norm {
         return None;
     }
-    Some(validated_reading(&response, input))
+    Some(validated_readings(&response, input))
+}
+
+/// Repair reading via candidate search + main conversion model likelihood scoring.
+/// If the worker is cold and `wait_for_worker` is true (e.g. offline evaluation),
+/// starts the worker synchronously; in live IME (`wait_for_worker = false`),
+/// triggers `prewarm()` and returns immediately.
+pub fn repair_reading(
+    context: &str,
+    input: &str,
+    raw: &str,
+    wait_for_worker: bool,
+) -> Option<Option<String>> {
+    repair_readings(context, input, raw, wait_for_worker).map(|v| v.into_iter().next())
 }
 
 pub fn suggest(
@@ -393,29 +427,41 @@ pub fn suggest(
         return None;
     }
     let started = Instant::now();
-    let Some(reading) = repair_reading(context, input, raw, false)? else {
-        return Some(None);
-    };
-    let remaining = 450u64
-        .saturating_sub(started.elapsed().as_millis() as u64)
-        .min(200);
-    if remaining < 20 {
+    let readings = repair_readings(context, input, raw, false)?;
+    if readings.is_empty() {
         return Some(None);
     }
-    // Reuse ordinary conversion for final spelling, independently of the main
-    // Swift composition. Its reading must match the channel's proposed reading.
-    let payload = corrector::payload(context, &reading)?;
-    let surface = simple_http_post(config.prediction_port, "/completion", &payload, remaining)
-        .and_then(|r| corrector::completed_surface(&r, &reading, payload["n_predict"].as_u64()?))
-        .filter(|s| reading_check::has_same_reading(s, &reading))
-        // The unigram channel's surface can have the right reading but poor
-        // spelling (e.g. し両 for 資料). A literal corrected reading is preferable
-        // when ordinary conversion is unavailable or fails reading validation.
-        .or_else(|| Some(reading.clone()));
-    Some(surface.map(|surface| TypoSuggestion {
-        surface: surface.clone(),
+    for reading in &readings {
+        let remaining = 450u64
+            .saturating_sub(started.elapsed().as_millis() as u64)
+            .min(200);
+        if remaining < 20 {
+            break;
+        }
+        // Reuse ordinary conversion for final spelling, independently of the main
+        // Swift composition. Its reading must match the channel's proposed reading.
+        let Some(payload) = corrector::payload(context, reading) else {
+            continue;
+        };
+        if let Some(surface) = simple_http_post(config.prediction_port, "/completion", &payload, remaining)
+            .and_then(|r| {
+                corrector::completed_surface(&r, reading, payload["n_predict"].as_u64()?)
+            })
+            .filter(|s| reading_check::has_same_reading(s, reading))
+        {
+            return Some(Some(TypoSuggestion {
+                surface: surface.clone(),
+                token_reading: input.into(),
+                token_surface: surface,
+                learned: false,
+            }));
+        }
+    }
+    let reading = readings.into_iter().next()?;
+    Some(Some(TypoSuggestion {
+        surface: reading.clone(),
         token_reading: input.into(),
-        token_surface: surface,
+        token_surface: reading,
         learned: false,
     }))
 }

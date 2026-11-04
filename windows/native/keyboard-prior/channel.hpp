@@ -493,7 +493,12 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       const char ch = r[i];
       if ((ch < 'a' || ch > 'z') && ch != '-')
         continue;
-      add(roman_decode(r.substr(0, i) + r.substr(i + 1)), 2.5);
+      const bool adj_vowel_a =
+          ch == 'a' &&
+          ((i > 0 && vowels.find(r[i - 1]) != std::string::npos) ||
+           (i + 1 < r.size() && vowels.find(r[i + 1]) != std::string::npos));
+      add(roman_decode(r.substr(0, i) + r.substr(i + 1)),
+          adj_vowel_a ? 1.0 : 2.5);
       auto nb_it = neighbors.find(ch);
       if (nb_it != neighbors.end()) {
         for (char nb : nb_it->second) {
@@ -531,6 +536,8 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       }
     }
     for (size_t i = 0; i + 1 < r.size(); ++i) {
+      if (r[i] < 'a' || r[i] > 'z' || r[i + 1] < 'a' || r[i + 1] > 'z')
+        continue;
       if (r[i] != r[i + 1]) {
         auto v = r;
         std::swap(v[i], v[i + 1]);
@@ -546,18 +553,18 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       if (r[i + 2] == 'a') {
         add(roman_decode(r.substr(0, i) + std::string(1, r[i + 1]) +
                          std::string(1, r[i]) + r.substr(i + 3)),
-            2.5);
+            2.0);
       }
     }
     for (size_t i = 0; i + 3 < r.size(); ++i) {
       if (r[i + 1] == 'a' && vowels.find(r[i + 3]) != std::string::npos) {
         add(roman_decode(r.substr(0, i + 1) + std::string(1, r[i + 3]) +
                          std::string(1, r[i + 2]) + r.substr(i + 4)),
-            2.5);
+            2.0);
         for (char vch : vowels) {
           add(roman_decode(r.substr(0, i + 1) + std::string(1, vch) +
                            r.substr(i + 4)),
-              3.2);
+              2.2);
         }
       }
     }
@@ -568,6 +575,9 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       add(orig.substr(0, i) + orig.substr(i + 1), 1.0);
   }
   for (size_t i = 1; i <= orig.size(); ++i) {
+    if (orig[i - 1] == U'？' || orig[i - 1] == U'！' || orig[i - 1] == U'。' ||
+        orig[i - 1] == U'、')
+      continue;
     for (char32_t sp : specials)
       add(orig.substr(0, i) + std::u32string(1, sp) + orig.substr(i), 2.5);
   }
@@ -575,10 +585,17 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
     auto v = orig;
     std::swap(v[i], v[i + 1]);
     add(v, 2.2);
+    const auto sub2 = orig.substr(i, 2);
+    if (sub2 == U"なっ" || sub2 == U"なな")
+      add(orig.substr(0, i) + U"ん" + orig.substr(i + 2), 1.2);
+    else if (sub2 == U"んな")
+      add(orig.substr(0, i) + U"にん" + orig.substr(i + 2), 1.8);
+    else if (sub2 == U"うじ")
+      add(orig.substr(0, i) + U"じゅ" + orig.substr(i + 2), 1.8);
   }
   struct ScoredItem {
     double rank_score;
-    double dict_score;
+    DictionaryPath path;
     double penalty;
     std::u32string reading;
   };
@@ -586,17 +603,17 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   for (const auto &kv : penalties) {
     if (kv.first == orig)
       continue;
-    const double d = dictionary.score_fast(kv.first);
-    items.push_back({d - kv.second * 4.0, d, kv.second, kv.first});
+    const auto p = dictionary.convert_fast(kv.first);
+    items.push_back({p.score - kv.second * 4.0, p, kv.second, kv.first});
   }
   std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
     return a.rank_score != b.rank_score ? a.rank_score > b.rank_score
                                         : a.reading < b.reading;
   });
   std::vector<ReadingCandidate> out;
-  out.push_back({orig, {dictionary.score_fast(orig), ""}, 0.0});
+  out.push_back({orig, dictionary.convert_fast(orig), 0.0});
   for (size_t i = 0; i < items.size() && out.size() < limit; ++i)
-    out.push_back({items[i].reading, {items[i].dict_score, ""}, items[i].penalty});
+    out.push_back({items[i].reading, items[i].path, items[i].penalty});
   return out;
 }
 

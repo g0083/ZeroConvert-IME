@@ -277,25 +277,84 @@ int main(int argc, char **argv) {
         const auto scores = score_sequences(sequences, lengths);
         const auto &orig = candidates[0];
         const double baseline = orig.path.score + 8.0 * scores[0];
-        size_t best = 0;
-        double best_delta = 0.0;
+        const int orig_tokens = int(sequences[0].size());
+        struct RankedCandidate {
+          double stage1_delta;
+          double final_score;
+          size_t index;
+        };
+        std::vector<RankedCandidate> ranked;
         for (size_t i = 1; i < candidates.size(); ++i) {
-          const double total = candidates[i].path.score + 8.0 * scores[i] -
-                               candidates[i].penalty * 3.0;
+          const int token_diff = int(sequences[i].size()) - orig_tokens;
+          const double len_comp =
+              (token_diff > 0 &&
+               candidates[i].path.score > orig.path.score + 3.5)
+                  ? 6.0 * std::min(token_diff, 2)
+                  : 0.0;
+          const double total = candidates[i].path.score + 8.0 * scores[i] +
+                               len_comp - candidates[i].penalty * 3.0;
           const double delta = total - baseline;
-          if (delta >= 37.0 && (best == 0 || delta > best_delta)) {
-            best = i;
-            best_delta = delta;
+          if (delta >= 34.0) {
+            ranked.push_back({delta, delta, i});
           }
         }
-        if (best == 0) {
+        std::sort(ranked.begin(), ranked.end(),
+                  [](const RankedCandidate &a, const RankedCandidate &b) {
+                    return a.stage1_delta > b.stage1_delta;
+                  });
+        if (ranked.empty() || ranked[0].stage1_delta < 37.0) {
           std::cout << "{\"observed\":" << json_string(encode_utf8(orig.reading))
                     << "}" << std::endl;
         } else {
+          const size_t top_k = std::min<size_t>(ranked.size(), 3);
+          if (top_k >= 2) {
+            std::vector<std::vector<llama_token>> surf_sequences;
+            std::vector<int> surf_prefixes;
+            std::vector<size_t> valid_k;
+            for (size_t k = 0; k < top_k; ++k) {
+              const size_t idx = ranked[k].index;
+              const auto &c = candidates[idx];
+              if (c.path.surface.empty())
+                continue;
+              auto full_seq = tokenize(
+                  encode_utf8(prompt_prefix + katakana(c.reading) + U"\uee01" +
+                              decode_utf8(c.path.surface)));
+              const int pfx_len = int(sequences[idx].size());
+              if (int(full_seq.size()) > pfx_len) {
+                surf_sequences.push_back(std::move(full_seq));
+                surf_prefixes.push_back(pfx_len);
+                valid_k.push_back(k);
+              }
+            }
+            if (surf_sequences.size() >= 2) {
+              const auto surf_scores =
+                  score_sequences(surf_sequences, surf_prefixes);
+              for (size_t j = 0; j < valid_k.size(); ++j) {
+                const size_t k = valid_k[j];
+                const int n_surf =
+                    int(surf_sequences[j].size()) - surf_prefixes[j];
+                const double surf_mean =
+                    surf_scores[j] / std::max(1, n_surf);
+                ranked[k].final_score =
+                    ranked[k].stage1_delta + 5.0 * surf_mean;
+              }
+              std::sort(ranked.begin(), ranked.begin() + top_k,
+                        [](const RankedCandidate &a, const RankedCandidate &b) {
+                          return a.final_score > b.final_score;
+                        });
+            }
+          }
+          const size_t best = ranked[0].index;
+          const double best_delta = std::max(37.0, ranked[0].stage1_delta);
           std::cout << "{\"observed\":" << json_string(encode_utf8(orig.reading))
                     << ",\"reading\":"
-                    << json_string(encode_utf8(candidates[best].reading))
-                    << ",\"gain\":" << std::setprecision(14) << best_delta << "}"
+                    << json_string(encode_utf8(candidates[best].reading));
+          if (top_k >= 2 && ranked[1].stage1_delta >= 35.0) {
+            const size_t alt = ranked[1].index;
+            std::cout << ",\"alt_reading\":"
+                      << json_string(encode_utf8(candidates[alt].reading));
+          }
+          std::cout << ",\"gain\":" << std::setprecision(14) << best_delta << "}"
                     << std::endl;
         }
       }
