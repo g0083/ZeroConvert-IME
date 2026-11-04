@@ -9,7 +9,7 @@ val sharedHostAssets by tasks.registering(Sync::class) {
     from("../app/src/main/assets") {
         exclude("dictionary/reverse-v2.bin")
         exclude { it.file.extension == "gguf" && it.file.name !in setOf(
-            "zerocon-nano-v4-iq4nl-emb8.gguf", "zerocon-nano-v4-q8_0.gguf", "zerocon-model-corrector.gguf"
+            "zerocon-nano-v4-iq4nl-emb8.gguf", "zerocon-nano-v4-q8_0.gguf"
         ) }
     }
     into(layout.buildDirectory.dir("sharedHostAssets"))

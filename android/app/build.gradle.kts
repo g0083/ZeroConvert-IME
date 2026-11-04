@@ -8,7 +8,7 @@ plugins {
 val bundledModelAssets by tasks.registering(Sync::class) {
     from("src/main/assets") {
         exclude { it.file.extension == "gguf" && it.file.name !in setOf(
-            "zerocon-nano-v4-iq4nl-emb8.gguf", "zerocon-nano-v4-q8_0.gguf", "zerocon-model-corrector.gguf"
+            "zerocon-nano-v4-iq4nl-emb8.gguf", "zerocon-nano-v4-q8_0.gguf"
         ) }
     }
     into(layout.buildDirectory.dir("bundledModelAssets"))

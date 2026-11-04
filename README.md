@@ -4,15 +4,15 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 ## 📥 すぐに試す（最新リリース）
 
-最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.2.1)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
+最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.2.2)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
 
 | プラットフォーム | 配布ファイル | 説明 |
 |---|---|---|
-| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.2.1.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.1/ZeroConvert-IME-setup-v0.2.1.exe) | インストーラーを実行するだけでモデル・エンジン一式を自動セットアップ |
-| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.2.1-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.1/ZeroConvert-IME-v0.2.1-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK |
-| **Android (実機推奨)** | [**ZeroConvert-IME-v0.2.1-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.1/ZeroConvert-IME-v0.2.1-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK |
+| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.2.2.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.2/ZeroConvert-IME-setup-v0.2.2.exe) | インストーラーを実行するだけでモデル・エンジン一式を自動セットアップ |
+| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.2.2-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.2/ZeroConvert-IME-v0.2.2-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK |
+| **Android (実機推奨)** | [**ZeroConvert-IME-v0.2.2-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.2/ZeroConvert-IME-v0.2.2-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK |
 
-> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.2.1)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.2.1) をご覧ください。
+> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.2.2)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.2.2) をご覧ください。
 
 ## 変換操作を減らす、独自のZeroCon Model Nano v4
 
@@ -38,6 +38,31 @@ ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall** を�
 ベースQ4との比較でIQ4_emb8は**92問、19.2ポイント改善**。量子化形式が異なる比較であることに留意してください。F16同士でもベース362問からNano v4の451問へ改善しています。評価と学習の正規化キーを分離し、学習817行・検証85行に対して評価セットとのキー重複0件を確認しています。ただし、これらは繰り返し使う開発用問題であり、未知入力や実IME全体の成功率を保証する値ではありません。
 
 CPUのみ・4スレッドのi5-14500HXでは、IQ4_emb8は平均38.7ms、Q8は40.3msで全文の変換出力を完了しました。CPUでの正解数はそれぞれ445/480、454/480。これはPCでのモデル単体測定で、Android端末の速度や打鍵から画面反映までの遅延とは区別します。詳細は [Nano v4の学習・評価](reports/models/zerocon_model_nano_v3_experiment_report.md) と [CPU比較](reports/models/nano-standard-v4-cpu-comparison.md) を参照してください。
+
+## 🎯 タイポ補正の劇的進化：メインモデル統合（v0.2.2）
+
+v0.2.2 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（Nano v4）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
+
+これにより、**常駐 `llama-server` プロセス数を半減（2→1）** させてメモリと起動負荷を削減しながら、タイポ補正正解率は **20.8% → 78.0%（実質正解 86.7% / +57.2pt / 約4倍）** という圧倒的な進化を遂げました。
+
+### 300件タイポベンチマーク評価結果
+
+| 指標 | 旧 Corrector v3 | 単体 Corrector v4 | **v0.2.2（メインモデル統合）** |
+| :--- | :---: | :---: | :---: |
+| **総合正解率 (完全一致)** | 53 / 255 (20.8%) | 62 / 255 (24.3%) | **199 / 255 (78.0%)** [約4倍] |
+| **実質正解率 (表記ゆれ含)** | — | — | **221 / 255 (86.7%)** |
+| **正常入力の誤補正率 (FP)** | 0 / 45 (0.0%) | 0 / 45 (0.0%) | **0 / 45 (0.0%)** [誤補正ゼロ維持] |
+| **誤自動確定数** | 0 件 | 0 件 | **0 件** [勝手な確定ゼロ維持] |
+| **常駐サーバー数** | 2 プロセス | 2 プロセス | **1 プロセス** [半減・省メモリ] |
+| **推論レイテンシ (CPU)** | — | p50: 67.3ms | **p50: 2.3ms** [超高速] |
+
+- **促音 `っ` 過不足**: **96.0% 正解** (実質 100.0%)
+- **撥音 `ん` 過不足**: **92.0% 正解** (実質 96.0%)
+- **順序入れ替わり (転置)**: **80.0% 正解** (実質 95.0%)
+- **QWERTY隣接キーミス**: **73.3% 正解** (実質 85.0%)
+- **母音抜け**: **74.0% 正解** (実質 82.0%)
+
+詳細は [タイポ補正刷新レポート](reports/typo-assist/unified-converter-corrector-20261104.md) をご覧ください。
 
 ## モデルだけでなく、入力から確定までを改良
 
