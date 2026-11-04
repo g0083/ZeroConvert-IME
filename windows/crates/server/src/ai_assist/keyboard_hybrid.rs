@@ -146,7 +146,9 @@ fn resolve_active_model(root: &Path) -> Option<PathBuf> {
     let repo_root = repo_root_from_manifest()?;
     for candidate in [
         repo_root.join("artifacts/models").join(filename),
-        repo_root.join("ZeroConvertIME-windows/models").join(filename),
+        repo_root
+            .join("ZeroConvertIME-windows/models")
+            .join(filename),
         repo_root.join("artifacts/models/zerocon-nano-v4-iq4nl-emb8.gguf"),
     ] {
         if candidate.is_file() {
