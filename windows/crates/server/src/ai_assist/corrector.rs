@@ -232,7 +232,9 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
     if let Some(reading) = romaji_decoder::decode_floating_consonant_typo(input) {
         let expected = typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone());
         let surface = infer(&context, &reading, config)
-            .filter(|s| *s == expected || *s == reading || reading_check::has_same_reading(s, &reading))
+            .filter(|s| {
+                *s == expected || *s == reading || reading_check::has_same_reading(s, &reading)
+            })
             .unwrap_or(expected);
         return Some(TypoSuggestion {
             surface: surface.clone(),
@@ -241,7 +243,10 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
             learned: false,
         });
     }
-    if config.engine == "embedded" && config.corrector_port >= 1024 && runtime::allow_native_worker() {
+    if config.engine == "embedded"
+        && config.corrector_port >= 1024
+        && runtime::allow_native_worker()
+    {
         let wait_for_worker = runtime::wait_for_native_worker();
         let repair_input = if input.chars().any(|c| ('一'..='鿿').contains(&c)) {
             super::reading_check::reading_for_surface(input)
@@ -250,12 +255,16 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
         } else {
             input.to_owned()
         };
-        if let Some(worker_decision) = super::keyboard_hybrid::repair_reading(&context, &repair_input, "", wait_for_worker) {
+        if let Some(worker_decision) =
+            super::keyboard_hybrid::repair_reading(&context, &repair_input, "", wait_for_worker)
+        {
             if let Some(reading) = worker_decision {
                 let surface = match infer(&context, &reading, config) {
                     Some(s) if reading_check::has_same_reading(&s, &reading) => s,
                     Some(_) => return None,
-                    None => typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone()),
+                    None => {
+                        typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone())
+                    }
                 };
                 return (katakana_to_hiragana(&surface) != katakana_to_hiragana(input)).then_some(
                     TypoSuggestion {

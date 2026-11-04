@@ -226,6 +226,7 @@ class ChannelDictionary {
   struct TrieNode {
     bool has_word = false;
     double best_score = -std::numeric_limits<double>::infinity();
+    std::string best_surface;
     std::vector<std::pair<char32_t, uint32_t>> children;
   };
   std::vector<TrieNode> trie;
@@ -294,13 +295,22 @@ public:
         }
         node = next;
       }
-      trie[node].has_word = true;
-      trie[node].best_score = std::max(trie[node].best_score, entry.second.score);
+      if (!trie[node].has_word || entry.second.score > trie[node].best_score ||
+          (entry.second.score == trie[node].best_score &&
+           entry.second.surface > trie[node].best_surface)) {
+        trie[node].has_word = true;
+        trie[node].best_score = entry.second.score;
+        trie[node].best_surface = entry.second.surface;
+      }
     }
   }
-  double score_fast(const std::u32string &reading) const {
+  DictionaryPath convert_fast(const std::u32string &reading) const {
+    static const std::u32string bound_moras = U"っんーぁぃぅぇぉゃゅょゎ";
+    static const std::u32string particles = U"はがをにへでとのもやかねよわな、。！？!?";
     const double missing = -std::numeric_limits<double>::infinity();
     std::vector<double> scores(reading.size() + 1, missing);
+    std::vector<size_t> prev_idx(reading.size() + 1, 0);
+    std::vector<std::string> piece_surf(reading.size() + 1);
     scores[0] = 0.0;
     for (size_t start = 0; start < reading.size(); ++start) {
       if (!std::isfinite(scores[start]))
@@ -310,8 +320,12 @@ public:
           (first >= U'ぁ' && first <= U'ゖ') || first == U'ー' ||
           first == U'、' || first == U'。' || first == U'！' ||
           first == U'？' || first == U'!' || first == U'?';
-      scores[start + 1] =
-          std::max(scores[start + 1], scores[start] + (single_ok ? -24.0 : -40.0));
+      const double fb_score = scores[start] + (single_ok ? -22.0 : -40.0);
+      if (fb_score > scores[start + 1]) {
+        scores[start + 1] = fb_score;
+        prev_idx[start + 1] = start;
+        piece_surf[start + 1] = encode_utf8(reading.substr(start, 1));
+      }
       uint32_t node = 0;
       for (size_t end = start; end < std::min(reading.size(), start + 40); ++end) {
         uint32_t next = 0;
@@ -325,12 +339,39 @@ public:
           break;
         node = next;
         if (trie[node].has_word) {
-          scores[end + 1] =
-              std::max(scores[end + 1], scores[start] + trie[node].best_score);
+          const size_t len = end - start + 1;
+          double w_score = trie[node].best_score;
+          if (len == 1) {
+            if (bound_moras.find(first) != std::u32string::npos) {
+              w_score = -20.0;
+            } else if (particles.find(first) != std::u32string::npos) {
+              if (start == 0 && first >= U'ぁ' && first <= U'ゖ')
+                w_score = std::min(w_score, -9.0);
+            } else {
+              w_score = std::min(w_score, -11.0);
+            }
+          } else {
+            w_score += 2.5 * double(std::min<size_t>(len - 1, 4));
+          }
+          const double cand_score = scores[start] + w_score;
+          if (cand_score > scores[end + 1]) {
+            scores[end + 1] = cand_score;
+            prev_idx[end + 1] = start;
+            piece_surf[end + 1] = trie[node].best_surface;
+          }
         }
       }
     }
-    return scores.back();
+    std::vector<std::string> parts;
+    for (size_t cur = reading.size(); cur > 0; cur = prev_idx[cur])
+      parts.push_back(piece_surf[cur]);
+    std::string full_surface;
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it)
+      full_surface += *it;
+    return {scores.back() - 2.5 * double(reading.size()), full_surface};
+  }
+  double score_fast(const std::u32string &reading) const {
+    return convert_fast(reading).score;
   }
   DictionaryPath convert(const std::u32string &reading) const {
     const double missing = -std::numeric_limits<double>::infinity();
@@ -524,7 +565,7 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   const std::u32string specials = U"っんー";
   for (size_t i = 0; i < orig.size(); ++i) {
     if (specials.find(orig[i]) != std::u32string::npos)
-      add(orig.substr(0, i) + orig.substr(i + 1), 2.0);
+      add(orig.substr(0, i) + orig.substr(i + 1), 1.0);
   }
   for (size_t i = 1; i <= orig.size(); ++i) {
     for (char32_t sp : specials)
