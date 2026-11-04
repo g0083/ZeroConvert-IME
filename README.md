@@ -4,15 +4,15 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 ## 📥 すぐに試す（最新リリース）
 
-最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.2.0)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
+最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.2.1)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
 
 | プラットフォーム | 配布ファイル | 説明 |
 |---|---|---|
-| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.2.0.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.0/ZeroConvert-IME-setup-v0.2.0.exe) | インストーラーを実行するだけでモデル・エンジン一式を自動セットアップ |
-| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.2.0-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.0/ZeroConvert-IME-v0.2.0-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK |
-| **Android (実機推奨)** | [**ZeroConvert-IME-v0.2.0-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.0/ZeroConvert-IME-v0.2.0-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK |
+| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.2.1.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.1/ZeroConvert-IME-setup-v0.2.1.exe) | インストーラーを実行するだけでモデル・エンジン一式を自動セットアップ |
+| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.2.1-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.1/ZeroConvert-IME-v0.2.1-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK |
+| **Android (実機推奨)** | [**ZeroConvert-IME-v0.2.1-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.1/ZeroConvert-IME-v0.2.1-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK |
 
-> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.2.0)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.2.0) をご覧ください。
+> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.2.1)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.2.1) をご覧ください。
 
 ## 変換操作を減らす、独自のZeroCon Model Nano v4
 
