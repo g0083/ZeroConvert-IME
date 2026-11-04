@@ -49,6 +49,12 @@ WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。�
 
 ### 設定・状態の保存先
 
+2026-10-28追記: Windowsのembeddedアシストに、元のローマ字打鍵列から隣接キー1文字の候補を作る経路を追加した。`ai_assist/keyboard_hybrid.rs` が別プロセス `llama_cpu/keyboard-prior.exe` を管理し、AZR2辞書と追加の18.45MBモデル `models/zerocon-model-keyboard-prior.gguf` で最大8読みを採点する。既知の固定補正・学習済み補正は従来経路を優先する。新経路は手動採用専用で、通常変換候補を保持する。候補表記は既存の予測モデルへ問い合わせ、読み一致の検証に失敗・時間切れなら補正済みのひらがなを使う。
+
+ワーカー初期化は背景処理、要求はtry_lockと250ms期限で制限する。終了・応答失敗時は子プロセスを破棄して再起動する。TSF側はタイマーで結果を受け取り、先読みが先着した場合だけ初回表示を最大200msまで待ち合わせる。入力処理を同期で待たせない。実装・適用・確認範囲は [実IME検証記録](../reports/typo-assist/keyboard-hybrid-ime-20261028.md) を参照。上記の2026-10-22時点の経路説明とは区別する。
+
+- GPUの層数によるRAM/VRAMの配分と、Windows再起動を伴わないバックエンド切替は [Windows推論のメモリ設定](investigations/windows-inference-memory.md) を参照。`zenzai.gpu_layers` の既定値は99（全層）、CPUでは0層として扱う。
+
 - 実設定は `%APPDATA%\Azookey\settings.json`。配布フォルダの `settings.json` は初期コピー元であり、既存設定があればStartスクリプトは上書きしない。
 - 補正学習は同ディレクトリの `ai-assist-learning.json`（最大500件）、追加補正語彙は `ai-assist-vocabulary.json`。先読みの確定履歴キャッシュはRustプロセス内に最大300件保持する。
 - `shared/src/lib.rs` のPipe名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`。古い固定名やセッション番号をハードコードしない。
@@ -107,3 +113,5 @@ powershell -ExecutionPolicy Bypass -File .\ZeroConvertIME-windows\Restart-ZeroCo
 Androidは **`android/`** 内で `./gradlew.bat assembleDebug`、`./gradlew.bat testDebugUnitTest`、`./gradlew.bat lintDebug`。SDK/NDK・JDKと `local.properties` のローカル設定が必要。
 
 Python評価はルートから `python scripts/run.py benchmarks/research/benchmark_nano_v2.py`、`python scripts/run.py benchmarks/research/benchmark_typo_300.py` が入口候補。前者はCUDA版llama-serverと複数GGUF、後者もローカルモデルを前提にサーバーを起動する。実行前にパス・ポート・出力先を読む。仮想環境の依存充足やGPUの利用可能性は本調査では確認していない。実IMEを経由しない評価のため、Windows動作確認とは別に扱う。
+
+日常の開発では `Build-Trial.bat` が入力グループごとのソース指紋と前回の適用記録を比較し、必要なコンポーネントだけ増分ビルドして `.local/trial-updates/` の差分から適用する。変更がない場合はビルド・再起動を行わない。差分適用後の `trial-deployment.json` は `mode=incremental` となり、配布パッケージとの同一性を主張しない。配布前には全体の共通パッケージ作成・適用・確認を実施する。

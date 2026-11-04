@@ -9,8 +9,8 @@ use anyhow::Result;
 
 #[derive(Default, Clone, PartialEq, Debug)]
 pub enum InputMode {
-    #[default]
     Latin,
+    #[default]
     Kana,
 }
 

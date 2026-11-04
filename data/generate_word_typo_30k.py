@@ -9,6 +9,7 @@ import json
 import random
 import re
 from typing import List, Tuple, Dict
+from dataset_isolation import evaluation_keys, separated_rows, validate_rows
 from generate_typo_dataset import (
     apply_typo, hira_to_kata, mutate_adjacent_key, mutate_missing_vowel,
     mutate_transposition, mutate_geminate, mutate_syllabic_nasal,
@@ -165,10 +166,12 @@ def generate_word_dataset(output_dir="data", total_samples=30000):
             "category": cat
         }
 
-        if i % 10 == 0:
-            val_samples.append(sample)
-        else:
-            train_samples.append(sample)
+        train_samples.append(sample)
+
+    reserved = evaluation_keys()
+    train_samples, val_samples, excluded = separated_rows(train_samples, reserved)
+    validate_rows(train_samples, val_samples, reserved)
+    print(f"Excluded evaluation-related rows: {len(excluded)}")
 
     train_path = os.path.join(output_dir, 'typo_dataset_train_30k.jsonl')
     val_path = os.path.join(output_dir, 'typo_dataset_val_30k.jsonl')

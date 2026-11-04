@@ -2,7 +2,7 @@
 
 本ドキュメントは、ZeroConvert-IME の Android 版における「入力 → 変換 → 表示 → 確定」までの処理を、層ごとに解説する。対象は `android/` 配下の Kotlin IME サービス、`azookey` 入力状態、ネイティブ JNI/llama.cpp、設定 UI。Windows 版（Rust/Swift）とは実装が別であり、RPC や IPC は持たない。Windows 側の時間予算やモデル経路をそのまま Android に適用しない。
 
-関連ドキュメント: [architecture.md](architecture.md)（構成）、[file-map.md](file-map.md)（探索先）、[android-development.md](android-development.md)（開発手順）、[android-port-completion-audit.md](android-port-completion-audit.md)。
+関連ドキュメント: [architecture.md](architecture.md)（構成）、[file-map.md](file-map.md)（探索先）、[android-development.md](android-development.md)（開発手順）、[android-port-completion-audit.md](../reports/port-history/android-port-completion-audit.md)。
 
 ---
 

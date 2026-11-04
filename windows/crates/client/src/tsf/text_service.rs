@@ -11,6 +11,7 @@ use windows::{
 
 use anyhow::{Context, Result};
 
+use super::selection_count::SelectionCountWindow;
 use crate::engine::{composition::Composition, input_mode::InputMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -132,6 +133,9 @@ pub struct TextService {
     pub thread_mgr: Option<ITfThreadMgr>,
     pub context: Option<ITfContext>,
     pub layout_sink_context: Option<ITfContext>,
+    pub(super) selection_count: SelectionCountWindow,
+    pub(super) selection_count_pending: bool,
+    pub(super) selection_count_generation: u64,
     pub composition: RefCell<Composition>,
     pub update_pos_state: UpdatePosState,
     pub update_pos_generation: u64,

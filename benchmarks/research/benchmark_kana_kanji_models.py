@@ -123,6 +123,9 @@ class LlamaServerInstance:
                 raise RuntimeError(f"Missing model content: {res}")
             return res
 
+    def conversion_prompt(self, context, katakana_reading):
+        return f"\uEE02{context}\uEE00{katakana_reading}\uEE01"
+
 
 
 
@@ -132,8 +135,8 @@ def load_cases(path: str = TESTSET):
         return [json.loads(line) for line in f if line.strip()]
 
 
-def evaluate_model(model_path: str, port: int, cases, n_gpu_layers: int = 99, backend: str = "vulkan") -> dict:
-    srv = LlamaServerInstance(model_path, port, n_gpu_layers, backend)
+def evaluate_model(model_path: str, port: int, cases, n_gpu_layers: int = 99, backend: str = "vulkan", server_factory=None) -> dict:
+    srv = (server_factory or LlamaServerInstance)(model_path, port, n_gpu_layers, backend)
     perfect_cnt = 0
     total_score = 0
     cat_stats = {}
@@ -142,7 +145,7 @@ def evaluate_model(model_path: str, port: int, cases, n_gpu_layers: int = 99, ba
     try:
         srv.start()
         for _ in range(3):
-            srv.complete("\uEE02\uEE00キョウハイイテンキデス\uEE01")
+            srv.complete(srv.conversion_prompt("", "キョウハイイテンキデス"))
         t0 = time.perf_counter()
         for c in cases:
             ctx = "" if c["left_context"] == "なし" else c["left_context"]
@@ -152,7 +155,7 @@ def evaluate_model(model_path: str, port: int, cases, n_gpu_layers: int = 99, ba
             cat_stats[cat]["max"] += 2
             cat_stats[cat]["total"] += 1
 
-            prompt = f"\uEE02{ctx}\uEE00{kata}\uEE01"
+            prompt = srv.conversion_prompt(ctx, kata)
             started = time.perf_counter()
             response = srv.complete(prompt)
             latency_ms = (time.perf_counter() - started) * 1000

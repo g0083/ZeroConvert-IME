@@ -911,6 +911,43 @@ fn reconversion_shortcuts_require_the_exact_configured_modifiers() {
 }
 
 #[test]
+fn selection_space_reconverts_with_every_enabled_preset_only_without_modifiers() {
+    let plain = ModifierState {
+        shift: false,
+        ctrl: false,
+        alt: false,
+        win: false,
+    };
+    for preset in [
+        ReconversionKey::Convert,
+        ReconversionKey::ShiftConvert,
+        ReconversionKey::Space,
+        ReconversionKey::WinSlash,
+    ] {
+        assert!(reconversion_shortcut_matches(preset, 0x20, plain));
+        for modified in [
+            ModifierState {
+                shift: true,
+                ..plain
+            },
+            ModifierState {
+                ctrl: true,
+                ..plain
+            },
+            ModifierState { alt: true, ..plain },
+            ModifierState { win: true, ..plain },
+        ] {
+            assert!(!reconversion_shortcut_matches(preset, 0x20, modified));
+        }
+    }
+    assert!(!reconversion_shortcut_matches(
+        ReconversionKey::Disabled,
+        0x20,
+        plain
+    ));
+}
+
+#[test]
 fn standard_reconversion_is_only_exposed_for_idle_win_slash() {
     assert!(standard_reconversion_available(
         ReconversionKey::WinSlash,
@@ -1866,10 +1903,11 @@ fn deferred_clause_navigation_ready_sync_preserves_candidate_window_show_request
 }
 
 #[test]
-fn enter_commits_all_when_clause_navigation_is_active() {
+fn enter_keeps_following_clause_uncommitted_when_clause_navigation_is_active() {
     let composition = Composition {
         state: CompositionState::Composing,
         preview: "加減".to_string(),
+        suffix: "統一".to_string(),
         raw_input: "kagentouitu".to_string(),
         raw_hiragana: "かげんとういつ".to_string(),
         corresponding_count: 5,
@@ -1887,16 +1925,16 @@ fn enter_commits_all_when_clause_navigation_is_active() {
     )
     .expect("enter should commit active clause navigation");
 
-    assert_eq!(transition, CompositionState::None);
+    assert_eq!(transition, CompositionState::Composing);
     assert_eq!(
         actions,
         vec![
             ClientAction::CommitLearning {
-                scope: LearningCommitScope::Composition,
-                kind: LearningCommitKind::Normal,
+                scope: LearningCommitScope::CurrentClause,
+                kind: LearningCommitKind::Partial,
                 was_temporary_latin: false,
             },
-            ClientAction::EndComposition,
+            ClientAction::ShrinkText(String::new()),
         ]
     );
 }

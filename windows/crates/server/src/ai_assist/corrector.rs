@@ -13,6 +13,49 @@ pub fn clear_cache() {
     }
 }
 
+/// Bounded diagnostic evidence for a proposed reading change. A surface with
+/// no dictionary reading is not evidence of the user's intended keystrokes.
+pub fn reading_change_distance(input: &str, surface: &str) -> Option<usize> {
+    if input.chars().count() > MAX_INPUT || surface.chars().count() > MAX_INPUT {
+        return None;
+    }
+    let reading = if surface.chars().all(|c| {
+        ('ぁ'..='ゖ').contains(&c) || ('ァ'..='ヶ').contains(&c) || "ー、。！？!?・".contains(c)
+    }) {
+        surface.to_owned()
+    } else {
+        super::reading_check::reading_for_surface(surface)?
+    };
+    let source_reading = if input.chars().any(|c| ('一'..='鿿').contains(&c)) {
+        super::reading_check::reading_for_surface(input)?
+    } else {
+        input.to_owned()
+    };
+    Some(super::damerau_levenshtein_distance(
+        &katakana_to_hiragana(&source_reading),
+        &katakana_to_hiragana(&reading),
+    ))
+}
+
+fn supported_reading_change(input: &str, surface: &str) -> bool {
+    // A single malformed romaji syllable can affect two kana. This is evidence
+    // for a proposal only; automatic application still needs independent proof.
+    input.chars().any(|c| {
+        ('ぁ'..='ゖ').contains(&c) || ('ァ'..='ヶ').contains(&c) || ('一'..='鿿').contains(&c)
+    }) && reading_change_distance(input, surface)
+        .is_some_and(|distance| (1..=2).contains(&distance))
+}
+
+pub(super) fn explicit_typo_surface(input: &str) -> Option<&'static str> {
+    let reading = katakana_to_hiragana(input);
+    super::TYPO_TABLE.iter().find_map(|&(typo, surface)| {
+        (katakana_to_hiragana(typo) == reading
+            && katakana_to_hiragana(surface) != reading
+            && !super::reading_check::has_same_reading(surface, input))
+        .then_some(surface)
+    })
+}
+
 fn known_reading(input: &str) -> bool {
     let hira = katakana_to_hiragana(input);
     STANDARD_VOCAB.iter().any(|(reading, _)| *reading == hira)
@@ -49,6 +92,12 @@ pub fn suggest_composition(
     let (prefix, target) = trailing_phrase(input, baseline)?;
     let mut result = suggest(&format!("{context}{prefix}"), target, config)?;
     if super::reading_check::has_same_reading(&result.surface, target) {
+        return None;
+    }
+    if !result.learned
+        && explicit_typo_surface(target) != Some(result.surface.as_str())
+        && !supported_reading_change(target, &result.surface)
+    {
         return None;
     }
     result.surface.insert_str(0, prefix);
@@ -144,8 +193,8 @@ fn infer(context: &str, input: &str, config: &AiAssistConfig) -> Option<String> 
     Some(surface)
 }
 
-/// Model output is the final surface. Rules supply evidence or an offline fallback;
-/// fuzzy vocabulary matches never preempt a successfully completed model response.
+/// Exact, explicit repairs precede inference. Fuzzy vocabulary matches only supply
+/// an offline fallback and never preempt a successfully completed model response.
 pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<TypoSuggestion> {
     let context = context.replace(' ', "\u{3000}");
     let input = input.trim();
@@ -162,6 +211,21 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
     }
     if known_reading(input) {
         return None;
+    }
+    if input
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphabetic() && !"aeiou".contains(c.to_ascii_lowercase()))
+    {
+        return None;
+    }
+    if let Some(surface) = explicit_typo_surface(input) {
+        return Some(TypoSuggestion {
+            surface: surface.into(),
+            token_reading: input.into(),
+            token_surface: surface.into(),
+            learned: false,
+        });
     }
     // Mixed kana/Latin input is absent from the current corrector training data.
     // A generic one-key reconstruction supplies a candidate, then the corrector
@@ -211,6 +275,69 @@ pub fn can_auto_apply(input: &str, surface: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_unresolved_terminal_n_waits_without_calling_a_model() {
+        struct NoInference;
+        impl runtime::CompletionBackend for NoInference {
+            fn read_learning(&self) -> bool {
+                false
+            }
+            fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+                panic!("an unresolved terminal n must wait for the next key");
+            }
+        }
+        let config = AiAssistConfig {
+            enabled: true,
+            corrector_port: 0,
+            ..Default::default()
+        };
+        runtime::with_backend(Box::new(NoInference), || {
+            for input in ["あしたn", "よろすくn", "しりょうn"] {
+                assert!(suggest_composition("", input, input, &config).is_none());
+            }
+        });
+    }
+    #[test]
+    fn exact_repairs_are_available_without_inference_but_partial_keys_are_not() {
+        let config = AiAssistConfig {
+            enabled: true,
+            corrector_port: 1,
+            ..Default::default()
+        };
+        for (input, expected) in [
+            ("きんにちは", "こんにちは"),
+            ("くらおど", "クラウド"),
+            ("おひょ", "おはよう"),
+            ("てそと", "テスト"),
+        ] {
+            let proposal = suggest_composition("", input, input, &config).unwrap();
+            assert_eq!(proposal.surface, expected);
+            assert!(!proposal.learned);
+            assert!(!can_auto_apply(input, expected));
+        }
+        assert!(suggest("", "きっp", &config).is_none());
+        assert!(suggest("", "おkせr", &config).is_none());
+        assert!(suggest("", "おかえり", &config).is_none());
+    }
+    #[test]
+    fn model_proposals_need_a_local_reading_change_without_shortening_the_sentence() {
+        assert!(supported_reading_change("おkせり", "おかえり"));
+        assert!(supported_reading_change(
+            "ありがとうございまし",
+            "ありがとうございます"
+        ));
+        assert!(!supported_reading_change(
+            "おめでとう！よかったね",
+            "おめでとう"
+        ));
+        assert!(!supported_reading_change(
+            "おしらせします",
+            "おしらせします"
+        ));
+        assert!(!supported_reading_change("sushi", "すし"));
+        assert!(!supported_reading_change("ai", "あい"));
+        assert!(reading_change_distance(&"あ".repeat(129), "あ").is_none());
+    }
     fn mock_inference(input: &str, reply: Value) -> (Option<TypoSuggestion>, Value) {
         use std::{
             io::{BufRead, BufReader},

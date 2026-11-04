@@ -51,6 +51,7 @@ Invoke-BuildStep $frontendRoot 'npm.cmd' @('run', 'tauri:build')
 Invoke-BuildStep $windowsRoot 'node.exe' @('scripts/generate-reverse-dictionary.mjs')
 
 $files = [ordered]@{
+    'llama_cpu\keyboard-prior.exe' = (& (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1'))
     'azookey_windows.dll' = Join-Path $windowsRoot 'target\release\azookey_windows.dll'
     'x86\azookey_windows.dll' = Join-Path $windowsRoot 'target\i686-pc-windows-msvc\release\azookey_windows.dll'
     'azookey-server.exe' = Join-Path $windowsRoot 'target\release\azookey-server.exe'

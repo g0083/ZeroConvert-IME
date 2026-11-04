@@ -116,9 +116,11 @@ private let embeddedPerformance = EmbeddedPerformance()
     guard !zerocon_conversion_cancelled() else { return ["cancelled": true] }
     let started = DispatchTime.now().uptimeNanoseconds
     var length: CInt = 0
+    // No caller-supplied raw-input boundary: use the snapshot's cursor prefix.
+    // Zero is an exact empty boundary in the shared API, not an unspecified one.
     let candidates = request["allowAI"] as? Bool == false
         ? get_composed_text_for_reconversion(lengthPtr: &length)
-        : (snapshot.isAtEndIndex ? get_composed_text(lengthPtr: &length) : get_composed_text_for_cursor_prefix(requiredInputCount: 0, lengthPtr: &length))
+        : (snapshot.isAtEndIndex ? get_composed_text(lengthPtr: &length) : get_composed_text_for_cursor_prefix(requiredInputCount: -1, lengthPtr: &length))
     defer { free_candidate_list(candidates, length) }
     if zerocon_conversion_cancelled() {
         // An aborted decode may leave a partially updated KV cache. Reset both

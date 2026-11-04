@@ -112,4 +112,4 @@ Android検証時点ではWindows版のソース・Swiftテストまで更新し�
 変更はSwift DLL 1ファイルで、メモ帳で原打鍵からの候補選択・確定、確定後のカーソル移動、
 次の入力のEscape取消を確認した。Windowsの速度比較、インストーラー・VM検証は実施していない。
 共通エンジン・Androidホストと今回の最適化はGitコミット対象とし、無関係な既存のWindows変更は保持する。
-適用物の識別と検証範囲は [Windows適用記録](windows-shared-performance-validation.md) を参照。
+適用物の識別と検証範囲は [Windows適用記録](../reports/port-history/windows-shared-performance-validation.md) を参照。

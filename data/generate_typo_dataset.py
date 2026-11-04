@@ -18,6 +18,7 @@ import json
 import random
 import re
 from typing import List, Tuple, Dict
+from dataset_isolation import evaluation_keys, separated_rows, validate_rows
 
 # QWERTY隣接キーマップ (英字のみ)
 QWERTY_ADJACENT = {
@@ -416,30 +417,12 @@ SEED_CORPUS = [
 ]
 
 def load_clean_testset_pairs() -> List[Tuple[str, str, str, str]]:
-    """既存のkana_kanji_llm_testset_5x.jsonlから純粋な日本語読みのみを厳選インポート"""
-    res = list(SEED_CORPUS)
-    testset_path = "data/kana_kanji_llm_testset_5x.jsonl"
-    if os.path.exists(testset_path):
-        with open(testset_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    obj = json.loads(line)
-                    ctx = obj.get("left_context", "").strip()
-                    if ctx == "なし":
-                        ctx = ""
-                    reading = obj.get("target", "").strip()
-                    expected = obj.get("expected", "").strip()
-                    # 純粋なひらがな読みのみ抽出（英語や数字混じりは除外）
-                    if reading and is_pure_japanese_kana(reading) and expected:
-                        res.append((ctx, reading, expected, "testset_clean"))
-                except:
-                    pass
-    return res
+    """Compatibility name: evaluation examples are never training seeds."""
+    return list(SEED_CORPUS)
 
 def generate_dataset(output_dir: str = "data", total_samples: int = 6000):
     os.makedirs(output_dir, exist_ok=True)
+    random.seed(20261027)
     raw_pairs = load_clean_testset_pairs()
     print(f"Total verified seed pairs: {len(raw_pairs)}")
 
@@ -488,11 +471,12 @@ def generate_dataset(output_dir: str = "data", total_samples: int = 6000):
             "category": cat
         }
 
-        # 90% train, 10% val
-        if i % 10 == 0:
-            val_samples.append(sample)
-        else:
-            train_samples.append(sample)
+        train_samples.append(sample)
+
+    reserved = evaluation_keys()
+    train_samples, val_samples, excluded = separated_rows(train_samples, reserved)
+    validate_rows(train_samples, val_samples, reserved)
+    print(f"Excluded evaluation-related rows: {len(excluded)}")
 
     train_path = os.path.join(output_dir, 'typo_dataset_train.jsonl')
     val_path = os.path.join(output_dir, 'typo_dataset_val.jsonl')

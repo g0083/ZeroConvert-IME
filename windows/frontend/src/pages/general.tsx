@@ -391,7 +391,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     ))}
                 </SettingsSection>
                 <SettingsSection title="再変換">
-                    <SettingsRow label="再変換キー" htmlFor="reconversion-key">
+                    <SettingsRow label="再変換キー" description="選択した文章はSpaceでも再変換できます。「無効」の場合はSpaceによる再変換も停止します。" htmlFor="reconversion-key">
                         <Select value={shortcutValue.reconversionKey} onValueChange={(value: ReconversionKey) => void updateShortcut("reconversion_key", value)}>
                             <SelectTrigger id="reconversion-key"><SelectValue /></SelectTrigger>
                             <SelectContent>{RECONVERSION_KEY_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>

@@ -1,0 +1,5 @@
+{
+  "task_weights": {"convert": 0.40, "repair": 0.60, "predict": 0.0},
+  "repair_action_weights": {"keep": 0.55, "emit": 0.40, "abstain": 0.05},
+  "purpose": "Diagnostic bridge: restore conversion while retaining surface repair. Prediction is explicitly excluded at this stage. Not a deployment prior."
+}

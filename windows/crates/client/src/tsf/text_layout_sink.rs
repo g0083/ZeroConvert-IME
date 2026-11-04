@@ -1,7 +1,7 @@
 use windows::{
     core::Interface as _,
     Win32::UI::TextServices::{
-        ITfContext, ITfContextView, ITfDocumentMgr, ITfSource, ITfTextLayoutSink,
+        ITfContext, ITfContextView, ITfDocumentMgr, ITfSource, ITfTextEditSink, ITfTextLayoutSink,
         ITfTextLayoutSink_Impl, TfLayoutCode,
     },
 };
@@ -20,6 +20,14 @@ impl ITfTextLayoutSink_Impl for TextServiceFactory_Impl {
         _lcode: TfLayoutCode,
         _pview: Option<&ITfContextView>,
     ) -> Result<()> {
+        if self
+            .borrow()
+            .is_ok_and(|service| service.selection_count.is_visible())
+        {
+            if let Some(context) = pic {
+                let _ = self.request_selection_count_update(context);
+            }
+        }
         let should_skip = match self.borrow_mut() {
             Ok(mut text_service) => text_service
                 .update_pos_state
@@ -60,13 +68,33 @@ impl TextService {
 
             self.sink_cookies.insert(ITfTextLayoutSink::IID, cookie);
 
+            // Selection changes (including mouse drags) are delivered independently
+            // of layout notifications, which some hosts omit entirely.
+            match context
+                .cast::<ITfSource>()?
+                .AdviseSink(&ITfTextEditSink::IID, &self.this::<ITfTextEditSink>()?)
+            {
+                Ok(cookie) => {
+                    self.sink_cookies.insert(ITfTextEditSink::IID, cookie);
+                }
+                Err(error) => {
+                    tracing::debug!(?error, "Host does not support selection notifications")
+                }
+            }
+
             Ok(())
         }
     }
 
     pub fn unadvise_text_layout_sink(&mut self) -> Result<()> {
+        self.selection_count.destroy();
+        self.selection_count_pending = false;
+        self.selection_count_generation = self.selection_count_generation.wrapping_add(1);
         unsafe {
             if let Some(context) = self.layout_sink_context.take() {
+                if let Some(cookie) = self.sink_cookies.remove(&ITfTextEditSink::IID) {
+                    let _ = context.cast::<ITfSource>()?.UnadviseSink(cookie);
+                }
                 if let Some(cookie) = self.sink_cookies.remove(&ITfTextLayoutSink::IID) {
                     context.cast::<ITfSource>()?.UnadviseSink(cookie)?;
                 }

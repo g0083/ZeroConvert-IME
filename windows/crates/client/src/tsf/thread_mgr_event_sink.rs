@@ -6,6 +6,7 @@ use anyhow::Result;
 
 use crate::engine::state::{keyboard_disabled_from_context, IMEState};
 
+use super::edit_session::has_same_com_identity;
 use super::factory::{TextServiceFactory, TextServiceFactory_Impl};
 
 fn ensure_ipc_service_for_tsf_event(event: &str) {
@@ -17,8 +18,25 @@ fn ensure_ipc_service_for_tsf_event(event: &str) {
 }
 
 impl TextServiceFactory {
+    fn refresh_selection_context(&self) -> Result<()> {
+        let thread_mgr = self.borrow()?.thread_mgr()?;
+        let Ok(document) = (unsafe { thread_mgr.GetFocus() }) else {
+            return Ok(());
+        };
+        let context = unsafe { document.GetTop()? };
+        let current = self.borrow()?.layout_sink_context.clone();
+        if !current
+            .as_ref()
+            .is_some_and(|current| has_same_com_identity(current, &context))
+        {
+            self.borrow_mut()?.advise_text_layout_sink(document)?;
+        }
+        self.request_selection_count_update(&context)
+    }
+
     pub fn set_keyboard_disabled_state(&self, disabled: bool) -> Result<()> {
         if disabled {
+            self.hide_selection_count();
             self.cancel_typo_assist();
             self.cancel_jev_conversion();
         }
@@ -99,11 +117,13 @@ impl ITfThreadMgrEventSink_Impl for TextServiceFactory_Impl {
 
     #[macros::anyhow]
     fn OnPushContext(&self, _pic: Option<&ITfContext>) -> Result<()> {
+        let _ = self.refresh_selection_context();
         Ok(())
     }
 
     #[macros::anyhow]
     fn OnPopContext(&self, _pic: Option<&ITfContext>) -> Result<()> {
+        let _ = self.refresh_selection_context();
         Ok(())
     }
 }
@@ -119,6 +139,7 @@ impl ITfThreadFocusSink_Impl for TextServiceFactory_Impl {
         };
         ensure_ipc_service_for_tsf_event("OnSetThreadFocus");
         self.set_keyboard_disabled_for_document_mgr(focus.as_ref())?;
+        let _ = self.refresh_selection_context();
 
         Ok(())
     }

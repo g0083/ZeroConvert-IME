@@ -30,6 +30,8 @@ import java.io.File
 class PortInstrumentationRunner : Instrumentation() {
     private var includeQuality = false
     private var keyboardUiOnly = false
+    private var clipboardUiOnly = false
+    private var pendingRomajiOnly = false
     private var performanceArguments: Bundle? = null
     private fun findNode(matches: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
@@ -116,10 +118,22 @@ class PortInstrumentationRunner : Instrumentation() {
         super.onCreate(arguments)
         includeQuality = arguments?.getString("quality") == "true"
         keyboardUiOnly = arguments?.getString("keyboardUiOnly") == "true"
+        clipboardUiOnly = arguments?.getString("clipboardUiOnly") == "true"
+        pendingRomajiOnly = arguments?.getString("pendingRomajiOnly") == "true"
         performanceArguments = arguments?.takeIf { it.getString("enginePerformance") == "true" }
         start()
     }
     override fun onStart() {
+        if (pendingRomajiOnly) {
+            val result = LearningPolicy.withoutWrites { PendingRomajiRegression(this).run() }
+            finish(result.first, result.second)
+            return
+        }
+        if (clipboardUiOnly) {
+            val result = ClipboardSuggestionRegression(this).run()
+            finish(result.first, result.second)
+            return
+        }
         performanceArguments?.let {
             val result = SharedEnginePerformanceRunner(this).run(it)
             finish(result.first, result.second)
@@ -221,6 +235,31 @@ class PortInstrumentationRunner : Instrumentation() {
             val emoji = runBlocking { converter.requestCandidates(input.clone(), "", enableAI = false, personalize = false) }
             check(emoji.any { it.text == "😀" }) { "Supplementary direct input was lost" }
             check(com.zeroconvert.ime.engine.WindowsEngine.readingForSurface("東京") == "とうきょう")
+        }
+        if (BuildConfig.WINDOWS_ENGINE) test("shared_cursor_prefix_with_and_without_ai") {
+            KanaKanjiConverter.ensureInitialized(targetContext)
+            val converter = KanaKanjiConverter()
+            for (style in listOf(InputStyle.ROMAN2KANA, InputStyle.DIRECT)) {
+                val input = ComposingText().apply {
+                    insertAtCursorPosition(if (style == InputStyle.ROMAN2KANA) "toukyou" else "とうきょう", style)
+                    insertAtCursorPosition("にいく", InputStyle.DIRECT)
+                    moveCursorFromCursorPosition(-3)
+                }
+                for (ai in listOf(false, true)) {
+                    val candidates = runBlocking {
+                        converter.requestCandidates(input.clone(), "", enableAI = ai, personalize = false)
+                    }
+                    check(candidates.any { it.text == "東京" && it.engineConsumedReading == 5 }) {
+                        "Cursor prefix missing Tokyo: style=$style ai=$ai"
+                    }
+                    check(candidates.all { (it.engineConsumedReading ?: 0) in 1..5 }) {
+                        "Cursor conversion consumed text to the right: style=$style ai=$ai"
+                    }
+                    check(input.convertTarget == "とうきょうにいく" && input.convertTargetCursorPosition == 5) {
+                        "Cursor conversion changed the input snapshot"
+                    }
+                }
+            }
         }
         test("editor_context_change_without_cursor_move") {
             onUi {
@@ -482,8 +521,82 @@ class PortInstrumentationRunner : Instrumentation() {
             check(onUi { checkNotNull(activity).field.text.isNotEmpty() })
 
         }
+        if (BuildConfig.WINDOWS_ENGINE) test("real_ime_cursor_prefix_commit_and_selection_count") {
+            val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
+            val layoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
+            val autoKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED
+            val liveKey = ZeroConvertInputMethodService.KEY_REALTIME_INLINE
+            val hadLayout = prefs.contains(layoutKey)
+            val savedLayout = prefs.getString(layoutKey, JapaneseInputLayout.FLICK_12KEY.name)
+            val hadAuto = prefs.contains(autoKey)
+            val savedAuto = prefs.getBoolean(autoKey, true)
+            val hadLive = prefs.contains(liveKey)
+            val savedLive = prefs.getBoolean(liveKey, true)
+            try {
+                onUi {
+                    prefs.edit().putBoolean(autoKey, false).putBoolean(liveKey, true).apply()
+                    val field = checkNotNull(activity).field
+                    field.setText("")
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
+                }
+                waitUntil("Japanese mode unavailable") { findText("入力モード:日本語") != null }
+                if (findText("QWERTY") != null) check(clickText("QWERTY"))
+                waitUntil("Japanese QWERTY unavailable") { findText("tを入力") != null }
+                for (key in "toukyouniiku") check(clickText("${key}を入力"))
+                repeat(3) { check(touchKey("◀")) }
+                waitUntil("Cursor prefix candidate Tokyo missing") { findText("変換候補 東京") != null }
+                waitUntil("Prefix preview or caret did not preserve the suffix") { onUi {
+                    val field = checkNotNull(activity).field
+                    field.text.toString() == "東京にいく" && field.selectionStart == 2 && field.selectionEnd == 2
+                } }
+                // Some editors combine our new caret with an older composing
+                // range, or omit the range. Neither means a user moved elsewhere.
+                for (omitRange in listOf(false, true)) {
+                    onUi {
+                        val field = checkNotNull(activity).field
+                        (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                            .updateSelection(field, field.selectionStart, field.selectionEnd,
+                                if (omitRange) -1 else 0, if (omitRange) -1 else field.text.length + 3)
+                    }
+                    SystemClock.sleep(150)
+                    check(onUi { BaseInputConnection.getComposingSpanStart(checkNotNull(activity).field.text) == 0 }) {
+                        "Our cursor notification committed the composition: omittedRange=$omitRange"
+                    }
+                    check(findText("変換候補 東京") != null) { "Our cursor notification removed conversion candidates" }
+                }
+                check(touchKey("▶") && touchKey("◀"))
+                waitUntil("Cursor prefix candidate did not return after moving right then left") {
+                    findText("変換候補 東京") != null
+                }
+                check(clickText("変換候補 東京"))
+                waitUntil("Partial commit lost the remaining composition") { onUi {
+                    val text = checkNotNull(activity).field.text
+                    text.startsWith("東京") && text.length > 2 && BaseInputConnection.getComposingSpanStart(text) == 2
+                } }
+                check(clickText("確定", 500) || clickText("Enter", 500))
+                waitUntil("Remaining composition was not committed") { onUi {
+                    val text = checkNotNull(activity).field.text
+                    text.startsWith("東京") && text.length > 2 && BaseInputConnection.getComposingSpanStart(text) == -1
+                } }
+                onUi {
+                    checkNotNull(activity).field.apply { setText("東京に行く"); setSelection(0, 2) }
+                }
+                waitUntil("Selection counter missing after prefix conversion") { findText("2文字選択") != null }
+            } finally {
+                onUi {
+                    prefs.edit().apply {
+                        if (hadLayout) putString(layoutKey, savedLayout) else remove(layoutKey)
+                        if (hadAuto) putBoolean(autoKey, savedAuto) else remove(autoKey)
+                        if (hadLive) putBoolean(liveKey, savedLive) else remove(liveKey)
+                    }.apply()
+                    val field = checkNotNull(activity).field
+                    field.setText("")
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
+                }
+            }
+        }
         for (layout in listOf(JapaneseInputLayout.QWERTY, JapaneseInputLayout.FLICK_12KEY)) for (prefix in listOf("he", "get")) {
-            test("english_enter_preserves_spelling_${layout.name.lowercase()}_$prefix") {
+            test("english_enter_and_mode_switch_preserve_spelling_${layout.name.lowercase()}_$prefix") {
                 val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
                 val key = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
                 val hadLayout = prefs.contains(key)
@@ -565,6 +678,49 @@ class PortInstrumentationRunner : Instrumentation() {
                     check(clickText("変換候補 $completion"))
                     check(onUi { checkNotNull(activity).field.text.toString() } == completion) {
                         "Explicit candidate selection no longer adopts the completion"
+                    }
+                    if (layout == JapaneseInputLayout.QWERTY && prefix == "get") {
+                        for (punctuation in listOf(',', '.', '?')) {
+                            onUi { checkNotNull(activity).field.setText("") }
+                            typePrefix()
+                            check(clickText("${punctuation}を入力")) { "Punctuation key not found: $punctuation" }
+                            check(onUi {
+                                val text = checkNotNull(activity).field.text
+                                text.toString() == "$prefix$punctuation" && BaseInputConnection.getComposingSpanStart(text) == -1
+                            }) { "Punctuation replaced the spelling with a completion: $punctuation" }
+                            typeLetter('h')
+                            check(pressEnter())
+                            check(onUi { checkNotNull(activity).field.text.toString() } == "$prefix${punctuation}h") {
+                                "Input after punctuation did not start a new word"
+                            }
+                        }
+                    }
+                    onUi { checkNotNull(activity).field.setText("") }
+                    typePrefix()
+                    check(clickText("入力モード:英語"))
+                    waitUntil("Numeric mode did not appear") { findText("入力モード:数字") != null }
+                    check(onUi {
+                        val text = checkNotNull(activity).field.text
+                        text.toString() == prefix && BaseInputConnection.getComposingSpanStart(text) == -1
+                    }) { "Mode switch did not commit the literal English spelling: $prefix" }
+                    check(clickText("入力モード:数字"))
+                    waitUntil("Japanese mode did not appear") { findText("入力モード:日本語") != null }
+                    check(clickText(if (layout == JapaneseInputLayout.QWERTY) "aを入力" else "あを入力"))
+                    check(onUi {
+                        val text = checkNotNull(activity).field.text
+                        text.startsWith(prefix) && text.length > prefix.length &&
+                            BaseInputConnection.getComposingSpanStart(text) == prefix.length
+                    }) { "Japanese input replaced the preceding English spelling: $prefix" }
+                    check(touchKey("Backspace"))
+                    check(onUi { checkNotNull(activity).field.text.toString() } == prefix) {
+                        "Deleting Japanese input also removed the preceding English spelling"
+                    }
+                    check(clickText("入力モード:日本語"))
+                    waitUntil("English mode did not return") { findText("入力モード:英語") != null }
+                    typeLetter('h')
+                    check(pressEnter())
+                    check(onUi { checkNotNull(activity).field.text.toString() } == prefix + "h") {
+                        "Switching back reused an obsolete English buffer"
                     }
                 } finally {
                     val restoreLabel = if (savedLayout == JapaneseInputLayout.QWERTY.name) "QWERTY" else "12キー"

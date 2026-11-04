@@ -114,6 +114,18 @@ fn reconversion_shortcut_matches(
     key_code: usize,
     modifiers: ModifierState,
 ) -> bool {
+    if preset != ReconversionKey::Disabled
+        && key_code == VK_SPACE_KEY_CODE
+        && modifiers
+            == (ModifierState {
+                shift: false,
+                ctrl: false,
+                alt: false,
+                win: false,
+            })
+    {
+        return true;
+    }
     match preset {
         ReconversionKey::Convert => {
             key_code == VK_CONVERT_KEY_CODE
@@ -1153,7 +1165,7 @@ impl TextServiceFactory {
     }
 
     #[inline]
-    fn preceding_action_sent_terminal_ui_cleanup(
+    pub(crate) fn preceding_action_sent_terminal_ui_cleanup(
         terminal_ui_cleanup_sent_at: Option<usize>,
         action_index: usize,
     ) -> bool {
@@ -4800,15 +4812,22 @@ impl TextServiceFactory {
                         Some(range) => unsafe { range.Clone()? },
                         None => return Ok(false),
                     };
-                    let input_scope_property =
-                        unsafe { context.GetAppProperty(&GUID_PROP_INPUTSCOPE)? };
-                    let value = unsafe { input_scope_property.GetValue(cookie, &range)? };
-                    let unknown = IUnknown::try_from(&value)?;
-                    let input_scope = unknown.cast::<ITfInputScope>()?;
-                    Ok(Self::input_scope_list_contains_sensitive(&input_scope))
+                    Self::range_has_sensitive_input_scope(cookie, &context, &range)
                 }
             }),
         )
+    }
+
+    pub(crate) fn range_has_sensitive_input_scope(
+        cookie: u32,
+        context: &ITfContext,
+        range: &ITfRange,
+    ) -> Result<bool> {
+        let property = unsafe { context.GetAppProperty(&GUID_PROP_INPUTSCOPE)? };
+        let value = unsafe { property.GetValue(cookie, range)? };
+        let unknown = IUnknown::try_from(&value)?;
+        let input_scope = unknown.cast::<ITfInputScope>()?;
+        Ok(Self::input_scope_list_contains_sensitive(&input_scope))
     }
 
     fn current_context_has_sensitive_input_scope(&self) -> bool {
@@ -4863,39 +4882,26 @@ impl TextServiceFactory {
 
     #[inline]
     fn commit_enter_actions(composition: &Composition) -> (CompositionState, Vec<ClientAction>) {
-        if ClauseState::is_active_for_composition(composition) {
-            (
-                CompositionState::None,
-                vec![
-                    ClientAction::CommitLearning {
-                        scope: LearningCommitScope::Composition,
-                        kind: LearningCommitKind::Normal,
-                        was_temporary_latin: composition.temporary_latin,
-                    },
-                    ClientAction::EndComposition,
-                ],
-            )
+        // Clause navigation must keep the text after the selected boundary editable.
+        let (state, mut actions) = Self::commit_current_clause_actions(composition);
+        let kind = if composition.suffix.is_empty() {
+            LearningCommitKind::Normal
         } else {
-            let (state, mut actions) = Self::commit_current_clause_actions(composition);
-            let kind = if composition.suffix.is_empty() {
-                LearningCommitKind::Normal
-            } else {
-                LearningCommitKind::Partial
-            };
-            actions.insert(
-                0,
-                ClientAction::CommitLearning {
-                    scope: if composition.suffix.is_empty() {
-                        LearningCommitScope::Composition
-                    } else {
-                        LearningCommitScope::CurrentClause
-                    },
-                    kind,
-                    was_temporary_latin: composition.temporary_latin,
+            LearningCommitKind::Partial
+        };
+        actions.insert(
+            0,
+            ClientAction::CommitLearning {
+                scope: if composition.suffix.is_empty() {
+                    LearningCommitScope::Composition
+                } else {
+                    LearningCommitScope::CurrentClause
                 },
-            );
-            (state, actions)
-        }
+                kind,
+                was_temporary_latin: composition.temporary_latin,
+            },
+        );
+        (state, actions)
     }
 
     #[inline]
@@ -5882,7 +5888,15 @@ impl TextServiceFactory {
             alt: Self::is_alt_pressed(),
             win: Self::is_win_pressed(),
         };
-        Ok(reconversion_shortcut_matches(preset, key_code, modifiers).then_some(preset))
+        Ok(
+            reconversion_shortcut_matches(preset, key_code, modifiers).then_some(
+                if key_code == VK_SPACE_KEY_CODE {
+                    ReconversionKey::Space
+                } else {
+                    preset
+                },
+            ),
+        )
     }
 
     pub(crate) fn test_reconversion_key(
@@ -7352,7 +7366,6 @@ impl TextServiceFactory {
             let mut transition = transition;
             let mut deferred_clause_navigation_ready_ui_sync = None;
             let mut pending_learning_commits = Vec::new();
-            let mut terminal_ui_cleanup_sent_at = None;
             let has_learning_action = actions
                 .iter()
                 .any(|deferred| matches!(deferred.action, ClientAction::CommitLearning { .. }));
@@ -7594,19 +7607,17 @@ impl TextServiceFactory {
                         // fresh composition. Merely seeing a handle is not sufficient: a
                         // previous terminal edit may have emptied its range before failing.
                         self.start_composition()?;
-                        if app_config.general.show_candidate_window_after_space {
-                            let delivery = ipc_service.update_candidate_window(
-                                Some(false),
-                                None,
-                                None,
-                                None,
-                                None,
-                            )?;
-                            self.remember_candidate_window_visibility_if_sent(
-                                delivery,
-                                Some(false),
-                            );
-                        }
+                        let delivery = ipc_service.update_candidate_window(
+                            Some(false),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        self.remember_candidate_window_visibility_if_sent(
+                            delivery,
+                            Some(false),
+                        );
                     }
                     ClientAction::ShowCandidateWindow => {
                         let position = self.candidate_window_position()?;
@@ -7684,10 +7695,7 @@ impl TextServiceFactory {
                         let followup_owns_ui_cleanup =
                             Self::followup_owns_terminal_ui_cleanup(actions, action_index);
                         terminal_ui_cleanup_delegated_to_followup = followup_owns_ui_cleanup;
-                        let skip_ui_cleanup = Self::preceding_action_sent_terminal_ui_cleanup(
-                            terminal_ui_cleanup_sent_at,
-                            action_index,
-                        ) || followup_owns_ui_cleanup;
+                        let skip_ui_cleanup = false;
                         let typo_acceptances = if !learning_blocked
                             && !actions.iter().any(|entry| {
                                 matches!(
@@ -8216,9 +8224,7 @@ impl TextServiceFactory {
 
                             // Hide before either TSF edit below can fail. This keeps the
                             // candidate and ruby windows consistent with an empty document.
-                            let hide_delivery = self.hide_candidate_window_ui(&mut ipc_service)?;
-                            terminal_ui_cleanup_sent_at =
-                                hide_delivery.was_sent().then_some(action_index);
+                            let _ = self.hide_candidate_window_ui(&mut ipc_service)?;
                             if committed_prefix.is_empty() {
                                 self.set_text("", "")?;
                             } else {

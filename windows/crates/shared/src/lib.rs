@@ -802,6 +802,25 @@ pub fn zenzai_cpu_backend_supported() -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn gpu_layer_setting_preserves_legacy_behavior_and_respects_cpu() {
+        let mut legacy = serde_json::to_value(super::AppConfig::default()).unwrap();
+        legacy["zenzai"]
+            .as_object_mut()
+            .unwrap()
+            .remove("gpu_layers");
+        let mut config: super::AppConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.zenzai.effective_gpu_layers(), 99);
+        config.zenzai.gpu_layers = 4;
+        let saved = serde_json::to_string(&config).unwrap();
+        let mut restored: super::AppConfig = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.zenzai.effective_gpu_layers(), 4);
+        restored.zenzai.gpu_layers = u32::MAX;
+        assert_eq!(restored.zenzai.effective_gpu_layers(), 99);
+        restored.zenzai.backend = "cpu".into();
+        assert_eq!(restored.zenzai.effective_gpu_layers(), 0);
+    }
+
+    #[test]
     fn retired_predictive_model_setting_is_ignored_and_not_saved() {
         let mut legacy = serde_json::to_value(super::AppConfig::default()).unwrap();
         legacy["general"]["experimental_predictive_model"] = serde_json::json!("350m_q4km");
@@ -1389,8 +1408,24 @@ pub struct ZenzaiConfig {
     pub enable: bool,
     pub profile: String,
     pub backend: String,
+    #[serde(default = "default_gpu_layers")]
+    pub gpu_layers: u32,
     #[serde(default = "runtime_assets::default_model")]
     pub model: String,
+}
+
+fn default_gpu_layers() -> u32 {
+    99
+}
+
+impl ZenzaiConfig {
+    pub fn effective_gpu_layers(&self) -> u32 {
+        if self.backend == "cpu" {
+            0
+        } else {
+            self.gpu_layers.min(99)
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -1580,6 +1615,7 @@ impl Default for AppConfig {
                 enable: true,
                 profile: "".to_string(),
                 backend: "vulkan".to_string(),
+                gpu_layers: default_gpu_layers(),
                 model: runtime_assets::default_model(),
             },
             shortcuts: ShortcutConfig::default(),

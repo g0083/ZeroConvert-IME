@@ -1377,8 +1377,8 @@ impl ScenarioBackend {
         current.clamp_selection();
     }
 
-    fn commit_spec_all_clauses(&mut self) {
-        let committed = std::mem::take(&mut self.spec.clauses);
+    fn commit_spec_through_current_clause(&mut self) {
+        let committed = self.spec.clauses.drain(..=self.spec.current_index);
         self.spec
             .committed_clauses
             .extend(committed.into_iter().map(|clause| SimCommittedClause {
@@ -1396,7 +1396,7 @@ impl ScenarioBackend {
             HarnessUserAction::ShiftLeft => self.split_spec_left(),
             HarnessUserAction::ShiftRight => self.split_spec_right(),
             HarnessUserAction::Space => {}
-            HarnessUserAction::Enter => self.commit_spec_all_clauses(),
+            HarnessUserAction::Enter => self.commit_spec_through_current_clause(),
             HarnessUserAction::SetTextType(set_type) => {
                 if let Some(current) = self.spec.clauses.get_mut(self.spec.current_index) {
                     current.display_override = Some(set_type);
@@ -1621,9 +1621,34 @@ fn assert_harness_matches_spec(
     spec: &SimSpecState,
     history: &[HarnessUserAction],
 ) {
+    // A partial commit clears navigation caches. Until navigation is prepared again,
+    // the remaining clauses after the current one are displayed as a single suffix.
+    let mut expected_display: Vec<_> = spec_display(spec)
+        .split(" / ")
+        .map(str::to_string)
+        .collect();
+    let mut expected_lengths: Vec<_> = spec_clause_input_lengths(spec)
+        .split(" / ")
+        .map(str::to_string)
+        .collect();
+    let suffix_index = spec.committed_clauses.len() + spec.current_index + 1;
+    if harness.future_clause_snapshots.is_empty()
+        && !harness.suffix.is_empty()
+        && suffix_index < expected_display.len()
+    {
+        let suffix = expected_display.drain(suffix_index..).collect::<String>();
+        expected_display.push(suffix);
+        let suffix_length: i32 = expected_lengths
+            .drain(suffix_index..)
+            .map(|length| length.parse::<i32>().unwrap())
+            .sum();
+        expected_lengths.push(suffix_length.to_string());
+    }
+    let expected_display = expected_display.join(" / ");
+    let expected_lengths = expected_lengths.join(" / ");
     assert_eq!(
         harness_visible_clauses(harness),
-        spec_display(spec),
+        expected_display,
         "history: {}\nharness clauses: {}\nexpected clauses: {}\nharness lengths: {}\nexpected lengths: {}\nclause_snapshots: {}\nfuture_clause_snapshots: {}\npreview={} fixed_prefix={} suffix={} raw_input={} raw_hiragana={} corresponding_count={} selection_index={}",
         history_string(history),
         harness_visible_clauses(harness),
@@ -1642,7 +1667,7 @@ fn assert_harness_matches_spec(
     );
     assert_eq!(
         harness_clause_input_lengths(harness),
-        spec_clause_input_lengths(spec),
+        expected_lengths,
         "history: {}\nharness clauses: {}\nexpected clauses: {}\nharness raw clauses: {}\nexpected raw clauses: {}\nharness lengths: {}\nexpected lengths: {}\nclause_snapshots: {}\nfuture_clause_snapshots: {}\npreview={} fixed_prefix={} suffix={} raw_input={} raw_hiragana={} corresponding_count={} selection_index={}",
         history_string(history),
         harness_visible_clauses(harness),
@@ -2086,9 +2111,7 @@ fn apply_user_action(
                             next_raw_hiragana,
                         ));
                 }
-                harness
-                    .committed_clauses
-                    .push(committed_current_clause_from_harness(harness));
+                let mut committed_current = committed_current_clause_from_harness(harness);
 
                 harness.fixed_prefix.clear();
                 harness.clause_snapshots.clear();
@@ -2112,6 +2135,13 @@ fn apply_user_action(
                     &harness.candidates,
                     harness.selection_index,
                 ) {
+                    // The server's remaining reading provides the boundary even when
+                    // raw input counts and kana counts differ and caches were cleared.
+                    committed_current.raw_hiragana = harness
+                        .raw_hiragana
+                        .strip_suffix(&selected.hiragana)
+                        .expect("remaining reading must be a suffix before partial commit")
+                        .to_string();
                     harness.selection_index = selected.index;
                     harness.corresponding_count = selected.corresponding_count;
                     harness.preview = selected.text.clone();
@@ -2123,6 +2153,7 @@ fn apply_user_action(
                     harness.raw_hiragana.clear();
                     harness.corresponding_count = 0;
                 }
+                harness.committed_clauses.push(committed_current);
             }
             ClientAction::SetTextWithType(set_type) => {
                 let clause_raw_input = TextServiceFactory::current_clause_raw_input_preview(

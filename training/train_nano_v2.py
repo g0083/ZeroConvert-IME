@@ -10,6 +10,7 @@ import sys
 import json
 import argparse
 from typing import Dict, List
+from dataset_guard import checked_datasets, record_training_completed
 
 import torch
 from datasets import Dataset
@@ -27,8 +28,8 @@ sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model", type=str, default="Miwa-Keita/zenz-v3.1-xsmall")
-    parser.add_argument("--train_file", type=str, default="data/distilled_train.jsonl")
-    parser.add_argument("--val_file", type=str, default="data/distilled_val.jsonl")
+    parser.add_argument("--train_file", type=str, default="artifacts/datasets/separated-v1/distilled/train.jsonl")
+    parser.add_argument("--val_file", type=str, default="artifacts/datasets/separated-v1/distilled/val.jsonl")
     parser.add_argument("--output_dir", type=str, default='artifacts/checkpoints/nano-v2-lora')
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--grad_accum", type=int, default=2)
@@ -50,6 +51,7 @@ def load_jsonl(path: str) -> List[Dict]:
 
 def main():
     args = parse_args()
+    train_raw, val_raw = checked_datasets(args.train_file, args.val_file, args.output_dir)
     print(f"Loading base model: {args.base_model}...", flush=True)
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
@@ -75,8 +77,6 @@ def main():
     model.print_trainable_parameters()
 
     print("Loading datasets...", flush=True)
-    train_raw = load_jsonl(args.train_file)
-    val_raw = load_jsonl(args.val_file)
 
     def preprocess_function(examples):
         input_ids_list = []
@@ -139,6 +139,7 @@ def main():
     print(f"Saving best LoRA adapter to {args.output_dir}...", flush=True)
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    record_training_completed(args.output_dir)
     print("Training finished successfully!", flush=True)
 
 if __name__ == "__main__":

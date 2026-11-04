@@ -9,6 +9,7 @@ function Get-TrialInputGroups {
         shared = @('windows/crates/shared')
         macros = @('windows/crates/macros')
         server = @('windows/crates/server/src','windows/crates/server/Cargo.toml','windows/crates/server/build.rs')
+        keyboard = @('windows/native/keyboard-prior','windows/scripts/build-keyboard-prior.ps1')
         ui = @('windows/crates/ui/src','windows/crates/ui/Cargo.toml','windows/crates/ui/build.rs')
         launcher = @('windows/crates/launcher/src','windows/crates/launcher/Cargo.toml','windows/crates/launcher/build.rs')
         frontend = @('windows/frontend/src','windows/frontend/public','windows/frontend/index.html',

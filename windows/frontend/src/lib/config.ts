@@ -27,7 +27,7 @@ type UpdateInstallResult = {
 };
 
 const SERVER_APPLY_WARNING =
-    "設定を保存しましたが、IME への反映に失敗しました。再起動後に反映されます。";
+    "設定を保存しましたが、IME への反映に失敗しました。IMEサーバーの再起動をお試しください。";
 const enqueueConfigUpdate = createSerialTaskQueue();
 
 export const getConfigAfterPendingUpdates = async () =>
@@ -80,6 +80,7 @@ export const showUpdateInstallResultOnce = async () => {
 export const saveConfigWithToast = async (
     updater: (config: any) => void,
     failureMessage = "設定の更新に失敗しました",
+    onResult?: (result: UpdateConfigResponse) => void,
 ) =>
     enqueueConfigUpdate(async () => {
         try {
@@ -97,6 +98,8 @@ export const saveConfigWithToast = async (
                     duration: 10000,
                 });
             }
+
+            onResult?.(result);
 
             return result.config;
         } catch (_error) {

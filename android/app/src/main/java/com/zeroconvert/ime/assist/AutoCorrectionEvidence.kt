@@ -7,7 +7,7 @@ object AutoCorrectionEvidence {
         learned: LearnedMatch?,
         uniqueRepair: () -> String? = { if (AssistVocabulary.isReady) RomajiDecoder.uniqueAdjacentCorrection(input) else null }
     ): Boolean {
-        if (input.isBlank() || surface.isBlank() || input.hasUnsafeTokens() || surface.hasUnsafeTokens()) return false
+        if (input.isBlank() || surface.isBlank() || input.hasUnsafeTokens() || surface.hasUnsafeTokens() || input.hasPendingRomaji()) return false
         if (learned?.reading == input && learned.surface == surface && learned.confirmedCount >= 3) return true
         if (AssistVocabulary.isKnownCleanReading(input)) return false
         val reading = uniqueRepair() ?: return false

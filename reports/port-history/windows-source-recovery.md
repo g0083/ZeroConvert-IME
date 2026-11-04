@@ -79,7 +79,7 @@ Swiftの再ビルド、サーバーbinのリンク・テスト、ブラウザ描
 
 一方、`Build-Trial.bat` は増分ビルドと適用まで行うのに対し、引数なしの `Apply-Trial.bat` は `dist/packages/latest.json` の完全パッケージを選ぶ。バックアップ履歴では17:51の増分適用のあと17:53に16:25作成の完全パッケージが適用されていた。これはソースと別に実行ファイルが古い状態へ戻る経路である。
 
-`apply-trial-package.ps1` と `distribution.psm1` を変更し、新しい増分更新より古い完全パッケージの暗黙適用を、検証・停止・コピーの前に拒否するようにした。意図して完全パッケージを使う場合の明示的な `-PackageDirectory` は維持する。`Apply-Trial.bat` の案内と [開発手順](local-installer.md) も更新。
+`apply-trial-package.ps1` と `distribution.psm1` を変更し、新しい増分更新より古い完全パッケージの暗黙適用を、検証・停止・コピーの前に拒否するようにした。意図して完全パッケージを使う場合の明示的な `-PackageDirectory` は維持する。`Apply-Trial.bat` の案内と [開発手順](../../docs/local-installer.md) も更新。
 
 - 増分テスト: 26 assertions成功。古い完全パッケージの拒否・新しい完全パッケージの許可・初回/完全適用済み環境の許可・検査時の状態非変更を含む。
 - 配布テスト: 25 assertions成功。

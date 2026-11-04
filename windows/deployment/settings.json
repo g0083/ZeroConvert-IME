@@ -13,6 +13,7 @@
     "enable": true,
     "profile": "",
     "backend": "vulkan",
+    "gpu_layers": 99,
     "model": "nano_v4_iq4_emb8"
   },
   "shortcuts": {

@@ -13,7 +13,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright")
 function installMock() {
     const config = {
         general: {}, shortcuts: {}, character_width: {}, learning: { mode: "enabled" }, debug: {},
-        zenzai: { enable: true, profile: "old profile", backend: "vulkan" },
+        zenzai: { enable: true, profile: "old profile", backend: "vulkan", gpu_layers: 99 },
         romaji_table: { rows: [{ input: "ka", output: "か", next_input: "" }] },
         user_dictionary: { entries: Array.from({ length: 25 }, (_, i) => ({ reading: `よみ${i}`, word: `単語${i}` })) },
     };
@@ -43,7 +43,7 @@ function installMock() {
                     while (state.holdSave) await new Promise((resolve) => setTimeout(resolve, 20));
                     if (state.failSave) throw new Error("mock save failure");
                     Object.assign(config, structuredClone(args.newConfig));
-                    return { saved: true, server_applied: true, changed: true, config: structuredClone(config) };
+                    return { saved: true, server_applied: !state.failApply, changed: true, config: structuredClone(config) };
                 case "check_for_updates":
                     state.checks++;
                     if (state.failCheck) throw new Error("mock update failure");
@@ -54,6 +54,7 @@ function installMock() {
                     if (state.failStart) throw new Error("mock updater launch failure");
                     return { launched: true };
                 case "check_capability": return { cpu: true, cuda: false, vulkan: true };
+                case "get_active_model": return { active_id: "standard", models: [] };
                 case "has_jev_api_key": return state.jevApiKeySaved;
                 case "check_jev_api_key":
                     state.keyChecks++;
@@ -63,7 +64,10 @@ function installMock() {
                     return null;
                 case "get_default_romaji_rows": return [{ input: "ka", output: "か", next_input: "" }, { input: "kk", output: "っ", next_input: "k" }];
                 case "plugin:opener|open_url": state.links.push(args.url); return null;
-                case "restart_server": return null;
+                case "restart_server":
+                    state.restarts = (state.restarts ?? 0) + 1;
+                    if (state.failRestart) throw new Error("mock restart failure");
+                    return null;
                 case "reset_learning_history": return { reset: true, server_applied: true };
                 default: throw new Error(`Unmocked command: ${command}`);
             }
@@ -347,6 +351,60 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await page.getByRole("button", { name: "破棄して閉じる", exact: true }).click();
         assert.equal(await page.evaluate(() => window.settingsTest.destroys), 2);
         assert.deepEqual(runtimeErrors, []);
+    } finally {
+        await browser.close();
+        await server.close();
+    }
+});
+
+
+test("runtime settings use RAM presets and retry failed application without a PC reboot", async () => {
+    const server = await createServer({ root, configFile: path.join(root, "vite.config.ts"), server: { host: "127.0.0.1", port: 0 }, logLevel: "error" });
+    await server.listen();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+    try {
+        const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+        await context.addInitScript(installMock);
+        const page = await context.newPage();
+        await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/conversion`);
+        await page.getByLabel("バックエンド", { exact: true }).waitFor();
+        const backend = page.getByLabel("バックエンド", { exact: true });
+        const layers = page.getByLabel("GPUに載せる層数", { exact: true });
+        await backend.click();
+        await page.getByRole("option", { name: "CPU (非推奨)", exact: true }).click();
+        await page.waitForFunction(() => window.settingsTest.config.zenzai.backend === "cpu");
+        assert.ok(await layers.isDisabled());
+        assert.equal(await page.getByText(/PCを再起動してください/).count(), 0);
+        await backend.click();
+        await page.getByRole("option", { name: "Vulkan", exact: true }).click();
+        await layers.click();
+        await page.getByRole("option", { name: "最大4層（RAM優先）", exact: true }).click();
+        await page.waitForFunction(() => window.settingsTest.config.zenzai.gpu_layers === 4);
+        await page.evaluate(() => { window.settingsTest.failApply = true; });
+        await layers.click();
+        await page.getByRole("option", { name: "最大8層", exact: true }).click();
+        const retryRuntime = page.getByRole("button", { name: "IMEサーバーを再起動して再試行", exact: true });
+        await retryRuntime.waitFor();
+        assert.equal(await page.evaluate(() => window.settingsTest.config.zenzai.gpu_layers), 8);
+        await page.evaluate(() => { window.settingsTest.failRestart = true; });
+        await retryRuntime.click();
+        await page.getByText(/IMEサーバーを再起動できませんでした/).waitFor();
+        assert.ok(await retryRuntime.isVisible());
+        await page.evaluate(() => { window.settingsTest.failRestart = false; window.settingsTest.failApply = false; });
+        await retryRuntime.click();
+        await retryRuntime.waitFor({ state: "hidden" });
+        assert.equal(await page.evaluate(() => window.settingsTest.restarts), 2);
+        await page.evaluate(() => { window.settingsTest.failSave = true; });
+        await layers.click();
+        await page.getByRole("option", { name: "最大16層", exact: true }).click();
+        await page.getByText("推論設定の更新に失敗しました", { exact: true }).waitFor();
+        assert.equal(await layers.innerText(), "最大8層");
+        await page.evaluate(() => { window.settingsTest.failSave = false; });
+
+        if (process.env.SETTINGS_UI_EVIDENCE_DIR) {
+            await mkdir(process.env.SETTINGS_UI_EVIDENCE_DIR, { recursive: true });
+            await page.screenshot({ path: path.join(process.env.SETTINGS_UI_EVIDENCE_DIR, "runtime-settings.png"), fullPage: true });
+        }
     } finally {
         await browser.close();
         await server.close();

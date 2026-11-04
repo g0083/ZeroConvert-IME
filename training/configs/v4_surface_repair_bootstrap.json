@@ -1,0 +1,5 @@
+{
+  "task_weights": {"convert": 0.10, "repair": 0.85, "predict": 0.05},
+  "repair_action_weights": {"keep": 0.30, "emit": 0.65, "abstain": 0.05},
+  "purpose": "Surface repair bootstrap after three-task recovery. Reuse R5's positive exposure and deterministic DoRA anchor recipe; KL6, first-action0.10. Not a deployment prior."
+}

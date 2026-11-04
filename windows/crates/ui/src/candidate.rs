@@ -69,8 +69,7 @@ fn candidate_html() -> String {
                         display: flex;
                         flex-direction: column;
                     }
-                    main[data-candidate-list-hidden] ol,
-                    main[data-candidate-list-hidden] footer {
+                    main[data-candidate-list-hidden] ol {
                         display: none;
                     }
                     ol {
@@ -147,17 +146,6 @@ fn candidate_html() -> String {
                         text-overflow: ellipsis;
                         white-space: nowrap;
                     }
-                    footer {
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        padding: 6px 10px 4px 10px;
-                        border-top: 1px solid rgba(0, 0, 0, 0.06);
-                        font-size: 11px;
-                        color: #94A3B8;
-                        font-weight: 500;
-                        user-select: none;
-                    }
 
                     @media (prefers-color-scheme: dark) {
                         body {
@@ -190,10 +178,6 @@ fn candidate_html() -> String {
                             }
                         }
                             
-                        footer {
-                            border-top: 1px solid rgba(255, 255, 255, 0.07);
-                            color: #64748B;
-                        }
                     }
                 </style>
                 <script>
@@ -405,22 +389,20 @@ fn candidate_html() -> String {
 
                     function adjustWindowSize() {
                         const candidateList = document.getElementById('candidate-list');
-                        const footer = document.querySelector('footer');
                         const main = document.querySelector('main');
                         const body = document.body;
-                        if (!candidateList || !footer || !main) {
+                        if (!candidateList || !main) {
                             return;
                         }
 
                         const candidateListVisible = !main.hasAttribute('data-candidate-list-hidden');
                         const itemHeight = candidateListVisible ? measureListItemHeight(candidateList) : 0;
                         const candidateListHeight = itemHeight * Math.min(VISIBLE_ITEM_COUNT, currentCandidates.length);
-                        const footerHeight = candidateListVisible ? footer.offsetHeight : 0;
                         const mainPadding = parseInt(window.getComputedStyle(main).paddingTop) + 
                                            parseInt(window.getComputedStyle(main).paddingBottom);
                         const bodyPadding = parseInt(window.getComputedStyle(body).paddingTop) + 
                                           parseInt(window.getComputedStyle(body).paddingBottom);
-                        const totalHeight = candidateListHeight + footerHeight + mainPadding + bodyPadding;
+                        const totalHeight = candidateListHeight + mainPadding + bodyPadding;
                         
                         window.ipc.postMessage(JSON.stringify({
                             type: 'resize',
@@ -445,9 +427,6 @@ fn candidate_html() -> String {
                 <main>
                     <ol id="candidate-list">
                     </ol>
-                    <footer>
-                        <span style="letter-spacing: 0.05em; font-weight: 600; font-size: 10px; text-transform: uppercase; color: #94A3B8;">ZeroCon</span>
-                    </footer>
                 </main>
             </body>
         </html>"##
@@ -522,6 +501,5 @@ mod tests {
         }
 
         assert!(style.contains("margin: 0 10px 0 0;"));
-        assert!(style.contains("padding: 6px 10px 4px 10px;"));
     }
 }

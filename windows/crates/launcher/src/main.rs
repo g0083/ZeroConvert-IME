@@ -815,9 +815,29 @@ mod tests {
             );
             assert_eq!(spec.backend, path.join(super::backend_dir(&config)));
             assert_eq!(spec.backend, path.join(directory));
+            assert_eq!(spec.gpu_layers, if backend == "cpu" { 0 } else { 99 });
         }
+        config.zenzai.backend = "vulkan".into();
+        let full = super::prediction_server_spec(&path, &config).unwrap();
+        config.zenzai.gpu_layers = 4;
+        let limited = super::prediction_server_spec(&path, &config).unwrap();
+        assert_ne!(
+            full, limited,
+            "memory changes must replace the owned process"
+        );
+        assert_eq!(limited.gpu_layers, 4);
+        let corrector_path = path.join("models").join(shared::runtime_assets::CORRECTOR);
+        std::fs::create_dir_all(corrector_path.parent().unwrap()).unwrap();
+        std::fs::write(&corrector_path, []).unwrap();
+        let corrector = super::assist_server_spec(&path, &config, true).unwrap();
+        assert_eq!(corrector.gpu_layers, 4);
+        config.general.experimental_ai_engine = "external".into();
+        assert!(super::assist_server_spec(&path, &config, true).is_none());
+        assert!(super::prediction_server_spec(&path, &config).is_some());
         config.general.experimental_ai_assist = false;
         assert!(super::prediction_server_spec(&path, &config).is_none());
+        assert!(super::assist_server_spec(&path, &config, true).is_none());
+        std::fs::remove_file(corrector_path).unwrap();
         std::fs::remove_file(path.join("models").join(shared::runtime_assets::NANO_IQ4)).unwrap();
         std::fs::remove_dir(path.join("models")).unwrap();
         for directory in ["llama_vulkan", "llama_cuda", "llama_cpu"] {
@@ -1007,86 +1027,11 @@ mod tests {
     }
 }
 
-fn start_ai_server_process(install_dir: &Path) -> anyhow::Result<Option<Child>> {
-    let config = load_config();
-    if !config.general.experimental_ai_assist || config.general.experimental_ai_engine != "embedded"
-    {
-        return Ok(None);
-    }
-
-    // Check whether the embedded corrector server is already listening on port 18090.
-    // We must NOT check process_is_running("llama-server.exe") because Zenzai or other tools
-    // may also run an executable with the same name on a different port (e.g. 8090).
-    if std::net::TcpStream::connect_timeout(
-        &"127.0.0.1:18090".parse().unwrap(),
-        std::time::Duration::from_millis(50),
-    )
-    .is_ok()
-    {
-        return Ok(None);
-    }
-
-    let model_filename = shared::runtime_assets::CORRECTOR;
-    let model_path = shared::runtime_assets::corrector_model(install_dir);
-    if !model_path.is_file() {
-        eprintln!(
-            "[launcher] AI model not found at {}; skipping embedded llama-server",
-            model_path.display()
-        );
-        return Ok(None);
-    }
-
-    let exe_dir = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
-    let exe_path = exe_dir.join("llama-server.exe");
-    if !exe_path.is_file() {
-        eprintln!(
-            "[launcher] llama-server.exe not found at {}; skipping embedded llama-server",
-            exe_path.display()
-        );
-        return Ok(None);
-    }
-
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let mut command = Command::new(&exe_path);
-    command.current_dir(&exe_dir);
-    command.env("PATH", prepend_to_path(&exe_dir));
-    command.creation_flags(CREATE_NO_WINDOW);
-    command.stdin(Stdio::piped());
-    command.args([
-        "-m",
-        model_path.to_str().unwrap_or_default(),
-        "--port",
-        "18090",
-        "-c",
-        "512",
-        "-n",
-        "32",
-        "--threads",
-        "4",
-        "--host",
-        "127.0.0.1",
-        "-ngl",
-        if config.zenzai.backend == "cpu" {
-            "0"
-        } else {
-            "99"
-        },
-    ]);
-
-    println!(
-        "[launcher] Spawning embedded llama-server on port 18090 with model {}",
-        model_filename
-    );
-    let child = spawn_process(command, "llama-server.exe", "[llama]")?;
-    Ok(Some(child))
-}
-
 #[derive(Debug, PartialEq, Eq)]
-struct PredictionServerSpec {
+struct AssistServerSpec {
     model: std::path::PathBuf,
     backend: std::path::PathBuf,
+    gpu_layers: u32,
 }
 
 struct PredictionJob(HANDLE);
@@ -1127,20 +1072,51 @@ impl Drop for PredictionJob {
     }
 }
 
-fn prediction_server_spec(install_dir: &Path, config: &AppConfig) -> Option<PredictionServerSpec> {
-    if !config.general.experimental_ai_assist {
+fn prediction_server_spec(install_dir: &Path, config: &AppConfig) -> Option<AssistServerSpec> {
+    assist_server_spec(install_dir, config, false)
+}
+
+fn assist_server_spec(
+    install_dir: &Path,
+    config: &AppConfig,
+    corrector: bool,
+) -> Option<AssistServerSpec> {
+    if !config.general.experimental_ai_assist
+        || (corrector && config.general.experimental_ai_engine != "embedded")
+    {
         return None;
     }
-    let model = shared::runtime_assets::converter_model(install_dir, &config.zenzai.model);
+    let model = if corrector {
+        shared::runtime_assets::corrector_model(install_dir)
+    } else {
+        shared::runtime_assets::converter_model(install_dir, &config.zenzai.model)
+    };
     let backend = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
-    (model.is_file() && backend.join("llama-server.exe").is_file())
-        .then_some(PredictionServerSpec { model, backend })
+    (model.is_file() && backend.join("llama-server.exe").is_file()).then_some(AssistServerSpec {
+        model,
+        backend,
+        gpu_layers: config.zenzai.effective_gpu_layers(),
+    })
 }
 
 // This worker owns only the prediction process it launches. Never stop another
 // application's server merely because it happens to occupy the same port.
 fn watch_prediction_server(install_dir: &Path) {
-    let mut owned: Option<(PredictionServerSpec, Child, PredictionJob)> = None;
+    watch_assist_server(install_dir, false);
+}
+
+fn watch_assist_server(install_dir: &Path, corrector: bool) {
+    let port = if corrector {
+        18090
+    } else {
+        shared::PREDICTION_SERVER_PORT
+    };
+    let label = if corrector {
+        "[corrector]"
+    } else {
+        "[prediction]"
+    };
+    let mut owned: Option<(AssistServerSpec, Child, PredictionJob)> = None;
     loop {
         if shared::model_update::requested() {
             if let Some((_, mut child, _job)) = owned.take() {
@@ -1148,7 +1124,9 @@ fn watch_prediction_server(install_dir: &Path) {
                 let _ = child.wait();
             }
             // No model process owned by this watcher remains before acknowledging.
-            shared::model_update::acknowledge_prediction_stopped();
+            if !corrector {
+                shared::model_update::acknowledge_prediction_stopped();
+            }
             thread::sleep(Duration::from_millis(100));
             continue;
         }
@@ -1158,7 +1136,11 @@ fn watch_prediction_server(install_dir: &Path) {
             thread::sleep(Duration::from_secs(2));
             continue;
         };
-        let desired = prediction_server_spec(install_dir, &config);
+        let desired = if corrector {
+            assist_server_spec(install_dir, &config, true)
+        } else {
+            prediction_server_spec(install_dir, &config)
+        };
         if let Some((spec, child, _job)) = owned.as_mut() {
             if desired.as_ref() != Some(spec) {
                 let _ = child.kill();
@@ -1172,7 +1154,7 @@ fn watch_prediction_server(install_dir: &Path) {
         if owned.is_none() {
             if let Some(spec) = desired {
                 let listening = std::net::TcpStream::connect_timeout(
-                    &std::net::SocketAddr::from(([127, 0, 0, 1], shared::PREDICTION_SERVER_PORT)),
+                    &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
                     Duration::from_millis(50),
                 )
                 .is_ok();
@@ -1184,24 +1166,23 @@ fn watch_prediction_server(install_dir: &Path) {
                         .arg("-m")
                         .arg(&spec.model)
                         .arg("--port")
-                        .arg(shared::PREDICTION_SERVER_PORT.to_string())
+                        .arg(port.to_string())
                         .args([
                             "--host",
                             "127.0.0.1",
                             "-c",
-                            "2048",
+                            if corrector { "512" } else { "2048" },
                             "--threads",
                             "4",
-                            "-ngl",
-                            if config.zenzai.backend == "cpu" {
-                                "0"
-                            } else {
-                                "99"
-                            },
-                        ]);
+                        ])
+                        .arg("-ngl")
+                        .arg(spec.gpu_layers.to_string());
+                    if corrector {
+                        command.args(["-n", "32"]);
+                    }
                     use std::os::windows::process::CommandExt;
                     command.creation_flags(0x08000000);
-                    match spawn_process(command, "llama-server.exe", "[prediction]") {
+                    match spawn_process(command, "llama-server.exe", label) {
                         Ok(mut child) => {
                             let job = match PredictionJob::attach(&child) {
                                 Ok(job) => job,
@@ -1214,9 +1195,10 @@ fn watch_prediction_server(install_dir: &Path) {
                                 }
                             };
                             println!(
-                                "[launcher] prediction port=18091 model={} backend={}",
+                                "[launcher] {label} port={port} model={} backend={} gpu_layers={}",
                                 spec.model.display(),
-                                spec.backend.display()
+                                spec.backend.display(),
+                                spec.gpu_layers
                             );
                             owned = Some((spec, child, job));
                         }
@@ -1230,21 +1212,5 @@ fn watch_prediction_server(install_dir: &Path) {
 }
 
 fn watch_ai_server_process(install_dir: &Path) {
-    loop {
-        match start_ai_server_process(install_dir) {
-            Ok(Some(mut child)) => match child.wait() {
-                Ok(status) => eprintln!("[launcher] embedded llama-server exited: {status}"),
-                Err(err) => eprintln!("[launcher] Failed to wait for llama-server: {err:?}"),
-            },
-            Ok(None) => {
-                thread::sleep(Duration::from_secs(2));
-                continue;
-            }
-            Err(err) => {
-                eprintln!("[launcher] Failed to start embedded llama-server: {err:?}");
-                thread::sleep(Duration::from_secs(5));
-            }
-        }
-        thread::sleep(SERVER_RESTART_DELAY);
-    }
+    watch_assist_server(install_dir, true);
 }

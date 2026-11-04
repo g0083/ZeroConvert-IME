@@ -181,6 +181,10 @@ fun MainScreen(
     var clipboardRetention by remember {
         mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_RETENTION_HOURS, 1))
     }
+    var clipboardSuggestionMinutes by remember {
+        mutableStateOf(ClipboardSuggestionPolicy.normalizeMinutes(imePrefs.getInt(
+            ZeroConvertInputMethodService.KEY_CLIPBOARD_SUGGESTION_MINUTES, ClipboardSuggestionPolicy.DEFAULT_MINUTES)))
+    }
     var screenshotCapture by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, true))
     }
@@ -1033,7 +1037,11 @@ fun MainScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(text = "クリップボード設定", fontWeight = FontWeight.Bold, color = palette.textPrimary, fontSize = 15.sp)
-                Text(text = "保持時間: ${clipboardRetention}時間", color = palette.textSecondary, fontSize = 12.sp)
+                ClipboardSuggestionDurationSetting(clipboardSuggestionMinutes, palette) { minutes ->
+                    clipboardSuggestionMinutes = minutes
+                    imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_SUGGESTION_MINUTES, minutes).apply()
+                }
+                Text(text = "履歴の保持時間: ${clipboardRetention}時間", color = palette.textSecondary, fontSize = 12.sp)
                 Slider(
                     value = clipboardRetention.toFloat(),
                     onValueChange = { v ->

@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ZeroConvert-IME 技術比較 - azooKeyベースからの進化</title>
+<meta name="description" content="ZeroConvert-IMEと改造元azooKey-Windowsの技術的・機能的な比較。レイテンシ予算、生成制限、補正・先読みパイプラインの数値を掲載。" />
+<style>
+:root{--bg:#0a0f1e;--bg2:#111830;--card:#141c36;--fg:#e8edf9;--muted:#93a0c4;--accent:#4dd4ac;--accent2:#9b8cff;--warn:#fbbf24;--danger:#f87171;--ok:#34d399;--line:#26325a;--radius:14px;--max:1240px}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.7}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);background:#0a0f1ecc;border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+.brand{font-weight:800;font-size:17px}
+.brand span{color:var(--accent)}
+.navlinks{display:flex;gap:20px;font-size:13px;color:var(--muted)}
+a{color:inherit;text-decoration:none}
+.hero{padding:70px 0 40px;background:linear-gradient(180deg,var(--bg),var(--bg2))}
+h1{font-size:clamp(30px,4.5vw,52px);font-weight:900;letter-spacing:-.5px;line-height:1.1}
+.grad{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{margin-top:16px;color:var(--muted);max-width:760px;font-size:16px}
+.badges{margin-top:20px;display:flex;gap:8px;flex-wrap:wrap}
+.badge{font-size:12px;padding:5px 11px;border-radius:999px;background:#1a2340;border:1px solid var(--line);color:var(--muted)}
+section{padding:60px 0}
+h2{font-size:clamp(24px,3.2vw,38px);font-weight:900;margin-bottom:10px}
+.section-sub{color:var(--muted);max-width:760px;font-size:15px;margin-bottom:32px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:24px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#1a2340;color:var(--fg);font-weight:700}
+tr:hover td{background:#1a234055}
+.num{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent)}
+.muted{color:var(--muted)}
+.tag{display:inline-block;font-size:11px;padding:3px 9px;border-radius:999px;background:#1a2340;color:var(--accent);margin:2px}
+.kpi{background:linear-gradient(180deg,#141c36,#0e1426);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.kpi .v{font-size:28px;font-weight:900;color:var(--accent)}
+.kpi .l{font-size:12px;color:var(--muted);margin-top:4px}
+ul{padding-left:20px}
+li{margin:6px 0}
+.code{font-family:Consolas,monospace;font-size:13px;background:#0b1020;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;white-space:pre}
+@media (max-width:860px){.grid2,.grid3{grid-template-columns:1fr}.navlinks{display:none}}
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap">
+    <div class="brand">ZeroConvert-IME <span>Dev Compare</span></div>
+    <div class="navlinks">
+      <a href="#matrix">機能比較</a>
+      <a href="#perf">性能</a>
+      <a href="#pipeline">パイプライン</a>
+      <a href="#safety">安全性</a>
+      <a href="#eval">評価</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="badges">
+      <span class="badge">開発者向け</span>
+      <span class="badge">azooKey-Windows fork</span>
+      <span class="badge">ZeroConモデル</span>
+    </div>
+    <h1>azooKeyを<span class="grad">超える</span>設計上の差分</h1>
+    <p class="sub">改造元 azooKey-Windows との比較を、機能マトリクス・レイテンシ予算・生成制限・非破壊操作の観点で整理。数値は実装コードと設計文書に基づく。</p>
+  </div>
+</section>
+
+<section id="matrix">
+  <div class="wrap">
+    <h2>1. 機能マトリクス</h2>
+    <p class="section-sub">基本機能は継承。ZeroConvert側で追加・強化したのは補正と先読みの非同期パイプライン。</p>
+    <div class="card">
+      <table>
+        <thead><tr><th>機能</th><th>azooKey-Windows</th><th>ZeroConvert-IME</th><th>差分</th></tr></thead>
+        <tbody>
+          <tr><td>ライブ変換</td><td>対応</td><td>対応</td><td class="muted">継承</td></tr>
+          <tr><td>ルビ表示</td><td>対応</td><td>対応</td><td class="muted">継承</td></tr>
+          <tr><td>Zenzaiニューラル変換</td><td>対応</td><td>対応</td><td class="muted">継承</td></tr>
+          <tr><td>変換学習</td><td>対応</td><td>対応</td><td class="muted">継承</td></tr>
+          <tr><td>ユーザー辞書</td><td>最大50件</td><td>最大50件</td><td class="muted">継承</td></tr>
+          <tr><td>再変換</td><td>対応</td><td>対応</td><td class="muted">継承</td></tr>
+          <tr><td>句読点確定</td><td>対応</td><td>対応</td><td class="muted">継承</td></tr>
+          <tr><td>誤入力補正</td><td>実験的・既定OFF</td><td>AI補正 + 自動反映条件</td><td>強化</td></tr>
+          <tr><td>先読み</td><td>なし</td><td>ZeroConモデルで次文を生成</td><td>新規</td></tr>
+          <tr><td>補正の取り消し</td><td>なし</td><td>Escで原文履歴へ復元</td><td>新規</td></tr>
+          <tr><td>補正候補の配置</td><td>なし</td><td>候補一覧2番目に「補正」</td><td>新規</td></tr>
+          <tr><td>自動反映</td><td>なし</td><td>隣接キー復元 or 3回採用</td><td>新規</td></tr>
+          <tr><td>補助サーバー管理</td><td>なし</td><td>launcherが所有プロセスを監視</td><td>新規</td></tr>
+          <tr><td>モデルキャッシュ</td><td>なし</td><td>32件 LRU相当</td><td>新規</td></tr>
+          <tr><td>出力検査</td><td>なし</td><td>制御文字・繰り返し・原表記変更を除外</td><td>新規</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="perf">
+  <div class="wrap">
+    <h2>2. 性能・効率の数値</h2>
+    <p class="section-sub">変換本線をブロックしない設計。補正・先読みは別RPC・別生成枠で並列実行。</p>
+    <div class="grid3">
+      <div class="kpi"><div class="v">60 ms</div><div class="l">入力停止後の補助要求トリガ</div></div>
+      <div class="kpi"><div class="v">25 ms</div><div class="l">TSFスレッドの結果ポーリング間隔</div></div>
+      <div class="kpi"><div class="v">0 ms</div><div class="l">変換本線のモデル待ち（非ブロック）</div></div>
+      <div class="kpi"><div class="v">128</div><div class="l">全文を補正器へ渡す最大文字数</div></div>
+      <div class="kpi"><div class="v">512</div><div class="l">補正要求の全体上限（文字）</div></div>
+      <div class="kpi"><div class="v">32-384</div><div class="l">補正の出力トークン予算（入力長に応じ）</div></div>
+      <div class="kpi"><div class="v">24 / 250 ms</div><div class="l">読み生成：トークン数 / タイムアウト</div></div>
+      <div class="kpi"><div class="v">256 / 300 ms</div><div class="l">表記変換：最大トークン / タイムアウト</div></div>
+      <div class="kpi"><div class="v">256 文字</div><div class="l">左文脈の保持長</div></div>
+      <div class="kpi"><div class="v">32 件</div><div class="l">モデルキャッシュエントリ数</div></div>
+      <div class="kpi"><div class="v">2 RPC</div><div class="l">補正(kind=1)と先読み(kind=2)を分離</div></div>
+      <div class="kpi"><div class="v">1 件/RPC</div><div class="l">各生成枠の推論数上限</div></div>
+    </div>
+    <div style="height:24px"></div>
+    <div class="card">
+      <h3 style="margin-bottom:10px">打鍵削減の試算（例）</h3>
+      <table>
+        <thead><tr><th>シナリオ</th><th>従来IME</th><th>ZeroConvert-IME</th><th>削減</th></tr></thead>
+        <tbody>
+          <tr><td>12文字の定型文</td><td>12打鍵 + Space + Enter = 14</td><td>4打鍵 + Tab = 5</td><td class="num">-64%</td></tr>
+          <tr><td>打ち間違い1文字</td><td>Backspace + 再入力 + 変換 = 3+</td><td>補正候補をTabで採用 = 1</td><td class="num">-67%</td></tr>
+          <tr><td>長文の続き</td><td>全文入力 + 変換</td><td>先頭数文字 + Tab</td><td class="num">-50%〜</td></tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:10px;font-size:12px">※ 試算例。実測は入力履歴・文章長・モデルヒット率に依存。</p>
+    </div>
+  </div>
+</section>
+
+<section id="pipeline">
+  <div class="wrap">
+    <h2>3. 補正・先読みパイプライン</h2>
+    <p class="section-sub">変換本線と補助生成を分離し、世代・文脈・設定の一致のみ反映。</p>
+    <div class="grid2">
+      <div class="card">
+        <h3 style="margin-bottom:8px">タイポ補正経路</h3>
+        <ol>
+          <li>AppendText/ReplaceComposition はモデルを待たず応答</li>
+          <li>クライアントが入力・候補・COM context/composition・文脈・設定・世代をスナップショット</li>
+          <li>60ms入力停止後に GetAssistCandidates を別タスクで呼び出し</li>
+          <li>専用ワーカーで補正と先読みを独立生成（各1件）</li>
+          <li>25msタイマーで結果受信、世代不一致は破棄</li>
+          <li>補正は元候補を保持して追加（候補ID維持）</li>
+          <li>適用時は direct入力として絶対置換、原文ledgerを保存</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:8px">先読み経路（ZeroCon）</h3>
+        <ol>
+          <li>通常変換応答後に 60ms停止で補正(kind=1)と先読み(kind=2)を別RPC</li>
+          <li>先読みは補正の終了を待たない（並列）</li>
+          <li>ZeroCon: EE02 + 左文脈 + EE00 + カタカナ読み → 続き生成（24トークン）</li>
+          <li>短い句境界まで取り出し、EE02 + 左文脈 + EE00 + 延長読み + EE01 → 表記変換</li>
+          <li>現在の表記で始まらなければ破棄</li>
+          <li>生成上限断片・制御文字・記号のみ・繰り返し・原表記変更を除外</li>
+          <li>Tabで追加部分＋全文を確定</li>
+        </ol>
+      </div>
+    </div>
+    <div style="height:24px"></div>
+    <div class="card">
+      <h3 style="margin-bottom:8px">妥当性の順序値（relevance）</h3>
+      <table>
+        <thead><tr><th>候補種別</th><th>値</th><th>説明</th></tr></thead>
+        <tbody>
+          <tr><td>一意な近接キー復元（自動反映根拠あり）</td><td class="num">100</td><td>完全な辞書語へ一意復元</td></tr>
+          <tr><td>学習済み手動補正</td><td class="num">70</td><td>明示採用3回以上の記録</td></tr>
+          <tr><td>ZeroCon先読み（出力検査通過）</td><td class="num">60</td><td>表記を維持し検査通過</td></tr>
+          <tr><td>根拠のないモデル・規則補正</td><td class="num">30</td><td>独立根拠なし</td></tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:10px;font-size:12px">同値時は先読みを選択。モデル確率を正解率として扱わない。</p>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <h2>4. 非破壊・安全性の設計</h2>
+    <p class="section-sub">誤操作を防ぐため、自動確定と取消を分離。</p>
+    <div class="grid2">
+      <div class="card">
+        <h3>操作仕様</h3>
+        <ul>
+          <li>Tabで補正しても確定しない。続けて入力可能</li>
+          <li>先読みのTabは従来どおり採用・確定</li>
+          <li>補正適用直後のEscで原文の打鍵履歴と表示を復元</li>
+          <li>同じ入力状態では取り消した候補を再表示しない</li>
+          <li>Enterは表示を確定、未採用提案を自動採用しない</li>
+          <li>Spaceの候補一覧に補正を2番目「補正」で表示</li>
+          <li>候補選択開始後は背景結果で並びを変えない</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>自動反映の制限</h3>
+        <ul>
+          <li>完全な辞書語へ一意復元できる隣接キー誤入力のみ</li>
+          <li>または明示採用して確定した記録が3回以上</li>
+          <li>末尾が入力途中の子音なら自動反映しない</li>
+          <li>全体が英字だけの識別子は自動反映しない</li>
+          <li>曖昧な候補は自動反映しない</li>
+          <li>自動反映だけで採用回数を増やさない</li>
+          <li>取消・未確定・確定失敗は学習に数えない</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="eval">
+  <div class="wrap">
+    <h2>5. 評価・検証</h2>
+    <p class="section-sub">モデル評価と実IME操作を区別して検証。</p>
+    <div class="card">
+      <table>
+        <thead><tr><th>検証項目</th><th>方法</th><th>備考</th></tr></thead>
+        <tbody>
+          <tr><td>ユニットテスト</td><td>cargo test -p azookey-windows --lib</td><td>Swift DLLが必要</td></tr>
+          <tr><td>サーバーテスト</td><td>cargo test -p azookey-server --lib/--bin</td><td>テスト用AppData指定</td></tr>
+          <tr><td>UIテスト</td><td>node --test crates/ui/tests/ruby_reading.browser.mjs</td><td>Playwright必須</td></tr>
+          <tr><td>ライブ補正</td><td>test_live_server_okseri（ignored）</td><td>実サーバー接続</td></tr>
+          <tr><td>モデル評価</td><td>live_prediction_evaluation（ignored）</td><td>ZEROCON_PREDICTION_TEST_PORT指定</td></tr>
+          <tr><td>実操作確認</td><td>yorosikuonegaisi → Tab、okseri → 補正 → Tab、Esc</td><td>新DLLをロードしたアプリで確認</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="height:16px"></div>
+    <div class="card">
+      <h3 style="margin-bottom:8px">品質指標（比較対象）</h3>
+      <ul>
+        <li>正常入力への誤補正率</li>
+        <li>補正取消率</li>
+        <li>先読みの出現率・採用率</li>
+        <li>打鍵削減率</li>
+        <li>候補変更回数</li>
+        <li>停止から表示までの遅延</li>
+      </ul>
+      <p class="muted" style="margin-top:8px;font-size:12px">出現率を落としただけの精度改善は採用しない。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>6. バックエンド構成</h2>
+    <p class="section-sub">用途別にポート・モデルを分離。</p>
+    <div class="card">
+      <table>
+        <thead><tr><th>用途</th><th>ポート</th><th>モデル</th></tr></thead>
+        <tbody>
+          <tr><td>Rust補正</td><td class="num">18090</td><td>corrector専用重み</td></tr>
+          <tr><td>ZeroCon先読み</td><td class="num">18091</td><td>zenz.gguf（漢字変換と共通backend）</td></tr>
+          <tr><td>設定画面ベンチマーク</td><td class="num">8090</td><td>ZeroCon生成・出力検査</td></tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:10px;font-size:12px">backend: 既定Vulkan、CPU/CUDAも選択可。先読み不通時にcorrectorへフォールバックしない。</p>
+    </div>
+  </div>
+</section>
+
+<footer style="padding:30px 0;border-top:1px solid var(--line);color:var(--muted);font-size:13px">
+  <div class="wrap" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div>ZeroConvert-IME developer comparison</div>
+    <div>Base: azooKey-Windows / Engine: AzooKeyKanaKanjiConverter</div>
+  </div>
+</footer>
+</body>
+</html>

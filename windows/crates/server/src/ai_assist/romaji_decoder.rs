@@ -108,7 +108,14 @@ fn normalized_romaji(raw_input: &str) -> Option<String> {
         }
     }
 
-    Some(normalized_tokens.join(""))
+    let normalized = normalized_tokens.join("");
+    // The reconstruction below indexes ASCII keystrokes by byte. Kanji,
+    // punctuation, emoji and identifiers with symbols are not romaji fragments;
+    // leave them to the full-input model rather than corrupting or panicking.
+    normalized
+        .bytes()
+        .all(|c| c.is_ascii_alphabetic() || c == b'-')
+        .then_some(normalized)
 }
 
 /// Unique full-word repair supported by a single adjacent-key substitution.
@@ -481,4 +488,17 @@ fn is_valid_japanese_word(hira: &str) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixed_script_input_does_not_enter_ascii_romaji_decoder() {
+        for input in ["資料A", "型b", "おkせり。", "ねっとC++", "おkせり🙂"] {
+            assert_eq!(decode_floating_consonant_typo(input), None, "{input}");
+            assert_eq!(unique_adjacent_correction(input), None, "{input}");
+        }
+    }
 }

@@ -4,6 +4,14 @@ import KanaKanjiConverterModule
 import Testing
 @testable import azookey_server
 
+@Test func gpuLayerCountKeepsLegacyDefaultAndClampsSettings() {
+    #expect(resolvedGpuLayerCount(nil) == 99)
+    #expect(resolvedGpuLayerCount(4) == 4)
+    #expect(resolvedGpuLayerCount(0) == 0)
+    #expect(resolvedGpuLayerCount(-1) == 0)
+    #expect(resolvedGpuLayerCount(Int.max) == 99)
+}
+
 private func row(_ input: String, _ output: String, _ next: String = "") -> RomajiTableRow {
     RomajiTableRow(input: input, output: output, next_input: next)
 }

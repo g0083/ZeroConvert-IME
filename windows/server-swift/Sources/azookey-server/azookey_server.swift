@@ -690,8 +690,12 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
         backend: config["backend"] as? String
     )
     KanaKanjiConverterEngineRuntime.configure(
-        gpuLayerCount: shouldOffloadToGpu ? Int32.max : 0
+        gpuLayerCount: shouldOffloadToGpu ? resolvedGpuLayerCount(config["gpuLayers"] as? Int) : 0
     )
+}
+
+func resolvedGpuLayerCount(_ configured: Int?) -> Int32 {
+    Int32(max(0, min(99, configured ?? 99)))
 }
 
 @MainActor private func learningMemoryDirectoryURL(settingsPath: URL?) -> URL {
@@ -1243,6 +1247,7 @@ private struct ZenzaiSettings: Decodable {
     let enable: Bool?
     let profile: String?
     let backend: String?
+    let gpu_layers: Int?
     let model: String?
 }
 
@@ -2517,6 +2522,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     let previousZenzaiEnabled = (config["enable"] as? Bool) ?? false
     let previousProfile = (config["profile"] as? String) ?? ""
     let previousBackend = (config["backend"] as? String) ?? "cpu"
+    let previousGpuLayers = resolvedGpuLayerCount(config["gpuLayers"] as? Int)
     let previousExperimentalTypoCorrection =
         (config["experimentalTypoCorrection"] as? Bool) ?? false
     let previousEffectiveZenzaiEnabled = effectiveZenzaiRuntimeEnabled(
@@ -2542,6 +2548,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     config["enable"] = false
     config["profile"] = ""
     config["backend"] = "cpu"
+    config["gpuLayers"] = 99
     config["model"] = "standard"
     config["experimentalTypoCorrection"] = false
     setRoman2KanaInputStyle()
@@ -2552,6 +2559,7 @@ func cursorPrefixBoundaryFirstClauseResults(
         serverLog("INFO", "LoadConfig: reading settingsPath=\(loadedSettingsPath.path)")
 
         if let zenzai = settings.zenzai {
+            config["gpuLayers"] = Int(resolvedGpuLayerCount(zenzai.gpu_layers))
             config["model"] = zenzai.model ?? "nano_v4_iq4_emb8"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
@@ -2631,13 +2639,15 @@ func cursorPrefixBoundaryFirstClauseResults(
     )
     let currentUsedCustomRomajiTable = customRomajiTableEnabled
     let backendChanged = normalizedZenzaiBackend(previousBackend) != normalizedZenzaiBackend(currentBackend)
+    let gpuLayersChanged = previousGpuLayers != resolvedGpuLayerCount(config["gpuLayers"] as? Int)
     if previousEffectiveZenzaiEnabled != currentEffectiveZenzaiEnabled
         || previousProfile != currentProfile
         || backendChanged
+        || gpuLayersChanged
         || previousUsedCustomRomajiTable != currentUsedCustomRomajiTable
         || previousExperimentalTypoCorrection != currentExperimentalTypoCorrection
     {
-        if backendChanged {
+        if backendChanged || gpuLayersChanged {
             rebuildConverter()
         } else {
             converter.stopComposition()

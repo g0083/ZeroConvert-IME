@@ -6,6 +6,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ComposingEditorStateTest {
+    @Test fun ownCursorCallbackMayCarryThePreviousComposingEnd() {
+        val state = ComposingEditorState()
+        assertTrue(state.write(Editor(), "とうきょうにいく", 5))
+        // The selection position is current, but this editor still reports the
+        // previous converted preview's shorter composing range.
+        assertTrue(state.ownsSelection(7, 7, 2, 7))
+        assertTrue(state.ownsSelection(7, 7, 2, 10))
+        assertFalse(state.ownsSelection(6, 6, 2, 10))
+    }
+
+    @Test fun ownCursorCallbackMayOmitTheComposingRange() {
+        val state = ComposingEditorState()
+        assertTrue(state.write(Editor(), "東京にいく", 2))
+        assertTrue(state.ownsSelection(4, 4, -1, -1))
+        assertTrue(state.ownsSelection(4, 4, -1, -1))
+        assertFalse(state.ownsSelection(3, 3, -1, -1))
+    }
+
+    @Test fun mismatchedOriginsAndRealSelectionsAreNeverOwned() {
+        val state = ComposingEditorState()
+        assertTrue(state.write(Editor(), "東京にいく", 2))
+        assertFalse(state.ownsSelection(4, 4, 1, 6))
+        assertFalse(state.ownsSelection(4, 4, 2, 1))
+        assertFalse(state.ownsSelection(4, 5, -1, -1))
+        assertFalse(state.ownsSelection(4, 4, -1, 7))
+    }
+
     private class Editor(prefix: String = "前文") : ComposingEditorState.Editor {
         var text = prefix
         var cursor = prefix.length
@@ -18,6 +45,7 @@ class ComposingEditorStateTest {
         var refuseText = false
         var refuseSelection = false
         var provideSelection = true
+        var overrideSelectionEnd: Int? = null
         override fun beginBatch() { batchDepth++; batchStarts++ }
         override fun endBatch() { batchDepth-- }
         override fun composing(text: String): Boolean {
@@ -30,7 +58,10 @@ class ComposingEditorStateTest {
             cursor = checkNotNull(end)
             return true
         }
-        override fun selectionEnd(): Int? { selectionQueries++; return cursor.takeIf { provideSelection } }
+        override fun selectionEnd(): Int? {
+            selectionQueries++
+            return overrideSelectionEnd ?: cursor.takeIf { provideSelection }
+        }
         override fun select(position: Int): Boolean {
             selectionCalls++
             if (refuseSelection) return false
@@ -200,5 +231,47 @@ class ComposingEditorStateTest {
         assertNull(ComposingEditorState.absoluteSelectionEnd(100, 20, 24))
         assertNull(ComposingEditorState.absoluteSelectionEnd(-1, 24, 24))
         assertNull(ComposingEditorState.absoluteSelectionEnd(Int.MAX_VALUE, 24, 24))
+    }
+
+    @Test fun writePrefersExistingStartHintOverStaleSelectionEnd() {
+        val state = ComposingEditorState()
+        val editor = Editor(prefix = "")
+        // First, write "たいちょうかく" with cursor at 6 (prefix "たいちょうか")
+        assertTrue(state.write(editor, "たいちょうかく", 6))
+        assertEquals("たいちょうかく", editor.text)
+        assertEquals(6, editor.cursor)
+
+        // Now, conversion finishes and writes "体調かく" (length 4) with cursor at 3.
+        // Simulate editor returning stale selectionEnd (6 from previous batch) rather than new length (4).
+        editor.overrideSelectionEnd = 6 // stale cursor in editor
+        assertTrue(state.write(editor, "体調かく", 3))
+        assertEquals("体調かく", editor.text)
+        // Cursor must be correctly set to 3 ("体調か|く"), NOT 5 or broken
+        assertEquals(3, editor.cursor)
+        assertEquals("体調かく", state.preview)
+        assertEquals(3, state.cursor)
+    }
+
+    @Test fun writeSupportsMultipleConsecutiveLeftMovesWithoutCorruption() {
+        val state = ComposingEditorState()
+        val editor = Editor(prefix = "")
+        // Write initial converted text "東京にいく" (5 chars)
+        assertTrue(state.write(editor, "東京にいく", 5))
+        assertEquals(5, editor.cursor)
+
+        // Move 1: suffix "く" (len 1) -> cursor at 4 ("東京にい|く")
+        assertTrue(state.write(editor, "東京にいく", 4))
+        assertEquals(4, editor.cursor)
+        assertEquals(4, state.cursor)
+
+        // Move 2: suffix "いく" (len 2) -> cursor at 3 ("東京に|いく")
+        assertTrue(state.write(editor, "東京にいく", 3))
+        assertEquals(3, editor.cursor)
+        assertEquals(3, state.cursor)
+
+        // Move 3: suffix "にいく" (len 3) -> cursor at 2 ("東京|にいく")
+        assertTrue(state.write(editor, "東京にいく", 2))
+        assertEquals(2, editor.cursor)
+        assertEquals(2, state.cursor)
     }
 }
