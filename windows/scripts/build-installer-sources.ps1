@@ -3,6 +3,7 @@
 param([string]$SwiftRuntimeDirectory)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'distribution.psm1') -Force
 $windowsRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 
 function Invoke-BuildStep([string]$Directory, [string]$Command, [string[]]$Arguments) {
@@ -78,8 +79,8 @@ $buildInfoPath = Join-Path $windowsRoot 'target/azookey-build/build-info.json'
 $installerMetadataPath = Join-Path $windowsRoot 'target/azookey-build/AppVersion.iss'
 $receipt = @{
     assetLayout = 3; files = $receiptFiles
-    buildInfo = @{ path = $buildInfoPath; sha256 = (Get-FileHash -LiteralPath $buildInfoPath).Hash.ToLowerInvariant() }
-    installerMetadata = @{ path = $installerMetadataPath; sha256 = (Get-FileHash -LiteralPath $installerMetadataPath).Hash.ToLowerInvariant() }
+    buildInfo = @{ path = $buildInfoPath; sha256 = Get-ArtifactHash $buildInfoPath }
+    installerMetadata = @{ path = $installerMetadataPath; sha256 = Get-ArtifactHash $installerMetadataPath }
 }
 [IO.File]::WriteAllText((Join-Path $windowsRoot 'target\installer-source-build.json'), ($receipt | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
 return $files
