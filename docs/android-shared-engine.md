@@ -90,8 +90,13 @@ Windows用Swift SDKで欠けているDispatchは、同版の公式Android SDKを
 モデル/入力欄切替を確認する。精度と遅延は同じモデル・設定で比較する。
 従来版の端末検査結果を新構成の成功証拠に流用しない。
 OPD2415への更新と基本18項目は成功。精度検査には不合格があり、正式署名・配布は未実施。
-詳細は [今回の検証記録](android-shared-engine-validation.md) を参照。
+詳細は [今回の検証記録](../reports/port-history/android-shared-engine-validation.md) を参照。
 2.0.5-devの容量・速度改善とV2520Aでの検証は [性能・APK容量](android-performance-size.md) を参照。
+2.0.6-devのカーソル前変換の復旧と実機24項目の検証は [カーソル変換の復旧](investigations/android-cursor-prefix-regression.md) を参照。
+2.0.7-devのクリップボード候補の期限・ピン留め除外・表示時間設定は [クリップボード候補表示](investigations/android-clipboard-suggestion.md) を参照。
+2.0.8-devの入力途中のnなどの誤補正防止と実機検証は [未完ローマ字の保護](investigations/android-pending-romaji.md) を参照。
+2.0.9-devの未確定英字から日本語への切替修正は [モード切替時の英字保持](investigations/android-mode-switch.md) を参照。
+2.0.10-devの矢印移動で勝手に確定される問題への対応は [カーソル通知の所有判定](investigations/android-cursor-ownership.md) を参照。
 
 ## Androidホストの性能と梱包
 

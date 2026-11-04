@@ -15,3 +15,6 @@ internal fun String.codePointSize(): Int = codePointCount(0, length)
 internal fun String.tailCodePoints(max: Int): String =
     if (codePointSize() <= max) this else substring(offsetByCodePoints(0, codePointSize() - max))
 internal fun String.hasUnsafeTokens(): Boolean = any { it.isISOControl() || it in '\uEE00'..'\uEE0F' }
+
+/** A terminal Latin letter, including n, can still be completed by the next romaji key. */
+internal fun String.hasPendingRomaji(): Boolean = lastOrNull()?.let { it in 'a'..'z' || it in 'A'..'Z' } == true

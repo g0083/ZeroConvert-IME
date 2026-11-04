@@ -10,11 +10,25 @@
 
 - ルートのGit管理先は `https://github.com/g0083/ZeroConvert-IME.git`（`origin`）。Windowsソースは `windows/`、Androidは `android/`。ルートのGitで管理する。
 - `windows/` の作業には、その配下の [AGENTS.md](windows/AGENTS.md) と必要な開発手順も適用する。
+- `android/` の作業には、その配下の [AGENTS.md](android/AGENTS.md) と [Android開発手順](docs/android-development.md) を適用する。Windows用のビルド・適用スクリプトやスキルをAndroidへそのまま流用しない。
 - 学習は `training/`、評価は `benchmarks/`、共有データは `data/`。Pythonは `python scripts/run.py <対象.py> [引数]` でルート基準のパス・importを揃える。
 - モデルは `artifacts/models/`、学習出力は `artifacts/checkpoints/`、評価結果・ログは `artifacts/results/` / `artifacts/logs/`。いずれもGit対象外。
 - `scratch/` は旧チェックアウト・実験保管先でGit対象外。`scratch/batao_src/` は移行前の保全用であり、今後の編集先ではない。ローカル履歴バックアップは `.local/migration-backup/`。既存の実行環境 `ZeroConvertIME-windows/` もGit対象外で保持する。
 - 外部依存はルートの `.gitmodules` で固定。Android llama.cppの独自変更は `patches/llama.cpp/` に保存し、`scripts/setup-dependencies.ps1` で適用する。
 - 構造・データフロー・設定・コマンドは [docs/architecture.md](docs/architecture.md)、症状別の探索先・詳細なファイル一覧は [docs/file-map.md](docs/file-map.md)。
+
+## ドキュメント・レポートの配置原則
+
+- **`docs/`（現行仕様・運用ガイド）**: システム設計、アーキテクチャ、セットアップ・開発手順など、継続的に参照・保守される恒久文書のみを配置する。
+  - `docs/investigations/`: 特定機能の詳細調査、特定バージョンでの不具合解析、実装メモなどを配置する。
+- **`reports/`（実験・検証・過去の進捗レポート）**: スナップショット的な記録、実験結果、移行フェーズの記録などをサブディレクトリに分類して格納する。新規レポートを `reports/` や `docs/` の直下に散らかさない。
+  - `reports/models/`: ZeroCon Model（nano / standard / 各バージョン）の学習・評価・比較実験レポート
+  - `reports/typo-assist/`: タイポ補正、先読み、キーボードハイブリッドの調査・検証レポート
+  - `reports/port-history/`: Android移植の各ステージ進捗記録（stage2〜10等）や過去の監査ドキュメント
+  - `reports/web/`: 外部向け紹介HTMLや技術比較ページ
+- **一時ファイル・ログの管理**:
+  - 実験結果JSONやビルド・評価ログは `artifacts/results/` や `artifacts/logs/` を利用する。
+  - ルートやソースディレクトリ直下に一時ログ（`*.log`）や差分テキストを放置しない。不要になった一時ファイルは速やかに掃除する。
 
 ## 中核ファイル（パスは Windows ソースルートから）
 
@@ -42,6 +56,7 @@
 - 独立した並行作業は別worktreeか順次作業にする。このPCの試験IMEへの適用担当は一つにし、複数チャットから同時にビルド・適用しない。
 - 通常のWindows変更反映はルートの `Build-Trial.bat` が増分ビルドと自動適用まで行う。続けて `Apply-Trial.bat` を実行しない。TSF DLL更新後は入力アプリを開き直して確認する。
 - 配布確認は `Build-Package.bat` → そのフォルダを指定して `Apply-Trial.bat -PackageDirectory ...` → 実IME確認 → 同じフォルダを指定して `Build-Installer.bat -PackageDirectory ...`。ソース編集・Git保存・ビルド・適用・梱包を区別する。
+- Androidはソース修正→Gradleテスト/lint/APK作成→依頼された対象端末への更新→実IME確認→最終署名済みの同じAPKを確認・配布する。APK作成だけで端末更新済みとしない。署名不一致や版の逆行を、無断アンインストール・データ消去で回避しない。
 - コミット・pushはユーザーの承認済み範囲に従う。未承認なら対象差分を整理して未保存であることを報告し、checkpoint/stashを通常履歴の代用にしない。バイナリ・重み・個人設定は既存のGit除外を維持する。
 
 ## タスク完了条件

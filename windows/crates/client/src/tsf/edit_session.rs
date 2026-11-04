@@ -229,7 +229,7 @@ fn request_async_edit_session(
     complete_async_edit_session_request(request_result)
 }
 
-fn request_async_read_edit_session(
+pub(super) fn request_async_read_edit_session(
     client_id: u32,
     context: ITfContext,
     callback: Rc<dyn Fn(u32) -> anyhow::Result<()>>,
@@ -377,7 +377,7 @@ fn collect_range_text_prefix(
     Ok(text)
 }
 
-fn read_range_text_prefix(
+pub(super) fn read_range_text_prefix(
     cookie: u32,
     range: &ITfRange,
     max_code_units: usize,
@@ -450,7 +450,7 @@ fn should_clear_display_attribute(text_len: i32, combined_text_is_empty: bool) -
     text_len == 0 && !combined_text_is_empty
 }
 
-fn has_same_com_identity<I: Interface>(left: &I, right: &I) -> bool {
+pub(super) fn has_same_com_identity<I: Interface>(left: &I, right: &I) -> bool {
     match (left.cast::<IUnknown>(), right.cast::<IUnknown>()) {
         (Ok(left), Ok(right)) => left.as_raw() == right.as_raw(),
         (Err(left_error), Err(right_error)) => {
@@ -584,6 +584,7 @@ impl TextServiceFactory {
         context: &ITfContext,
         expected_text: &str,
     ) -> Result<bool> {
+        self.hide_selection_count();
         let (tid, sink) = {
             let text_service = self.borrow()?;
             (text_service.tid, text_service.this::<ITfCompositionSink>()?)
@@ -639,6 +640,7 @@ impl TextServiceFactory {
         range: &ITfRange,
         expected_text: &str,
     ) -> Result<bool> {
+        self.hide_selection_count();
         let range_context = unsafe { range.GetContext()? };
         if !has_same_com_identity(context, &range_context) {
             anyhow::bail!("Reconversion range belongs to a different TSF context");
@@ -810,6 +812,7 @@ impl TextServiceFactory {
 
     #[tracing::instrument]
     pub fn start_composition(&self) -> Result<()> {
+        self.hide_selection_count();
         tracing::debug!("start_composition");
 
         let tip_exists = {
@@ -893,6 +896,7 @@ impl TextServiceFactory {
                         // TSF rejects ShiftEnd(0) / SetValue on an empty range in hosts such
                         // as Windows 11 Notepad. Final deletion still has to update the
                         // composition range and caret, but there is no display span to style.
+                        let mut caret_range = range.Clone()?;
                         if should_apply_display_attribute(text_len) {
                             let text_range = range.Clone()?;
                             text_range.Collapse(cookie, TF_ANCHOR_START)?;
@@ -910,16 +914,20 @@ impl TextServiceFactory {
                                 let prop = context.GetProperty(&GUID_PROP_ATTRIBUTE)?;
                                 prop.SetValue(cookie, &text_range, &pvar)?;
                             }
+                            text_range.Collapse(cookie, TF_ANCHOR_END)?;
+                            caret_range = text_range;
                         } else if should_clear_display_attribute(text_len, combined_text_is_empty) {
                             // TF_ST_CORRECTION can retain the old property on the new
                             // suffix-only text. With no primary span, clear it explicitly.
                             let prop = context.GetProperty(&GUID_PROP_ATTRIBUTE)?;
                             prop.Clear(cookie, &range)?;
+                            caret_range.Collapse(cookie, TF_ANCHOR_END)?;
+                        } else {
+                            caret_range.Collapse(cookie, TF_ANCHOR_END)?;
                         }
 
-                        range.Collapse(cookie, TF_ANCHOR_END)?;
                         let selection = TF_SELECTION {
-                            range: ManuallyDrop::new(Some(range.clone())),
+                            range: ManuallyDrop::new(Some(caret_range)),
                             style: TF_SELECTIONSTYLE {
                                 ase: TF_AE_NONE,
                                 fInterimChar: false.into(),

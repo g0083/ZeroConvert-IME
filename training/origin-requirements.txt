@@ -1,0 +1,9 @@
+# Measured runtime. Use a dedicated Python 3.12 environment.
+# CUDA wheel: --extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+transformers==5.20.2
+sentencepiece==0.2.2
+safetensors==0.8.0
+# Corpus labeling only: package MIT, bundled UniDic dictionary BSD-3-Clause.
+fugashi==1.5.2
+unidic-lite==1.0.8

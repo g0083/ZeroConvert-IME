@@ -28,12 +28,13 @@ type ModelListResponse = {
 };
 
 export const Zenzai = () => {
-    const [value, setValue] = useState({ enable: false, profile: "", backend: "" });
+    const [value, setValue] = useState({ enable: false, profile: "", backend: "", gpu_layers: 99 });
     const [capability, setCapability] = useState({ cpu: false, cuda: false, vulkan: false });
     const [capabilityError, setCapabilityError] = useState(false);
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
-    const [restartRequired, setRestartRequired] = useState(false);
+    const [runtimeApplying, setRuntimeApplying] = useState(false);
+    const [runtimePending, setRuntimePending] = useState(false);
     const [profileSaveState, setProfileSaveState] = useState<ConfigSaveState>("saved");
     const [activeModelId, setActiveModelId] = useState<string>("");
     const [models, setModels] = useState<ModelInfo[]>([]);
@@ -66,6 +67,7 @@ export const Zenzai = () => {
                 enable: true,
                 profile: profileEdited.current ? previous.profile : zenzai.profile,
                 backend: zenzai.backend,
+                gpu_layers: zenzai.gpu_layers ?? 99,
             }));
             if (zenzai.backend === "cuda") {
                 void invoke<{ installed: boolean; download_bytes: number }>("cuda_backend_status").then((status) => {
@@ -104,20 +106,36 @@ export const Zenzai = () => {
         setValue((previous) => ({ ...previous, profile }));
         profileSaver.schedule(profile);
     };
-    const saveBackend = async (backend: string) => {
-        const data = await saveConfigWithToast((config) => { config.zenzai.backend = backend; });
-        if (data) {
-            setValue((previous) => ({ ...previous, backend: data.zenzai.backend }));
-            setRestartRequired(true);
-            toast("バックエンドが変更されました", {
-                description: "変更を適用するには、PCを再起動してください",
-                duration: 10000,
+    const saveRuntime = async (update: { backend?: string; gpu_layers?: number }) => {
+        setRuntimeApplying(true);
+        try {
+            const data = await saveConfigWithToast((config) => {
+                Object.assign(config.zenzai, update);
+            }, "推論設定の更新に失敗しました", (result) => {
+                setRuntimePending(!result.server_applied);
+                if (result.server_applied) toast.success("推論設定を適用しました。補正・先読みは数秒で切り替わります。");
             });
+            if (data) setValue((previous) => ({ ...previous, backend: data.zenzai.backend, gpu_layers: data.zenzai.gpu_layers ?? 99 }));
+        } finally {
+            setRuntimeApplying(false);
+        }
+    };
+
+    const retryRuntime = async () => {
+        setRuntimeApplying(true);
+        try {
+            await invoke("restart_server");
+            setRuntimePending(false);
+            toast.success("IMEサーバーを再起動して設定を適用しました");
+        } catch (error) {
+            toast.error(`IMEサーバーを再起動できませんでした: ${error}`);
+        } finally {
+            setRuntimeApplying(false);
         }
     };
 
     const handleBackendChange = async (backend: string) => {
-        if ((backend === value.backend && backend !== "cuda") || cudaInstalling) return;
+        if ((backend === value.backend && backend !== "cuda") || cudaInstalling || runtimeApplying) return;
         try {
             if (backend === "cuda") {
                 const status = await invoke<{ installed: boolean; download_bytes: number }>("cuda_backend_status");
@@ -127,7 +145,7 @@ export const Zenzai = () => {
                     return;
                 }
             }
-            await saveBackend(backend);
+            await saveRuntime({ backend });
         } catch (error) { toast.error(`バックエンドを変更できませんでした: ${error}`); }
     };
     const installCuda = async () => {
@@ -139,7 +157,7 @@ export const Zenzai = () => {
                 setCudaProgress(Math.min(100, Math.round(payload.received / payload.total * 100)));
             });
             await invoke("install_cuda_backend", { confirmed: true });
-            await saveBackend("cuda");
+            await saveRuntime({ backend: "cuda" });
             toast.success("CUDAバックエンドを導入しました");
         } catch (error) {
             toast.error(`CUDAの導入に失敗しました。バックエンド設定は維持されます: ${error}`);
@@ -191,7 +209,7 @@ export const Zenzai = () => {
                 {loadState === "error" && <Button variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>再試行</Button>}
             </div> : <>
                 <SettingsRow label="利用モデル" description="漢字変換と先読みで使うモデルを選択します。タイポ補正には独自モデル corecctor（ZeroCon Model Corrector）を使います。" htmlFor="zenzai-model">
-                    <Select value={activeModelId} disabled={isSwitchingModel || models.length === 0} onValueChange={(modelId) => void handleModelChange(modelId)}>
+                    <Select value={activeModelId} disabled={runtimeApplying || cudaInstalling || isSwitchingModel || models.length === 0} onValueChange={(modelId) => void handleModelChange(modelId)}>
                         <SelectTrigger id="zenzai-model" className="w-[320px]">
                             <SelectValue placeholder="モデルを選択" />
                         </SelectTrigger>
@@ -206,8 +224,8 @@ export const Zenzai = () => {
                     </Select>
                 </SettingsRow>
 
-                <SettingsRow label="バックエンド" description="漢字変換とZeroCon先読みで共用します。既定はVulkanです。" htmlFor="zenzai-backend">
-                    <Select value={value.backend} disabled={capabilityError || cudaInstalling} onValueChange={(backend) => void handleBackendChange(backend)}>
+                <SettingsRow label="バックエンド" description="漢字変換・タイポ補正・先読みで共用します。変更時はIMEサーバーを自動で再起動します。Windowsの再起動は不要です。入力中の文字を確定してから変更してください。" htmlFor="zenzai-backend">
+                    <Select value={value.backend} disabled={capabilityError || cudaInstalling || runtimeApplying || isSwitchingModel} onValueChange={(backend) => void handleBackendChange(backend)}>
                         <SelectTrigger id="zenzai-backend"><SelectValue placeholder="バックエンドを選択" /></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="cpu" disabled={!capability.cpu}>CPU (非推奨){!capability.cpu && " — AVX 対応 CPU が必要"}</SelectItem>
@@ -220,6 +238,24 @@ export const Zenzai = () => {
                 {value.backend === "cpu" && <p className="settings-description px-4 pb-3">
                     CPUバックエンドには AVX 対応 CPU が必要です。未対応の場合は標準変換を使います。
                 </p>}
+                <SettingsRow label="GPUに載せる層数" description="少なくすると残りの層の重みをRAMに置き、その層をCPUで処理します。0層ではCPUで推論するため、CPU負荷が増え、遅くなる場合があります。Vulkan/CUDAでは0層でも作業領域などにVRAMを使用する場合があります。漢字変換・内蔵タイポ補正・先読みで共用します。" htmlFor="zenzai-gpu-layers">
+                    <Select value={String(value.gpu_layers)} disabled={value.backend === "cpu" || cudaInstalling || runtimeApplying || isSwitchingModel} onValueChange={(layers) => void saveRuntime({ gpu_layers: Number(layers) })}>
+                        <SelectTrigger id="zenzai-gpu-layers"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="99">全層（速度優先・既定）</SelectItem>
+                            <SelectItem value="16">最大16層</SelectItem>
+                            <SelectItem value="8">最大8層</SelectItem>
+                            <SelectItem value="4">最大4層（RAM優先）</SelectItem>
+                            <SelectItem value="0">0層（CPUで推論）</SelectItem>
+                            {![0, 4, 8, 16, 99].includes(value.gpu_layers) && <SelectItem value={String(value.gpu_layers)}>最大{value.gpu_layers}層</SelectItem>}
+                        </SelectContent>
+                    </Select>
+                </SettingsRow>
+                {runtimeApplying && <p className="settings-description p-4" role="status">IMEサーバーを再起動して設定を適用しています…</p>}
+                {runtimePending && <div className="p-4 space-y-2" role="status">
+                    <p className="settings-description">設定は保存済みですが、IMEへの適用が完了していません。</p>
+                    <Button variant="outline" disabled={runtimeApplying} onClick={() => void retryRuntime()}>IMEサーバーを再起動して再試行</Button>
+                </div>}
                 <SettingsRow label="変換プロファイル" description="名前・専門分野などを変換に反映します。" htmlFor="zenzai-profile">
                     <div className="w-full space-y-2">
                         <Textarea id="zenzai-profile" placeholder="例）山田太郎、数学科の学生。" value={value.profile}
@@ -231,7 +267,6 @@ export const Zenzai = () => {
                         </p>}
                     </div>
                 </SettingsRow>
-                {restartRequired && <p className="settings-description p-4" role="status">バックエンドの変更を適用するには、PCを再起動してください。</p>}
             </>}
         </SettingsSection>
     );

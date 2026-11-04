@@ -7,11 +7,13 @@
 | タスク | 最初に読む → 必要なら読む |
 | --- | --- |
 | タイポ候補が生成されない・誤補正する | `W/crates/server/src/ai_assist/mod.rs` の `fetch_typo_suggestion` → 同階層の `romaji_decoder.rs` / `typo_variant.rs` / `learning.rs` |
+| 元の打鍵列による隣接キー補正 | `W/crates/server/src/ai_assist/keyboard_hybrid.rs` → `W/native/keyboard-prior/`。生成・配布は `W/scripts/build-keyboard-prior.ps1` / `build-trial.ps1` / `deployment/model-catalog.json` |
 | 補正があるのに表示・Tab採用できない | `W/crates/server/src/main.rs` の `append_ai_assist_candidates` → `W/crates/client/src/engine/composition.rs` の `ai_assist_priority_index` と候補フィルタ・キー処理 → `W/crates/ui/src/ruby.rs` |
 | Swift変換側のタイポ補正 | `W/server-swift/Sources/azookey-server/azookey_server.swift` の `getOptions` / `confidentKeyboardTypoCorrectionForZenzaiMerge` → `W/data/keyboard-typo-dictionary.tsv` |
 | 先読みが不自然・出ない | `W/crates/server/src/main.rs` の先読み呼び出し → `W/crates/server/src/ai_assist/mod.rs` の `fetch_predictive_candidate_internal` → `collocation.rs` → launcherの起動モデル |
 | 入力遅延・モデル接続・設定と違うモデル | `W/crates/launcher/src/main.rs` の `start_ai_server_process` → `W/crates/server/src/ai_assist/mod.rs` の `simple_http_post` → 配布先のモデル・backend |
 | 自動確定・削除・カーソル・文節の不整合 | `W/crates/client/src/engine/composition.rs` → `composition/tests/` → `W/crates/server/src/composition_owner.rs` / Swiftの対応操作 |
+| 選択範囲の再変換・文字数表示 | `W/crates/client/src/engine/composition.rs` の再変換キー判定 → `W/crates/client/src/tsf/edit_session.rs` / `selection_count.rs` |
 | 設定変更が反映されない | `W/crates/shared/src/lib.rs` → `W/frontend/src/lib/config.ts` / `pages/general.tsx` → `W/frontend/src-tauri/src/lib.rs` → serverの `reload_ai_assist_from_settings` / Swiftの `LoadConfig` |
 | 起動・DLL登録・配布差分 | `ZeroConvertIME-windows/Start-ZeroConvertIME.ps1` / `Status-ZeroConvertIME.ps1` → `W/crates/launcher/src/main.rs` → `W/Makefile.toml` / `installer/Installer.iss` |
 | モデル切替・画面内ベンチマーク | `W/frontend/src/pages/zenzai.tsx` / `benchmark.tsx` → `W/frontend/src-tauri/src/lib.rs` の `switch_model` / `run_ai_assist_benchmark_item` |
@@ -26,6 +28,7 @@
 | `ZeroConvertIME-windows/` | ローカルWindows配布・実行物。運用PowerShell、初期設定、DLL/EXE、辞書、モデル、バックエンド。開発ソースとは区別 |
 | `W/crates/client/` | TSF DLL、キー・編集セッション・composition・IPC |
 | `W/crates/server/` | Rust変換RPCサーバー、Swift FFI呼び出し、composition所有権、AIアシスト |
+| `W/native/keyboard-prior/` | 元の打鍵列・辞書・小型読みモデルを使う補正専用ワーカーの正本。研究用C++実行器もこの実装を共有 |
 | `W/crates/shared/` | IPC契約、共通設定、候補ID、文字幅・ローマ字規則 |
 | `W/crates/ui/` | 候補一覧・読み表示・入力モード表示、表示用IPC |
 | `W/crates/launcher/` | セッション単位の子プロセス起動・監視、llamaバックエンド選択 |
@@ -44,7 +47,8 @@
 | `artifacts/models/` | 学習・量子化したGGUFや比較用モデル。配布先 `ZeroConvertIME-windows/models/` とは別 |
 | `artifacts/checkpoints/` | LoRA、マージ済み重み、全層学習、チェックポイント等の実験成果物 |
 | `artifacts/results/` / `artifacts/logs/` | 評価JSON / ログ。実装の一次情報にはしない |
-| `reports/` | 過去の実験・実装調査レポート。現コードの保証とは区別 |
+| `docs/` | 現行の仕様書・設計書・開発手順（恒久文書）。個別調査は `docs/investigations/` |
+| `reports/` | 過去の実験・実装調査レポート。`models/`（モデル実験）、`typo-assist/`（タイポ・先読み）、`port-history/`（移植記録）に分類 |
 | `scratch/` | このPCだけの旧チェックアウト・調査資料保管先。新規クローンには含まれない |
 | `.venv/` / `.venv_train/` / `__pycache__/` | Python環境・キャッシュ。通常のソース探索から除外 |
 
@@ -55,6 +59,7 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | ファイル | 役割 |
 | --- | --- |
 | `W/crates/client/src/tsf/key_event_sink.rs` / `edit_session.rs` | TSFキー入口 / 編集セッション |
+| `W/crates/client/src/tsf/selection_count.rs` | 選択変更通知、非同期文字数カウント、フォーカスを奪わない文字数表示 |
 | `W/crates/client/src/engine/ipc_service.rs` | 変換サーバーとの通信 |
 | `W/crates/server/src/composition_owner.rs` | 操作元接続とcompositionの所有管理 |
 | `W/crates/shared/service.proto` / `window.proto` | 変換・管理RPC / 表示メッセージ |

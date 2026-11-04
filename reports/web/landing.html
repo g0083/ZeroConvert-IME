@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ZeroConvert-IME - 変換を、ほとんど押さない日本語IME</title>
+<meta name="description" content="ライブ変換・タイポ補正・先読みで、変換キーを連打する必要がないWindows向け日本語IME。ZeroConvert-IME。" />
+<style>
+:root{
+  --bg:#070a14;--bg2:#0e1426;--card:#131a30cc;--fg:#eaf0ff;--muted:#9aa7c7;--accent:#5eead4;--accent2:#a78bfa;--warn:#fbbf24;--danger:#f87171;--ok:#34d399;
+  --radius:18px;--max:1180px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.7;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:#070a14cc;border-bottom:1px solid #1f2a4a}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:.5px}
+.brand .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;color:#070a14;font-weight:900}
+.navlinks{display:flex;gap:22px;font-size:14px;color:var(--muted)}
+.navlinks a:hover{color:var(--fg)}
+.cta{padding:10px 20px;border-radius:999px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#070a14;font-weight:700;font-size:14px;box-shadow:0 8px 30px #5eead440}
+.hero{padding:90px 0 60px;position:relative}
+.hero::before{content:"";position:absolute;inset:0;background:radial-gradient(60% 50% at 70% 20%,#5eead422,transparent 60%),radial-gradient(50% 40% at 20% 80%,#a78bfa22,transparent 60%);pointer-events:none}
+.hero-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:48px;align-items:center}
+h1{font-size:clamp(40px,6vw,74px);line-height:1.05;font-weight:900;letter-spacing:-1px}
+h1 .grad{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{margin-top:22px;font-size:18px;color:var(--muted);max-width:520px}
+.hero-actions{margin-top:34px;display:flex;gap:14px;flex-wrap:wrap}
+.btn{padding:14px 26px;border-radius:12px;font-weight:700;font-size:15px;display:inline-flex;align-items:center;gap:8px;border:1px solid #2a365a;transition:transform .15s,box-shadow .15s}
+.btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#070a14;border:none;box-shadow:0 12px 40px #5eead433}
+.btn.primary:hover{transform:translateY(-2px);box-shadow:0 16px 50px #5eead455}
+.btn.ghost:hover{border-color:var(--accent)}
+.badges{margin-top:28px;display:flex;gap:10px;flex-wrap:wrap}
+.badge{font-size:12px;padding:6px 12px;border-radius:999px;background:#1a2340;border:1px solid #2a365a;color:var(--muted)}
+
+.demo{background:var(--card);border:1px solid #2a365a;border-radius:var(--radius);padding:24px;box-shadow:0 30px 80px #00000066;position:relative}
+.demo-title{font-size:12px;color:var(--muted);margin-bottom:12px;letter-spacing:1px;text-transform:uppercase}
+.demo-line{font-size:22px;font-weight:600;min-height:34px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.demo-line .typed{color:var(--fg)}
+.demo-line .pred{color:var(--accent);opacity:.9;position:relative}
+.demo-line .pred::after{content:"Tabで確定";position:absolute;bottom:-22px;left:0;font-size:11px;color:var(--muted);white-space:nowrap}
+.demo-sub{margin-top:34px;font-size:13px;color:var(--muted);display:flex;gap:18px;flex-wrap:wrap}
+.demo-sub span{display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.kbd{display:inline-block;padding:2px 8px;border-radius:6px;background:#0b1020;border:1px solid #2a365a;font-size:12px;font-family:Consolas,monospace}
+.stats{margin-top:20px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stat{background:#0b1020;border:1px solid #2a365a;border-radius:12px;padding:12px}
+.stat .n{font-size:26px;font-weight:800;color:var(--accent)}
+.stat .l{font-size:12px;color:var(--muted)}
+
+section{padding:80px 0}
+h2{font-size:clamp(28px,4vw,46px);font-weight:900;letter-spacing:-.5px;margin-bottom:14px}
+h2 .grad{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.section-sub{color:var(--muted);max-width:640px;font-size:17px;margin-bottom:48px}
+
+.problem{background:linear-gradient(180deg,var(--bg),var(--bg2));}
+.problem-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.card{background:var(--card);border:1px solid #2a365a;border-radius:var(--radius);padding:28px;transition:transform .2s,border-color .2s}
+.card:hover{transform:translateY(-4px);border-color:var(--accent)}
+.card h3{font-size:20px;font-weight:700;margin-bottom:8px}
+.card p{color:var(--muted);font-size:15px}
+.card .icon{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:14px;font-weight:700;margin-bottom:16px;background:#1a2340}
+
+.features{background:var(--bg)}
+.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.feat{background:linear-gradient(180deg,#131a30,#0e1426);border:1px solid #2a365a;border-radius:var(--radius);padding:30px;position:relative;overflow:hidden}
+.feat::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));opacity:0;transition:opacity .2s}
+.feat:hover::before{opacity:1}
+.feat h3{font-size:20px;font-weight:800;margin-bottom:10px}
+.feat p{color:var(--muted);font-size:14px}
+.feat .tag{display:inline-block;margin-top:14px;font-size:11px;padding:4px 10px;border-radius:999px;background:#1a2340;color:var(--accent)}
+
+.compare{background:var(--bg2)}
+.compare-wrap{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.col{border-radius:var(--radius);padding:30px;border:1px solid #2a365a}
+.col.before{background:#1a1420}
+.col.after{background:linear-gradient(180deg,#0f1f2a,#0e1426);border-color:var(--accent)}
+.col h3{font-size:22px;font-weight:800;margin-bottom:18px}
+.row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #2a365a;font-size:15px}
+.row:last-child{border:none}
+.row .mark{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700}
+.before .mark{background:#3a2030;color:var(--danger)}
+.after .mark{background:#14302a;color:var(--ok)}
+
+.how{background:var(--bg)}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;counter-reset:s}
+.step{background:var(--card);border:1px solid #2a365a;border-radius:var(--radius);padding:24px;position:relative}
+.step::before{counter-increment:s;content:counter(s);position:absolute;top:16px;right:18px;font-size:40px;font-weight:900;color:#1f2a4a}
+.step h3{font-size:17px;font-weight:700;margin-bottom:6px}
+.step p{color:var(--muted);font-size:14px}
+
+.cta-section{background:linear-gradient(135deg,#0e1426,#1a1430);text-align:center;padding:100px 0}
+.cta-section h2{margin-bottom:14px}
+.cta-section p{color:var(--muted);margin-bottom:34px;font-size:17px}
+.cta-big{display:inline-block;padding:18px 40px;border-radius:14px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#070a14;font-weight:800;font-size:18px;box-shadow:0 20px 60px #5eead444}
+.cta-big:hover{transform:translateY(-3px)}
+.note{margin-top:18px;font-size:13px;color:var(--muted)}
+
+footer{padding:40px 0;border-top:1px solid #1f2a4a;color:var(--muted);font-size:13px}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+
+@media (max-width:860px){
+  .hero-grid,.problem-grid,.compare-wrap{grid-template-columns:1fr}
+  .feat-grid{grid-template-columns:1fr 1fr}
+  .steps{grid-template-columns:1fr 1fr}
+  .navlinks{display:none}
+}
+@media (max-width:560px){
+  .feat-grid,.steps,.stats{grid-template-columns:1fr}
+}
+
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.cursor{display:inline-block;width:2px;height:1.1em;background:var(--accent);margin-left:2px;animation:blink 1s infinite;vertical-align:middle}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+.hero-grid > *{animation:fadeUp .7s ease both}
+.hero-grid > *:nth-child(2){animation-delay:.15s}
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap">
+    <div class="brand"><div class="logo">Z</div>ZeroConvert-IME</div>
+    <div class="navlinks">
+      <a href="#features">機能</a>
+      <a href="#compare">違い</a>
+      <a href="#how">使い方</a>
+      <a href="#download">ダウンロード</a>
+    </div>
+    <a class="cta" href="#download">無料で試す</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="badges">
+        <span class="badge">Windows向け</span>
+        <span class="badge">日本語IME</span>
+        <span class="badge">AI搭載</span>
+      </div>
+      <h1>変換キーを<br/><span class="grad">ほとんど押さない。</span></h1>
+      <p class="sub">打つそばから変換され、次に書く一文まで先読み。打ち間違いも自動で補正。思考の速度で日本語が流れる、新しいIME体験。</p>
+      <div class="hero-actions">
+        <a class="btn primary" href="#download">今すぐダウンロード</a>
+        <a class="btn ghost" href="#compare">何が変わる？</a>
+      </div>
+    </div>
+    <div class="demo">
+      <div class="demo-title">ライブデモ - 入力すると...</div>
+      <div class="demo-line"><span class="typed" id="typed"></span><span class="cursor"></span><span class="pred" id="pred"></span></div>
+      <div class="demo-sub">
+        <span><span class="dot"></span>ライブ変換</span>
+        <span><span class="kbd">Tab</span>で先読み確定</span>
+        <span><span class="kbd">Esc</span>で元に戻す</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="n">-70%</div><div class="l">変換キー操作</div></div>
+        <div class="stat"><div class="n">0.06s</div><div class="l">補正の待ち時間</div></div>
+        <div class="stat"><div class="n">Tab</div><div class="l">一文を一撃で</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="problem">
+  <div class="wrap">
+    <h2>日本語入力、<span class="grad">まだ変換キー押してますか？</span></h2>
+    <p class="section-sub">従来のIMEは「打って→変換→選択→確定」の繰り返し。ZeroConvert-IMEはこの手間そのものをなくします。</p>
+    <div class="problem-grid">
+      <div class="card"><div class="icon">KB</div><h3>変換の連打</h3><p>Space・Enterを何度も押す、候補を選ぶ手間。文章を書くリズムが途切れます。</p></div>
+      <div class="card"><div class="icon">NG</div><h3>打ち間違い</h3><p>一文字のミスで変換が崩れる。直すのにまた変換…の悪循環。</p></div>
+      <div class="card"><div class="icon">CTX</div><h3>文脈を無視</h3><p>前後の文を読まない変換。自然な続きが候補に出ません。</p></div>
+      <div class="card"><div class="icon">TM</div><h3>思考が止まる</h3><p>候補選択に頭を使う時間が、本来書きたかった内容から遠ざけます。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="features">
+  <div class="wrap">
+    <h2>4つの<span class="grad">魔法</span></h2>
+    <p class="section-sub">技術的な話は抜きにして、使って感じる違い。</p>
+    <div class="feat-grid">
+      <div class="feat"><div class="icon">LV</div><h3>ライブ変換</h3><p>打つそばから文字が変換される。SpaceもEnterも待たない。入力の速度がそのまま文章になる。</p><span class="tag">リアルタイム</span></div>
+      <div class="feat"><div class="icon">PR</div><h3>先読み</h3><p>次に書く一文をAIが予測。Tabひとつで全文確定。長い定型文も一撃。</p><span class="tag">Tabで確定</span></div>
+      <div class="feat"><div class="icon">TC</div><h3>タイポ補正</h3><p>打ち間違いを自動検出。「しますた」→「しました」。Escでいつでも元に戻せる。</p><span class="tag">安心設計</span></div>
+      <div class="feat"><div class="icon">CT</div><h3>文脈理解</h3><p>前後の文章を読んで自然な続きを提案。機械的な候補ではなく、あなたの文章に寄り添う。</p><span class="tag">AIモデル</span></div>
+      <div class="feat"><div class="icon">AC</div><h3>自動確定</h3><p>確定できる部分は自動で確定。未確定のまま残るのは本当に迷う部分だけ。</p><span class="tag">手間削減</span></div>
+      <div class="feat"><div class="icon">SF</div><h3>誤操作ゼロ</h3><p>Enterで確定、Escで取消。自動で勝手に確定しない。あなたの意図が常に最優先。</p><span class="tag">コントロール</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="compare" class="compare">
+  <div class="wrap">
+    <h2>Before / After</h2>
+    <p class="section-sub">同じ文章を書くのに、必要な操作がこれだけ違う。</p>
+    <div class="compare-wrap">
+      <div class="col before">
+        <h3>従来のIME</h3>
+        <div class="row"><span class="mark">NG</span>1文ごとに変換キー</div>
+        <div class="row"><span class="mark">NG</span>候補を上下キーで選択</div>
+        <div class="row"><span class="mark">NG</span>打ち間違いで変換崩壊</div>
+        <div class="row"><span class="mark">NG</span>文脈を無視した候補</div>
+        <div class="row"><span class="mark">NG</span>思考が入力操作に中断</div>
+      </div>
+      <div class="col after">
+        <h3>ZeroConvert-IME</h3>
+        <div class="row"><span class="mark">OK</span>打つだけで変換完了</div>
+        <div class="row"><span class="mark">OK</span>Tabで一文を確定</div>
+        <div class="row"><span class="mark">OK</span>タイポは自動補正</div>
+        <div class="row"><span class="mark">OK</span>文脈に沿った先読み</div>
+        <div class="row"><span class="mark">OK</span>思考の速度で文章が流れる</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="how">
+  <div class="wrap">
+    <h2>使い方、<span class="grad">3秒でわかる</span></h2>
+    <p class="section-sub">インストール後、いつも通り打つだけ。</p>
+    <div class="steps">
+      <div class="step"><h3>インストール</h3><p>インストーラーを実行。管理者権限が必要です。</p></div>
+      <div class="step"><h3>IMEを切替</h3><p>言語バーからZeroConvert-IMEを選択。</p></div>
+      <div class="step"><h3>打つだけ</h3><p>ライブ変換が自動で開始。特別な操作不要。</p></div>
+      <div class="step"><h3>Tabで先読み</h3><p>灰色の予測が表示されたらTabで確定。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="download" class="cta-section">
+  <div class="wrap">
+    <h2>今日から、<span class="grad">変換を減らそう。</span></h2>
+    <p>無料・オープンソース。Windows 10/11対応。</p>
+    <a class="cta-big" href="https://github.com/g0083/ZeroConvert-IME/releases" target="_blank" rel="noopener">ダウンロードページへ</a>
+    <div class="note">※ 開発中ビルドです。安定性は保証されません。自己責任でご利用ください。</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>? 2026 ZeroConvert-IME</div>
+    <div>Windows IME / azooKeyベース / ZeroConモデル</div>
+  </div>
+</footer>
+
+<script>
+const typed=document.getElementById('typed');
+const pred=document.getElementById('pred');
+const seq=[
+  {t:"よ",p:"ろしくお願いします"},
+  {t:"よろ",p:"しくお願いします"},
+  {t:"よろしく",p:"お願いします"},
+  {t:"よろしくお",p:"願いします"},
+  {t:"よろしくお願い",p:"します"},
+  {t:"よろしくお願いします",p:"。本日は"},
+];
+let i=0;
+function step(){
+  const s=seq[i%seq.length];
+  typed.textContent=s.t;
+  pred.textContent=s.p;
+  i++;
+  setTimeout(step,900);
+}
+step();
+</script>
+</body>
+</html>

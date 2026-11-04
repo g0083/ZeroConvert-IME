@@ -49,6 +49,9 @@ fn reload_ai_assist_from_settings(config: &AppConfig) {
     AI_ASSIST_ENABLED.store(enabled, Ordering::Relaxed);
     let is_lm_studio = config.general.experimental_ai_engine == "lm_studio";
     AI_ENGINE_IS_LM_STUDIO.store(is_lm_studio, Ordering::Relaxed);
+    if enabled && !is_lm_studio {
+        ai_assist::keyboard_hybrid::prewarm();
+    }
     eprintln!(
         "[AI Assist] config loaded: enabled={}, prediction=zerocon, corrector_engine={}",
         enabled,
@@ -139,10 +142,13 @@ fn append_ai_assist_candidates(
     //    Evidence is evaluated independently from the unchanged-surface prediction.
     // The canonical reading preserves mixed kana/Latin. Never correct a second,
     // all-Latin raw key sequence as though it were an independent Japanese input.
-    let _ = composing_raw;
+    let hybrid = (kind != 2)
+        .then(|| ai_assist::keyboard_hybrid::suggest(context, hiragana_text, composing_raw, config))
+        .flatten();
+    let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
     let targets = [hiragana_text];
-    let mut found_typo = None;
-    for target in targets.into_iter().filter(|_| kind != 2) {
+    let mut found_typo = hybrid.flatten();
+    for target in targets.into_iter().filter(|_| kind != 2 && !hybrid_proposal) {
         if let Some(suggestion) =
             ai_assist::corrector::suggest_composition(context, target, &first_surface, config)
         {
@@ -168,11 +174,17 @@ fn append_ai_assist_candidates(
             });
             // 確定通知 (candidate_id 999901) と突き合わせるため候補を記憶する。
             ai_assist::remember_typo_candidate(&suggestion);
-            relevance = if ai_assist::corrector::can_auto_apply_composition(
-                hiragana_text,
-                &first_surface,
-                &suggestion.surface,
-            ) {
+            relevance = if hybrid_proposal {
+                // Strong bounded keyboard evidence should be offered ahead of
+                // speculative continuation, while remaining below automatic 100.
+                80
+            } else if !hybrid_proposal
+                && ai_assist::corrector::can_auto_apply_composition(
+                    hiragana_text,
+                    &first_surface,
+                    &suggestion.surface,
+                )
+            {
                 100
             } else if suggestion.learned {
                 70
@@ -1933,16 +1945,17 @@ impl AzookeyService for MyAzookeyService {
                 request.kind,
             );
             suggestions.remove(0);
-            let auto_apply = suggestions
-                .iter()
-                .find(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION)
-                .is_some_and(|s| {
-                    ai_assist::corrector::can_auto_apply_composition(
-                        &request.reading,
-                        &request.baseline,
-                        &s.text,
-                    )
-                });
+            let auto_apply = relevance == 100
+                && suggestions
+                    .iter()
+                    .find(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION)
+                    .is_some_and(|s| {
+                        ai_assist::corrector::can_auto_apply_composition(
+                            &request.reading,
+                            &request.baseline,
+                            &s.text,
+                        )
+                    });
             shared::proto::GetAssistCandidatesResponse {
                 suggestions,
                 auto_apply,

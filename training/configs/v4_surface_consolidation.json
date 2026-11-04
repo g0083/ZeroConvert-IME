@@ -1,0 +1,5 @@
+{
+  "task_weights": {"convert": 0.50, "repair": 0.35, "predict": 0.15},
+  "repair_action_weights": {"keep": 0.50, "emit": 0.45, "abstain": 0.05},
+  "purpose": "Consolidate conversion after surface repair bootstrap, using balanced anchor validation and parent-correct retention. KL1.2, first-action0.25, all dropout0. Not a deployment prior."
+}

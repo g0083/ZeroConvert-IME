@@ -269,7 +269,7 @@ fn clause_integration_fkeys_preserve_display_when_moving_right() {
 }
 
 #[test]
-fn clause_integration_fkeys_commit_all_clauses_when_clause_navigation_is_active() {
+fn clause_integration_fkeys_enter_keeps_following_clause_editable() {
     for (set_type, converted_clause) in fkey_cases() {
         let extra = vec![
             HarnessUserAction::SetTextType(set_type),
@@ -288,11 +288,70 @@ fn clause_integration_fkeys_commit_all_clauses_when_clause_navigation_is_active(
         );
         assert_eq!(harness_raw_clauses(&harness), "かげん / とういつ");
         assert_eq!(harness_clause_input_lengths(&harness), "5 / 6");
-        assert_eq!(harness.committed_clauses.len(), 2);
-        assert!(harness.preview.is_empty());
+        assert_eq!(harness.committed_clauses.len(), 1);
+        assert_eq!(harness.preview, "統一");
+        assert_eq!(harness.raw_input, "touitu");
         assert!(harness.future_clause_snapshots.is_empty());
+        assert_eq!(harness.state, CompositionState::Composing);
+    }
+}
+
+#[test]
+fn clause_integration_enter_allows_converting_and_committing_each_clause() {
+    for mut extra in [
+        vec![],
+        vec![HarnessUserAction::Right, HarnessUserAction::Left],
+    ] {
+        extra.extend([HarnessUserAction::Space, HarnessUserAction::Enter]);
+        let (harness, _, _) = run_from_fkey_baseline(&extra);
+        assert_eq!(harness.committed_clauses.len(), 1);
+        assert_eq!(harness.raw_input, "touitu");
+        assert_eq!(harness.preview, "統一");
+        assert_eq!(harness.state, CompositionState::Composing);
+
+        extra.extend([HarnessUserAction::Space, HarnessUserAction::Enter]);
+        let (harness, _, _) = run_from_fkey_baseline(&extra);
+        assert_eq!(harness.committed_clauses.len(), 2);
+        assert_eq!(harness_visible_clauses(&harness), "下限 / とういつ");
+        assert!(harness.raw_input.is_empty());
+        assert!(harness.preview.is_empty());
         assert_eq!(harness.state, CompositionState::None);
     }
+}
+
+#[test]
+fn clause_integration_enter_in_middle_commits_prefix_and_keeps_suffix_editable() {
+    let mut extra = vec![
+        HarnessUserAction::Left,
+        HarnessUserAction::Left,
+        HarnessUserAction::Space,
+        HarnessUserAction::Enter,
+    ];
+    let (harness, _, _) = run_from_baseline(&extra);
+    assert_eq!(harness.committed_clauses.len(), 2);
+    assert_eq!(
+        harness_visible_clauses(&harness),
+        "いい / 下限 / 統一 / しろ"
+    );
+    assert_eq!(harness.raw_input, "touitusiro");
+    assert_eq!(harness.preview, "統一");
+    assert_eq!(harness.state, CompositionState::Composing);
+
+    extra.extend([HarnessUserAction::Space, HarnessUserAction::Enter]);
+    let (harness, _, _) = run_from_baseline(&extra);
+    assert_eq!(harness.committed_clauses.len(), 3);
+    assert_eq!(harness.raw_input, "siro");
+    assert_eq!(harness.preview, "しろ");
+    assert_eq!(harness.state, CompositionState::Composing);
+
+    extra.push(HarnessUserAction::Enter);
+    let (harness, _, _) = run_from_baseline(&extra);
+    assert_eq!(
+        harness_visible_clauses(&harness),
+        "いい / 下限 / とういつ / しろ"
+    );
+    assert_eq!(harness.committed_clauses.len(), 4);
+    assert_eq!(harness.state, CompositionState::None);
 }
 
 #[test]
@@ -1871,7 +1930,7 @@ fn clause_integration_restore_rebases_modified_downstream_boundary() {
 }
 
 #[test]
-fn clause_integration_auto_clause_navigation_commits_all_after_adjustment() {
+fn clause_integration_auto_clause_navigation_enter_keeps_adjusted_suffix() {
     let extra = vec![
         HarnessUserAction::Right,
         HarnessUserAction::ShiftLeft,
@@ -1884,9 +1943,11 @@ fn clause_integration_auto_clause_navigation_commits_all_after_adjustment() {
         "history: {}",
         history_string(&history),
     );
-    assert!(harness.preview.is_empty());
+    assert_eq!(harness.committed_clauses.len(), 1);
+    assert!(!harness.preview.is_empty());
+    assert!(!harness.raw_input.is_empty());
     assert!(harness.future_clause_snapshots.is_empty());
-    assert_eq!(harness.state, CompositionState::None);
+    assert_eq!(harness.state, CompositionState::Composing);
 }
 
 #[test]

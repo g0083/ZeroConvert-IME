@@ -4,6 +4,7 @@ pub(super) mod factory;
 pub(super) mod function_provider;
 pub(super) mod key_event_sink;
 pub(super) mod language_bar;
+pub(super) mod selection_count;
 pub(super) mod surrounded_text;
 pub(super) mod text_input_proccesor;
 pub(super) mod text_layout_sink;

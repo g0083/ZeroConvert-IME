@@ -7,11 +7,12 @@ class ModelPredictor(private val inference: AssistInference, private val restore
     private fun useful(text: String) = text.codePointSize() in 2..48 && !text.hasUnsafeTokens() && text.any { it.isLetterOrDigit() }
 
     fun suggest(context: String, reading: String, surface: String): AiAssistResult? {
+        if (reading.hasPendingRomaji()) return null
         if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
             return com.zeroconvert.ime.engine.WindowsEngine.assist("prediction", context, reading, surface, inference)
         }
         if (surface.codePointSize() < 2 || reading.codePointSize() !in 1..512 ||
-            context.any { it in '\uEE00'..'\uEE0F' } || (reading + surface).hasUnsafeTokens() || reading.last().let { it in 'a'..'z' || it in 'A'..'Z' }) return null
+            context.any { it in '\uEE00'..'\uEE0F' } || (reading + surface).hasUnsafeTokens()) return null
         val modelReading = if (reading.any { it in '\u3400'..'\u9FFF' }) restore(surface) ?: return null else reading
         val left = context.map { if (it == ' ' || it.isISOControl()) '　' else it }.joinToString("").tailCodePoints(256)
         val target = KanaKanjiConverter.toKatakana(modelReading)

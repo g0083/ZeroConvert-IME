@@ -90,7 +90,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         display: flex;
                         align-items: center;
                         gap: 8px;
-                        margin-top: 4px;
+                        margin-bottom: 4px;
                         padding: 4px 7px;
                         border-radius: 6px;
                         font-size: 12px;
@@ -289,7 +289,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             assist = { status: parts[1].startsWith('🔮') ? 'prediction' : 'proposal',
                                 source: readingText, replacement: parts[1].replace(/^[💡🔮]\s*/u, '').replace(' [Tab]', '') };
                         }
-                        readingElement.innerHTML = '<span class="reading-text">' + escapeHtml(readingText) + '</span>';
+                        readingElement.innerHTML = '';
                         if (assist && typeof assist.replacement === 'string') {
                             const applied = assist.status === 'applied';
                             const prediction = assist.status === 'prediction';
@@ -297,15 +297,17 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             const change = prediction ? escapeHtml(typeof assist.continuation === 'string' && assist.continuation ? assist.continuation : assist.replacement) :
                                 '<span class="assist-original">' + escapeHtml(diff.original) + '</span> → ' +
                                 '<span class="assist-replacement">' + diff.replacement + '</span>';
-                            readingElement.innerHTML += '<span class="ai-assist-pill" role="status">' +
+                            let assistHtml = '<span class="ai-assist-pill" role="status">' +
                                 '<span class="assist-change">' + change + '</span>' +
                                 '<span class="assist-action">' + (applied ? '補正済み · ' : '') +
                                 '<span class="ai-assist-tab">' + (applied ? 'Esc' : 'Tab') + '</span>' +
                                 (applied ? '戻す' : prediction ? 'で確定' : 'で補正') + '</span></span>';
                             if (prediction && assist.undoAvailable) {
-                                readingElement.innerHTML += '<span class="assist-action">補正済み · Escで戻す</span>';
+                                assistHtml += '<span class="assist-action">補正済み · Escで戻す</span>';
                             }
+                            readingElement.innerHTML += assistHtml;
                         }
+                        readingElement.innerHTML += '<span class="reading-text">' + escapeHtml(readingText) + '</span>';
 
                         // Measure the actual styled badges, including their margins,
                         // padding and borders. A plain-text approximation can be a few

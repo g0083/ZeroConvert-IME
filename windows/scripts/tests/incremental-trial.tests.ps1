@@ -53,6 +53,10 @@ Assert ((@(Get-TrialBuildPlan @('server')) -join ',') -eq 'frontend,server,ui') 
 Assert (@(Get-TrialBuildPlan @('shared')).Count -eq 5) 'shared changes include all native consumers'
 Assert (@(Get-TrialBuildPlan @()).Count -eq 0) 'no changes means no work'
 Assert ((@(Get-TrialBuildPlan @('tooling')) -join ',') -eq 'tooling') 'workflow edits do not rebuild product binaries'
+Assert ((@(Get-TrialBuildPlan @('keyboard')) -join ',') -eq 'keyboard') 'keyboard worker edits build the isolated worker only'
+Put 'windows/native/keyboard-prior/main.cpp' 'native worker source'
+$nativeChanged = Get-TrialInputSnapshot $fixture $next
+Assert ($nativeChanged.keyboard.hash -ne $next.keyboard.hash) 'native worker source changes are tracked'
 Move-Item -LiteralPath (Join-Path $fixture 'windows/server-swift/azooKey_dictionary_storage/Dictionary/test.louds') -Destination (Join-Path $fixture 'removed.louds')
 $removed=Get-TrialInputSnapshot $fixture $next
 Assert ($removed.dictionary.hash -ne $next.dictionary.hash) 'deleted inputs detected'

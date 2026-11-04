@@ -11,7 +11,7 @@
 `Build-Android.bat` の検査に `:app:testDebugUnitTest` が含まれていても、
 旧構成の `android/app/build/outputs/apk/debug/app-debug.apk` は更新されない。
 2026-10-26、vivoへ旧1.0.0のAPKを再導入したため英字Enter修正が反映されなかった。
-版・ハッシュで修正版を識別する。詳細は [英字Enterの記録](android-english-enter.md)。
+版・ハッシュで修正版を識別する。詳細は [英字Enterの記録](investigations/android-english-enter.md)。
 
 2026-10-23、現在のAndroidソースとGradle設定を確認して整備。エージェント向けの必須ルールは [android/AGENTS.md](../android/AGENTS.md)。Windowsのbatと混同しないため、Androidの作業手順はこの文書を正本とする。
 
@@ -67,19 +67,19 @@ Windowsから移植するときは、読み・表記・原打鍵・先読み追�
 
 ## ビルド環境とモデル
 
-現行の移植範囲と検証状況は [完了監査](android-port-completion-audit.md) を参照。[第5段階の移植記録](android-windows-port-stage5.md) にある専用の範囲変換UIは取り下げ済み。Windows現行のロジックを既存の入力操作へ接続し、独自の文節操作モードは追加しない。既存のカーソル前部分確定と末尾の入力状態を保持する修正は維持する。
+現行の移植範囲と検証状況は [完了監査](../reports/port-history/android-port-completion-audit.md) を参照。[第5段階の移植記録](../reports/port-history/android-windows-port-stage5.md) にある専用の範囲変換UIは取り下げ済み。Windows現行のロジックを既存の入力操作へ接続し、独自の文節操作モードは追加しない。既存のカーソル前部分確定と末尾の入力状態を保持する修正は維持する。
 
-最新の補正規則・登録語保護・APKは [第4段階の移植記録](android-windows-port-stage4.md) を参照。語彙生成スクリプトは `WindowsTypoData.kt` も生成し、`--check` で語彙TSVと合わせて照合する。このKotlinファイルは手編集せず、Windowsの生成元を確認して再生成する。ユーザー辞書の更新は補正側の参照マップと要求世代にも反映される。
+最新の補正規則・登録語保護・APKは [第4段階の移植記録](../reports/port-history/android-windows-port-stage4.md) を参照。語彙生成スクリプトは `WindowsTypoData.kt` も生成し、`--check` で語彙TSVと合わせて照合する。このKotlinファイルは手編集せず、Windowsの生成元を確認して再生成する。ユーザー辞書の更新は補正側の参照マップと要求世代にも反映される。
 
-通常辞書側の補正・探索・ユーザー辞書・学習モードは [第8段階](android-windows-port-stage8.md) を参照。`node scripts/generate-android-keyboard-typos.mjs` がWindowsの選択データと生成関数からnative用の104エントリ、端末検査用データ、APK同梱NOTICEを生成する。`--check` で同期を検査し、生成された `keyboard_typo_dictionary.inc` を手編集しない。`experimental_typo_correction` は既定falseで、AIアシストと独立したローマ字入力用設定。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。
+通常辞書側の補正・探索・ユーザー辞書・学習モードは [第8段階](../reports/port-history/android-windows-port-stage8.md) を参照。`node scripts/generate-android-keyboard-typos.mjs` がWindowsの選択データと生成関数からnative用の104エントリ、端末検査用データ、APK同梱NOTICEを生成する。`--check` で同期を検査し、生成された `keyboard_typo_dictionary.inc` を手編集しない。`experimental_typo_correction` は既定falseで、AIアシストと独立したローマ字入力用設定。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。
 
-通常確定の学習は [第9段階](android-windows-port-stage9.md)、形態素の頻度・減衰・保存・native探索は [第10段階](android-windows-port-stage10.md) を参照。既存の選択表記履歴に加え、`files/conversion-learning-v1.bin` をAtomicFileで保存する。破損した形態素履歴は自動で置換せず、利用者の履歴消去でのみ解除する。実機テストは専用cacheファイルで保存/再読込/破損保護を検査し、ユーザーの実履歴には合成語を保存しない。
+通常確定の学習は [第9段階](../reports/port-history/android-windows-port-stage9.md)、形態素の頻度・減衰・保存・native探索は [第10段階](../reports/port-history/android-windows-port-stage10.md) を参照。既存の選択表記履歴に加え、`files/conversion-learning-v1.bin` をAtomicFileで保存する。破損した形態素履歴は自動で置換せず、利用者の履歴消去でのみ解除する。実機テストは専用cacheファイルで保存/再読込/破損保護を検査し、ユーザーの実履歴には合成語を保存しない。
 
-最新の実装・APK・検証範囲は [第3段階の移植記録](android-windows-port-stage3.md) を参照。資産準備はWindows補正語彙から `assets/assist-vocabulary.tsv` も生成する。このTSVはGit対象であり、Windows語彙更新後は `node scripts/generate-android-assist-vocabulary.mjs` で再生成し、`--check` で一致を検査する。重みと逆引き辞書は引き続きGit対象外。
+最新の実装・APK・検証範囲は [第3段階の移植記録](../reports/port-history/android-windows-port-stage3.md) を参照。資産準備はWindows補正語彙から `assets/assist-vocabulary.tsv` も生成する。このTSVはGit対象であり、Windows語彙更新後は `node scripts/generate-android-assist-vocabulary.mjs` で再生成し、`--check` で一致を検査する。重みと逆引き辞書は引き続きGit対象外。
 
 設定 `auto_typo_correction` は既定trueで、AIアシスト設定と併せて読み直す。自動補正は取消可能で、自動適用自体を学習しない。既存の学習回数は保持するが、自動適用には新しい確定成功回数を使う。選択文字列の再変換は辞書のみで、通常のモデル変換・補正・先読みとは別経路。
 
-モデル補正・二段先読みの資産準備が追加された。初回や資産更新時はルートで `./scripts/prepare-android-assist-assets.ps1` を実行する。CorrectorはWindowsカタログのSHA-256で検証し、逆引き辞書はAndroid同梱のLOUDSソースから生成する。どちらもGit対象外のため新しいcloneには含まれない。GradleのpreBuildは不足や不整合を検出して停止する。用途別JNI・現在の資産・テスト・未確認点は [第2段階の移植記録](android-windows-port-stage2.md) を参照。
+モデル補正・二段先読みの資産準備が追加された。初回や資産更新時はルートで `./scripts/prepare-android-assist-assets.ps1` を実行する。CorrectorはWindowsカタログのSHA-256で検証し、逆引き辞書はAndroid同梱のLOUDSソースから生成する。どちらもGit対象外のため新しいcloneには含まれない。GradleのpreBuildは不足や不整合を検出して停止する。用途別JNI・現在の資産・テスト・未確認点は [第2段階の移植記録](../reports/port-history/android-windows-port-stage2.md) を参照。
 
 JDK 17、上表のSDK/NDK/CMake、Gradle wrapperを使う。SDKのPC固有パスは `android/local.properties` 等のローカル設定で管理する。既存の設定を上書きせず、SDKライセンスや端末認証を無断で通過しない。
 

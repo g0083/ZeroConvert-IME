@@ -29,6 +29,7 @@ import com.zeroconvert.ime.azookey.input.ComposingText
 import com.zeroconvert.ime.azookey.input.InputStyle
 import com.zeroconvert.ime.assist.AssistRequestGate
 import com.zeroconvert.ime.assist.CorrectionSession
+import com.zeroconvert.ime.assist.hasPendingRomaji
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.withLock
@@ -77,6 +78,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
         const val KEY_CLIPBOARD_PINNED = "clipboard_pinned"
         const val KEY_CLIPBOARD_RETENTION_HOURS = "clipboard_retention_hours"
+        const val KEY_CLIPBOARD_SUGGESTION_MINUTES = "clipboard_suggestion_minutes"
         const val KEY_SCREENSHOT_CAPTURE = "screenshot_capture_enabled"
 
         private const val MIN_READING_LEN_FOR_AUTO_COMMIT = 16
@@ -98,9 +100,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
 
         fun hasTrailingIncompleteRomaji(readingHiragana: String): Boolean {
-            if (readingHiragana.isEmpty()) return false
-            val last = readingHiragana.last()
-            return last in 'a'..'z' || last in 'A'..'Z'
+            return readingHiragana.hasPendingRomaji()
         }
 
         fun isJapaneseClausePunctuation(ch: Char): Boolean {
@@ -324,7 +324,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun updateClipboardEntry(entry: ClipboardEntry, newText: String) {
         val idx = clipboardHistory.indexOfFirst { it.id == entry.id }
         if (idx < 0) return
-        clipboardHistory[idx] = clipboardHistory[idx].copy(text = newText, timestamp = System.currentTimeMillis())
+        // Editing is not a new clipboard addition; retain its suggestion deadline.
+        clipboardHistory[idx] = clipboardHistory[idx].copy(text = newText)
+        if (clipboardHistory[idx].pinned) persistPinnedClipboard()
     }
 
     fun clearClipboardHistory(keepPinned: Boolean = true) {
@@ -675,6 +677,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, false)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
         predictiveModelState.value = "zerocon"
+        clipboardSuggestionMinutesState.value = ClipboardSuggestionPolicy.normalizeMinutes(
+            prefs.getInt(KEY_CLIPBOARD_SUGGESTION_MINUTES, ClipboardSuggestionPolicy.DEFAULT_MINUTES))
         if (prefs.getBoolean(KEY_SCREENSHOT_CAPTURE, true)) {
             registerScreenshotObserver()
         } else {
@@ -730,6 +734,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val clipboardHistory = mutableStateListOf<ClipboardEntry>()
     val isClipboardSuggestionDismissed = mutableStateOf(false)
     val clipboardRetentionHoursState = mutableStateOf(1)
+    val clipboardSuggestionMinutesState = mutableStateOf(ClipboardSuggestionPolicy.DEFAULT_MINUTES)
 
     // English (alphabet) composing buffer for predictive completion
     var englishComposing: String = ""
@@ -891,7 +896,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val ownedSelection = composingEditor.ownsSelection(newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         // An external cursor/selection move ends the managed composition. Never
         // apply an automatic correction at a cursor that no longer owns this input.
-        if (!composingText.isEmpty && !ownedSelection && (newSelStart != candidatesEnd || newSelEnd != candidatesEnd)) {
+        val isInsideComposing = candidatesStart >= 0 && candidatesEnd >= candidatesStart &&
+            newSelStart >= candidatesStart && newSelEnd <= candidatesEnd
+        val isExternalMove = !ownedSelection && managedCursorKeys.isEmpty() && !isInsideComposing &&
+            (candidatesStart == -1 || newSelStart < candidatesStart || newSelEnd > candidatesEnd)
+        if (!composingText.isEmpty && isExternalMove) {
             clearInput()
             currentInputConnection?.finishComposingText()
         } else if (selected) {
@@ -1301,7 +1310,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         recordInferenceSnapshot(inferenceHistory, InferenceSnapshot(surface, aiCand, snapshot.input.size))
                     }
                     if (!sensitive && !reconversion && !rangeConversion && isAutoCommitEnabled() && composingText.isAtEndIndex &&
-                        !corrections.holdsAutoCommit
+                        !corrections.holdsAutoCommit && !hasTrailingIncompleteRomaji(surface)
                     ) {
                         val autoCommit = if (BuildConfig.WINDOWS_ENGINE) {
                             com.zeroconvert.ime.engine.WindowsEngine.autoCommit(
@@ -1320,7 +1329,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     predictedCandidate.value = best
                     lastInferredSurface = surface
                     lastInferredResult = best
-                    if (!sensitive && !reconversion && !rangeConversion && isAiAssistEnabled()) {
+                    if (!sensitive && !reconversion && !rangeConversion && isAiAssistEnabled() && !hasTrailingIncompleteRomaji(surface)) {
                         val allowCorrection = !corrections.isApplied && fixedPrefix.isEmpty()
                         aiAssistJob = serviceScope.launch(Dispatchers.IO) {
                             com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(applicationContext)
@@ -1639,8 +1648,16 @@ class ZeroConvertInputMethodService : InputMethodService(),
         clearCandidateList()
         val surfaceBefore = composingText.convertTargetBeforeCursor
         currentComposingSurface.value = surfaceBefore
-        // Keep the full reading, with the real editor caret at the selected prefix boundary.
-        if (!setComposingPreview(currentInputConnection, composingText.convertTarget)) return
+        // Keep the current preview if its suffix matches the remaining reading suffix,
+        // rather than reverting the entire text to raw hiragana.
+        val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
+        val currentPreview = composingEditor.preview
+        val previewToSet = if (currentPreview.isNotEmpty() && currentPreview.endsWith(suffix)) {
+            currentPreview
+        } else {
+            composingText.convertTarget
+        }
+        if (!setComposingPreview(currentInputConnection, previewToSet)) return
         if (surfaceBefore.isNotEmpty()) triggerDebouncedConversion(surfaceBefore)
     }
 
@@ -1702,6 +1719,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun confirmAsync(trailingText: String = "") {
         if (isConfirming) return
+        if (englishComposing.isNotEmpty()) {
+            // A mode change accepts the spelling, not an English completion.
+            commitText(englishComposing + trailingText, committedCandidate = null, trailingText = trailingText)
+            return
+        }
         if (composingText.isEmpty) {
             if (trailingText.isNotEmpty()) commitDirect(trailingText)
             return
@@ -1776,7 +1798,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isConfirming) return
         if (ch == ' ') { handleEnglishSpace(); return }
         if (!ch.isLetter()) {
-            if (englishComposing.isNotEmpty()) commitEnglishBuffer()
+            if (englishComposing.isNotEmpty()) commitEnglishBuffer(useTopCandidate = false)
             commitDirect(ch.toString())
             return
         }

@@ -1,7 +1,7 @@
 # 共通エンジンAndroid版の検証記録
 
 2026-10-24。WindowsのSwift/Rustを直接利用する `:rebuilt` の初回実装。
-従来のKotlin/C++移植版とは別の成果物。構造・更新手順は [新構成](android-shared-engine.md)。
+従来のKotlin/C++移植版とは別の成果物。構造・更新手順は [新構成](../../docs/android-shared-engine.md)。
 
 ## 実装した範囲
 

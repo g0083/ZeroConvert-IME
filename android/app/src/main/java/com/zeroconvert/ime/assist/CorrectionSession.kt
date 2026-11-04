@@ -26,6 +26,7 @@ class CorrectionSession {
 
     fun apply(input: ComposingText, surface: String, preview: String, explicit: Boolean = true): Boolean {
         if (input.isEmpty || input.isAtStartIndex || surface.isBlank() || surface.length > 512 || isApplied) return false
+        if (!explicit && input.convertTargetBeforeCursor.hasPendingRomaji()) return false
         val original = input.clone()
         undo = Undo(original, preview, surface, accepted.toList(), protectedSurfaces.toList(), holdAutoCommit)
         holdAutoCommit = true

@@ -39,6 +39,12 @@ jobs:
           node-version: '22'
       - name: Validate source tree
         run: python scripts/check_repository.py
+      - name: Dataset isolation regression tests
+        run: python scripts/run.py data/test_dataset_isolation.py
+      - name: Corrector training data and encoding tests
+        run: |
+          python scripts/run.py data/test_corrector_dataset.py
+          python scripts/run.py training/test_corrector_encoding.py
       - name: Frontend behavior tests
         working-directory: windows/frontend
         run: npm test

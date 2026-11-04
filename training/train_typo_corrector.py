@@ -14,6 +14,8 @@ import sys
 import json
 import argparse
 from typing import Dict, List
+from dataset_guard import checked_datasets, record_training_completed
+from corrector_encoding import encode_example
 
 import torch
 from datasets import Dataset
@@ -22,6 +24,7 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     Trainer,
+    set_seed,
     DataCollatorForSeq2Seq
 )
 from peft import LoraConfig, get_peft_model, TaskType
@@ -29,8 +32,8 @@ from peft import LoraConfig, get_peft_model, TaskType
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model", type=str, default="Miwa-Keita/zenz-v3.1-small")
-    parser.add_argument("--train_file", type=str, default="data/typo_dataset_train.jsonl")
-    parser.add_argument("--val_file", type=str, default="data/typo_dataset_val.jsonl")
+    parser.add_argument("--train_file", type=str, default="artifacts/datasets/separated-v1/typo/train.jsonl")
+    parser.add_argument("--val_file", type=str, default="artifacts/datasets/separated-v1/typo/val.jsonl")
     parser.add_argument("--output_dir", type=str, default='artifacts/checkpoints/typo-corrector-lora')
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--grad_accum", type=int, default=2)
@@ -40,6 +43,7 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
     parser.add_argument("--max_length", type=int, default=128)
+    parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 def load_jsonl(path: str) -> List[Dict]:
@@ -52,6 +56,9 @@ def load_jsonl(path: str) -> List[Dict]:
 
 def main():
     args = parse_args()
+    train_raw, val_raw = checked_datasets(args.train_file, args.val_file, args.output_dir)
+    # Seed before LoRA initialization as well as Trainer data shuffling.
+    set_seed(args.seed)
     print(f"Loading base model: {args.base_model}...")
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
@@ -77,8 +84,6 @@ def main():
     model.print_trainable_parameters()
 
     print("Loading datasets...")
-    train_raw = load_jsonl(args.train_file)
-    val_raw = load_jsonl(args.val_file)
 
     def preprocess_function(examples):
         input_ids_list = []
@@ -86,15 +91,9 @@ def main():
         for prompt, comp in zip(examples["prompt"], examples["completion"]):
             # prompt: \uEE02{ctx}\uEE00{reading}\uEE01
             # full: prompt + completion + <eos>
-            prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
-            comp_tokens = tokenizer.encode(comp, add_special_tokens=False) + [tokenizer.eos_token_id]
-
-            full_tokens = (prompt_tokens + comp_tokens)[:args.max_length]
-            # prompt 部分の損失は無視 (-100)
-            labels = ([-100] * len(prompt_tokens) + comp_tokens)[:args.max_length]
-
-            input_ids_list.append(full_tokens)
-            labels_list.append(labels)
+            encoded = encode_example(tokenizer, prompt, comp, args.max_length)
+            input_ids_list.append(encoded["input_ids"])
+            labels_list.append(encoded["labels"])
 
         return {"input_ids": input_ids_list, "labels": labels_list}
 
@@ -112,6 +111,8 @@ def main():
         gradient_accumulation_steps=args.grad_accum,
         num_train_epochs=args.epochs,
         learning_rate=args.lr,
+        seed=args.seed,
+        data_seed=args.seed,
         logging_steps=50,
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -136,6 +137,7 @@ def main():
     print(f"Saving LoRA weights to {args.output_dir}...")
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    record_training_completed(args.output_dir)
     print("Training complete!")
 
 if __name__ == "__main__":

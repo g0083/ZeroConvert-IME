@@ -10,7 +10,16 @@ internal class ComposingEditorState {
         fun endBatch()
     }
 
-    private data class Selection(val position: Int, val start: Int, val end: Int)
+    private data class Selection(val position: Int, val start: Int, val end: Int) {
+        fun matches(position: Int, reportedStart: Int, reportedEnd: Int): Boolean {
+            if (this.position != position) return false
+            // Editor callbacks can combine our new caret with a previous
+            // composing end, or omit the range altogether. The requested caret
+            // and, when present, the composing origin identify our operation.
+            return (reportedStart == -1 && reportedEnd == -1) ||
+                (reportedStart == start && reportedEnd >= reportedStart)
+        }
+    }
     private val pendingSelections = ArrayDeque<Selection>()
     private var currentSelection: Selection? = null
     private var startHint: Int? = null
@@ -39,13 +48,12 @@ internal class ComposingEditorState {
 
     fun ownsSelection(selectionStart: Int, selectionEnd: Int, composingStart: Int, composingEnd: Int): Boolean {
         if (selectionStart != selectionEnd) return false
-        val selection = Selection(selectionStart, composingStart, composingEnd)
-        val index = pendingSelections.indexOf(selection)
+        val index = pendingSelections.indexOfFirst { it.matches(selectionStart, composingStart, composingEnd) }
         if (index >= 0) {
             repeat(index + 1) { pendingSelections.removeFirst() }
             return true
         }
-        return selection == currentSelection
+        return currentSelection?.matches(selectionStart, composingStart, composingEnd) == true
     }
 
     fun write(editor: Editor, text: String, cursorOffset: Int): Boolean {
@@ -59,7 +67,9 @@ internal class ComposingEditorState {
         try {
             if (!editor.composing(text)) return false
             recordPreview(text)
-            val start = editor.selectionEnd()?.let { it - text.length }?.takeIf { it >= 0 } ?: startHint ?: return false
+            val start = startHint
+                ?: editor.selectionEnd()?.let { it - text.length }?.takeIf { it >= 0 }
+                ?: return false
             startHint = start
             // Some editors report the temporary end position before the explicit caret update.
             expect(start + text.length, start, start + text.length)

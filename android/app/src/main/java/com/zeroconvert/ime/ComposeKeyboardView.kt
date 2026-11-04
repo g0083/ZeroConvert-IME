@@ -119,9 +119,9 @@ fun KeyboardRootView(
         )
 
         // --- 1. Candidate Bar & Toolbar (with Clipboard Toggle & ∨ Expand) ---
-        // The clipboard suggestion is shown in the candidate area while it is available.
-        val suggestion = if (selectionCount == null && candidates.isEmpty() && clipboardHistory.isNotEmpty() && !imeService.isClipboardSuggestionDismissed.value) {
-            clipboardHistory.first()
+        val recentClipboard = rememberClipboardSuggestion(clipboardHistory, imeService.clipboardSuggestionMinutesState.value)
+        val suggestion = if (selectionCount == null && candidates.isEmpty() && !imeService.isClipboardSuggestionDismissed.value) {
+            recentClipboard
         } else {
             null
         }
@@ -331,6 +331,8 @@ fun KeyboardRootView(
         }
 
         val onCycleMode: () -> Unit = {
+            // The service owns pending input; this Compose frame can be older than the last key.
+            imeService.confirmCurrent()
             if (activeTab != KeyboardTab.MAIN) {
                 activeTab = KeyboardTab.MAIN
             } else {
@@ -339,9 +341,6 @@ fun KeyboardRootView(
                     KeyboardMode.ENGLISH -> KeyboardMode.NUMERIC
                     KeyboardMode.NUMERIC -> KeyboardMode.JAPANESE
                 }
-            }
-            if (currentSurface.isNotEmpty()) {
-                imeService.confirmCurrent()
             }
         }
 

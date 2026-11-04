@@ -1,0 +1,5 @@
+{
+  "task_weights": {"convert": 0.10, "repair": 0.85, "predict": 0.05},
+  "repair_action_weights": {"keep": 0.30, "emit": 0.65, "abstain": 0.05},
+  "purpose": "Research repair-body bootstrap; changed sampling is not a real-world error prior. Frozen-v4 convert KL is 6.0 and repair first-token weight is 0.10. Retain three tasks in one student."
+}

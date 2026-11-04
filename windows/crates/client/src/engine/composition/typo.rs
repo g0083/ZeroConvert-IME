@@ -37,6 +37,7 @@ struct Pending {
     correction_task: Option<tokio::task::JoinHandle<()>>,
     correction_receiver: Option<mpsc::Receiver<Option<shared::proto::GetAssistCandidatesResponse>>>,
     correction_result: Option<shared::proto::GetAssistCandidatesResponse>,
+    prediction_result: Option<shared::proto::GetAssistCandidatesResponse>,
     prediction_done: bool,
     correction_done: bool,
     owner: ITfTextInputProcessor,
@@ -89,9 +90,7 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
     if !pending.prediction_done {
         if let Some(result) = receive(&pending.receiver) {
             pending.prediction_done = true;
-            if let Some(result) = result {
-                results.push((2, result));
-            }
+            pending.prediction_result = result;
         }
     }
     if !pending.correction_done {
@@ -100,14 +99,21 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
             pending.correction_result = result;
         }
     }
-    // Do not occupy Tab with a speculative correction while prediction is pending.
-    // A reversible automatic correction need not wait for either model.
-    if pending.prediction_done
-        || pending
+    // Briefly coalesce first results so fast continuation does not permanently
+    // hide a stronger keyboard correction. Timers keep input fully asynchronous.
+    // A displayed Tab target remains stable; late results still enter the list.
+    if first_assist_ready(
+        pending.prediction_done,
+        pending.correction_done,
+        pending
             .correction_result
             .as_ref()
-            .is_some_and(|r| r.auto_apply)
-    {
+            .is_some_and(|r| r.auto_apply),
+        pending.started.elapsed(),
+    ) {
+        if let Some(result) = pending.prediction_result.take() {
+            results.push((2, result));
+        }
         if let Some(result) = pending.correction_result.take() {
             results.push((1, result));
         }
@@ -130,6 +136,15 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
     if !(pending.prediction_done && pending.correction_done) {
         PENDING.with(|slot| *slot.borrow_mut() = Some(pending));
     }
+}
+
+fn first_assist_ready(
+    prediction_done: bool,
+    correction_done: bool,
+    automatic: bool,
+    elapsed: Duration,
+) -> bool {
+    automatic || (prediction_done && (correction_done || elapsed >= Duration::from_millis(200)))
 }
 
 fn merge_results(
@@ -351,6 +366,7 @@ impl TextServiceFactory {
                 correction_task,
                 correction_receiver,
                 correction_result: None,
+                prediction_result: None,
                 prediction_done: false,
                 correction_done: corrected,
                 owner,
@@ -663,6 +679,73 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn first_prediction_waits_briefly_for_correction_but_never_blocks_auto_or_waits_unbounded() {
+        assert!(!first_assist_ready(
+            true,
+            false,
+            false,
+            Duration::from_millis(50)
+        ));
+        assert!(first_assist_ready(
+            true,
+            true,
+            false,
+            Duration::from_millis(130)
+        ));
+        assert!(first_assist_ready(
+            true,
+            false,
+            false,
+            Duration::from_millis(200)
+        ));
+        assert!(first_assist_ready(
+            false,
+            true,
+            true,
+            Duration::from_millis(1)
+        ));
+        assert!(!first_assist_ready(
+            false,
+            true,
+            false,
+            Duration::from_millis(130)
+        ));
+    }
+
+    #[test]
+    fn bounded_keyboard_proposal_precedes_continuation_without_automatic_apply() {
+        let mut state = Composition {
+            candidates: Candidates {
+                texts: vec!["資料を送りmっす".into()],
+                sub_texts: vec![String::new()],
+                hiragana: "しりょうをおくりmっす".into(),
+                candidate_ids: vec![0],
+                corresponding_count: vec![16],
+            },
+            ..Default::default()
+        };
+        let automatic = merge_results(
+            &mut state,
+            vec![
+                (
+                    1,
+                    response(shared::ai_candidate::TYPO_CORRECTION, "資料を送ります", 80),
+                ),
+                (
+                    2,
+                    response(shared::ai_candidate::PREDICTIVE, "資料を送りmっす。", 75),
+                ),
+            ],
+        );
+        assert_eq!(automatic, None);
+        assert_eq!(
+            state.typo.primary_assist,
+            Some(shared::ai_candidate::TYPO_CORRECTION)
+        );
+        assert_eq!(state.candidates.texts[0], "資料を送りmっす");
+    }
+
     #[test]
     fn weak_correction_cannot_hide_prediction_or_change_displayed_tab_target() {
         let mut state = Composition {

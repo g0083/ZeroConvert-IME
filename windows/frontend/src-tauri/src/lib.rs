@@ -21,6 +21,7 @@ pub struct AppState {
     ipc: Mutex<Option<ipc::IPCService>>,
     config_update_lock: Mutex<()>,
     server_config_dirty: Mutex<bool>,
+    runtime_config_dirty: Mutex<bool>,
     startup_notice: Mutex<Option<ConfigStartupNotice>>,
 }
 
@@ -53,6 +54,7 @@ impl AppState {
             ipc: Mutex::new(ipc),
             config_update_lock: Mutex::new(()),
             server_config_dirty: Mutex::new(false),
+            runtime_config_dirty: Mutex::new(false),
             startup_notice: Mutex::new(startup_notice),
         }
     }
@@ -252,6 +254,17 @@ fn update_config_impl(
     base_config: AppConfig,
     new_config: AppConfig,
 ) -> Result<UpdateConfigResponse, String> {
+    update_config_impl_with(state, base_config, new_config, |state, config| {
+        restart_server_connection(state, config, server_process::restart_server)
+    })
+}
+
+fn update_config_impl_with(
+    state: &AppState,
+    base_config: AppConfig,
+    new_config: AppConfig,
+    restart_runtime: impl FnOnce(&AppState, &AppConfig) -> anyhow::Result<()>,
+) -> Result<UpdateConfigResponse, String> {
     let _update_guard = state.config_update_lock.lock().unwrap();
     let _cross_process_guard = ConfigWriteGuard::acquire().map_err(|error| error.to_string())?;
     let current_config = match AppConfig::read() {
@@ -276,6 +289,15 @@ fn update_config_impl(
         new_config.write().map_err(|error| error.to_string())?;
     }
     *state.settings.lock().unwrap() = new_config.clone();
+    // The replacement launcher child reads/writes settings during startup.
+    // Release the cross-process lock before waiting for that child.
+    drop(_cross_process_guard);
+
+    if current_config.zenzai.backend != new_config.zenzai.backend
+        || current_config.zenzai.effective_gpu_layers() != new_config.zenzai.effective_gpu_layers()
+    {
+        *state.runtime_config_dirty.lock().unwrap() = true;
+    }
 
     if server_changed {
         *state.server_config_dirty.lock().unwrap() = true;
@@ -290,8 +312,14 @@ fn update_config_impl(
         });
     }
 
-    let applied = ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
-        .and_then(|ipc| ipc.update_config());
+    let applied = if *state.runtime_config_dirty.lock().unwrap() {
+        // A running process cannot replace its already-loaded llama DLLs by
+        // changing PATH. Start a fresh server with the selected backend instead.
+        restart_runtime(state, &new_config)
+    } else {
+        ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
+            .and_then(|ipc| ipc.update_config())
+    };
     if let Err(error) = applied {
         eprintln!("Failed to notify IPC config update: {}", error);
         return Ok(UpdateConfigResponse {
@@ -304,6 +332,7 @@ fn update_config_impl(
     }
 
     *state.server_config_dirty.lock().unwrap() = false;
+    *state.runtime_config_dirty.lock().unwrap() = false;
     Ok(UpdateConfigResponse {
         saved: true,
         server_applied: true,
@@ -373,12 +402,23 @@ fn restart_server_impl_with(
         config
     };
 
-    restart_process(&config)?;
+    restart_server_connection(state, &config, restart_process)?;
+    *state.server_config_dirty.lock().unwrap() = false;
+    *state.runtime_config_dirty.lock().unwrap() = false;
+    Ok(())
+}
 
+fn restart_server_connection(
+    state: &AppState,
+    config: &AppConfig,
+    restart_process: impl FnOnce(&AppConfig) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
+    restart_process(config)?;
+
+    *state.ipc.lock().unwrap() = None;
     let ipc = ipc::IPCService::new_with_timeout(Duration::from_secs(10))
         .context("Server restarted, but IPC reconnect failed")?;
     *state.ipc.lock().unwrap() = Some(ipc);
-    *state.server_config_dirty.lock().unwrap() = false;
 
     Ok(())
 }
@@ -614,7 +654,8 @@ async fn ensure_benchmark_server(config: &AppConfig) -> Result<(), String> {
         .ok_or_else(|| format!("llama-server.exe not found for backend: {backend}"))?;
     let model_path = get_benchmark_model_path(config)?;
     let model_path_str = model_path.to_string_lossy().to_string();
-    let identity = format!("{}|{}", server_exe.display(), model_path_str);
+    let gpu_layers = config.zenzai.effective_gpu_layers().to_string();
+    let identity = format!("{}|{}|{}", server_exe.display(), model_path_str, gpu_layers);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(500))
@@ -646,7 +687,7 @@ async fn ensure_benchmark_server(config: &AppConfig) -> Result<(), String> {
         "--host",
         "127.0.0.1",
         "-ngl",
-        if backend == "cpu" { "0" } else { "99" },
+        &gpu_layers,
         "--log-disable",
     ]);
     #[cfg(windows)]
@@ -1073,8 +1114,60 @@ mod tests {
             ipc: Mutex::new(None),
             config_update_lock: Mutex::new(()),
             server_config_dirty: Mutex::new(false),
+            runtime_config_dirty: Mutex::new(false),
             startup_notice: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn runtime_change_restarts_after_save_and_failed_restart_can_be_retried() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let state = test_state();
+        let base = AppConfig::default();
+        let mut config = base.clone();
+        config.zenzai.backend = "cpu".into();
+        let first = update_config_impl_with(&state, base, config.clone(), |_, saved| {
+            assert_eq!(AppConfig::read().unwrap().zenzai, saved.zenzai);
+            anyhow::bail!("restart failed")
+        })
+        .unwrap();
+        assert!(first.saved && !first.server_applied);
+        assert!(*state.runtime_config_dirty.lock().unwrap());
+        let mut restarted = false;
+        let retry = update_config_impl_with(&state, config.clone(), config, |_, _| {
+            restarted = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(restarted);
+        assert!(!retry.changed && retry.server_applied);
+        assert!(!*state.runtime_config_dirty.lock().unwrap());
+        assert!(!*state.server_config_dirty.lock().unwrap());
+    }
+
+    #[test]
+    fn gpu_layer_change_restarts_but_profile_edit_does_not() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let state = test_state();
+        let base = AppConfig::default();
+        let mut config = base.clone();
+        config.zenzai.gpu_layers = 4;
+        let result = update_config_impl_with(&state, base, config.clone(), |_, saved| {
+            assert_eq!(saved.zenzai.effective_gpu_layers(), 4);
+            Ok(())
+        })
+        .unwrap();
+        assert!(result.server_applied);
+        let mut update = config.clone();
+        update.zenzai.profile = "profile".into();
+        let result = update_config_impl_with(&state, config, update, |_, _| {
+            panic!("profile edit must not restart the server")
+        })
+        .unwrap();
+        assert!(result.saved);
+        assert!(!*state.runtime_config_dirty.lock().unwrap());
     }
 
     #[test]

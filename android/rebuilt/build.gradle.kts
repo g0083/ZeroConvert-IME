@@ -24,8 +24,8 @@ android {
         applicationId = "com.zeroconvert.ime"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "2.0.5-dev"
+        versionCode = 13
+        versionName = "2.0.11-dev"
         buildConfigField("boolean", "WINDOWS_ENGINE", "true")
 
         testInstrumentationRunner = "com.zeroconvert.ime.PortInstrumentationRunner"
@@ -188,6 +188,8 @@ tasks.withType<Test>().configureEach {
         includeTestsMatching("com.zeroconvert.ime.ComposingEditorStateTest")
         includeTestsMatching("com.zeroconvert.ime.EditorContextTest")
         includeTestsMatching("com.zeroconvert.ime.SelectionCharacterCountTest")
+        includeTestsMatching("com.zeroconvert.ime.ClipboardSuggestionPolicyTest")
+        includeTestsMatching("com.zeroconvert.ime.PendingRomajiTest")
     }
 }
 
