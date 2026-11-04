@@ -5,7 +5,19 @@ param(
     [string]$SwiftVersion = '6.4.1',
     [switch]$SwiftOnly
 )
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 $ErrorActionPreference = 'Stop'
+function Get-Sha256Hex([string]$filePath) {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($filePath)
+    try {
+        $hashBytes = $sha256.ComputeHash($stream)
+        [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
+}
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $stage = Join-Path $repoRoot 'engine/build/swift'
 $sdk = Join-Path $SwiftHome "Platforms/$SwiftVersion/Android.platform/Developer/SDKs/Android.sdk"
@@ -111,7 +123,7 @@ if (!$SwiftOnly) {
     $buildInputs = Join-Path $repoRoot 'engine/build/assets/shared-engine/sources.json'
     Copy-Item -LiteralPath $buildInputs -Destination (Join-Path $out 'build-inputs.json')
     Get-ChildItem -LiteralPath $out -Filter '*.so' | ForEach-Object {
-        [ordered]@{ name = $_.Name; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
+        [ordered]@{ name = $_.Name; sha256 = (Get-Sha256Hex $_.FullName) }
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'libraries.json') -Encoding UTF8
 }
 Write-Output "Shared native engine built for $Abi. JNI libraries: $out"

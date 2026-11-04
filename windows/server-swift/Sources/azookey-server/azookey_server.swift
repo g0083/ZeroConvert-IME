@@ -30,7 +30,7 @@ private let fallbackDictionaryURL =
 @MainActor var currentLearningType: LearningType = .inputAndOutput
 @MainActor var currentLearningMemoryDirectoryURL: URL?
 @MainActor var learningCandidateCache = LearningCandidateCache()
-@MainActor var learningSelectionOverrides: [String: String] = [:]
+@MainActor var learningSelectionOverrides = LearningSelectionStore()
 @MainActor var reconversionDictionary = ReconversionDictionary()
 
 @MainActor var execURL = URL(filePath: "")
@@ -55,6 +55,7 @@ let cursorPrefixExactClauseSupplementCandidateThreshold = 5
 let maxLearningCandidateCacheBatchCount = 64
 let maxLearningCandidateCacheSlotCount = 8_192
 let maxLearningSelectionOverrideCount = 4_096
+let maxOutputsPerRuby = 5
 let learningSelectionOverridesFilename = "selection-overrides.json"
 let backgroundWarmupPreloadsDictionary = false
 let maxReconversionSurfaceCount = 128
@@ -1053,6 +1054,88 @@ private func learningCandidateOutput(_ candidate: Candidate) -> String {
     )
 }
 
+struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral {
+    private(set) var entries: [String: [String]] = [:]
+
+    var count: Int { entries.count }
+    var keys: Dictionary<String, [String]>.Keys { entries.keys }
+    var isEmpty: Bool { entries.isEmpty }
+
+    init() {}
+
+    init(dictionaryLiteral elements: (String, String)...) {
+        for (ruby, output) in elements {
+            record(output: output, for: ruby)
+        }
+    }
+
+    subscript(ruby: String) -> String? {
+        get { entries[ruby]?.first }
+        set {
+            if let newValue {
+                record(output: newValue, for: ruby)
+            } else {
+                entries.removeValue(forKey: ruby)
+            }
+        }
+    }
+
+    mutating func record(output: String, for ruby: String) {
+        var list = entries[ruby] ?? []
+        list.removeAll { $0 == output }
+        list.insert(output, at: 0)
+        if list.count > maxOutputsPerRuby {
+            list = Array(list.prefix(maxOutputsPerRuby))
+        }
+        entries[ruby] = list
+    }
+
+    func outputs(for ruby: String) -> [String] {
+        entries[ruby] ?? []
+    }
+
+    mutating func removeAll(keepingCapacity: Bool = false) {
+        entries.removeAll(keepingCapacity: keepingCapacity)
+    }
+
+    @discardableResult
+    mutating func removeValue(forKey key: String) -> [String]? {
+        entries.removeValue(forKey: key)
+    }
+
+    func prefixMatches(for prefixRuby: String, maxCount: Int = 3) -> [(ruby: String, output: String)] {
+        guard prefixRuby.count >= 2 else { return [] }
+        var results: [(ruby: String, output: String)] = []
+        for (ruby, outputs) in entries {
+            if ruby.hasPrefix(prefixRuby) && ruby != prefixRuby {
+                for output in outputs {
+                    results.append((ruby: ruby, output: output))
+                    if results.count >= maxCount {
+                        return results
+                    }
+                }
+            }
+        }
+        return results
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let newFormat = try? container.decode([String: [String]].self) {
+            self.entries = newFormat
+        } else if let oldFormat = try? container.decode([String: String].self) {
+            self.entries = oldFormat.mapValues { [$0] }
+        } else {
+            self.entries = [:]
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(entries)
+    }
+}
+
 @MainActor func loadLearningSelectionOverrides() {
     guard currentLearningType != .nothing,
           let overridesURL = learningSelectionOverridesURL() else {
@@ -1067,12 +1150,7 @@ private func learningCandidateOutput(_ candidate: Candidate) -> String {
 
     do {
         let data = try Data(contentsOf: overridesURL)
-        let decoded = try JSONDecoder().decode([String: String].self, from: data)
-        learningSelectionOverrides = Dictionary(
-            uniqueKeysWithValues: decoded.prefix(maxLearningSelectionOverrideCount).map {
-                ($0.key, $0.value)
-            }
-        )
+        learningSelectionOverrides = try JSONDecoder().decode(LearningSelectionStore.self, from: data)
     } catch {
         learningSelectionOverrides.removeAll(keepingCapacity: false)
         serverLog(
@@ -1112,12 +1190,12 @@ private func learningCandidateOutput(_ candidate: Candidate) -> String {
         return false
     }
 
-    if learningSelectionOverrides[ruby] == nil,
+    if learningSelectionOverrides.outputs(for: ruby).isEmpty,
        learningSelectionOverrides.count >= maxLearningSelectionOverrideCount,
        let evictedRuby = learningSelectionOverrides.keys.first {
-        learningSelectionOverrides.removeValue(forKey: evictedRuby)
+        _ = learningSelectionOverrides.removeValue(forKey: evictedRuby)
     }
-    learningSelectionOverrides[ruby] = output
+    learningSelectionOverrides.record(output: output, for: ruby)
     return true
 }
 
@@ -1128,40 +1206,131 @@ private func learningCandidateOutput(_ candidate: Candidate) -> String {
     saveLearningSelectionOverrides()
 }
 
+@MainActor
+func synthesizeLearnedCandidate(
+    word: String,
+    ruby: String,
+    composingCount: ComposingCount
+) -> Candidate {
+    Candidate(
+        text: word,
+        value: -1,
+        composingCount: composingCount,
+        lastMid: MIDData.一般.mid,
+        data: [
+            DicdataElement(
+                word: word,
+                ruby: ruby,
+                cid: CIDData.一般名詞.cid,
+                mid: MIDData.一般.mid,
+                value: -1
+            )
+        ]
+    )
+}
+
 @MainActor func prioritizeLearningSelectionOverrides<Element>(
     _ elements: [Element],
     ruby: String,
-    candidate: (Element) -> Candidate
+    candidate: (Element) -> Candidate,
+    synthesizeElement: ((Candidate) -> Element)? = nil
 ) -> [Element] {
+    guard currentLearningType != .nothing else {
+        return elements
+    }
     let normalizedRuby = normalizedLearningRuby(ruby)
-    guard currentLearningType != .nothing,
-          let preferredOutput = learningSelectionOverrides[normalizedRuby],
-          elements.count > 1 else {
-        return elements
+    let preferredOutputs = learningSelectionOverrides.outputs(for: normalizedRuby)
+    #if os(Android)
+    let defaultPredictive = true
+    #else
+    let defaultPredictive = false
+    #endif
+    let predictiveEnabled = (config["predictiveConversion"] as? Bool) ?? defaultPredictive
+
+    if !preferredOutputs.isEmpty {
+        var prioritized: [Element] = []
+        var remaining = elements
+        var seenOutputs = Set<String>()
+
+        for preferredOutput in preferredOutputs {
+            if let matchedIndex = remaining.firstIndex(where: {
+                let c = candidate($0)
+                return learningCandidateRuby(c) == normalizedRuby && learningCandidateOutput(c) == preferredOutput
+            }) {
+                let matched = remaining.remove(at: matchedIndex)
+                prioritized.append(matched)
+                seenOutputs.insert(preferredOutput)
+            } else if let synthesizeElement, seenOutputs.insert(preferredOutput).inserted {
+                let refComposingCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
+                let synth = synthesizeLearnedCandidate(
+                    word: preferredOutput,
+                    ruby: normalizedRuby,
+                    composingCount: refComposingCount
+                )
+                prioritized.append(synthesizeElement(synth))
+            }
+        }
+
+        prioritized.append(contentsOf: remaining)
+
+        if predictiveEnabled, let synthesizeElement, normalizedRuby.count >= 2 {
+            let prefixMatches = learningSelectionOverrides.prefixMatches(for: normalizedRuby, maxCount: 2)
+            var existingTexts = Set(prioritized.map { learningCandidateOutput(candidate($0)) })
+            let refComposingCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
+            for match in prefixMatches {
+                guard existingTexts.insert(match.output).inserted else { continue }
+                let synth = synthesizeLearnedCandidate(
+                    word: match.output,
+                    ruby: match.ruby,
+                    composingCount: refComposingCount
+                )
+                prioritized.append(synthesizeElement(synth))
+            }
+        }
+
+        return prioritized
     }
 
-    var firstIndex: Int?
-    var preferredIndex: Int?
-    for (index, element) in elements.enumerated() {
-        let value = candidate(element)
-        guard learningCandidateRuby(value) == normalizedRuby else {
-            continue
+    var results = elements
+    if elements.count > 1 {
+        var firstIndices: [String: Int] = [:]
+        for (index, elem) in elements.enumerated() {
+            let c = candidate(elem)
+            let elemRuby = learningCandidateRuby(c)
+            if firstIndices[elemRuby] == nil {
+                firstIndices[elemRuby] = index
+            }
         }
-        if firstIndex == nil {
-            firstIndex = index
-        }
-        if preferredOutput == learningCandidateOutput(value) {
-            preferredIndex = index
-            break
+        for (elemRuby, firstIdx) in firstIndices {
+            guard elemRuby != normalizedRuby,
+                  let preferred = learningSelectionOverrides.outputs(for: elemRuby).first else {
+                continue
+            }
+            if let targetIdx = results.firstIndex(where: {
+                let c = candidate($0)
+                return learningCandidateRuby(c) == elemRuby && learningCandidateOutput(c) == preferred
+            }), targetIdx != firstIdx {
+                results.swapAt(firstIdx, targetIdx)
+            }
         }
     }
 
-    guard let firstIndex, let preferredIndex, firstIndex != preferredIndex else {
-        return elements
+    if predictiveEnabled, let synthesizeElement, normalizedRuby.count >= 2 {
+        let prefixMatches = learningSelectionOverrides.prefixMatches(for: normalizedRuby, maxCount: 2)
+        var existingTexts = Set(results.map { learningCandidateOutput(candidate($0)) })
+        let refComposingCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
+        for match in prefixMatches {
+            guard existingTexts.insert(match.output).inserted else { continue }
+            let synth = synthesizeLearnedCandidate(
+                word: match.output,
+                ruby: match.ruby,
+                composingCount: refComposingCount
+            )
+            results.append(synthesizeElement(synth))
+        }
     }
-    var prioritized = elements
-    prioritized.swapAt(firstIndex, preferredIndex)
-    return prioritized
+
+    return results
 }
 
 // Bundled emoji resources are immutable until Initialize/restart. Parsing the
@@ -1196,10 +1365,11 @@ private func makeConvertRequestOptions(
     profile: String,
     learningType: LearningType = .nothing,
     learningMemoryDirectoryURL: URL? = nil,
-    experimentalKeyboardTypoCorrection: Bool = false
+    experimentalKeyboardTypoCorrection: Bool = false,
+    predictiveConversion: Bool = false
 ) -> ConvertRequestOptions {
     return ConvertRequestOptions(
-        requireJapanesePrediction: .disabled,
+        requireJapanesePrediction: predictiveConversion ? .autoMix : .disabled,
         requireEnglishPrediction: .autoMix,
         keyboardLanguage: .ja_JP,
         learningType: learningType,
@@ -1237,6 +1407,7 @@ private struct AppSettings: Decodable {
 private struct GeneralSettings: Decodable {
     let jev_conversion: Bool?
     let experimental_typo_correction: Bool?
+    let predictive_conversion: Bool?
 }
 
 private struct LearningSettings: Decodable {
@@ -1937,7 +2108,15 @@ private func preferCursorPrefixBoundary(
         learningType: currentLearningType,
         learningMemoryDirectoryURL: currentLearningMemoryDirectoryURL,
         experimentalKeyboardTypoCorrection:
-            (config["experimentalTypoCorrection"] as? Bool) ?? false
+            (config["experimentalTypoCorrection"] as? Bool) ?? false,
+        predictiveConversion:
+            (config["predictiveConversion"] as? Bool) ?? {
+                #if os(Android)
+                return true
+                #else
+                return false
+                #endif
+            }()
     )
 }
 
@@ -1947,6 +2126,25 @@ private func preferCursorPrefixBoundary(
         backend: config["backend"] as? String,
         cpuBackendSupported: cpuZenzaiBackendSupportedFromEnvironment()
     )
+}
+
+/// 未確定のローマ字（子音アルファベット）が末尾に残っているかを判定する。
+/// この状態では予測変換のプレフィックス全件探索が多重に走り大きな入力遅延を引き起こすため、
+/// ひらがな（音節）が完成するまで予測変換を抑制する。
+func hasTrailingUncompletedRoman(in composingText: ComposingText) -> Bool {
+    guard let lastChar = composingText.convertTarget.last else {
+        return false
+    }
+    return lastChar.isASCII && lastChar.isLetter
+}
+
+/// 通常N-best補完検索用オプションを生成する。
+/// 補完検索はZenzaiがカバーしない文節候補のみをマージするためのものなので、予測変換は不要。
+func optionsForNormalNBestSupplement(from options: ConvertRequestOptions) -> ConvertRequestOptions {
+    var supplementOptions = options
+    supplementOptions.requireJapanesePrediction = .disabled
+    supplementOptions.requireEnglishPrediction = .disabled
+    return supplementOptions
 }
 
 private struct ZenzaiDiagnosticSnapshot {
@@ -2254,6 +2452,10 @@ struct SComposingText {
 }
 
 func constructCandidateString(candidate: Candidate, hiragana: String) -> String {
+    if candidate.rubyCount > hiragana.count && !candidate.text.isEmpty {
+        return candidate.text
+    }
+
     var result = ""
     result.reserveCapacity(hiragana.count)
 
@@ -2551,6 +2753,12 @@ func cursorPrefixBoundaryFirstClauseResults(
     config["gpuLayers"] = 99
     config["model"] = "standard"
     config["experimentalTypoCorrection"] = false
+    #if os(Android)
+    let defaultPredictiveConversion = true
+    #else
+    let defaultPredictiveConversion = false
+    #endif
+    config["predictiveConversion"] = defaultPredictiveConversion
     setRoman2KanaInputStyle()
     currentLearningType = .inputAndOutput
     currentLearningMemoryDirectoryURL = learningMemoryDirectoryURL(settingsPath: loadedSettingsPath)
@@ -2583,6 +2791,8 @@ func cursorPrefixBoundaryFirstClauseResults(
         currentLearningType = learningType(for: settings.learning?.mode)
         config["experimentalTypoCorrection"] =
             settings.general?.experimental_typo_correction ?? false
+        config["predictiveConversion"] =
+            settings.general?.predictive_conversion ?? defaultPredictiveConversion
 
         let sourceEntries = settings.user_dictionary?.entries ?? []
         var seen: Set<String> = []
@@ -3282,7 +3492,10 @@ public func free_candidate_list(
         "DEBUG",
         "GetComposedText: start \(diagnosticDetails)"
     )
-    let options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
+    var options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
+    if hasTrailingUncompletedRoman(in: previewComposingText) {
+        options.requireJapanesePrediction = .disabled
+    }
     candidateCrashTrace(
         useZenzai: useZenzai,
         operation: "GetComposedText",
@@ -3301,9 +3514,10 @@ public func free_candidate_list(
     }
     let normalNBestConverted: ConversionResult?
     if useZenzai {
+        let supplementOptions = optionsForNormalNBestSupplement(from: options)
         normalNBestConverted = requestNormalNBestSupplementCandidates(
             inputData: previewComposingText,
-            options: options,
+            options: supplementOptions,
             operation: "get_composed_text",
             diagnosticDetails: diagnosticDetails
         )
@@ -3334,10 +3548,19 @@ public func free_candidate_list(
             hiragana: previewHiragana
         )
     } ?? converted.mainResults
-    let mainResults = prioritizeLearningSelectionOverrides(
+    let rawMainResults = prioritizeLearningSelectionOverrides(
         mergedMainResults,
-        ruby: previewHiragana
-    ) { $0 }
+        ruby: previewHiragana,
+        candidate: { $0 },
+        synthesizeElement: { $0 }
+    )
+    var mainResults = rawMainResults
+    if let first = mainResults.first, first.rubyCount > previewHiragana.count {
+        if let exactIdx = mainResults.firstIndex(where: { $0.rubyCount <= previewHiragana.count }) {
+            let exactCandidate = mainResults.remove(at: exactIdx)
+            mainResults.insert(exactCandidate, at: 0)
+        }
+    }
     if let normalNBestConverted {
         serverLog(
             "DEBUG",
@@ -3489,7 +3712,10 @@ public func free_candidate_list(
         "DEBUG",
         "GetComposedTextForCursorPrefix: start suffix_len=\(suffixAfterCursor.count);\(diagnosticDetails)"
     )
-    let options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
+    var options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
+    if hasTrailingUncompletedRoman(in: previewPrefixComposingText) {
+        options.requireJapanesePrediction = .disabled
+    }
     candidateCrashTrace(
         useZenzai: useZenzai,
         operation: "GetComposedTextForCursorPrefix",
@@ -3509,9 +3735,10 @@ public func free_candidate_list(
     let totalStart = performanceNow()
     let normalNBestConverted: ConversionResult?
     if useZenzai {
+        let supplementOptions = optionsForNormalNBestSupplement(from: options)
         normalNBestConverted = requestNormalNBestSupplementCandidates(
             inputData: previewPrefixComposingText,
-            options: options,
+            options: supplementOptions,
             operation: "get_composed_text_for_cursor_prefix",
             diagnosticDetails: "suffix_len=\(suffixAfterCursor.count);\(diagnosticDetails)"
         )
@@ -3681,10 +3908,24 @@ public func free_candidate_list(
             previewHiragana: previewPrefixHiragana,
             resolutionCache: &cursorPrefixResolutionCache
         )
-    let cursorPrefixResults = prioritizeLearningSelectionOverrides(
+    let rawCursorPrefixPrioritized = prioritizeLearningSelectionOverrides(
         rawCursorPrefixResults,
-        ruby: previewPrefixHiragana
-    ) { $0.candidate }
+        ruby: previewPrefixHiragana,
+        candidate: { $0.candidate },
+        synthesizeElement: { synth in
+            CursorPrefixCandidateResult(
+                candidate: synth,
+                displayText: constructCandidateString(candidate: synth, hiragana: previewPrefixHiragana)
+            )
+        }
+    )
+    var cursorPrefixResults = rawCursorPrefixPrioritized
+    if let first = cursorPrefixResults.first, first.candidate.rubyCount > previewPrefixHiragana.count {
+        if let exactIdx = cursorPrefixResults.firstIndex(where: { $0.candidate.rubyCount <= previewPrefixHiragana.count }) {
+            let exactCandidate = cursorPrefixResults.remove(at: exactIdx)
+            cursorPrefixResults.insert(exactCandidate, at: 0)
+        }
+    }
     let totalMs = elapsedPerformanceMilliseconds(since: totalStart)
     performanceLog(
         operation: "get_composed_text_for_cursor_prefix",

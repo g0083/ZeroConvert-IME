@@ -842,6 +842,133 @@ private func testCandidate(
     }
 }
 
+@Test func prioritizeLearningSelectionOverridesSynthesizesMissingLearnedCandidate() async throws {
+    let katouSugar = testCandidate(
+        word: "果糖",
+        ruby: "カトウ",
+        composingCount: .inputCount(3)
+    )
+    let candidates = [katouSugar]
+
+    await MainActor.run {
+        let previousLearningType = currentLearningType
+        let previousLearningSelectionOverrides = learningSelectionOverrides
+        defer {
+            currentLearningType = previousLearningType
+            learningSelectionOverrides = previousLearningSelectionOverrides
+        }
+
+        currentLearningType = .inputAndOutput
+        learningSelectionOverrides["カトウ"] = "加藤"
+        let prioritized = prioritizeLearningSelectionOverrides(
+            candidates,
+            ruby: "かとう",
+            candidate: { $0 },
+            synthesizeElement: { $0 }
+        )
+        #expect(prioritized.map(\.text) == ["加藤", "果糖"])
+    }
+}
+
+@Test func prioritizeLearningSelectionOverridesPreservesMultipleLRUOrder() async throws {
+    let c1 = testCandidate(word: "効果", ruby: "コウカ", composingCount: .inputCount(3))
+    let c2 = testCandidate(word: "硬化", ruby: "コウカ", composingCount: .inputCount(3))
+    let c3 = testCandidate(word: "降下", ruby: "コウカ", composingCount: .inputCount(3))
+    let candidates = [c1, c2, c3]
+
+    await MainActor.run {
+        let previousLearningType = currentLearningType
+        let previousLearningSelectionOverrides = learningSelectionOverrides
+        defer {
+            currentLearningType = previousLearningType
+            learningSelectionOverrides = previousLearningSelectionOverrides
+        }
+
+        currentLearningType = .inputAndOutput
+        // 過去に「効果」を確定し、直近で「降下」を確定
+        learningSelectionOverrides.record(output: "効果", for: "コウカ")
+        learningSelectionOverrides.record(output: "降下", for: "コウカ")
+        let prioritized = prioritizeLearningSelectionOverrides(
+            candidates,
+            ruby: "こうか",
+            candidate: { $0 },
+            synthesizeElement: { $0 }
+        )
+        #expect(prioritized.map(\.text) == ["降下", "効果", "硬化"])
+    }
+}
+
+@Test func prioritizeLearningSelectionOverridesPrefixSuggestsRecentCompletions() async throws {
+    let c1 = testCandidate(word: "プロ", ruby: "プロ", composingCount: .inputCount(2))
+    let candidates = [c1]
+
+    await MainActor.run {
+        let previousLearningType = currentLearningType
+        let previousLearningSelectionOverrides = learningSelectionOverrides
+        defer {
+            currentLearningType = previousLearningType
+            learningSelectionOverrides = previousLearningSelectionOverrides
+        }
+
+        currentLearningType = .inputAndOutput
+        learningSelectionOverrides.record(output: "プログラミング", for: "プログラミング")
+        config["predictiveConversion"] = true
+        let prioritized = prioritizeLearningSelectionOverrides(
+            candidates,
+            ruby: "ぷろ",
+            candidate: { $0 },
+            synthesizeElement: { $0 }
+        )
+        #expect(prioritized.map(\.text) == ["プロ", "プログラミング"])
+
+        config["predictiveConversion"] = false
+        let disabledPrioritized = prioritizeLearningSelectionOverrides(
+            candidates,
+            ruby: "ぷろ",
+            candidate: { $0 },
+            synthesizeElement: { $0 }
+        )
+        #expect(disabledPrioritized.map(\.text) == ["プロ"])
+    }
+}
+
+@Test func testPredictiveConversionCandidatesWithRealConverter() async throws {
+    let packageRoot = packageRootURL()
+    let dictionaryURL = packageRoot
+        .appending(path: "azooKey_dictionary_storage")
+        .appending(path: "Dictionary")
+
+    await MainActor.run {
+        let previousConverter = converter
+        let previousComposingText = composingText
+        defer {
+            converter = previousConverter
+            composingText = previousComposingText
+        }
+
+        converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+        config["predictiveConversion"] = true
+        composingText = ComposingText()
+        composingText.insertAtCursorPosition("あ", inputStyle: .direct)
+        var length: CInt = 0
+        let candidatesPtr = get_composed_text(lengthPtr: &length)
+        defer { free_candidate_list(candidatesPtr, length) }
+        var list: [(text: String, subtext: String, count: Int32)] = []
+        for i in 0..<Int(length) {
+            let c = candidatesPtr[i]!.pointee
+            list.append((
+                text: String(cString: c.text),
+                subtext: String(cString: c.subtext),
+                count: c.correspondingCount
+            ))
+        }
+        #expect(length > 0)
+        #expect(list[0].text == "あ")
+        #expect(list.contains { $0.text == "あと" })
+        #expect(list.contains { $0.text == "ある" })
+    }
+}
+
 @Test func latestSelectionReplacesPreviouslyLearnedFirstCandidate() async throws {
     let packageRoot = packageRootURL()
     let dictionaryURL = packageRoot
@@ -1749,14 +1876,14 @@ private func testCandidate(
     #expect(constructCandidateString(candidate: candidate, hiragana: "きょうは") == "今日は")
 }
 
-@Test func constructCandidateStringFallsBackToRemainingHiraganaWhenRubyOverruns() async throws {
+@Test func constructCandidateStringPreservesPredictiveCandidateTextWhenRubyOverruns() async throws {
     let candidate = testCandidate(
         word: "今日",
         ruby: "きょう",
         composingCount: .inputCount(2)
     )
 
-    #expect(constructCandidateString(candidate: candidate, hiragana: "きょ") == "きょ")
+    #expect(constructCandidateString(candidate: candidate, hiragana: "きょ") == "今日")
 }
 
 @Test func zenzaiNormalNBestSupplementKeepsZenzaiFirstAndDeduplicates() async throws {
@@ -3335,4 +3462,39 @@ private func testCandidate(
 
     #expect(clause.convertTarget == "あるていど")
     #expect(clause.input.count == 8)
+}
+
+@Test func trailingUncompletedRomanSuppressesPrediction() async throws {
+    var pureHira = ComposingText()
+    pureHira.insertAtCursorPosition("ta", inputStyle: .roman2kana)
+    #expect(!hasTrailingUncompletedRoman(in: pureHira))
+
+    var incompleteRoman = ComposingText()
+    incompleteRoman.insertAtCursorPosition("tak", inputStyle: .roman2kana)
+    #expect(hasTrailingUncompletedRoman(in: incompleteRoman))
+
+    var singleConsonant = ComposingText()
+    singleConsonant.insertAtCursorPosition("k", inputStyle: .roman2kana)
+    #expect(hasTrailingUncompletedRoman(in: singleConsonant))
+
+    var finishedWord = ComposingText()
+    finishedWord.insertAtCursorPosition("takano", inputStyle: .roman2kana)
+    #expect(!hasTrailingUncompletedRoman(in: finishedWord))
+}
+
+@Test func optionsForNormalNBestSupplementDisablesPrediction() async throws {
+    let original = ConvertRequestOptions(
+        requireJapanesePrediction: .autoMix,
+        requireEnglishPrediction: .autoMix,
+        keyboardLanguage: .ja_JP,
+        learningType: .nothing,
+        memoryDirectoryURL: URL(fileURLWithPath: "/tmp"),
+        sharedContainerURL: URL(fileURLWithPath: "/tmp"),
+        textReplacer: .init { URL(fileURLWithPath: "/tmp") },
+        specialCandidateProviders: nil,
+        metadata: nil
+    )
+    let supplement = optionsForNormalNBestSupplement(from: original)
+    #expect(supplement.requireJapanesePrediction == .disabled)
+    #expect(supplement.requireEnglishPrediction == .disabled)
 }

@@ -7614,10 +7614,7 @@ impl TextServiceFactory {
                             None,
                             None,
                         )?;
-                        self.remember_candidate_window_visibility_if_sent(
-                            delivery,
-                            Some(false),
-                        );
+                        self.remember_candidate_window_visibility_if_sent(delivery, Some(false));
                     }
                     ClientAction::ShowCandidateWindow => {
                         let position = self.candidate_window_position()?;

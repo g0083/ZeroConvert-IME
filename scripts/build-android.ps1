@@ -1,5 +1,17 @@
 param([switch]$SkipNative, [switch]$UniversalApk)
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 $ErrorActionPreference = 'Stop'
+function Get-Sha256Hex([string]$filePath) {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($filePath)
+    try {
+        $hashBytes = $sha256.ComputeHash($stream)
+        [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
+}
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $repoRoot
 try {
@@ -24,7 +36,8 @@ try {
     $apkDirectory = Join-Path $repoRoot 'android/rebuilt/build/outputs/apk/debug'
     $outputs = Get-Content (Join-Path $apkDirectory 'output-metadata.json') -Raw | ConvertFrom-Json
     foreach ($element in $outputs.elements) {
-        Get-FileHash -Algorithm SHA256 (Join-Path $apkDirectory $element.outputFile)
+        $apkPath = Join-Path $apkDirectory $element.outputFile
+        [pscustomobject]@{ Path = $apkPath; Hash = (Get-Sha256Hex $apkPath) }
     }
     Write-Output 'Built the shared-engine Android debug APK. No device has been updated.'
 } finally { Pop-Location }

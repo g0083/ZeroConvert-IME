@@ -22,16 +22,15 @@ use utils::{
     get_candidate_window_position, get_candidate_window_position_with_ruby_clearance,
     get_ruby_window_size_for_rect, CandidateRect,
 };
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
-};
-use windows::Win32::{
-    Foundation::HWND,
-    UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE},
+    SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
 };
 use wry::WebContext;
 
 pub mod candidate;
+pub mod clipboard;
 pub mod data_paths;
 pub mod indicator;
 pub mod ipc;
@@ -344,6 +343,13 @@ pub enum UserEvent {
     UpdateSelection(i32),
     UpdateInputMethod(String),
     WindowAction(WindowAction),
+    ClipboardUpdated,
+    ToggleClipboardWindow,
+    ClipboardPaste(u64),
+    ClipboardTogglePin(u64),
+    ClipboardDelete(u64),
+    ClipboardUpdateText(u64, String),
+    ClipboardClose,
 }
 
 #[tokio::main]
@@ -454,6 +460,19 @@ async fn main() -> anyhow::Result<()> {
         })
         .build(&ruby_window)?;
 
+    let clipboard_state = Arc::new(std::sync::Mutex::new(clipboard::ClipboardState::new()));
+    let clipboard_window = clipboard::create_clipboard_window(&event_loop)?;
+    let clipboard_webview = clipboard::create_clipboard_webview(
+        &clipboard_window,
+        &mut web_context,
+        event_loop_proxy.clone(),
+    )?;
+    let _clipboard_listener_thread =
+        clipboard::start_clipboard_listener(clipboard_state.clone(), event_loop_proxy.clone());
+    let clipboard_window_id = clipboard_window.id();
+    let mut clipboard_window_visible = false;
+    let mut clipboard_shown_at: Option<std::time::Instant> = None;
+
     // handle window actions
     let proxy_clone = event_loop_proxy.clone();
     tokio::spawn(async move {
@@ -487,6 +506,24 @@ async fn main() -> anyhow::Result<()> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => *control_flow = ControlFlow::Exit,
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::Focused(false),
+                ..
+            } if window_id == clipboard_window_id => {
+                if clipboard_window_visible {
+                    if let Some(shown_at) = clipboard_shown_at {
+                        if shown_at.elapsed().as_millis() > 150 {
+                            let hwnd = clipboard_window.hwnd() as *mut std::ffi::c_void;
+                            unsafe {
+                                let _ = ShowWindow(HWND(hwnd), SW_HIDE);
+                            }
+                            clipboard_window_visible = false;
+                            clipboard_shown_at = None;
+                        }
+                    }
+                }
+            }
             Event::UserEvent(script) => match script {
                 UserEvent::UpdateTheme(theme) => {
                     let script = format!(
@@ -594,6 +631,117 @@ async fn main() -> anyhow::Result<()> {
                         current_ruby_size_ready,
                         last_candidate_rect.is_some(),
                     );
+                }
+                UserEvent::ClipboardUpdated => {
+                    let items = {
+                        let s = clipboard_state.lock().unwrap();
+                        s.items.clone()
+                    };
+                    if let Ok(json) = serde_json::to_string(&items) {
+                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    }
+                }
+                UserEvent::ToggleClipboardWindow => {
+                    let hwnd = clipboard_window.hwnd() as *mut std::ffi::c_void;
+                    if clipboard_window_visible {
+                        unsafe {
+                            let _ = ShowWindow(HWND(hwnd), SW_HIDE);
+                        }
+                        clipboard_window_visible = false;
+                    } else {
+                        let pos = if let Some(rect) = last_candidate_rect {
+                            PhysicalPosition::new(rect.left as f64, (rect.bottom + 10) as f64)
+                        } else {
+                            let mut pt = windows::Win32::Foundation::POINT::default();
+                            unsafe {
+                                let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+                            }
+                            PhysicalPosition::new(pt.x as f64, pt.y as f64)
+                        };
+                        clipboard_window.set_outer_position(pos);
+
+                        let items = {
+                            let s = clipboard_state.lock().unwrap();
+                            s.items.clone()
+                        };
+                        if let Ok(json) = serde_json::to_string(&items) {
+                            evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                        }
+
+                        unsafe {
+                            let _ = SetWindowPos(
+                                HWND(hwnd),
+                                HWND_TOPMOST,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE,
+                            );
+                            let _ = ShowWindow(HWND(hwnd), SW_SHOW);
+                            let _ = SetForegroundWindow(HWND(hwnd));
+                        }
+                        clipboard_window_visible = true;
+                        clipboard_shown_at = Some(std::time::Instant::now());
+                    }
+                }
+                UserEvent::ClipboardPaste(id) => {
+                    let hwnd = clipboard_window.hwnd() as *mut std::ffi::c_void;
+                    unsafe {
+                        let _ = ShowWindow(HWND(hwnd), SW_HIDE);
+                    }
+                    clipboard_window_visible = false;
+
+                    let (target_hwnd_raw, item_opt) = {
+                        let s = clipboard_state.lock().unwrap();
+                        (s.target_hwnd_raw, s.items.iter().find(|i| i.id == id).cloned())
+                    };
+
+                    if let Some(item) = item_opt {
+                        if let Some(bmp_b64) = &item.image_bmp_base64 {
+                            clipboard::paste_image(bmp_b64, target_hwnd_raw);
+                        } else if let Some(text) = &item.text {
+                            clipboard::paste_text(text, target_hwnd_raw);
+                        }
+                    }
+                }
+                UserEvent::ClipboardTogglePin(id) => {
+                    let items = {
+                        let mut s = clipboard_state.lock().unwrap();
+                        s.toggle_pin(id);
+                        s.items.clone()
+                    };
+                    if let Ok(json) = serde_json::to_string(&items) {
+                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    }
+                }
+                UserEvent::ClipboardDelete(id) => {
+                    let items = {
+                        let mut s = clipboard_state.lock().unwrap();
+                        s.delete_item(id);
+                        s.items.clone()
+                    };
+                    if let Ok(json) = serde_json::to_string(&items) {
+                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    }
+                }
+                UserEvent::ClipboardUpdateText(id, new_text) => {
+                    let items = {
+                        let mut s = clipboard_state.lock().unwrap();
+                        s.update_text(id, new_text);
+                        s.items.clone()
+                    };
+                    if let Ok(json) = serde_json::to_string(&items) {
+                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    }
+                }
+                UserEvent::ClipboardClose => {
+                    let hwnd = clipboard_window.hwnd() as *mut std::ffi::c_void;
+                    unsafe {
+                        let _ = ShowWindow(HWND(hwnd), SW_HIDE);
+                    }
+                    clipboard_window_visible = false;
+                    clipboard_shown_at = None;
                 }
                 UserEvent::WindowAction(action) => {
                     match action {

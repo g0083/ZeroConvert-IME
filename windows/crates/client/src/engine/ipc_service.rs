@@ -545,7 +545,8 @@ impl IPCService {
         let mut client = self.azookey_client.clone();
         self.runtime.spawn(async move {
             // A pause in typing starts work; subsequent keys cancel this task.
-            tokio::time::sleep(Duration::from_millis(60)).await;
+            // 連続タイピング中のGPU/CPU推論競合・入力遅延を防ぐため、打鍵休止（180ms）を待つ
+            tokio::time::sleep(Duration::from_millis(180)).await;
             let mut request = tonic::Request::new(request);
             request.set_timeout(Duration::from_millis(1300));
             let response = tokio::time::timeout(

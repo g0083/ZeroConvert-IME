@@ -152,7 +152,10 @@ fn append_ai_assist_candidates(
     let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
     let targets = [hiragana_text];
     let mut found_typo = hybrid.flatten();
-    for target in targets.into_iter().filter(|_| kind != 2 && !hybrid_proposal) {
+    for target in targets
+        .into_iter()
+        .filter(|_| kind != 2 && !hybrid_proposal)
+    {
         if let Some(suggestion) =
             ai_assist::corrector::suggest_composition(context, target, &first_surface, config)
         {
