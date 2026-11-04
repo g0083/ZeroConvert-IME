@@ -19,31 +19,30 @@ pub fn reading_change_distance(input: &str, surface: &str) -> Option<usize> {
     if input.chars().count() > MAX_INPUT || surface.chars().count() > MAX_INPUT {
         return None;
     }
-    let reading = if surface.chars().all(|c| {
-        ('ぁ'..='ゖ').contains(&c) || ('ァ'..='ヶ').contains(&c) || "ー、。！？!?・".contains(c)
-    }) {
-        surface.to_owned()
-    } else {
-        super::reading_check::reading_for_surface(surface)?
-    };
     let source_reading = if input.chars().any(|c| ('一'..='鿿').contains(&c)) {
         super::reading_check::reading_for_surface(input)?
     } else {
         input.to_owned()
     };
-    Some(super::damerau_levenshtein_distance(
-        &katakana_to_hiragana(&source_reading),
-        &katakana_to_hiragana(&reading),
-    ))
+    if surface.chars().all(|c| {
+        ('ぁ'..='ゖ').contains(&c) || ('ァ'..='ヶ').contains(&c) || "ー、。！？!?・".contains(c)
+    }) {
+        Some(super::damerau_levenshtein_distance(
+            &katakana_to_hiragana(&source_reading),
+            &katakana_to_hiragana(surface),
+        ))
+    } else {
+        super::reading_check::min_reading_distance(surface, &source_reading)
+    }
 }
 
 fn supported_reading_change(input: &str, surface: &str) -> bool {
-    // A single malformed romaji syllable can affect two kana. This is evidence
-    // for a proposal only; automatic application still needs independent proof.
+    // A single malformed romaji syllable or transposition can affect up to three kana.
+    // This is evidence for a proposal only; automatic application still needs independent proof.
     input.chars().any(|c| {
         ('ぁ'..='ゖ').contains(&c) || ('ァ'..='ヶ').contains(&c) || ('一'..='鿿').contains(&c)
     }) && reading_change_distance(input, surface)
-        .is_some_and(|distance| (1..=2).contains(&distance))
+        .is_some_and(|distance| (1..=3).contains(&distance))
 }
 
 pub(super) fn explicit_typo_surface(input: &str) -> Option<&'static str> {
@@ -233,7 +232,7 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
     if let Some(reading) = romaji_decoder::decode_floating_consonant_typo(input) {
         let expected = typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone());
         let surface = infer(&context, &reading, config)
-            .filter(|s| *s == expected || *s == reading)
+            .filter(|s| *s == expected || *s == reading || reading_check::has_same_reading(s, &reading))
             .unwrap_or(expected);
         return Some(TypoSuggestion {
             surface: surface.clone(),
@@ -241,6 +240,34 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
             token_surface: surface,
             learned: false,
         });
+    }
+    if config.engine == "embedded" && config.corrector_port >= 1024 && runtime::allow_native_worker() {
+        let wait_for_worker = runtime::wait_for_native_worker();
+        let repair_input = if input.chars().any(|c| ('一'..='鿿').contains(&c)) {
+            super::reading_check::reading_for_surface(input)
+                .map(|r| katakana_to_hiragana(&r))
+                .unwrap_or_else(|| input.to_owned())
+        } else {
+            input.to_owned()
+        };
+        if let Some(worker_decision) = super::keyboard_hybrid::repair_reading(&context, &repair_input, "", wait_for_worker) {
+            if let Some(reading) = worker_decision {
+                let surface = match infer(&context, &reading, config) {
+                    Some(s) if reading_check::has_same_reading(&s, &reading) => s,
+                    Some(_) => return None,
+                    None => typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone()),
+                };
+                return (katakana_to_hiragana(&surface) != katakana_to_hiragana(input)).then_some(
+                    TypoSuggestion {
+                        surface: surface.clone(),
+                        token_reading: input.into(),
+                        token_surface: surface,
+                        learned: false,
+                    },
+                );
+            }
+            return None;
+        }
     }
     match infer(&context, input, config) {
         Some(surface) if katakana_to_hiragana(&surface) == katakana_to_hiragana(input) => None,

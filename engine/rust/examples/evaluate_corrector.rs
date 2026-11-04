@@ -37,6 +37,14 @@ impl runtime::CompletionBackend for Backend {
     fn read_learning(&self) -> bool {
         false
     }
+    fn allow_native_worker(&self) -> bool {
+        self.oracle_surface.is_none()
+            && self.replay_responses.is_none()
+            && self.reading_normal_port.is_none()
+    }
+    fn wait_for_native_worker(&self) -> bool {
+        self.allow_native_worker()
+    }
     fn complete(&self, port: u16, _path: &str, body: &Value, timeout_ms: u64) -> Option<Value> {
         let started = Instant::now();
         let response = if let Some(surface) = &self.oracle_surface {
@@ -149,6 +157,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         corrector_port,
         ..Default::default()
     };
+    if !oracle_mode && !replay_mode {
+        let _ = ai_assist::keyboard_hybrid::repair_reading("", "てすと", "", true);
+    }
     let rows = std::fs::read_to_string(&args[1])?;
     let mut results = Vec::new();
     for line in rows.lines().filter(|s| !s.trim().is_empty()) {

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -41,15 +42,16 @@ int main(int argc, char **argv) {
     }
   }
   const bool hybrid = argc == 4 && std::string(argv[1]) == "--hybrid";
-  if (argc != 2 && !hybrid) {
-    std::cerr
-        << "usage: keyboard-prior [--hybrid] model.gguf [dictionary.bin]\n";
+  const bool assist = argc == 4 && std::string(argv[1]) == "--assist";
+  if (argc != 2 && !hybrid && !assist) {
+    std::cerr << "usage: keyboard-prior [--hybrid|--assist] model.gguf "
+                 "[dictionary.bin]\n";
     return 2;
   }
   llama_backend_init();
   auto mp = llama_model_default_params();
   mp.n_gpu_layers = 0;
-  auto *model = llama_model_load_from_file(argv[hybrid ? 2 : 1], mp);
+  auto *model = llama_model_load_from_file(argv[(hybrid || assist) ? 2 : 1], mp);
   if (!model)
     return 3;
   auto cp = llama_context_default_params();
@@ -199,6 +201,103 @@ int main(int argc, char **argv) {
                     << json_string(candidates[best].path.surface)
                     << ",\"gain\":" << std::setprecision(14) << gain << "}"
                     << std::endl;
+      }
+    } else if (assist) {
+      const ChannelDictionary dictionary(argv[3]);
+      std::cout << "ready " << nv << std::endl;
+      auto tokenize = [&](const std::string &text) {
+        std::vector<llama_token> tokens(512);
+        const int n =
+            llama_tokenize(vocab, text.data(), int(text.size()), tokens.data(),
+                           int(tokens.size()), false, true);
+        if (n < 1 || n > 384)
+          throw std::runtime_error("invalid tokenized sequence");
+        tokens.resize(n);
+        return tokens;
+      };
+      std::string line;
+      while (std::getline(std::cin, line)) {
+        if (!line.empty() && line.back() == '\r')
+          line.pop_back();
+        if (line.empty()) {
+          std::cout << "{}" << std::endl;
+          continue;
+        }
+        std::string raw_keys, input_utf8, context_utf8;
+        const size_t tab1 = line.find('\t');
+        if (tab1 == std::string::npos) {
+          const bool all_lower = std::all_of(
+              line.begin(), line.end(), [](char c) { return c >= 'a' && c <= 'z'; });
+          if (all_lower)
+            raw_keys = line;
+          else
+            input_utf8 = line;
+        } else {
+          raw_keys = line.substr(0, tab1);
+          const size_t tab2 = line.find('\t', tab1 + 1);
+          if (tab2 == std::string::npos) {
+            input_utf8 = line.substr(tab1 + 1);
+          } else {
+            input_utf8 = line.substr(tab1 + 1, tab2 - tab1 - 1);
+            context_utf8 = line.substr(tab2 + 1);
+          }
+        }
+        const auto input_hira =
+            !input_utf8.empty() ? hiragana(decode_utf8(input_utf8))
+                                : roman_decode(raw_keys);
+        const auto candidates =
+            assist_candidates(raw_keys, input_hira, dictionary, 24);
+        if (candidates.size() <= 1) {
+          std::cout << "{\"observed\":" << json_string(encode_utf8(input_hira))
+                    << "}" << std::endl;
+          continue;
+        }
+        std::u32string ctx_u32;
+        if (!context_utf8.empty()) {
+          ctx_u32 = decode_utf8(context_utf8);
+          ctx_u32.erase(
+              std::remove_if(ctx_u32.begin(), ctx_u32.end(),
+                             [](char32_t c) {
+                               return c < 32 ||
+                                      (c >= U'\uee00' && c <= U'\uee02');
+                             }),
+              ctx_u32.end());
+          if (ctx_u32.size() > 64)
+            ctx_u32 = ctx_u32.substr(ctx_u32.size() - 64);
+        }
+        const std::u32string prompt_prefix =
+            ctx_u32.empty() ? U"\uee00" : (U"\uee02" + ctx_u32 + U"\uee00");
+        const auto pfx_tokens = tokenize(encode_utf8(prompt_prefix));
+        std::vector<std::vector<llama_token>> sequences;
+        std::vector<int> lengths(candidates.size(), int(pfx_tokens.size()));
+        for (const auto &c : candidates) {
+          sequences.push_back(tokenize(
+              encode_utf8(prompt_prefix + katakana(c.reading) + U"\uee01")));
+        }
+        const auto scores = score_sequences(sequences, lengths);
+        const auto &orig = candidates[0];
+        const double baseline = orig.path.score + 8.0 * scores[0];
+        size_t best = 0;
+        double best_delta = 0.0;
+        for (size_t i = 1; i < candidates.size(); ++i) {
+          const double total = candidates[i].path.score + 8.0 * scores[i] -
+                               candidates[i].penalty * 3.0;
+          const double delta = total - baseline;
+          if (delta >= 37.0 && (best == 0 || delta > best_delta)) {
+            best = i;
+            best_delta = delta;
+          }
+        }
+        if (best == 0) {
+          std::cout << "{\"observed\":" << json_string(encode_utf8(orig.reading))
+                    << "}" << std::endl;
+        } else {
+          std::cout << "{\"observed\":" << json_string(encode_utf8(orig.reading))
+                    << ",\"reading\":"
+                    << json_string(encode_utf8(candidates[best].reading))
+                    << ",\"gain\":" << std::setprecision(14) << best_delta << "}"
+                    << std::endl;
+        }
       }
     } else {
       std::cout << "ready " << nv << std::endl;

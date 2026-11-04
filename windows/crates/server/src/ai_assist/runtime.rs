@@ -48,6 +48,12 @@ pub trait CompletionBackend {
     fn read_learning(&self) -> bool {
         true
     }
+    fn allow_native_worker(&self) -> bool {
+        false
+    }
+    fn wait_for_native_worker(&self) -> bool {
+        false
+    }
     fn complete(&self, port: u16, path: &str, body: &Value, timeout_ms: u64) -> Option<Value>;
 }
 
@@ -56,6 +62,22 @@ pub(super) fn read_learning() -> bool {
         slot.borrow()
             .as_ref()
             .is_none_or(|backend| backend.read_learning())
+    })
+}
+
+pub(super) fn allow_native_worker() -> bool {
+    BACKEND.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_none_or(|backend| backend.allow_native_worker())
+    })
+}
+
+pub(super) fn wait_for_native_worker() -> bool {
+    BACKEND.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|backend| backend.wait_for_native_worker())
     })
 }
 

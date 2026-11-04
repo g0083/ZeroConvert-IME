@@ -76,7 +76,11 @@ fn current_assist_config() -> AiAssistConfig {
         } else {
             "embedded".to_string()
         },
-        corrector_port: if is_lm_studio { 1234 } else { 18090 },
+        corrector_port: if is_lm_studio {
+            1234
+        } else {
+            shared::PREDICTION_SERVER_PORT
+        },
         prediction_port: shared::PREDICTION_SERVER_PORT,
     }
 }
