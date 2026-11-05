@@ -62,10 +62,10 @@ WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。�
 
 ### 調査で確認した制約・未確認点
 
-- launcherは `models/typo-corrector-xsmall-q4km.gguf` があれば、先読みモデルの選択より優先して18090番で起動する。なければ350M/230MのLFMを選ぶ。同梱ファイルの有無と、実際にロードしたモデルを確認する必要がある。
-- ニューラル補正は上記ポートの `/completion`、通常のモデル先読みは `/v1/completions` を呼ぶ。同じサービス・重みが補正と先読み両方に使われ得る。
-- `predictive_model == "zerocon"` の経路は8090番の `/completion` を利用し、失敗するとLFM側へフォールバックする。launcherの18090番起動とは別経路。Tauriのベンチマークには別のサーバー起動処理がある。
-- `experimental_ai_engine_port` は設定に存在するが、serverの `append_ai_assist_candidates` ではengineに応じて18090/1234、Zenzaiは8090を設定している。設定項目の存在だけで可変ポートが有効とは判断しない。
+- launcherはポート18091でメイン変換モデル（`zenz.gguf`、Nano v4等）の常駐推論サーバーを起動・監視する。従来の独立したCorrectorサーバー（18090番）およびLFMモデルはv0.2.3で完全撤廃された。
+- 先読みおよびタイポ補正（Stage-2 表層リランキングおよび再変換）はともに18091番のメイン変換モデルを利用する。
+- 設定画面のベンチマークは専用の8090番で起動し、実IMEのプロセスとは分離されている。
+- `experimental_ai_engine_port` 等の旧ポート設定は過去の互換性項目であり、現在の実運用では18091番（メイン変換）と8090番（設定UIベンチマーク）に整理されている。
 - `ai_assist/mod.rs` の冒頭コメントには推論エンジン非依存とあるが、現実のフォールバックには同期TCP/HTTPがある。タイポ補正150ms等のタイムアウトも含めて遅延を調べる。
 - 先読み関数の引数名は `partial_surface` だが、serverからは `hiragana_text` が渡る。定型句表には漢字表記もあるため、読み・変換済み表記・継続文字列の境界を追う。
 - 配布READMEのモデル精度・版数、`build-info.json` の上流版情報だけでは、現在のローカルソースや配布バイナリの品質・対応関係を確定できない。今回、起動状態・重みの由来・再現精度は検証していない。
@@ -74,7 +74,7 @@ WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。�
 
 学習経路は `data/` のJSONL生成→`training/train_*.py`によるLoRA/全層学習→`training/export_*.py`による重みのマージ→GGUF変換・量子化→評価。`training/export_nano_v2.py` 自体はGGUF変換器ではない。`training/train_nano_v2.py` の既定baseは `Miwa-Keita/zenz-v3.1-xsmall`、教師データはzenz-v3.2-small系の蒸留・辞書データ。配布名ZeroConと、ファイル名zenz/typo-corrector/nano-v2を区別し、各モデルの採用状況を名前から推測しない。
 
-Androidは `ZeroConvertInputMethodService` → `KanaKanjiConverter` / assist → `ZenzNative` → JNI/llama.cpp・LOUDS辞書という別実装。モデルは `ModelManager` がassetsとアプリ内filesから管理する。Windowsとの共有RPCや共通Rustエンジンがある前提で修正しない。
+Androidは `ZeroConvertInputMethodService` → `KanaKanjiConverter` / assist → `ZenzNative` → JNI/llama.cpp・LOUDS辞書という別実装。モデルは `ModelManager` がassetsとアプリ内filesから管理する。Windowsとの共有RPCや共通Rustエンジンがある前提で修正しない。2026-11-05に試験的な翻訳入力を追加した。PLaMo 3 Translate 0.8BはAPKに同梱せず、設定画面の確認後にHugging Faceから `files/translation/` へダウンロードし、`assist_jni.cpp` の独立したTranslation Runtime（mmap、別epoch）で推論する。詳細は [Android翻訳入力](investigations/android-translation-input.md)。
 
 ## ビルド・実行・検証コマンド
 

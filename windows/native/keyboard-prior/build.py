@@ -1,6 +1,6 @@
-"""Build the offline CPU probe against the exact installed b4846 runtime ABI.
+"""Build the offline CPU probe against the pinned b12125 runtime ABI.
 
-Fetches five pinned official headers into a NEW artifact directory. Does not
+Copies verified pinned official headers into a NEW artifact directory. Does not
 install the executable or change the IME. Requires clang++ with MSVC libraries.
 """
 import argparse
@@ -8,17 +8,7 @@ import hashlib
 import json
 import shutil
 import subprocess
-import urllib.request
 from pathlib import Path
-
-HEADERS = {
-    'llama.h': ('include/llama.h', '09a745137e1e5de07ab2c9f05e8ff7daf9d3a74f0d996f45c3897d7cf9876ee3'),
-    'ggml.h': ('ggml/include/ggml.h', '4bd5a73af85d5ac7a43fb9e8c30db05d0ca21518216d64fc6d64e33ec855a798'),
-    'ggml-cpu.h': ('ggml/include/ggml-cpu.h', '3f43c5f58ff276bf1c3dc16609c5433aeb0c5333427a538cb8d1555c0ce5619e'),
-    'ggml-backend.h': ('ggml/include/ggml-backend.h', '760b374e1e1d80a854b4d5385006b36d82e544e43281b5a070d6c895dc301252'),
-    'ggml-alloc.h': ('ggml/include/ggml-alloc.h', '8344c5eb56ce9d0e0d45e1ef59846e0dcd0e4f84eb9bb68a6126252247bc0338'),
-}
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -35,15 +25,19 @@ def main():
                              check=True, capture_output=True, text=True,
                              creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
     version_text = version.stdout + version.stderr
-    if '4846 (10131b23)' not in version_text:
-        raise RuntimeError('Unsupported runtime ABI; expected b4846 (10131b23)')
+    if '12125' not in version_text and '7d516e2' not in version_text:
+        raise RuntimeError('Unsupported runtime ABI; expected b12125 (7d516e2)')
     include = args.output/'include'
     include.mkdir(parents=True)
     provenance = {'runtime_version': version_text, 'headers': {}}
-    for name, (relative, expected) in HEADERS.items():
-        url = 'https://raw.githubusercontent.com/ggml-org/llama.cpp/10131b23/'+relative
-        with urllib.request.urlopen(url, timeout=30) as response:
-            content = response.read(2**20)
+    # The runtime generator verifies headers against pinned upstream hashes.
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec = spec_from_file_location('modern_llama', Path(__file__).resolve().parents[2] / 'scripts/prepare-modern-llama.py')
+    modern = module_from_spec(spec)
+    spec.loader.exec_module(modern)
+    for name, (relative, expected) in modern.HEADERS.items():
+        url = 'https://raw.githubusercontent.com/ggml-org/llama.cpp/7d516e2/'+relative
+        content = (args.runtime.parent / 'include' / name).read_bytes()
         actual = hashlib.sha256(content).hexdigest()
         if actual != expected:
             raise ValueError('Pinned header hash mismatch: '+name)
@@ -54,7 +48,7 @@ def main():
         raise ValueError('Unsupported executable name')
     executable = args.output/args.name
     command = [compiler, '-std=c++17', '-O2', '-Wno-deprecated-declarations', '-DLLAMA_SHARED', '-I', str(include),
-               str(source), str(args.runtime/'llama.lib'), '-o', str(executable)]
+               str(source), str(args.runtime/'llama.lib'), str(args.runtime/'ggml.lib'), '-o', str(executable)]
     subprocess.run(command, check=True, timeout=120, creationflags=subprocess.CREATE_NO_WINDOW)
     if not executable.is_file():
         raise RuntimeError('Compiler returned without producing an executable')

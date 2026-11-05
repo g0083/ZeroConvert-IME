@@ -1,4 +1,4 @@
-// Offline persistent likelihood probe for llama.cpp b4846 (10131b23).
+// Offline persistent likelihood probe for the pinned llama.cpp b12125 ABI.
 // Input: count, then count lines of token_count, prefix_count, and token IDs.
 // Each sequence contains the prompt marker, reading, and boundary token.
 // Output: one sum log-likelihood per sequence, one line per request.
@@ -48,6 +48,7 @@ int main(int argc, char **argv) {
                  "[dictionary.bin]\n";
     return 2;
   }
+  ggml_backend_load_all();
   llama_backend_init();
   auto mp = llama_model_default_params();
   mp.n_gpu_layers = 0;
@@ -59,6 +60,7 @@ int main(int argc, char **argv) {
   cp.n_batch = 4096;
   cp.n_ubatch = 512;
   cp.n_seq_max = 32;
+  cp.kv_unified = true;
   cp.n_threads = 4;
   cp.n_threads_batch = 4;
   cp.offload_kqv = false;
@@ -108,7 +110,7 @@ int main(int argc, char **argv) {
               edges.push_back({node, i, tokens[j + 1]});
           }
         }
-        llama_kv_cache_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
         auto batch = llama_batch_init(int(nodes.size()), 0, count);
         for (const auto &node : nodes) {
           const int at = batch.n_tokens++;

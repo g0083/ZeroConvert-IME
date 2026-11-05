@@ -250,17 +250,17 @@ li{margin:6px 0}
 <section>
   <div class="wrap">
     <h2>6. バックエンド構成</h2>
-    <p class="section-sub">用途別にポート・モデルを分離。</p>
+    <p class="section-sub">メイン変換モデル統合による省メモリ・高速化。</p>
     <div class="card">
       <table>
         <thead><tr><th>用途</th><th>ポート</th><th>モデル</th></tr></thead>
         <tbody>
-          <tr><td>Rust補正</td><td class="num">18090</td><td>corrector専用重み</td></tr>
-          <tr><td>ZeroCon先読み</td><td class="num">18091</td><td>zenz.gguf（漢字変換と共通backend）</td></tr>
-          <tr><td>設定画面ベンチマーク</td><td class="num">8090</td><td>ZeroCon生成・出力検査</td></tr>
+          <tr><td>Rust補正・先読み（統合）</td><td class="num">18091</td><td>zenz.gguf（メイン変換モデル、共通backend）</td></tr>
+          <tr><td>旧Corrector専用（撤廃）</td><td class="num">18090</td><td>v0.2.3で完全撤廃・18091へ統合</td></tr>
+          <tr><td>設定画面ベンチマーク</td><td class="num">8090</td><td>ZeroCon生成・出力検査（実IMEとは別プロセス）</td></tr>
         </tbody>
       </table>
-      <p class="muted" style="margin-top:10px;font-size:12px">backend: 既定Vulkan、CPU/CUDAも選択可。先読み不通時にcorrectorへフォールバックしない。</p>
+      <p class="muted" style="margin-top:10px;font-size:12px">backend: 既定Vulkan、CPU/CUDAも選択可。常駐サーバー数を半減（2→1プロセス）。</p>
     </div>
   </div>
 </section>

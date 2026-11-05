@@ -3474,6 +3474,33 @@ fn punctuation_commit_commits_current_composition_then_punctuation() {
 }
 
 #[test]
+fn translation_mode_keeps_punctuation_in_the_uncommitted_japanese_sentence() {
+    let mut config = AppConfig::default();
+    config.general.punctuation_commit = true;
+    config.general.experimental_translation = true;
+    let composition = Composition {
+        state: CompositionState::Composing,
+        preview: "会議は明日です".into(),
+        raw_input: "kaigihaashitadesu".into(),
+        ..Default::default()
+    };
+    let (transition, actions) = TextServiceFactory::plan_actions_for_user_action(
+        &composition,
+        &UserAction::Input('.'),
+        &InputMode::Kana,
+        false,
+        &config,
+        false,
+    )
+    .unwrap();
+    assert_eq!(transition, CompositionState::Composing);
+    assert!(!actions.iter().any(|a| matches!(
+        a,
+        ClientAction::EndComposition | ClientAction::CommitTextDirect(_)
+    )));
+}
+
+#[test]
 fn punctuation_commit_respects_punctuation_style_and_width_for_output() {
     let mut app_config = AppConfig::default();
     app_config.general.punctuation_commit = true;

@@ -44,6 +44,9 @@ type GeneralConfigState = {
     jev_conversion: boolean;
     predictive_conversion: boolean;
     experimental_ai_assist: boolean;
+    experimental_translation: boolean;
+    translation_model: string;
+    translation_keep_alive: boolean;
     experimental_ai_engine: string;
     auto_commit_live_conversion: boolean;
     auto_commit_rewind_on_backspace: boolean;
@@ -69,6 +72,9 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     jev_conversion: false,
     predictive_conversion: false,
     experimental_ai_assist: true,
+    experimental_translation: false,
+    translation_model: "0.8b",
+    translation_keep_alive: false,
     experimental_ai_engine: "embedded",
     auto_commit_live_conversion: true,
     auto_commit_rewind_on_backspace: false,
@@ -461,6 +467,27 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                 </SettingsSection>
             </>}
             {page === "advanced" && <>
+                <SettingsSection title="翻訳モード・選択文字翻訳（試験機能）">
+                    <SettingsRow label="翻訳機能を有効にする" description="Ctrl+Tで専用翻訳入力バーを表示し、入力した日本語を英訳して確定します。文字選択中の翻訳ボタンやCtrl+Tで英→日フローティング翻訳も可能です。通常は使用時のみ翻訳サーバーを起動します。起動待ちを減らしたい場合は常時起動も選べます。" htmlFor="translation-input">
+                        <Switch id="translation-input" checked={generalValue.experimental_translation} onCheckedChange={(value) => void updateGeneralConfig("experimental_translation", value)} />
+                    </SettingsRow>
+                    {generalValue.experimental_translation && (
+                        <>
+                            <SettingsRow label="翻訳サーバーを常時起動する" description="翻訳機能がONの間、サーバーとモデルを保持して起動待ちを減らします。OFFでは使用時だけ起動し、終了後にメモリを解放します。" htmlFor="translation-keep-alive">
+                                <Switch id="translation-keep-alive" checked={generalValue.translation_keep_alive} onCheckedChange={(value) => void updateGeneralConfig("translation_keep_alive", value)} />
+                            </SettingsRow>
+                            <SettingsRow label="翻訳モデル" description="0.8Bは軽量・高速・省メモリでCPUでも快適に動作します。2Bはより高精度な翻訳が可能です。" htmlFor="translation-model">
+                                <Select value={generalValue.translation_model || "0.8b"} onValueChange={(value) => void updateGeneralConfig("translation_model", value)}>
+                                    <SelectTrigger id="translation-model" className="w-72"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="0.8b">PLaMo 3 Translate 0.8B（推奨・軽量高速）</SelectItem>
+                                        <SelectItem value="2b">PLaMo 3 Translate 2B（高精度）</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </SettingsRow>
+                        </>
+                    )}
+                </SettingsSection>
                 <SettingsSection title="タイポ補正と先読み">
                     <SettingsRow label="タイポ補正モデル" description="Nano v4 メインモデルに統合。読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で高速処理します。">
                         <span className="text-sm font-medium">ZeroCon Model Nano v4（メインモデル統合）</span>

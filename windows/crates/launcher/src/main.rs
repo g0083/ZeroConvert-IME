@@ -67,6 +67,9 @@ fn main() -> anyhow::Result<()> {
 
     let prediction_path = exe_path.clone();
     let _prediction_handle = thread::spawn(move || watch_prediction_server(&prediction_path));
+    let translation_path = exe_path.clone();
+    let _translation_handle =
+        thread::spawn(move || watch_assist_server(&translation_path, AssistRole::Translation));
 
     loop {
         match start_ui_process(&exe_path) {
@@ -283,6 +286,7 @@ fn process_command_with_backend(
     let backend_path = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
     let mut command = process_command(install_dir, exe)?;
     command.env("PATH", prepend_to_path(&backend_path));
+    command.env("AZOOKEY_LLAMA_BACKEND_DIR", &backend_path);
     Ok(command)
 }
 
@@ -728,7 +732,7 @@ fn load_config() -> AppConfig {
 
 fn backend_dir(config: &AppConfig) -> &'static str {
     match config.zenzai.backend.as_str() {
-        "cuda" => "llama_cuda",
+        "cuda" => "llama_cuda_b12125",
         "vulkan" => "llama_vulkan",
         _ => "llama_cpu",
     }
@@ -757,6 +761,49 @@ enum LauncherCommandKind {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn translation_switch_controls_its_own_process_and_shares_the_backend() {
+        let root =
+            std::env::temp_dir().join(format!("zerocon-translation-spec-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("llama_vulkan")).unwrap();
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        std::fs::write(root.join("llama_vulkan/llama-server.exe"), []).unwrap();
+        let model = root
+            .join("models")
+            .join(shared::runtime_assets::TRANSLATION_0_8B);
+        let mut config = shared::AppConfig::default();
+        assert!(super::translation_server_spec_for_session(&root, &config, false).is_none());
+        config.general.experimental_translation = true;
+        assert!(super::translation_server_spec_for_session(&root, &config, false).is_none());
+        std::fs::write(&model, []).unwrap();
+        // On-demand mode needs a session; persistent mode is tested without one.
+        assert!(super::translation_server_spec_for_session(&root, &config, false).is_none());
+        config.general.experimental_ai_assist = false;
+        config.zenzai.gpu_layers = 4;
+        let spec = super::translation_server_spec_for_session(&root, &config, true).unwrap();
+        assert_eq!(spec.model, model);
+        assert_eq!(
+            spec.backend,
+            shared::runtime_assets::backend(&root, &config.zenzai.backend)
+        );
+        assert_eq!(spec.gpu_layers, 4);
+        assert!(super::translation_server_spec_for_session(&root, &config, false).is_none());
+        config.general.translation_keep_alive = true;
+        assert_eq!(
+            super::translation_server_spec_for_session(&root, &config, false).unwrap(),
+            spec
+        );
+        config.general.translation_keep_alive = false;
+        assert!(super::translation_server_spec_for_session(&root, &config, false).is_none());
+        config.general.translation_keep_alive = true;
+        config.general.experimental_translation = false;
+        assert!(super::translation_server_spec_for_session(&root, &config, false).is_none());
+        std::fs::remove_file(model).unwrap();
+        std::fs::remove_file(root.join("llama_vulkan/llama-server.exe")).unwrap();
+        std::fs::remove_dir(root.join("models")).unwrap();
+        std::fs::remove_dir(root.join("llama_vulkan")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn closing_prediction_job_stops_only_its_owned_process() {
         use std::os::windows::io::AsRawHandle;
@@ -797,7 +844,7 @@ mod tests {
         assert_eq!(config.zenzai.backend, "vulkan");
         for (backend, directory) in [
             ("vulkan", "llama_vulkan"),
-            ("cuda", "llama_cuda"),
+            ("cuda", "llama_cuda_b12125"),
             ("cpu", "llama_cpu"),
         ] {
             std::fs::create_dir_all(path.join(directory)).unwrap();
@@ -835,7 +882,7 @@ mod tests {
         std::fs::remove_file(corrector_path).unwrap();
         std::fs::remove_file(path.join("models").join(shared::runtime_assets::NANO_IQ4)).unwrap();
         std::fs::remove_dir(path.join("models")).unwrap();
-        for directory in ["llama_vulkan", "llama_cuda", "llama_cpu"] {
+        for directory in ["llama_vulkan", "llama_cuda_b12125", "llama_cpu"] {
             std::fs::remove_file(path.join(directory).join("llama-server.exe")).unwrap();
             std::fs::remove_dir(path.join(directory)).unwrap();
         }
@@ -1097,16 +1144,59 @@ fn assist_server_spec(
 // This worker owns only the prediction process it launches. Never stop another
 // application's server merely because it happens to occupy the same port.
 fn watch_prediction_server(install_dir: &Path) {
-    watch_assist_server(install_dir, false);
+    watch_assist_server(install_dir, AssistRole::Prediction);
 }
 
-fn watch_assist_server(install_dir: &Path, corrector: bool) {
-    let port = if corrector {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AssistRole {
+    Prediction,
+    Corrector,
+    Translation,
+}
+
+fn translation_server_spec(install_dir: &Path, config: &AppConfig) -> Option<AssistServerSpec> {
+    translation_server_spec_for_session(
+        install_dir,
+        config,
+        config.general.translation_keep_alive
+            || shared::translation_session::is_translation_active(),
+    )
+}
+
+fn translation_server_spec_for_session(
+    install_dir: &Path,
+    config: &AppConfig,
+    session_active: bool,
+) -> Option<AssistServerSpec> {
+    if !config.general.experimental_translation
+        || !(config.general.translation_keep_alive || session_active)
+    {
+        return None;
+    }
+    let filename =
+        shared::runtime_assets::translation_model_filename(&config.general.translation_model);
+    let model = install_dir.join("models").join(filename);
+    let backend = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
+    (model.is_file() && backend.join("llama-server.exe").is_file()).then_some(AssistServerSpec {
+        model,
+        backend,
+        gpu_layers: config.zenzai.effective_gpu_layers(),
+    })
+}
+
+fn watch_assist_server(install_dir: &Path, role: AssistRole) {
+    let corrector = role == AssistRole::Corrector;
+    let translation = role == AssistRole::Translation;
+    let port = if translation {
+        shared::TRANSLATION_SERVER_PORT
+    } else if corrector {
         18090
     } else {
         shared::PREDICTION_SERVER_PORT
     };
-    let label = if corrector {
+    let label = if translation {
+        "[translation]"
+    } else if corrector {
         "[corrector]"
     } else {
         "[prediction]"
@@ -1119,7 +1209,7 @@ fn watch_assist_server(install_dir: &Path, corrector: bool) {
                 let _ = child.wait();
             }
             // No model process owned by this watcher remains before acknowledging.
-            if !corrector {
+            if role == AssistRole::Prediction {
                 shared::model_update::acknowledge_prediction_stopped();
             }
             thread::sleep(Duration::from_millis(100));
@@ -1131,7 +1221,9 @@ fn watch_assist_server(install_dir: &Path, corrector: bool) {
             thread::sleep(Duration::from_secs(2));
             continue;
         };
-        let desired = if corrector {
+        let desired = if translation {
+            translation_server_spec(install_dir, &config)
+        } else if corrector {
             assist_server_spec(install_dir, &config, true)
         } else {
             prediction_server_spec(install_dir, &config)
@@ -1166,7 +1258,13 @@ fn watch_assist_server(install_dir: &Path, corrector: bool) {
                             "--host",
                             "127.0.0.1",
                             "-c",
-                            if corrector { "512" } else { "2048" },
+                            if translation {
+                                "4096"
+                            } else if corrector {
+                                "512"
+                            } else {
+                                "2048"
+                            },
                             "--threads",
                             "4",
                         ])
@@ -1174,6 +1272,9 @@ fn watch_assist_server(install_dir: &Path, corrector: bool) {
                         .arg(spec.gpu_layers.to_string());
                     if corrector {
                         command.args(["-n", "32"]);
+                    }
+                    if translation {
+                        command.args(["--alias", "plamo-3-translate-2b", "--parallel", "1"]);
                     }
                     use std::os::windows::process::CommandExt;
                     command.creation_flags(0x08000000);
@@ -1208,5 +1309,5 @@ fn watch_assist_server(install_dir: &Path, corrector: bool) {
 
 #[allow(dead_code)]
 fn watch_ai_server_process(install_dir: &Path) {
-    watch_assist_server(install_dir, true);
+    watch_assist_server(install_dir, AssistRole::Corrector);
 }

@@ -167,9 +167,9 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 4. 25ms の TSF スレッドタイマーで結果を受け取る。削除・再入力・候補操作・文節移動・確定・フォーカス変更等で世代や状態が変わった結果を破棄。同じ文字列を打ち直した場合も古い結果を使わない。
 5. 補正は元の候補を保持して追加する。適用時に補正表記を direct 入力として converter へ絶対置換し、原文の composition と入力 ledger を復元用に保存。補正適用とアプリへの確定は別操作。
 
-### 6.3 補正の内部パイプライン (`ai_assist/corrector`)
+### 6.3 補正の内部パイプライン (`ai_assist/corrector`, `keyboard_hybrid`)
 
-`ai_assist::corrector::suggest_composition(context, target, first_surface, config)` が補正候補を生成する。フォールバック順序:
+`ai_assist::corrector::suggest_composition(context, target, first_surface, config)` が補正候補を生成する。v0.2.3以降、独立Correctorサーバー（18090番）は廃止され、ネイティブワーカー（`keyboard-prior.exe`）の探索とメイン変換モデル（ポート18091）による2段リランキング（Stage-1/Stage-2）・漢字変換へ刷新された。フォールバック順序:
 
 1. 浮いたローマ字子音の復元 (`romaji_decoder.rs`)
 2. 採用済み学習 (`learning.rs`)
@@ -177,7 +177,7 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 4. 語中・音韻規則
 5. 編集距離
 6. QWERTY 辞書検索 (`typo_variant.rs` / `builtin_vocab.tsv`)
-7. 末尾最大 8 文字のニューラル補正（corrector モデル、ポート 18090）
+7. ネイティブ探索・メイン変換モデル統合補正（`keyboard_hybrid.rs` / `keyboard-prior.exe` `--assist`、ポート18091）
 
 入力は 128 文字までは全文を渡す。長い composition は通常変換の句読点境界を照合できる場合のみ末尾の句を補正し、変換済み接頭部を保持。境界を確認できない長文は任意の文字位置で切らない。要求全体の上限は 512 文字。
 
@@ -257,11 +257,11 @@ ZeroCon は `EE02 + 左文脈 + EE00 + カタカナ読み` から読みの続き
 
 | 用途 | 接続先・モデル |
 |---|---|
-| Rust 補正 | embedded は 18090、LM Studio は 1234。corrector 専用重み |
-| ZeroCon 先読み | 18091、実行フォルダの `zenz.gguf`、漢字変換と共通の `zenzai.backend`（既定 Vulkan、CPU/CUDA も選択可） |
-| 設定画面のベンチマーク | 8090。実 IME の先読みとは別プロセス |
+| Rust 補正・ZeroCon 先読み（統合） | 18091、実行フォルダの `zenz.gguf`（メイン変換モデル）、漢字変換と共通の `zenzai.backend`（既定 Vulkan、CPU/CUDA も選択可） |
+| 設定画面のベンチマーク | 8090。実 IME の先読み・補正とは別プロセス |
+| （旧構成）Corrector 専用 | 18090。v0.2.3で完全撤廃され、18091のメイン変換モデルへ一本化 |
 
-launcher は AI アシスト有効時に先読み用サーバーを監視する。先読みモデル選択は廃止し、旧 `experimental_predictive_model` は読み込み時に無視・次回保存時に除去する。タイポ補正の `experimental_ai_engine` は先読みには影響しない。所有するプロセスだけ設定変更・異常終了に応じて停止/再起動する。Job Object により launcher 終了時も先読みプロセスを終了する。外部の待受プロセスは停止しない。
+launcher は AI アシスト有効時に常駐推論サーバー（ポート 18091）を監視する。従来の独立した Corrector サーバー（18090 番）は廃止され、メイン変換モデル 1 本で先読み・タイポ補正（2段リランキング）・漢字変換を担う。先読みモデル選択は廃止し、旧 `experimental_predictive_model` は読み込み時に無視・次回保存時に除去する。タイポ補正の `experimental_ai_engine` は先読みには影響しない。所有するプロセスだけ設定変更・異常終了に応じて停止/再起動する。Job Object により launcher 終了時もサーバープロセスを終了する。外部の待受プロセスは停止しない。
 
 モデル切替時はセッション内の一時イベントで先読み停止を要求し、launcher が所有プロセスの停止を確認してから重みを差し替える。変換側の watchdog も切替中の再起動を待つ。
 
@@ -327,10 +327,10 @@ launcher は AI アシスト有効時に先読み用サーバーを監視する�
 
 ### 9.3 モデル・ポート
 
-- launcher は `models/typo-corrector-xsmall-q4km.gguf` があれば、先読みモデル選択より優先して 18090 番で起動する。なければ 350M/230M の LFM を選ぶ。
-- ニューラル補正は 18090 番の `/completion`、通常モデル先読みは 18091 番の `/v1/completions`（ZeroCon）。同じサービス・重みが補正と先読み両方に使われ得る。
-- `predictive_model == "zerocon"` の経路は 8090 番の `/completion` を利用し、失敗すると LFM 側へフォールバック。
-- 配布設定の確認値: Zenzai 有効、Vulkan、タイポ補正・AI アシスト・自動確定有効、予測モデル `230m_q4km`、engine `embedded`。ただし実行中の AppData 設定を保証しない。
+- v0.2.3 以降、常駐する推論サーバーはメイン変換モデル（ポート 18091、Nano v4 等）の単一プロセスへ統合された。旧 18090 番の独立 Corrector サーバーや LFM フォールバックは完全撤廃された。
+- 先読み・タイポ補正（Stage-2 表層リランキングおよび再変換）ともにポート 18091 のメイン変換モデルを利用する。
+- 設定画面のベンチマークは専用の 8090 番で起動し、実 IME のプロセスとは分離されている。
+- 配布設定の確認値: Zenzai 有効、Vulkan、タイポ補正・AI アシスト・自動確定有効、engine `embedded`。ただし実行中の AppData 設定を保証しない。
 
 ### 9.4 保存ファイル
 

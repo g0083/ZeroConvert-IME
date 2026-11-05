@@ -25,6 +25,16 @@ fn should_probe_reconversion_on_key(tested_selection: Option<bool>) -> bool {
     tested_selection != Some(false)
 }
 
+fn translation_shortcut(wparam: WPARAM) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
+    wparam.0 == 0x54
+        && unsafe {
+            GetKeyState(VK_CONTROL.0 as i32) < 0
+                && GetKeyState(VK_MENU.0 as i32) >= 0
+                && GetKeyState(VK_SHIFT.0 as i32) >= 0
+        }
+}
+
 // sink (aka event listener) for key events
 impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
     #[macros::anyhow]
@@ -40,6 +50,16 @@ impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
         if self.observe_disabled_key_test_context(pic)? {
             self.clear_reconversion_test_result();
             return Ok(false.into());
+        }
+
+        if translation_shortcut(wparam)
+            && (self.borrow()?.translation_session.is_some()
+                || self.translation_feature_enabled()?)
+        {
+            return Ok(true.into());
+        }
+        if wparam.0 == 0x1B && self.borrow()?.translation_session.is_some() {
+            return Ok(true.into());
         }
         if self.borrow()?.disabled_context_observed || self.deferred_input_ready()? {
             self.remember_reconversion_test_result(wparam, None);
@@ -84,6 +104,20 @@ impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
     fn OnKeyDown(&self, pic: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         self.update_shift_key_state(wparam, true);
         self.cleanup_observed_disabled_context()?;
+
+        let active = self.borrow()?.translation_session.is_some();
+        if translation_shortcut(wparam) && (active || self.translation_feature_enabled()?) {
+            if lparam.0 & (1 << 30) == 0 {
+                if active || !self.trigger_selection_translation() {
+                    self.toggle_translation_mode(pic)?;
+                }
+            }
+            return Ok(true.into());
+        }
+        if wparam.0 == 0x1B && active {
+            self.toggle_translation_mode(pic)?;
+            return Ok(true.into());
+        }
         if self.has_deferred_input()? {
             self.clear_reconversion_test_result();
             return Ok(self.handle_key(pic, wparam, lparam)?.into());
@@ -116,7 +150,14 @@ impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
         // this function is called when a key is pressed
         // we can handle key events here
         let result = self.handle_key(pic, wparam, lparam)?;
-
+        if result
+            && active
+            && matches!(wparam.0, 0x0D | 0x09)
+            && self.borrow()?.borrow_composition()?.state
+                == crate::engine::composition::CompositionState::None
+        {
+            self.stop_translation_mode();
+        }
         Ok(result.into())
     }
 

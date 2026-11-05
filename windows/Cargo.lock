@@ -344,6 +344,7 @@ dependencies = [
  "hyper-util",
  "log",
  "macros",
+ "selection-ui",
  "serde",
  "serde_json",
  "shared",
@@ -3661,6 +3662,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "selection-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "shared",
+ "windows",
+]
+
+[[package]]
 name = "selectors"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4930,6 +4942,7 @@ dependencies = [
  "anyhow",
  "azookey-server",
  "base64 0.22.1",
+ "selection-ui",
  "serde",
  "serde_json",
  "shared",

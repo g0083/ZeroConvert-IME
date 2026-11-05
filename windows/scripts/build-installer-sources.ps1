@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'distribution.psm1') -Force
 $windowsRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'modern-llama.ps1')
+$modernLlama = Initialize-ModernLlama
 
 function Invoke-BuildStep([string]$Directory, [string]$Command, [string[]]$Arguments) {
     Write-Host ("Build: $Command " + ($Arguments -join ' '))
@@ -31,10 +33,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $SwiftRuntimeDirectory 'swiftCore.dl
 }
 
 $swiftRoot = Join-Path $windowsRoot 'server-swift'
-Invoke-BuildStep $swiftRoot 'swift.exe' @('build', '-c', 'release', '-Xcc', '-D_CRT_USE_C_COMPLEX_H', '-Xcxx', '-D_CRT_USE_C_COMPLEX_H')
+Invoke-BuildStep $swiftRoot 'swift.exe' @('build', '--scratch-path', '.build-modern', '-c', 'release', '-Xcc', '-D_CRT_USE_C_COMPLEX_H', '-Xcxx', '-D_CRT_USE_C_COMPLEX_H')
 Push-Location $swiftRoot
 try {
-    $binOutput = & swift.exe build -c release --show-bin-path
+    $binOutput = & swift.exe build --scratch-path .build-modern -c release --show-bin-path
     if ($LASTEXITCODE -ne 0) { throw 'Cannot locate Swift build output.' }
     $swiftBin = ($binOutput | Select-Object -Last 1).Trim()
 } finally { Pop-Location }

@@ -2103,6 +2103,12 @@ impl TextServiceFactory {
         }
         if let Some(index) = candidate_ids
             .iter()
+            .position(|&id| id == shared::ai_candidate::TRANSLATION)
+        {
+            return Some((index, shared::ai_candidate::TRANSLATION));
+        }
+        if let Some(index) = candidate_ids
+            .iter()
             .position(|&id| id == shared::ai_candidate::TYPO_CORRECTION)
         {
             return Some((index, shared::ai_candidate::TYPO_CORRECTION));
@@ -2201,13 +2207,33 @@ impl TextServiceFactory {
         ) {
             if let Some(text) = candidates.texts.get(idx) {
                 augmented_reading = Some(serde_json::json!({"reading":base_reading,
-                    "assist":{"status": if kind == shared::ai_candidate::TYPO_CORRECTION {"proposal"} else {"prediction"},
+                    "assist":{"status": if kind == shared::ai_candidate::TRANSLATION {"translation"} else if kind == shared::ai_candidate::TYPO_CORRECTION {"proposal"} else {"prediction"},
                     "source":candidates.hiragana, "replacement":text,
                         "continuation":self.borrow()?.borrow_composition()?.typo.prediction_continuation,
                         "undoAvailable":applied.is_some()}}).to_string());
             }
         }
 
+        if self.borrow()?.translation_session.is_some() {
+            let translation = candidates
+                .candidate_ids
+                .iter()
+                .position(|id| *id == shared::ai_candidate::TRANSLATION)
+                .and_then(|i| candidates.texts.get(i));
+            augmented_reading = Some(serde_json::json!({
+                "translationMode": true,
+                "translationError": self.borrow()?.borrow_composition()?.typo.translation_failed,
+                "source": format!("{}{}", candidates.texts.first().map(String::as_str).unwrap_or(""),
+                    candidates.sub_texts.first().map(String::as_str).unwrap_or("")),
+                "translation": translation,
+                "model": IMEState::app_config_snapshot()?.app_config().general.translation_model,
+            }).to_string());
+        }
+        let candidate_list_visible = if self.borrow()?.translation_session.is_some() {
+            Some(false)
+        } else {
+            candidate_list_visible
+        };
         let has_ai_assist_aug = augmented_reading.is_some();
         let visible = if has_ai_assist_aug {
             visible.or(Some(true))
@@ -2427,6 +2453,7 @@ impl TextServiceFactory {
                 .iter()
                 .any(|&id| id == 999901 || id == 999902);
         if app_config.general.jev_conversion
+            && !app_config.general.experimental_translation
             && *transition == CompositionState::Composing
             && !has_ai_assist
             && !temporary_latin
@@ -2595,6 +2622,7 @@ impl TextServiceFactory {
         ipc_service: &mut IPCService,
     ) -> Result<()> {
         if self.borrow()?.borrow_composition()?.typo.hold_auto_commit
+            || app_config.general.experimental_translation
             || app_config.general.jev_conversion
             || *transition != CompositionState::Composing
             || temporary_latin
@@ -5017,7 +5045,10 @@ impl TextServiceFactory {
         app_config: &AppConfig,
         romaji_lookup: &RomajiLookup,
     ) -> bool {
-        if !app_config.general.punctuation_commit || *mode != InputMode::Kana {
+        if app_config.general.experimental_translation
+            || !app_config.general.punctuation_commit
+            || *mode != InputMode::Kana
+        {
             return false;
         }
 
@@ -5202,7 +5233,9 @@ impl TextServiceFactory {
         {
             return Some((composition.state.clone(), Vec::new()));
         }
-        if matches!(action, UserAction::Tab) {
+        if matches!(action, UserAction::Tab)
+            || (app_config.general.experimental_translation && matches!(action, UserAction::Enter))
+        {
             // 読み行のピル表示と同じ優先度解決を使うため、Tab で確定される候補と
             // 画面に出ている候補が常に一致する。
             if let Some((idx, kind)) = Self::ai_assist_priority_index(
@@ -5225,6 +5258,12 @@ impl TextServiceFactory {
                     ));
                 }
             }
+        }
+        if app_config.general.experimental_translation
+            && composition.state == CompositionState::Composing
+            && matches!(action, UserAction::Enter | UserAction::Tab)
+        {
+            return Some((composition.state.clone(), Vec::new()));
         }
         if app_config.general.jev_conversion
             && composition.state == CompositionState::Composing
@@ -5878,7 +5917,8 @@ impl TextServiceFactory {
         if composition_state != CompositionState::None {
             return Ok(None);
         }
-        let preset = IMEState::app_config_snapshot()?
+        let preset = self
+            .input_config_snapshot()?
             .app_config()
             .shortcuts
             .reconversion_key;
@@ -6020,7 +6060,7 @@ impl TextServiceFactory {
         }
         // Acquire the configuration snapshot before replacing the selected
         // document range, so a settings read failure remains non-destructive.
-        let app_config_snapshot = IMEState::app_config_snapshot()?;
+        let app_config_snapshot = self.input_config_snapshot()?;
         if !Self::ensure_ipc_service_for_key_event("start_reconversion") {
             return Ok(Some(true));
         }
@@ -6188,7 +6228,7 @@ impl TextServiceFactory {
             let is_shift_key = Self::is_shift_key(wparam);
             let is_alt_backquote = Self::is_alt_backquote(wparam, lparam);
             let config_snapshot_start = trace_request_id.map(|_| Instant::now());
-            let config_snapshot = IMEState::app_config_snapshot()?;
+            let config_snapshot = self.input_config_snapshot()?;
             let app_config = config_snapshot.app_config();
             let romaji_lookup = config_snapshot.romaji_lookup();
             if let (Some(request_id), Some(config_snapshot_start)) =
@@ -6501,7 +6541,7 @@ impl TextServiceFactory {
                 execute(
                     &[],
                     composition.state.clone(),
-                    IMEState::app_config_snapshot()?,
+                    self.input_config_snapshot()?,
                 )?;
                 continue;
             }
@@ -6522,7 +6562,7 @@ impl TextServiceFactory {
                     // Keep the user event queued until every fallible prerequisite for
                     // replanning has succeeded. A transient configuration or mode lookup
                     // failure must not discard the user's input.
-                    let config_snapshot = IMEState::app_config_snapshot()?;
+                    let config_snapshot = self.input_config_snapshot()?;
                     let mode = IMEState::input_mode()?;
                     let planned = Self::plan_deferred_user_action(
                         &composition,
@@ -6792,7 +6832,7 @@ impl TextServiceFactory {
                 return Ok(false);
             }
 
-            let config_snapshot = IMEState::app_config_snapshot()?;
+            let config_snapshot = self.input_config_snapshot()?;
             let app_config = config_snapshot.app_config();
             if !app_config.shortcuts.eisu_toggle {
                 return Ok(false);
@@ -7229,7 +7269,7 @@ impl TextServiceFactory {
         // A pending asynchronous language-bar request must not overtake queued recovery input.
         // Preserve the absolute target computed from that pending request, and only invalidate
         // the request after the replacement has been queued successfully.
-        let config_snapshot = IMEState::app_config_snapshot()?;
+        let config_snapshot = self.input_config_snapshot()?;
         let deferred = DeferredUserAction {
             action: language_bar_deferred_action(&mode, replaces_pending_mode_switch),
             is_shift_pressed: false,
@@ -7256,7 +7296,7 @@ impl TextServiceFactory {
     ) -> Result<()> {
         let trace_request_id = current_input_trace_request_id();
         let config_snapshot_start = trace_request_id.map(|_| Instant::now());
-        let config_snapshot = IMEState::app_config_snapshot()?;
+        let config_snapshot = self.input_config_snapshot()?;
         if let (Some(request_id), Some(config_snapshot_start)) =
             (trace_request_id, config_snapshot_start)
         {
@@ -9475,6 +9515,18 @@ mod lifecycle_tests {
 
     #[test]
     fn ai_assist_priority_prefers_typo_correction_over_predictive() {
+        // TRANSLATION is preferred when present
+        let ids_trans = vec![
+            0u64,
+            shared::ai_candidate::TYPO_CORRECTION,
+            shared::ai_candidate::TRANSLATION,
+            shared::ai_candidate::PREDICTIVE,
+        ];
+        let (index, kind) =
+            TextServiceFactory::ai_assist_priority_index(&ids_trans, None).expect("should resolve");
+        assert_eq!(index, 2);
+        assert_eq!(kind, shared::ai_candidate::TRANSLATION);
+
         // 💡 もしかして (TYPO_CORRECTION) は誤字を直す修正型なので優先する
         let ids = vec![
             0u64,

@@ -6,10 +6,17 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'distribution.psm1') -Force
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $windowsRoot = Join-Path $repoRoot 'windows'
-if (-not $DependencyDirectory) { $DependencyDirectory = Join-Path $repoRoot 'artifacts/runtime/windows' }
+if (-not $DependencyDirectory) {
+    . (Join-Path $PSScriptRoot 'modern-llama.ps1')
+    $modernLlama = Initialize-ModernLlama
+    $DependencyDirectory = $modernLlama.runtime
+}
 $dependencyRoot = (Resolve-Path -LiteralPath $DependencyDirectory).ProviderPath
 $dependencies = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $dependencyRoot 'dependencies-manifest.json') | ConvertFrom-Json
 if ($dependencies.schemaVersion -ne 1) { throw 'Unsupported dependency manifest.' }
+if (-not $dependencies.PSObject.Properties['llamaRevision'] -or $dependencies.llamaRevision -ne '7d516e2') {
+    throw 'The modern Swift ABI requires the b12125 dependency set. Omit -DependencyDirectory to prepare it automatically.'
+}
 Test-ArtifactEntries $dependencyRoot $dependencies.files
 foreach ($entry in $dependencies.files) {
     if ($entry.path -notmatch '^(llama_cpu/|llama_vulkan/|plutil\.exe$|(?:concrt140|msvcp140(?:_[a-z0-9_]+)?|vccorlib140|vcruntime140(?:_[a-z0-9_]+)?)\.dll$)') {
@@ -68,6 +75,14 @@ try {
         if ((Get-ArtifactHash (Join-Path $payloadRoot ('models\' + $model.filename))) -ne $model.sha256) { throw "Distribution model changed: $($model.name)" }
     }
     # Use maintained distribution defaults, never this user's live settings or learning.
+    # The tested translation default is PLaMo 3 Translate 0.8B. The 2B model is
+    # optional and not bundled; shipping only the validated 0.8B keeps the
+    # installer under GitHub's per-asset limit and matches settings.json.
+    $translationModel = Join-Path $repoRoot 'artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf'
+    if (Test-Path -LiteralPath $translationModel -PathType Leaf) {
+        if ((Get-ArtifactHash $translationModel) -ne '3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c') { throw 'Translation model hash mismatch.' }
+        Copy-PayloadFile $translationModel 'models/plamo-3-translate-0.8b-Q4_K_M.gguf'
+    }
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $windowsRoot 'deployment') -File) {
         if ($file.Extension -in @('.ps1', '.bat', '.md', '.json')) {
             Copy-PayloadFile $file.FullName $file.Name

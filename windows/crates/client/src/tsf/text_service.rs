@@ -136,6 +136,7 @@ pub struct TextService {
     pub(super) selection_count: SelectionCountWindow,
     pub(super) selection_count_pending: bool,
     pub(super) selection_count_generation: u64,
+    pub translation_session: Option<shared::translation_session::TranslationSessionGuard>,
     pub composition: RefCell<Composition>,
     pub update_pos_state: UpdatePosState,
     pub update_pos_generation: u64,

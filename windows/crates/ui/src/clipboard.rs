@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU32, Ordering},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -14,12 +15,12 @@ use tao::{
     window::{Window, WindowBuilder},
 };
 use windows::Win32::{
-    Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM},
+    Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, WPARAM},
     System::{
         DataExchange::{
             AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
-            IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
-            RemoveClipboardFormatListener, SetClipboardData,
+            GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+            RegisterClipboardFormatW, RemoveClipboardFormatListener, SetClipboardData,
         },
         Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
     },
@@ -30,17 +31,19 @@ use windows::Win32::{
             VIRTUAL_KEY, VK_CONTROL,
         },
         WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-            GetMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongW,
-            TranslateMessage, GWL_EXSTYLE, GWL_STYLE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE,
-            WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-            WS_POPUP,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
+            GetForegroundWindow, GetMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+            SetWindowLongW, TranslateMessage, GWL_EXSTYLE, GWL_STYLE, MSG, WINDOW_EX_STYLE,
+            WINDOW_STYLE, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_HOTKEY, WNDCLASSW, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
 use wry::{WebContext, WebView, WebViewBuilder};
 
 use crate::{data_paths, UserEvent};
+
+static LAST_SELF_CLIPBOARD_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
 const CF_DIB: u32 = 8;
 const CF_UNICODETEXT: u32 = 13;
@@ -374,6 +377,8 @@ pub fn paste_text(text: &str, target_hwnd_raw: isize) {
             let _ = CloseClipboard();
         }
 
+        mark_self_clipboard_write();
+
         send_ctrl_v();
     }
 }
@@ -401,6 +406,8 @@ pub fn paste_image(bmp_base64: &str, target_hwnd_raw: isize) {
                     }
                     let _ = CloseClipboard();
                 }
+
+                mark_self_clipboard_write();
 
                 send_ctrl_v();
             }
@@ -463,10 +470,83 @@ unsafe fn send_ctrl_v() {
     let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
 }
 
+pub fn read_clipboard_text() -> Option<String> {
+    unsafe {
+        let fmt_exclude = RegisterClipboardFormatW(windows::core::w!(
+            "ExcludeClipboardContentFromMonitorProcessing"
+        ));
+        let fmt_ignore = RegisterClipboardFormatW(windows::core::w!("Clipboard Viewer Ignore"));
+        if fmt_exclude != 0 && IsClipboardFormatAvailable(fmt_exclude).is_ok() {
+            return None;
+        }
+        if fmt_ignore != 0 && IsClipboardFormatAvailable(fmt_ignore).is_ok() {
+            return None;
+        }
+        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
+            return None;
+        }
+        let mut text = None;
+        if IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {
+            if let Ok(handle) = GetClipboardData(CF_UNICODETEXT) {
+                let hmem = HGLOBAL(handle.0 as _);
+                let ptr = GlobalLock(hmem) as *const u16;
+                if !ptr.is_null() {
+                    let mut len = 0usize;
+                    while *ptr.add(len) != 0 {
+                        len += 1;
+                        if len > 65_536 {
+                            break;
+                        }
+                    }
+                    let slice = std::slice::from_raw_parts(ptr, len);
+                    text = Some(String::from_utf16_lossy(slice));
+                    let _ = GlobalUnlock(hmem);
+                }
+            }
+        }
+        let _ = CloseClipboard();
+        text
+    }
+}
+
+pub fn mark_self_clipboard_write() {
+    unsafe {
+        LAST_SELF_CLIPBOARD_SEQUENCE.store(GetClipboardSequenceNumber(), Ordering::SeqCst);
+    }
+}
+
+pub fn is_self_clipboard_write(seq_before: u32) -> bool {
+    // seq_before is the sequence number captured before our write? We'll compare current to recorded.
+    let _ = seq_before;
+    let recorded = LAST_SELF_CLIPBOARD_SEQUENCE.load(Ordering::SeqCst);
+    recorded != 0 && recorded == unsafe { GetClipboardSequenceNumber() }
+}
+
+pub fn current_clipboard_sequence() -> u32 {
+    unsafe { GetClipboardSequenceNumber() }
+}
+pub fn set_clipboard_text(text: &str) {
+    unsafe {
+        if OpenClipboard(HWND(std::ptr::null_mut())).is_ok() {
+            let _ = EmptyClipboard();
+            let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let size = utf16.len() * 2;
+            if let Ok(hmem) = GlobalAlloc(GMEM_MOVEABLE, size) {
+                let ptr = GlobalLock(hmem) as *mut u16;
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr, utf16.len());
+                    let _ = GlobalUnlock(hmem);
+                    let _ = SetClipboardData(CF_UNICODETEXT, HANDLE(hmem.0 as _));
+                }
+            }
+            let _ = CloseClipboard();
+        }
+        mark_self_clipboard_write();
+    }
+}
+
 pub fn create_clipboard_window(event_loop: &EventLoop<UserEvent>) -> Result<Window> {
     let window = WindowBuilder::new()
-        .with_decorations(false)
-        .with_title("ZeroConvert Clipboard")
         .with_focused(false)
         .with_visible(false)
         .with_undecorated_shadow(true)
@@ -590,6 +670,34 @@ pub fn start_clipboard_listener(
             if msg.message == WM_CLIPBOARDUPDATE {
                 if check_clipboard(&state) {
                     let _ = proxy.send_event(UserEvent::ClipboardUpdated);
+                }
+                // Copy-translation candidate handling (best-effort, bounded).
+                if !is_self_clipboard_write(0) {
+                    let config = shared::AppConfig::read().unwrap_or_default();
+                    if config.general.experimental_translation {
+                        if let Some(text) = read_clipboard_text() {
+                            if !text.trim().is_empty() {
+                                let fg = GetForegroundWindow();
+                                let mut pt = POINT::default();
+                                let _ = GetCursorPos(&mut pt);
+                                let source = crate::copy_source::classify_with_timeout(
+                                    fg.0 as isize,
+                                    pt,
+                                    300,
+                                );
+                                if source == crate::copy_translation::CopySource::ReadOnlyDocument {
+                                    let _ = proxy.send_event(UserEvent::CopyTranslationShow {
+                                        text,
+                                        owner: fg.0 as isize,
+                                        x: pt.x,
+                                        y: pt.y,
+                                    });
+                                } else {
+                                    let _ = proxy.send_event(UserEvent::CopyTranslationHide);
+                                }
+                            }
+                        }
+                    }
                 }
             } else if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
                 let foreground = GetForegroundWindow();

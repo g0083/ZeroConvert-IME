@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+/* __THEME_CSS__ */
+:root {
+    --ime-background: #ffffff;
+    --ime-surface: #f1f5f9;
+    --ime-border: #cbd5e1;
+    --ime-text: #0f172a;
+    --ime-muted: #64748b;
+    --ime-accent: #2563eb;
+    --ime-selection: #dbeafe;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ime-background: #1e1e24;
+        --ime-surface: #2b2b36;
+        --ime-border: #3f3f4e;
+        --ime-text: #f8fafc;
+        --ime-muted: #94a3b8;
+        --ime-accent: #3b82f6;
+        --ime-selection: #1e3a8a;
+    }
+}
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+    display: none;
+}
+html, body {
+    background: transparent !important;
+    overflow: hidden !important;
+    width: 100vw;
+    height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ime-text);
+}
+.card {
+    background: var(--ime-background) !important;
+    border: 1px solid var(--ime-border);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+    padding: 10px 14px;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    opacity: 1 !important;
+}
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--ime-muted);
+}
+.badge {
+    background: var(--ime-selection);
+    color: var(--ime-accent);
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+}
+.content-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 2px 0;
+}
+.ja-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--ime-text);
+}
+.ja-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ime-muted);
+    min-width: 44px;
+}
+.ja-text {
+    flex: 1;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.en-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--ime-accent);
+}
+.en-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ime-accent);
+    min-width: 44px;
+}
+.en-text {
+    flex: 1;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.en-text.loading {
+    color: var(--ime-muted);
+    font-style: italic;
+    font-weight: 400;
+}
+.footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--ime-muted);
+    border-top: 1px solid var(--ime-border);
+    padding-top: 4px;
+}
+.shortcuts {
+    display: flex;
+    gap: 10px;
+}
+.key {
+    background: var(--ime-surface);
+    border: 1px solid var(--ime-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: monospace;
+    color: var(--ime-text);
+}
+</style>
+</head>
+<body>
+
+<div class="card">
+    <div class="header">
+        <span class="badge" id="badge">翻訳モード (PLaMo 3)</span>
+        <span id="status">リアルタイム英訳入力中</span>
+    </div>
+
+    <div class="content-row">
+        <div class="ja-row">
+            <span class="ja-label" id="src-label">日本語:</span>
+            <span class="ja-text" id="ja-text">入力待ち...</span>
+        </div>
+        <div class="en-row">
+            <span class="en-label" id="dst-label">英訳:</span>
+            <span class="en-text" id="en-text"></span>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div class="shortcuts">
+            <span><span class="key">Enter</span> 確定</span>
+            <span><span class="key">Esc</span> 取消</span>
+            <span><span class="key">Ctrl+T</span> 終了</span>
+        </div>
+        <span id="model-tag">0.8B 高速推論</span>
+    </div>
+</div>
+
+<script>
+const jaText = document.getElementById("ja-text");
+const enText = document.getElementById("en-text");
+const badge = document.getElementById("badge");
+const srcLabel = document.getElementById("src-label");
+const dstLabel = document.getElementById("dst-label");
+const statusText = document.getElementById("status");
+
+let serverReady = false;
+let latest = {ja: "", en: "", loading: false, error: false};
+function renderTranslation() {
+    const {ja, en, loading, error} = latest;
+    const preparing = !serverReady && !en && !error;
+    jaText.textContent = ja || "入力待ち…";
+    statusText.textContent = error ? "翻訳失敗・入力し直して再試行" : preparing ? "モデルを読み込み中" : loading ? "翻訳中" : "リアルタイム英訳入力中";
+    enText.textContent = error ? "翻訳できませんでした。Escで取消" : preparing ? "モデルを読み込み中…" : loading ? "翻訳中…" : en || "";
+    enText.classList.toggle("loading", preparing || loading || error);
+}
+window.updateTranslation = function(ja, en, loading, error) {
+    latest = {ja, en, loading, error}; renderTranslation();
+};
+window.setReadiness = function(ready) { serverReady = ready; renderTranslation(); };
+
+window.setModel = function(model) {
+    document.getElementById("model-tag").textContent = model === "2b" ? "2B" : "0.8B";
+};
+window.setColorTheme = function(theme) {
+    if (!theme) return;
+    const r = document.documentElement;
+    if (theme.background) r.style.setProperty('--ime-background', theme.background);
+    if (theme.surface) r.style.setProperty('--ime-surface', theme.surface);
+    if (theme.border) r.style.setProperty('--ime-border', theme.border);
+    if (theme.text) r.style.setProperty('--ime-text', theme.text);
+    if (theme.muted) r.style.setProperty('--ime-muted', theme.muted);
+    if (theme.accent) r.style.setProperty('--ime-accent', theme.accent);
+    if (theme.selection) r.style.setProperty('--ime-selection', theme.selection);
+};
+</script>
+
+</body>
+</html>

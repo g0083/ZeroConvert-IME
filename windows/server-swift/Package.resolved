@@ -1,14 +1,6 @@
 {
-  "originHash" : "5313021ca2189c544d81debf5f4f4f9557344c855a4836d18649b4746f282587",
+  "originHash" : "386bf6620a845666a1ce4027c9a323ee70ec208e9f423d7e13bbc341c889f03d",
   "pins" : [
-    {
-      "identity" : "azookeykanakanjiconverter",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/batao9/AzooKeyKanaKanjiConverter",
-      "state" : {
-        "revision" : "c228776b0b869f81ee2a1031ff9dbd679f4b3cd9"
-      }
-    },
     {
       "identity" : "jinja",
       "kind" : "remoteSourceControl",

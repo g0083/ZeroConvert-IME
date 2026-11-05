@@ -35,6 +35,11 @@ Write-Host ('Changed input groups: ' + ($changed -join ', '))
 Write-Host ('Build/update targets: ' + ($plan -join ', '))
 if (-not $plan.Count) { Write-Host "No changes; no build, copies or restarts ($([math]::Round($timer.Elapsed.TotalSeconds,1))s)."; return }
 if (-not $PSCmdlet.ShouldProcess($trialRoot, 'Incrementally build changed components and apply a local development update')) { return }
+$modernLlama = $null
+if (@($plan | Where-Object { $_ -in @('runtime','swift','keyboard') }).Count) {
+    . (Join-Path $PSScriptRoot 'modern-llama.ps1')
+    $modernLlama = Initialize-ModernLlama
+}
 function Invoke-TrialStep([string]$Directory, [string]$Command, [string[]]$Arguments) {
     Write-Host ("Build: $Command " + ($Arguments -join ' '))
     Push-Location $Directory
@@ -43,6 +48,12 @@ function Invoke-TrialStep([string]$Directory, [string]$Command, [string[]]$Argum
 }
 $outputs = [ordered]@{}
 if ($previous) { foreach ($group in $previous.outputs.PSObject.Properties) { $outputs[$group.Name] = @($group.Value) } }
+if ('runtime' -in $plan -and -not $outputs.Contains('runtime')) {
+    # Only retire files with a known original dependency hash; the apply step
+    # refuses removals if a user has changed any of these files independently.
+    $legacyManifest = Get-Content -Raw (Join-Path $repoRoot 'artifacts/runtime/windows/dependencies-manifest.json') | ConvertFrom-Json
+    $outputs['runtime'] = @($legacyManifest.files | Where-Object { $_.path -match '^llama_(cpu|vulkan)/' })
+}
 $sources = [ordered]@{}
 function Add-TrialOutput([string]$Group, [string]$Source, [string]$Relative) {
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "Build output missing: $Source" }
@@ -75,9 +86,9 @@ while ($true) {
     if ('swift' -in $plan) {
         if ($env:SDKROOT -notmatch '^(.*)[\\/]Platforms[\\/]([^\\/]+)[\\/]Windows\.platform[\\/]') { throw 'SDKROOT must identify the Swift Windows SDK.' }
         $swiftRuntime = Join-Path $Matches[1] ('Runtimes\' + $Matches[2] + '\usr\bin')
-        Invoke-TrialStep (Join-Path $windowsRoot 'server-swift') 'swift.exe' @('build','-c','release','-Xcc','-D_CRT_USE_C_COMPLEX_H','-Xcxx','-D_CRT_USE_C_COMPLEX_H')
+        Invoke-TrialStep (Join-Path $windowsRoot 'server-swift') 'swift.exe' @('build','--scratch-path','.build-modern','-c','release','-Xcc','-D_CRT_USE_C_COMPLEX_H','-Xcxx','-D_CRT_USE_C_COMPLEX_H')
         Push-Location (Join-Path $windowsRoot 'server-swift')
-        try { $swiftBin = (& swift.exe build -c release --show-bin-path | Select-Object -Last 1).Trim(); if ($LASTEXITCODE -ne 0) { throw 'Swift output lookup failed.' } }
+        try { $swiftBin = (& swift.exe build --scratch-path .build-modern -c release --show-bin-path | Select-Object -Last 1).Trim(); if ($LASTEXITCODE -ne 0) { throw 'Swift output lookup failed.' } }
         finally { Pop-Location }
         New-Item -ItemType Directory -Path (Join-Path $windowsRoot 'crates/server/target') -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $swiftBin 'azookey-server.lib') -Destination (Join-Path $windowsRoot 'crates/server/target/azookey-server.lib') -Force
@@ -122,6 +133,26 @@ while ($true) {
         } finally { $env:AZOOKEY_BUILD_CHANNEL=$oldChannel; $env:AZOOKEY_BUILD_NUMBER=$oldNumber }
         Add-TrialOutput 'frontend' (Join-Path $windowsRoot 'target/release/frontend.exe') 'frontend.exe'
         Add-TrialOutput 'frontend' (Join-Path $windowsRoot 'target/release/frontend.exe') 'azookey-updater-helper.exe'
+    }
+    if ('runtime' -in $plan) {
+        foreach ($backend in @('llama_cpu','llama_vulkan')) {
+            foreach ($entry in Get-ArtifactEntries (Join-Path $modernLlama.runtime $backend)) {
+                Add-TrialOutput 'runtime' (Join-Path $modernLlama.runtime "$backend/$($entry.path)") "$backend/$($entry.path)"
+            }
+        }
+    }
+    if ('translation-model' -in $plan) {
+        $models = @(
+            @{ Path = 'artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf'; Hash = '3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c'; Target = 'models/plamo-3-translate-0.8b-Q4_K_M.gguf' },
+            @{ Path = 'artifacts/models/plamo-3-translate-2b/plamo-3-translate-2b-Q4_K_M.gguf'; Hash = '2c288ecc7ebfe60c3561726580da3583767f3c41ca3ef5c6825bf6c4cc060787'; Target = 'models/plamo-3-translate-2b-Q4_K_M.gguf' }
+        )
+        foreach ($m in $models) {
+            $src = Join-Path $repoRoot $m.Path
+            if (Test-Path -LiteralPath $src -PathType Leaf) {
+                if ((Get-ArtifactHash $src) -ne $m.Hash) { throw "Translation model hash mismatch: $($m.Path)" }
+                Add-TrialOutput 'translation-model' $src $m.Target
+            }
+        }
     }
     foreach ($dataGroup in @('dictionary','emoji','deployment','models')) {
         if ($dataGroup -notin $plan) { continue }

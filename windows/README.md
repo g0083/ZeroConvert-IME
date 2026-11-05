@@ -187,3 +187,6 @@ python3 scripts/vm.py --profile manual handoff
 - [microsoft/Windows-classic-samples](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/Win7Samples/winui/input/tsf/textservice)
 - [dec32/ajemi](https://github.com/dec32/ajemi)
 - https://zenn.dev/mkpoli/scraps/6dc57fcd0335cf
+
+## ライセンス
+本ソフトウェアは MIT / Apache-2.0 等の第三者ライセンスに加え、翻訳機能に PLaMo 3 Translate（Preferred Networks, Inc.）を PLaMo Community License の条件で内蔵しています。詳細は deployment/THIRD_PARTY_LICENSES.md を参照してください。

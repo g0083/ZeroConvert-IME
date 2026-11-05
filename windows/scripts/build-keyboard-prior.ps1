@@ -5,11 +5,15 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'distribution.psm1')
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path $repoRoot 'artifacts/runtime/windows/llama_cpu' }
+if (-not $RuntimeDirectory) {
+    . (Join-Path $PSScriptRoot 'modern-llama.ps1')
+    $prepared = Initialize-ModernLlama
+    $RuntimeDirectory = Join-Path $prepared.runtime 'llama_cpu'
+}
 $sourceRoot = Join-Path $repoRoot 'windows/native/keyboard-prior'
 $inputs = @(Get-ChildItem -LiteralPath $sourceRoot -File | Sort-Object Name)
 $content = ($inputs | ForEach-Object { $_.Name + ':' + (Get-ArtifactHash $_.FullName) }) -join "`n"
-foreach ($name in @('llama.dll','llama.lib','ggml-cpu.dll')) {
+foreach ($name in @('llama.dll','llama.lib','ggml-cpu-x64.dll')) {
     $content += "`n" + $name + ':' + (Get-ArtifactHash (Join-Path $RuntimeDirectory $name))
 }
 $algorithm = [Security.Cryptography.SHA256]::Create()

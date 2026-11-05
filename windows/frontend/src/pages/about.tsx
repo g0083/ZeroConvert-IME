@@ -68,6 +68,9 @@ export const About = () => {
                 <SettingsRow label="llama.cpp (GGML / GGUF 推論ランタイム)" description="Georgi Gerganov et al.">
                     <span className="text-xs font-mono text-muted-foreground">MIT License</span>
                 </SettingsRow>
+                <SettingsRow label="PLaMo 3 Translate (翻訳モデル)" description="Preferred Networks, Inc. (PFN)。PLaMo Community License（年商10億円以下は登録後無償商用可）">
+                    <span className="text-xs font-mono text-muted-foreground">PLaMo Community License</span>
+                </SettingsRow>
                 <SettingsRow label="ライセンス全文">
                     <span className="text-xs font-mono text-muted-foreground">THIRD_PARTY_LICENSES.md</span>
                 </SettingsRow>

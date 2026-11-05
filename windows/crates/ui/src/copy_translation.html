@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic UI", sans-serif; font-size: 13px; background: transparent; }
+.container { width: 100%; height: 100%; display: flex; flex-direction: column; background: #FFFFFF; border: 1px solid rgba(0,0,0,0.12); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); overflow: hidden; color: #1E293B; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+.count { font-weight: 600; }
+.btn { padding: 4px 10px; border: none; border-radius: 6px; background: #2563EB; color: #fff; cursor: pointer; font-size: 12px; }
+.btn.secondary { background: #E2E8F0; color: #475569; }
+.close { margin-left: auto; background: transparent; color: #64748B; font-size: 16px; cursor: pointer; border: none; }
+.result { padding: 8px 12px; border-top: 1px solid rgba(0,0,0,0.06); max-height: 260px; overflow: auto; white-space: pre-wrap; }
+.hidden { display: none; }
+@media (prefers-color-scheme: dark) {
+ .container { background: #181A20; color: #F1F5F9; border-color: rgba(255,255,255,0.12); }
+ .btn.secondary { background: #334155; color: #E2E8F0; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="toolbar">
+    <span class="count" id="count">0文字</span>
+    <button class="btn" id="translate">翻訳</button>
+    <button class="close" id="close">×</button>
+  </div>
+  <div class="result hidden" id="result"></div>
+  <div class="toolbar hidden" id="copyrow">
+    <button class="btn secondary" id="copy">コピー</button>
+  </div>
+</div>
+<script>
+let currentText = "";
+window.updateToolbar = function(text, count, truncated) {
+  currentText = text;
+  document.getElementById("count").textContent = count + "文字" + (truncated ? "+" : "");
+  document.getElementById("result").classList.add("hidden");
+  document.getElementById("copyrow").classList.add("hidden");
+  document.getElementById("result").textContent = "";
+};
+window.showResult = function(text) {
+  const r = document.getElementById("result");
+  r.textContent = text;
+  r.classList.remove("hidden");
+  document.getElementById("copyrow").classList.remove("hidden");
+};
+window.showLoading = function(text) {
+  const r = document.getElementById("result");
+  r.textContent = text || "読み込み中…";
+  r.classList.remove("hidden");
+};
+document.getElementById("translate").onclick = () => window.ipc.postMessage(JSON.stringify({action:"translate"}));
+document.getElementById("copy").onclick = () => window.ipc.postMessage(JSON.stringify({action:"copy"}));
+document.getElementById("close").onclick = () => window.ipc.postMessage(JSON.stringify({action:"close"}));
+window.addEventListener("blur", () => { setTimeout(() => { if (!document.hasFocus()) window.ipc.postMessage(JSON.stringify({action:"close"})); }, 120); });
+</script>
+</body>
+</html>
