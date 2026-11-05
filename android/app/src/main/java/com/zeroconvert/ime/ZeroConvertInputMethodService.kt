@@ -30,10 +30,34 @@ import com.zeroconvert.ime.azookey.input.InputStyle
 import com.zeroconvert.ime.assist.AssistRequestGate
 import com.zeroconvert.ime.assist.CorrectionSession
 import com.zeroconvert.ime.assist.hasPendingRomaji
+import com.zeroconvert.ime.translation.TranslationEngine
+import com.zeroconvert.ime.translation.TranslationModelManager
+import com.zeroconvert.ime.translation.TranslationSession
+import com.zeroconvert.ime.translation.TranslationText
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+
+enum class TranslationStatus { IDLE, LOADING, TRANSLATING, READY, ERROR }
+
+data class TranslationUiState(
+    val active: Boolean = false,
+    val status: TranslationStatus = TranslationStatus.IDLE,
+    val request: String = "",
+    val source: String = "",
+    val output: String = "",
+    val target: String = TranslationText.EN,
+    val message: String? = null
+)
+
+data class SelectionTranslationState(
+    val status: TranslationStatus = TranslationStatus.IDLE,
+    val source: String = "",
+    val output: String = "",
+    val target: String = TranslationText.EN,
+    val message: String? = null
+)
 
 data class InferenceSnapshot(
     val readingHiragana: String,
@@ -77,6 +101,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction" // Windows default: false
         const val KEY_PREDICTIVE_CONVERSION = "predictive_conversion" // boolean, Android default: true, Windows default: false
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
+        const val KEY_TRANSLATION_ENABLED = "translation_enabled" // boolean, default false
+        const val KEY_TRANSLATION_TARGET = "translation_target" // "auto", "en", "ja"
+        const val KEY_TRANSLATION_KEEP_LOADED = "translation_keep_loaded" // boolean, default false
         const val KEY_CLIPBOARD_PINNED = "clipboard_pinned"
         const val KEY_CLIPBOARD_RETENTION_HOURS = "clipboard_retention_hours"
         const val KEY_CLIPBOARD_SUGGESTION_MINUTES = "clipboard_suggestion_minutes"
@@ -211,12 +238,568 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private var savedOriginalResult = ""
     private var savedOriginalInferredReading = ""
 
+    val translationEnabledState = mutableStateOf(false)
+    val translationModelReadyState = mutableStateOf(false)
+    val translationKeepLoadedState = mutableStateOf(false)
+    val translationTargetState = mutableStateOf(TranslationText.AUTO)
+    val translationState = mutableStateOf(TranslationUiState())
+    val selectionTranslationState = mutableStateOf<SelectionTranslationState?>(null)
+    private val translationSession = TranslationSession()
+    private val selectionTranslationSession = TranslationSession()
+    private var translationJob: Job? = null
+    private var selectionTranslationJob: Job? = null
+    private var translationLoadJob: Job? = null
+    private var committingTranslation = false
+
     fun isRealtimeInlineEnabled(): Boolean = isRealtimeInlineState.value
     fun isAiAssistEnabled(): Boolean = isAiAssistEnabledState.value
     fun isPredictiveConversionEnabled(): Boolean = isPredictiveConversionState.value
     fun getPredictiveModel(): String = predictiveModelState.value
+    fun isTranslationMode(): Boolean = translationState.value.active
+
+    fun toggleTranslationMode() {
+        if (isTranslationMode()) exitTranslationMode(revert = true) else enterTranslationMode()
+    }
+
+    fun enterTranslationMode() {
+        if (isConfirming || isTranslationMode() || reconverting || conversionRange.active) {
+            if (reconverting || conversionRange.active) {
+                translationToast("変換操作を終了してから翻訳を開始してください")
+            }
+            return
+        }
+        if (!translationEnabledState.value) {
+            translationToast("設定画面で翻訳機能をONにしてください")
+            return
+        }
+        if (isSensitiveInput()) {
+            translationToast("この入力欄では翻訳できません")
+            return
+        }
+        val file = TranslationModelManager.modelFile(applicationContext)
+        if (TranslationModelManager.isReady(applicationContext)) {
+            translationModelReadyState.value = true
+            beginTranslationMode(file)
+            return
+        }
+        if (file.isFile && file.length() == TranslationModelManager.EXPECTED_BYTES) {
+            translationState.value = TranslationUiState(
+                active = true,
+                status = TranslationStatus.LOADING,
+                message = "モデルを確認中…"
+            )
+            translationLoadJob = serviceScope.launch(Dispatchers.IO) {
+                val verified = TranslationModelManager.verifyExisting(applicationContext)
+                withContext(Dispatchers.Main) {
+                    if (!isTranslationMode()) return@withContext
+                    if (verified) {
+                        translationModelReadyState.value = true
+                        beginTranslationMode(file)
+                    } else {
+                        translationState.value = TranslationUiState()
+                        translationToast("翻訳モデルを確認できません。設定画面からダウンロードしてください")
+                    }
+                }
+            }
+            return
+        }
+        translationToast("翻訳モデルがありません。設定画面からダウンロードしてください")
+    }
+
+    private fun beginTranslationMode(file: File) {
+        translationState.value = TranslationUiState(
+            active = true,
+            status = TranslationStatus.LOADING,
+            target = configuredTranslationTarget()
+        )
+        selectionTranslationState.value = null
+        cancelPendingInference(edited = false)
+        clearCandidateList()
+        aiAssistAdoptedState.value = false
+        lastAutoCommitRewind = null
+        canRewindOnNextBackspace = false
+        vibrateOnKeyPress()
+        ensureTranslationLoaded(file) { loaded ->
+            if (!loaded) {
+                if (isTranslationMode()) {
+                    translationState.value = translationState.value.copy(
+                        status = TranslationStatus.ERROR,
+                        message = "翻訳モデルを読み込めませんでした"
+                    )
+                }
+                return@ensureTranslationLoaded
+            }
+            if (!isTranslationMode()) return@ensureTranslationLoaded
+            if (translationState.value.status == TranslationStatus.LOADING) {
+                translationState.value = translationState.value.copy(status = TranslationStatus.IDLE, message = null)
+            }
+            if (!composingText.isEmpty || englishComposing.isNotEmpty()) scheduleTranslation()
+        }
+    }
+
+    fun exitTranslationMode(revert: Boolean) {
+        if (!isTranslationMode()) return
+        cancelPendingTranslation()
+        translationLoadWaiters.clear()
+        selectionTranslationSession.cancel()
+        selectionTranslationJob?.cancel()
+        selectionTranslationJob = null
+        selectionTranslationState.value = null
+        val source = if (englishComposing.isNotEmpty()) englishComposing else composingText.convertTarget
+        translationState.value = TranslationUiState()
+        if (revert && source.isNotEmpty()) {
+            currentInputConnection?.let { setManagedComposingText(it, source, 1) }
+        }
+        maybeUnloadTranslation()
+    }
+
+    fun beforeKeyboardModeChange() {
+        if (isTranslationMode()) {
+            exitTranslationMode(revert = true)
+            return
+        }
+        confirmCurrent()
+    }
+
+    fun handleSpace() {
+        if (isTranslationMode()) {
+            appendTranslationLiteral(" ")
+            return
+        }
+        if (composingText.isEmpty) commitDirect(" ") else confirmCurrent()
+    }
+
+    fun commitTranslationFromUi() {
+        val state = translationState.value
+        if (state.status != TranslationStatus.READY || state.output.isEmpty()) return
+        val currentInput = if (englishComposing.isNotEmpty()) englishComposing else composingText.convertTarget
+        if (state.request != currentInput) {
+            scheduleTranslation()
+            return
+        }
+        commitTranslation(state.output)
+    }
+
+    fun translateSelectedText() {
+        if (!translationEnabledState.value) {
+            translationToast("設定画面で翻訳機能をONにしてください")
+            return
+        }
+        if (isSensitiveInput()) {
+            translationToast("この入力欄では翻訳できません")
+            return
+        }
+        val connection = currentInputConnection ?: return
+        val selected = connection.getSelectedText(0)?.toString().orEmpty()
+        if (selected.isEmpty()) return
+        if (!TranslationText.validSource(selected)) {
+            translationToast("選択翻訳は512文字までです")
+            return
+        }
+        val file = TranslationModelManager.modelFile(applicationContext)
+        if (!TranslationModelManager.isReady(applicationContext)) {
+            translationToast("翻訳モデルがありません。設定画面からダウンロードしてください")
+            return
+        }
+        selectionTranslationState.value = SelectionTranslationState(
+            status = TranslationStatus.LOADING,
+            source = selected
+        )
+        ensureTranslationLoaded(file) { loaded ->
+            if (!loaded) {
+                selectionTranslationState.value = SelectionTranslationState(
+                    status = TranslationStatus.ERROR,
+                    source = selected,
+                    message = "翻訳モデルを読み込めませんでした"
+                )
+                return@ensureTranslationLoaded
+            }
+            if (selectionTranslationState.value?.source != selected) return@ensureTranslationLoaded
+            startSelectionTranslation(connection, selected)
+        }
+    }
+
+    private fun startSelectionTranslation(
+        connection: android.view.inputmethod.InputConnection,
+        selected: String
+    ) {
+        selectionTranslationSession.cancel()
+        val token = selectionTranslationSession.begin()
+        selectionTranslationJob?.cancel()
+        val target = TranslationText.targetFor(selected, configuredTranslationTarget())
+        selectionTranslationState.value = SelectionTranslationState(
+            status = TranslationStatus.TRANSLATING,
+            source = selected,
+            target = target
+        )
+        selectionTranslationJob = serviceScope.launch(Dispatchers.IO) {
+            val completion = TranslationEngine.translate(
+                TranslationText.prompt(selected, target),
+                512,
+                15_000
+            )
+            val output = if (completion.finished && TranslationText.validOutput(completion.text)) {
+                completion.text.trim()
+            } else {
+                ""
+            }
+            withContext(Dispatchers.Main) {
+                if (!selectionTranslationSession.isCurrent(token)) return@withContext
+                if (connection !== currentInputConnection) return@withContext
+                if (connection.getSelectedText(0)?.toString() != selected) return@withContext
+                selectionTranslationState.value = if (output.isNotEmpty()) {
+                    SelectionTranslationState(
+                        status = TranslationStatus.READY,
+                        source = selected,
+                        output = output,
+                        target = target
+                    )
+                } else {
+                    SelectionTranslationState(
+                        status = TranslationStatus.ERROR,
+                        source = selected,
+                        target = target,
+                        message = translationErrorMessage(completion.stopReason)
+                    )
+                }
+            }
+        }
+    }
+
+    fun commitSelectionTranslation() {
+        val state = selectionTranslationState.value ?: return
+        if (state.status != TranslationStatus.READY || state.output.isEmpty()) return
+        val connection = currentInputConnection ?: return
+        if (connection.getSelectedText(0)?.toString() != state.source) {
+            selectionTranslationState.value = state.copy(
+                status = TranslationStatus.ERROR,
+                message = "選択範囲が変わりました"
+            )
+            return
+        }
+        vibrateOnKeyPress()
+        connection.commitText(state.output, 1)
+        cachedLeftContext = EditorContext.bounded(
+            connection.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN, 0)?.toString().orEmpty()
+        )
+        selectionTranslationState.value = null
+        hasSelectionInEditor = false
+        selectionAvailableState.value = false
+        clearSelectionCharacterCount()
+        updateSelectionCharacterCount(-1, -1)
+    }
+
+    fun copySelectionTranslation() {
+        val output = selectionTranslationState.value?.output ?: return
+        if (output.isEmpty()) return
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        manager.setPrimaryClip(android.content.ClipData.newPlainText("translation", output))
+        translationToast("訳文をコピーしました")
+    }
+
+    fun dismissSelectionTranslation() {
+        selectionTranslationSession.cancel()
+        selectionTranslationJob?.cancel()
+        selectionTranslationJob = null
+        selectionTranslationState.value = null
+    }
+
+    private val translationLoadWaiters = mutableListOf<(Boolean) -> Unit>()
+
+    private fun ensureTranslationLoaded(file: File, onReady: (Boolean) -> Unit) {
+        if (TranslationEngine.isLoaded(file)) {
+            onReady(true)
+            return
+        }
+        translationLoadWaiters.add(onReady)
+        if (translationLoadJob?.isActive == true) return
+        translationState.value = translationState.value.copy(
+            status = TranslationStatus.LOADING,
+            message = "翻訳モデルを読み込み中…"
+        )
+        translationLoadJob = serviceScope.launch(Dispatchers.IO) {
+            val loaded = TranslationEngine.load(file)
+            withContext(Dispatchers.Main) {
+                val waiters = translationLoadWaiters.toList()
+                translationLoadWaiters.clear()
+                if (loaded) {
+                    translationModelReadyState.value = true
+                    waiters.forEach { it(true) }
+                } else {
+                    if (isTranslationMode()) {
+                        translationState.value = translationState.value.copy(
+                            status = TranslationStatus.ERROR,
+                            message = "翻訳モデルを読み込めませんでした"
+                        )
+                    }
+                    waiters.forEach { it(false) }
+                }
+            }
+        }
+    }
+
+    private fun configuredTranslationTarget(): String = when (translationTargetState.value) {
+        TranslationText.EN, TranslationText.JA -> translationTargetState.value
+        else -> TranslationText.AUTO
+    }
+
+    private fun scheduleTranslation() {
+        if (!isTranslationMode() || isSensitiveInput()) return
+        val englishSource = englishComposing
+        val japaneseSource = composingText.convertTarget
+        val sourceIsEnglish = englishSource.isNotEmpty()
+        val rawSource = if (sourceIsEnglish) englishSource else japaneseSource
+        if (rawSource.isBlank() || (!sourceIsEnglish && !composingText.isAtEndIndex)) {
+            cancelPendingTranslation()
+            translationState.value = translationState.value.copy(
+                request = rawSource,
+                source = rawSource,
+                output = "",
+                status = TranslationStatus.IDLE,
+                message = null
+            )
+            return
+        }
+        if (!sourceIsEnglish && hasTrailingIncompleteRomaji(japaneseSource)) {
+            cancelPendingTranslation()
+            translationState.value = translationState.value.copy(
+                request = rawSource,
+                source = rawSource,
+                output = "",
+                status = TranslationStatus.TRANSLATING,
+                message = null
+            )
+            return
+        }
+
+        translationJob?.cancel()
+        ZenzNative.abortTranslation()
+        val token = translationSession.begin()
+        translationState.value = translationState.value.copy(
+            request = rawSource,
+            source = rawSource,
+            output = "",
+            status = TranslationStatus.TRANSLATING,
+            message = null
+        )
+        val connection = currentInputConnection ?: return
+        val context = cachedLeftContext
+        val profile = aiProfileState.value
+        val snapshot = composingText.clone()
+        val configuredTarget = configuredTranslationTarget()
+        translationJob = serviceScope.launch(Dispatchers.IO) {
+            try {
+                delay(400)
+                if (!translationSession.isCurrent(token)) return@launch
+                val source = if (sourceIsEnglish) {
+                    englishSource
+                } else {
+                    KanaKanjiConverter.ensureInitialized(applicationContext)
+                    val results = converter.requestCandidates(
+                        snapshot,
+                        context,
+                        enableAI = true,
+                        profile = profile,
+                        personalize = true,
+                        predictiveConversion = false
+                    )
+                    (results.firstOrNull { it.assist == null } ?: results.firstOrNull())
+                        ?.previewForReading(japaneseSource)
+                        .orEmpty()
+                        .ifEmpty { japaneseSource }
+                }
+                if (!TranslationText.validSource(source)) {
+                    withContext(Dispatchers.Main) {
+                        if (translationSession.isCurrent(token) && isTranslationMode()) {
+                            translationState.value = translationState.value.copy(
+                                status = TranslationStatus.ERROR,
+                                message = "翻訳できる文字数は512文字までです"
+                            )
+                        }
+                    }
+                    return@launch
+                }
+                val target = TranslationText.targetFor(source, configuredTarget)
+                val completion = TranslationEngine.translate(
+                    TranslationText.prompt(source, target),
+                    512,
+                    15_000
+                )
+                if (!translationSession.isCurrent(token)) return@launch
+                val output = if (completion.finished && TranslationText.validOutput(completion.text)) {
+                    completion.text.trim()
+                } else {
+                    ""
+                }
+                withContext(Dispatchers.Main) {
+                    if (!translationSession.isCurrent(token) || !isTranslationMode()) return@withContext
+                    if (connection !== currentInputConnection) return@withContext
+                    val currentSource = if (sourceIsEnglish) englishComposing else composingText.convertTarget
+                    if (currentSource != rawSource) return@withContext
+                    if (!connection.getSelectedText(0).isNullOrEmpty()) return@withContext
+                    if (output.isEmpty()) {
+                        translationState.value = translationState.value.copy(
+                            source = source,
+                            status = TranslationStatus.ERROR,
+                            message = translationErrorMessage(completion.stopReason)
+                        )
+                    } else {
+                        if (translationState.value.output != output) {
+                            setManagedComposingText(connection, output, 1)
+                        }
+                        translationState.value = translationState.value.copy(
+                            request = rawSource,
+                            source = source,
+                            output = output,
+                            target = target,
+                            status = TranslationStatus.READY,
+                            message = null
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Translation failed", error)
+                withContext(Dispatchers.Main) {
+                    if (translationSession.isCurrent(token) && isTranslationMode()) {
+                        translationState.value = translationState.value.copy(
+                            status = TranslationStatus.ERROR,
+                            message = "翻訳に失敗しました"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleTranslationEnter() {
+        val state = translationState.value
+        val currentInput = if (englishComposing.isNotEmpty()) englishComposing else composingText.convertTarget
+        val readyForCurrentInput = state.status == TranslationStatus.READY &&
+            state.output.isNotEmpty() && state.request == currentInput
+        when {
+            readyForCurrentInput -> {
+                commitTranslation(state.output)
+            }
+            state.status == TranslationStatus.READY && state.request != currentInput -> {
+                scheduleTranslation()
+                vibrateOnKeyPress()
+                translationToast("翻訳を更新しています。もう一度Enterを押してください")
+            }
+            state.status == TranslationStatus.TRANSLATING ||
+                state.status == TranslationStatus.LOADING -> {
+                vibrateOnKeyPress()
+                translationToast("翻訳を待っています。翻訳ボタンで取消できます")
+            }
+            composingText.isEmpty && englishComposing.isEmpty() -> {
+                exitTranslationMode(revert = false)
+                sendKeyChar('\n')
+            }
+            else -> {
+                vibrateOnKeyPress()
+                translationToast(state.message ?: "翻訳を確定できません。入力をやり直してください")
+            }
+        }
+    }
+
+    private fun commitTranslation(text: String) {
+        val connection = currentInputConnection ?: return
+        vibrateOnKeyPress()
+        cancelPendingTranslation()
+        translationLoadWaiters.clear()
+        committingTranslation = true
+        try {
+            connection.beginBatchEdit()
+            try {
+                if (!connection.commitText(text, 1)) return
+                composingEditor.finishComposition()
+                cachedLeftContext = EditorContext.bounded(cachedLeftContext + text)
+            } finally {
+                connection.endBatchEdit()
+            }
+        } finally {
+            committingTranslation = false
+        }
+        composingText.stopComposition()
+        englishComposing = ""
+        currentComposingSurface.value = ""
+        candidatesList.clear()
+        predictedCandidate.value = ""
+        lastInferredSurface = ""
+        lastInferredResult = ""
+        inferenceHistory.clear()
+        lastAutoCommitRewind = null
+        canRewindOnNextBackspace = false
+        previousLearningSegment = null
+        corrections.clear()
+        reconverting = false
+        savedOriginalCandidates = emptyList()
+        savedOriginalSurface = ""
+        savedOriginalReading = ""
+        savedOriginalResult = ""
+        savedOriginalInferredReading = ""
+        aiAssistAdoptedState.value = false
+        aiAssistResultState.value = null
+        conversionRange.clear()
+        conversionRangeState.value = ""
+        composingEditor.clear()
+        hasSelectionInEditor = false
+        selectionAvailableState.value = false
+        clearSelectionCharacterCount()
+        selectionTranslationState.value = null
+        translationState.value = TranslationUiState()
+        maybeUnloadTranslation()
+    }
+
+    private fun appendTranslationLiteral(text: String) {
+        if (isConfirming || text.isEmpty()) return
+        cancelPendingTranslation()
+        val connection = currentInputConnection ?: return
+        if (englishComposing.isNotEmpty()) {
+            englishComposing += text
+            currentComposingSurface.value = englishComposing
+            setManagedComposingText(connection, englishComposing, 1)
+        } else {
+            composingText.insertAtCursorPosition(text, InputStyle.DIRECT)
+            currentComposingSurface.value = composingText.convertTargetBeforeCursor
+            setManagedComposingText(connection, composingText.convertTarget, 1)
+        }
+        scheduleTranslation()
+    }
+
+    private fun cancelPendingTranslation() {
+        translationSession.cancel()
+        translationJob?.cancel()
+        translationJob = null
+        ZenzNative.abortTranslation()
+    }
+
+    private fun maybeUnloadTranslation() {
+        if (translationKeepLoadedState.value || isTranslationMode()) return
+        val file = TranslationModelManager.modelFile(applicationContext)
+        if (!TranslationEngine.isLoaded(file)) return
+        translationLoadJob?.cancel()
+        translationLoadJob = null
+        ZenzNative.abortTranslation()
+        serviceScope.launch(Dispatchers.IO) { TranslationEngine.close() }
+    }
+
+    private fun translationErrorMessage(reason: String): String = when (reason) {
+        "timeout" -> "翻訳がタイムアウトしました。もう一度お試しください"
+        "limit" -> "訳文が長すぎて完了できませんでした"
+        "unavailable" -> "翻訳モデルが読み込まれていません"
+        "busy" -> "翻訳処理中です"
+        "cancelled" -> "翻訳を取り消しました"
+        else -> "翻訳に失敗しました"
+    }
+
+    private fun translationToast(message: String) {
+        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+    }
 
     fun adoptAiAssist(explicit: Boolean = true) {
+        if (isTranslationMode()) return
         val assist = aiAssistResultState.value ?: return
         val ic = currentInputConnection ?: return
         if (!isAiAssistEnabled() || isSensitiveInput() || isConfirming) return
@@ -688,6 +1271,16 @@ class ZeroConvertInputMethodService : InputMethodService(),
         } else {
             unregisterScreenshotObserver()
         }
+        translationEnabledState.value = prefs.getBoolean(KEY_TRANSLATION_ENABLED, false)
+        translationKeepLoadedState.value = prefs.getBoolean(KEY_TRANSLATION_KEEP_LOADED, false)
+        translationTargetState.value = prefs.getString(KEY_TRANSLATION_TARGET, TranslationText.AUTO)
+            ?: TranslationText.AUTO
+        translationModelReadyState.value = TranslationModelManager.isReady(this)
+        if (!translationEnabledState.value && isTranslationMode()) {
+            exitTranslationMode(revert = true)
+        } else if (!translationKeepLoadedState.value && !isTranslationMode()) {
+            maybeUnloadTranslation()
+        }
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -896,6 +1489,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         val selected = newSelStart != newSelEnd
+        val pendingSelectionTranslation = selectionTranslationState.value
+        if (pendingSelectionTranslation != null) {
+            val selectedNow = if (selected) currentInputConnection?.getSelectedText(0)?.toString() else null
+            if (selectedNow != pendingSelectionTranslation.source) dismissSelectionTranslation()
+        }
         composingEditor.observeRange(candidatesStart, candidatesEnd)
         val ownedSelection = composingEditor.ownsSelection(newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         // An external cursor/selection move ends the managed composition. Never
@@ -904,7 +1502,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             newSelStart >= candidatesStart && newSelEnd <= candidatesEnd
         val isExternalMove = !ownedSelection && managedCursorKeys.isEmpty() && !isInsideComposing &&
             (candidatesStart == -1 || newSelStart < candidatesStart || newSelEnd > candidatesEnd)
-        if (!composingText.isEmpty && isExternalMove) {
+        if (!composingText.isEmpty && isExternalMove && !committingTranslation) {
+            if (isTranslationMode()) exitTranslationMode(revert = false)
             clearInput()
             currentInputConnection?.finishComposingText()
         } else if (selected) {
@@ -1032,6 +1631,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isConfirming) return
         canRewindOnNextBackspace = false
 
+        if (isTranslationMode() && (ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
+                ch == '？' || ch == '！' || ch == '．' || ch == '，' ||
+                ch.isDigit() || ch in "!@#$%^&*()")
+        ) {
+            val literal = when (ch) {
+                '.' -> "。"
+                ',' -> "、"
+                else -> ch.toString()
+            }
+            appendTranslationLiteral(literal)
+            return
+        }
+
         if (ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
             ch == '？' || ch == '！' || ch == '．' || ch == '，' ||
             ch.isDigit() || ch in "!@#$%^&*()"
@@ -1100,6 +1712,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
         vibrateOnKeyPress()
         if (isConfirming) return
         canRewindOnNextBackspace = false
+
+        if (isTranslationMode() && (kana == "、" || kana == "。" || kana == "？" || kana == "！")) {
+            appendTranslationLiteral(kana)
+            return
+        }
 
         if (kana == "、" || kana == "。" || kana == "？" || kana == "！") {
             if (!composingText.isEmpty) {
@@ -1280,6 +1897,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private fun triggerDebouncedConversion(surface: String) {
+        if (isTranslationMode()) {
+            scheduleTranslation()
+            return
+        }
         cancelPendingInference(edited = false)
         if (!isSensitiveInput()) readEditorLeftContext()?.let { cachedLeftContext = it }
         // Capture every mutable input on the UI thread, before dispatching work.
@@ -1558,12 +2179,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun canBeginConversionRange(): Boolean = !isConfirming && !isSensitiveInput() && !reconverting &&
+        !isTranslationMode() &&
         !corrections.holdsAutoCommit && !conversionRange.active && composingText.isAtEndIndex &&
         composingText.convertTarget.codePointCount(0, composingText.convertTarget.length) in 2..128 &&
         !hasTrailingIncompleteRomaji(composingText.convertTarget)
 
     fun beginConversionRange() {
-        if (!canBeginConversionRange()) return
+        if (isTranslationMode() || !canBeginConversionRange()) return
         val connection = currentInputConnection ?: return
         val preview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
         if (!conversionRange.begin(composingText, preview)) return
@@ -1604,6 +2226,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleCursorLeft() {
+        if (isTranslationMode()) return
         if (conversionRange.active) { adjustConversionRange(-1); return }
         vibrateOnKeyPress()
         canRewindOnNextBackspace = false
@@ -1619,6 +2242,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleCursorRight() {
+        if (isTranslationMode()) return
         if (conversionRange.active) { adjustConversionRange(1); return }
         vibrateOnKeyPress()
         canRewindOnNextBackspace = false
@@ -1668,6 +2292,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun handleEnter() {
         if (isConfirming) return
+        if (isTranslationMode()) {
+            handleTranslationEnter()
+            return
+        }
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer(useTopCandidate = false)
         } else if (!composingText.isEmpty) {
@@ -1677,10 +2305,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun canReconvertSelection(): Boolean = selectionAvailableState.value && composingText.isEmpty && !isSensitiveInput()
+    fun canReconvertSelection(): Boolean = selectionAvailableState.value && composingText.isEmpty &&
+        !isSensitiveInput() && !isTranslationMode()
 
     fun reconvertSelection() {
-        if (!canReconvertSelection() || isConfirming) return
+        if (isTranslationMode() || !canReconvertSelection() || isConfirming) return
         val connection = currentInputConnection ?: return
         val selected = connection.getSelectedText(0)?.toString() ?: return
         cancelPendingInference(edited = false)
@@ -1724,6 +2353,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun confirmAsync(trailingText: String = "") {
         if (isConfirming) return
+        if (isTranslationMode()) {
+            handleTranslationEnter()
+            return
+        }
         if (englishComposing.isNotEmpty()) {
             // A mode change accepts the spelling, not an English completion.
             commitText(englishComposing + trailingText, committedCandidate = null, trailingText = trailingText)
@@ -1794,6 +2427,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun commitDirect(text: String) {
+        if (isTranslationMode() && !committingTranslation) {
+            appendTranslationLiteral(text)
+            return
+        }
         vibrateOnKeyPress()
         currentInputConnection?.commitText(text, 1)
         clearInput()
@@ -1802,6 +2439,18 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleEnglishChar(ch: Char) {
         vibrateOnKeyPress()
         if (isConfirming) return
+        if (isTranslationMode()) {
+            if (ch == ' ') {
+                handleEnglishSpace()
+                return
+            }
+            if (ch.isISOControl()) return
+            englishComposing += ch
+            currentComposingSurface.value = englishComposing
+            setManagedComposingText(currentInputConnection, englishComposing, 1)
+            scheduleTranslation()
+            return
+        }
         if (ch == ' ') { handleEnglishSpace(); return }
         if (!ch.isLetter()) {
             if (englishComposing.isNotEmpty()) commitEnglishBuffer(useTopCandidate = false)
@@ -1824,6 +2473,21 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun handleEnglishDelete() {
         if (isConfirming) return
+        if (isTranslationMode()) {
+            if (englishComposing.isNotEmpty()) {
+                englishComposing = englishComposing.dropLast(1)
+                currentComposingSurface.value = englishComposing
+                if (englishComposing.isNotEmpty()) {
+                    setManagedComposingText(currentInputConnection, englishComposing, 1)
+                } else {
+                    setManagedComposingText(currentInputConnection, "", 0)
+                }
+                scheduleTranslation()
+            } else {
+                currentInputConnection?.deleteSurroundingText(1, 0)
+            }
+            return
+        }
         if (englishComposing.isNotEmpty()) {
             englishComposing = englishComposing.dropLast(1)
             currentComposingSurface.value = englishComposing
@@ -1842,6 +2506,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun handleEnglishSpace() {
         vibrateOnKeyPress()
+        if (isTranslationMode()) {
+            appendTranslationLiteral(" ")
+            return
+        }
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer()
         }
@@ -1849,6 +2517,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun commitEnglishBuffer(useTopCandidate: Boolean = true) {
+        if (isTranslationMode()) {
+            commitTranslationFromUi()
+            return
+        }
         if (englishComposing.isEmpty()) return
         val candidate = if (useTopCandidate) candidatesList.firstOrNull() else null
         commitText(candidate?.text ?: englishComposing,
@@ -1889,6 +2561,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         trailingText: String = ""
     ) {
         if (isConfirming) return
+        if (isTranslationMode() && !committingTranslation) {
+            appendTranslationLiteral(text)
+            return
+        }
         val connection = currentInputConnection ?: return
         vibrateOnKeyPress()
         val wasEnglish = englishComposing.isNotEmpty()
@@ -1983,10 +2659,25 @@ class ZeroConvertInputMethodService : InputMethodService(),
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
         aiAssistResultState.value = null
+        if (isTranslationMode()) {
+            cancelPendingTranslation()
+            translationState.value = translationState.value.copy(
+                request = "",
+                source = "",
+                output = "",
+                status = TranslationStatus.IDLE,
+                message = null
+            )
+        }
+        selectionTranslationSession.cancel()
+        selectionTranslationJob?.cancel()
+        selectionTranslationJob = null
+        selectionTranslationState.value = null
     }
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        exitTranslationMode(revert = false)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         reloadPreferences()
@@ -1998,6 +2689,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     override fun onStartInput(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
+        exitTranslationMode(revert = false)
         clearInput()
         hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
         selectionAvailableState.value = hasSelectionInEditor
@@ -2005,12 +2697,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     override fun onFinishInput() {
+        exitTranslationMode(revert = false)
         clearInput()
         super.onFinishInput()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        exitTranslationMode(revert = false)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         clearInput()
@@ -2018,6 +2712,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     override fun onDestroy() {
         learningQueue.close()
+        translationJob?.cancel()
+        selectionTranslationJob?.cancel()
+        translationLoadJob?.cancel()
+        translationLoadWaiters.clear()
         super.onDestroy()
         sharedPreferences?.unregisterOnSharedPreferenceChangeListener(prefsListener)
         clipListener?.let { clipboardManager?.removePrimaryClipChangedListener(it) }

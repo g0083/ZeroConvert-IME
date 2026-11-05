@@ -126,6 +126,83 @@ object ZenzNative {
                                          learnedReadings: Array<String>, learnedWords: Array<String>,
                                          learnedIds: IntArray, learnedScores: FloatArray): String
 
+    private external fun nativeInitTranslation(modelPath: String): Boolean
+    private external fun nativeTranslate(prompt: String, maxTokens: Int, timeoutMs: Int, expectedEpoch: Long): Array<String>
+    private external fun nativeTranslationEpoch(): Long
+    private external fun nativeAbortTranslation()
+    private external fun nativeCloseTranslation()
+
+    private val translationLock = Any()
+    @Volatile private var translationInitialized = false
+    @Volatile private var translationPath = ""
+
+    fun isTranslationLoadedFor(modelPath: String): Boolean =
+        translationInitialized && translationPath == modelPath
+
+    fun initTranslation(modelPath: String): Boolean = synchronized(translationLock) {
+        try {
+            val ok = nativeInitTranslation(modelPath)
+            translationInitialized = ok
+            translationPath = if (ok) modelPath else ""
+            if (ok) Log.i(TAG, "Translation model loaded: ${File(modelPath).name}")
+            else Log.e(TAG, "Failed to load translation model: $modelPath")
+            ok
+        } catch (t: Throwable) {
+            translationInitialized = false
+            translationPath = ""
+            Log.w(TAG, "Translation model unavailable", t)
+            false
+        }
+    }
+
+    fun translationEpoch(): Long = try {
+        if (translationInitialized) nativeTranslationEpoch() else -1L
+    } catch (t: Throwable) {
+        -1L
+    }
+
+    fun abortTranslation() {
+        try {
+            if (translationInitialized) nativeAbortTranslation()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Translation abort error", t)
+        }
+    }
+
+    fun closeTranslation() {
+        translationInitialized = false
+        translationPath = ""
+        try {
+            nativeCloseTranslation()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Translation close error", t)
+        }
+    }
+
+    fun translate(
+        prompt: String,
+        maxTokens: Int,
+        timeoutMs: Int
+    ): com.zeroconvert.ime.assist.ModelCompletion {
+        if (!translationInitialized) {
+            return com.zeroconvert.ime.assist.ModelCompletion("", "unavailable")
+        }
+        val epoch = translationEpoch()
+        if (epoch < 0L) {
+            return com.zeroconvert.ime.assist.ModelCompletion("", "unavailable")
+        }
+        return try {
+            val reply = nativeTranslate(prompt, maxTokens, timeoutMs, epoch)
+            com.zeroconvert.ime.assist.ModelCompletion(
+                reply.getOrElse(1) { "" },
+                reply.getOrElse(0) { "error" }
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Translation inference error", t)
+            com.zeroconvert.ime.assist.ModelCompletion("", "error")
+        }
+    }
+
     fun abort() {
         if (isInitialized) {
             try {
@@ -329,6 +406,8 @@ object ZenzNative {
 
     fun close() {
         abort()
+        translationInitialized = false
+        translationPath = ""
         assistReady = 0
         modelEpoch.incrementAndGet()
         val request = lifecycleRequests.incrementAndGet()
