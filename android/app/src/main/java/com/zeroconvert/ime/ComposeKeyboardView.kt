@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.zeroconvert.ime.translation.TranslationText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -98,6 +99,8 @@ fun KeyboardRootView(
     val accentColor = palette.primaryAccent
     val textColor = palette.textPrimary
     val selectionCount = imeService.selectedCharacterCountState.value
+    val translation = imeService.translationState.value
+    val selectionTranslation = imeService.selectionTranslationState.value
 
     // Read the composing state from the service so that the QWERTY emoji key can be
     // swapped for the "?" key while the user is typing.
@@ -111,7 +114,7 @@ fun KeyboardRootView(
     ) {
         KeyboardAssistBar(
             reading = currentSurface,
-            assist = aiAssistResult.takeIf { keyboardMode != KeyboardMode.ENGLISH },
+            assist = aiAssistResult.takeIf { keyboardMode != KeyboardMode.ENGLISH && !translation.active },
             correctionApplied = imeService.aiAssistAdoptedState.value,
             palette = palette,
             onAdopt = onAdoptAiAssist,
@@ -131,6 +134,22 @@ fun KeyboardRootView(
                 .height(48.dp)
                 .background(surfaceColor)
         ) {
+            if (translation.active) {
+                TranslationStatusBar(
+                    state = translation,
+                    palette = palette,
+                    onCommit = { imeService.commitTranslationFromUi() },
+                    onClose = { imeService.exitTranslationMode(revert = true) }
+                )
+            } else if (selectionTranslation != null) {
+                SelectionTranslationStatusBar(
+                    state = selectionTranslation,
+                    palette = palette,
+                    onInsert = { imeService.commitSelectionTranslation() },
+                    onCopy = { imeService.copySelectionTranslation() },
+                    onClose = { imeService.dismissSelectionTranslation() }
+                )
+            } else {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -195,6 +214,15 @@ fun KeyboardRootView(
                             Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
                         }
                     }
+                    if (imeService.translationEnabledState.value) {
+                        Box(
+                            Modifier.fillMaxHeight().widthIn(min = 56.dp)
+                                .clickable { imeService.translateSelectedText() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("翻訳", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
+                        }
+                    }
                 } else if (candidates.isEmpty()) {
                     if (imeService.canReconvertSelection()) {
                         Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp,
@@ -256,9 +284,42 @@ fun KeyboardRootView(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+
+                    if (imeService.translationEnabledState.value) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { imeService.toggleTranslationMode() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Translate,
+                                contentDescription = "Translate",
+                                tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
             } else {
                 // While converting (candidates are displayed), hide layout switcher & clipboard to maximize candidate space!
-                // Only show Down chevron expand button
+                // Keep only the translation toggle and the Down chevron.
+                if (imeService.translationEnabledState.value) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { imeService.toggleTranslationMode() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Translate,
+                            contentDescription = "Translate",
+                            tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .size(48.dp)
@@ -324,6 +385,7 @@ fun KeyboardRootView(
                     }
                 }
             }
+            }
         }
 
         val onLongPressSpace: () -> Unit = {
@@ -332,7 +394,7 @@ fun KeyboardRootView(
 
         val onCycleMode: () -> Unit = {
             // The service owns pending input; this Compose frame can be older than the last key.
-            imeService.confirmCurrent()
+            imeService.beforeKeyboardModeChange()
             if (activeTab != KeyboardTab.MAIN) {
                 activeTab = KeyboardTab.MAIN
             } else {
@@ -386,20 +448,10 @@ fun KeyboardRootView(
                                     },
                                     onDelete = onDeleteChar,
                                     onSpace = {
-                                        if (currentSurface.isNotEmpty()) {
-                                            imeService.confirmCurrent()
-                                        } else {
-                                            imeService.commitDirect(" ")
-                                        }
+                                        imeService.handleSpace()
                                     },
                                     onLongPressSpace = onLongPressSpace,
-                                    onEnter = {
-                                        if (currentSurface.isNotEmpty()) {
-                                            imeService.confirmCurrent()
-                                        } else {
-                                            onEnter()
-                                        }
-                                    },
+                                    onEnter = onEnter,
                                     onCycleMode = onCycleMode,
                                     onOpenSymbols = { activeTab = KeyboardTab.SYMBOLS },
                                     onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
@@ -420,21 +472,11 @@ fun KeyboardRootView(
                                     onShiftToggle = onShiftToggle,
                                     onDelete = onDeleteChar,
                                     onSpace = {
-                                        if (currentSurface.isNotEmpty()) {
-                                            imeService.confirmCurrent()
-                                        } else {
-                                            imeService.commitDirect(" ")
-                                            shiftState = shiftState.afterCharacter()
-                                        }
+                                        imeService.handleSpace()
+                                        shiftState = shiftState.afterCharacter()
                                     },
                                     onLongPressSpace = onLongPressSpace,
-                                    onEnter = {
-                                        if (currentSurface.isNotEmpty()) {
-                                            imeService.confirmCurrent()
-                                        } else {
-                                            onEnter()
-                                        }
-                                    },
+                                    onEnter = onEnter,
                                     onCycleMode = onCycleMode,
                                     onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
                                     isComposing = isComposing,
@@ -575,7 +617,7 @@ fun KeyboardRootView(
                         },
                         onDelete = onDeleteChar,
                         onSpace = {
-                            imeService.commitDirect(" ")
+                            imeService.handleSpace()
                         },
                         onLongPressSpace = onLongPressSpace,
                         onEnter = onEnter,
@@ -589,6 +631,111 @@ fun KeyboardRootView(
                 }
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun TranslationStatusBar(
+    state: TranslationUiState,
+    palette: ZeroConPalette,
+    onCommit: () -> Unit,
+    onClose: () -> Unit
+) {
+    val text = when (state.status) {
+        TranslationStatus.READY -> "${TranslationText.targetLabel(state.target)}: ${state.output}"
+        TranslationStatus.LOADING -> state.message ?: "翻訳モデルを読み込み中…"
+        TranslationStatus.TRANSLATING -> "翻訳中… ${state.source}"
+        TranslationStatus.ERROR -> state.message ?: "翻訳に失敗しました"
+        TranslationStatus.IDLE -> if (state.source.isEmpty()) "翻訳モード: 入力を開始" else "翻訳待ち"
+    }
+    val color = when (state.status) {
+        TranslationStatus.READY -> palette.textPrimary
+        TranslationStatus.ERROR -> palette.textSecondary
+        else -> palette.primaryAccentSoft
+    }
+    Row(
+        modifier = Modifier.fillMaxSize().padding(start = 8.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            color = color,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (state.status == TranslationStatus.READY) {
+            Text(
+                text = "確定",
+                color = palette.primaryAccentSoft,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable(onClick = onCommit).padding(horizontal = 8.dp)
+            )
+        }
+        Text(
+            text = "×",
+            color = palette.textSecondary,
+            fontSize = 18.sp,
+            modifier = Modifier.clickable(onClick = onClose).padding(horizontal = 8.dp)
+        )
+    }
+}
+
+@Composable
+private fun SelectionTranslationStatusBar(
+    state: SelectionTranslationState,
+    palette: ZeroConPalette,
+    onInsert: () -> Unit,
+    onCopy: () -> Unit,
+    onClose: () -> Unit
+) {
+    val text = when (state.status) {
+        TranslationStatus.READY -> "${TranslationText.targetLabel(state.target)}: ${state.output}"
+        TranslationStatus.LOADING -> "翻訳モデルを読み込み中…"
+        TranslationStatus.TRANSLATING -> "選択範囲を翻訳中…"
+        TranslationStatus.ERROR -> state.message ?: "翻訳に失敗しました"
+        TranslationStatus.IDLE -> "選択翻訳"
+    }
+    val color = when (state.status) {
+        TranslationStatus.READY -> palette.textPrimary
+        TranslationStatus.ERROR -> palette.textSecondary
+        else -> palette.primaryAccentSoft
+    }
+    Row(
+        modifier = Modifier.fillMaxSize().padding(start = 8.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            color = color,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (state.status == TranslationStatus.READY) {
+            Text(
+                text = "挿入",
+                color = palette.primaryAccentSoft,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable(onClick = onInsert).padding(horizontal = 7.dp)
+            )
+            Text(
+                text = "コピー",
+                color = palette.textSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.clickable(onClick = onCopy).padding(horizontal = 7.dp)
+            )
+        }
+        Text(
+            text = "×",
+            color = palette.textSecondary,
+            fontSize = 18.sp,
+            modifier = Modifier.clickable(onClick = onClose).padding(horizontal = 8.dp)
         )
     }
 }

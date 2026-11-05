@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,8 +40,12 @@ import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
 import com.zeroconvert.ime.model.ModelInfo
 import com.zeroconvert.ime.model.ModelManager
+import com.zeroconvert.ime.translation.TranslationEngine
+import com.zeroconvert.ime.translation.TranslationModelManager
+import com.zeroconvert.ime.translation.TranslationText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -191,6 +197,27 @@ fun MainScreen(
     var screenshotCapture by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, true))
     }
+    var translationEnabled by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false))
+    }
+    var translationKeepLoaded by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_KEEP_LOADED, false))
+    }
+    var translationTarget by remember {
+        mutableStateOf(
+            imePrefs.getString(ZeroConvertInputMethodService.KEY_TRANSLATION_TARGET, TranslationText.AUTO)
+                ?: TranslationText.AUTO
+        )
+    }
+    var translationModelReady by remember { mutableStateOf(TranslationModelManager.isReady(context)) }
+    var translationProgress by remember { mutableStateOf<TranslationModelManager.Progress?>(null) }
+    var translationDownloadError by remember { mutableStateOf<String?>(null) }
+    var showTranslationDownloadDialog by remember { mutableStateOf(false) }
+    var translationDownloadJob by remember { mutableStateOf<Job?>(null) }
+    var translationTestInput by remember { mutableStateOf("会議は明日です。") }
+    var translationTestResult by remember { mutableStateOf("未実行") }
+    var translationTestRunning by remember { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
     val screenshotPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         android.Manifest.permission.READ_MEDIA_IMAGES
     } else {
@@ -1284,6 +1311,355 @@ fun MainScreen(
             }
         }
 
+        // --- Translation input (experimental) ---
+        fun applyTranslationEnabled(on: Boolean) {
+            if (!on) {
+                translationEnabled = false
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                    .apply()
+                return
+            }
+            if (translationModelReady || TranslationModelManager.isReady(context)) {
+                translationModelReady = true
+                translationEnabled = true
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, true)
+                    .apply()
+            } else if (translationDownloadJob?.isActive != true) {
+                showTranslationDownloadDialog = true
+            }
+        }
+
+        fun startTranslationDownload() {
+            if (translationDownloadJob?.isActive == true) return
+            translationDownloadError = null
+            translationProgress = TranslationModelManager.Progress(0)
+            translationDownloadJob = coroutineScope.launch {
+                val result = TranslationModelManager.download(context) { progress ->
+                    coroutineScope.launch(Dispatchers.Main) { translationProgress = progress }
+                }
+                translationProgress = null
+                result.onSuccess {
+                    translationDownloadError = null
+                    translationModelReady = true
+                    translationEnabled = true
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, true)
+                        .apply()
+                    android.widget.Toast.makeText(context, "翻訳モデルを保存しました", android.widget.Toast.LENGTH_SHORT).show()
+                }.onFailure { error ->
+                    translationDownloadError = error.message ?: "ダウンロードに失敗しました"
+                    translationModelReady = TranslationModelManager.isReady(context)
+                    if (!translationModelReady) {
+                        translationEnabled = false
+                        imePrefs.edit()
+                            .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                            .apply()
+                    }
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = palette.surface),
+            border = BorderStroke(1.dp, palette.borderSubtle),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "翻訳入力（試験）",
+                    fontWeight = FontWeight.Bold,
+                    color = palette.textPrimary,
+                    fontSize = 15.sp
+                )
+                Text(
+                    text = "日本語入力の未確定文を翻訳し、Enterで訳文を確定します。選択文字列の翻訳・挿入にも対応します。翻訳は端末内で実行され、入力文は送信されません。",
+                    color = palette.textSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "翻訳機能を有効にする",
+                            color = palette.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (translationModelReady) {
+                                "モデル: ダウンロード済み"
+                            } else {
+                                "モデル: 未ダウンロード"
+                            },
+                            color = if (translationModelReady) palette.readyEmerald else palette.textMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Switch(
+                        checked = translationEnabled,
+                        onCheckedChange = { applyTranslationEnabled(it) }
+                    )
+                }
+
+                if (translationEnabled && !translationModelReady) {
+                    Text(
+                        text = "翻訳モデルがありません。下のボタンからダウンロードしてください。",
+                        color = palette.textSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+
+                val downloading = translationProgress
+                if (downloading != null) {
+                    LinearProgressIndicator(
+                        progress = downloading.fraction,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (downloading.downloaded >= downloading.total) {
+                                "保存・検証中…（SHA-256）"
+                            } else {
+                                "${downloading.downloaded / (1024 * 1024)} / ${downloading.total / (1024 * 1024)} MB"
+                            },
+                            color = palette.textSecondary,
+                            fontSize = 11.sp
+                        )
+                        TextButton(onClick = {
+                            translationDownloadJob?.cancel()
+                            translationDownloadJob = null
+                            translationProgress = null
+                            translationDownloadError = "ダウンロードを中断しました（次回再開できます）"
+                        }) {
+                            Text("中断", fontSize = 12.sp)
+                        }
+                    }
+                }
+                translationDownloadError?.let { message ->
+                    Text(text = message, color = palette.textSecondary, fontSize = 11.sp)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = {
+                            if (translationModelReady) {
+                                startTranslationDownload()
+                            } else {
+                                showTranslationDownloadDialog = true
+                            }
+                        },
+                        enabled = downloading == null,
+                        modifier = Modifier.weight(1f).height(42.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent)
+                    ) {
+                        Text(
+                            text = if (translationModelReady) "再ダウンロード" else "翻訳モデルをダウンロード",
+                            fontSize = 12.sp,
+                            color = Color.White
+                        )
+                    }
+                    if (translationModelReady) {
+                        Button(
+                            onClick = {
+                                translationEnabled = false
+                                translationModelReady = false
+                                translationTestResult = "未実行"
+                                imePrefs.edit()
+                                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                                    .apply()
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    TranslationModelManager.delete(context)
+                                }
+                            },
+                            enabled = !translationEnabled && downloading == null,
+                            modifier = Modifier.height(42.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
+                        ) {
+                            Text("削除", fontSize = 12.sp, color = palette.textPrimary)
+                        }
+                    }
+                }
+
+                Text(
+                    text = "翻訳方向",
+                    color = palette.textPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        TranslationText.AUTO to "自動",
+                        TranslationText.EN to "英語へ",
+                        TranslationText.JA to "日本語へ"
+                    ).forEach { (value, label) ->
+                        FilterChip(
+                            selected = translationTarget == value,
+                            onClick = {
+                                translationTarget = value
+                                imePrefs.edit()
+                                    .putString(ZeroConvertInputMethodService.KEY_TRANSLATION_TARGET, value)
+                                    .apply()
+                            },
+                            label = { Text(label, fontSize = 11.sp) }
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "翻訳モデルを常時読み込む",
+                            color = palette.textPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "OFFでは翻訳モード終了時に約573MBのモデルを解放します。",
+                            color = palette.textMuted,
+                            fontSize = 10.sp
+                        )
+                    }
+                    Switch(
+                        checked = translationKeepLoaded,
+                        onCheckedChange = { enabled ->
+                            translationKeepLoaded = enabled
+                            imePrefs.edit()
+                                .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_KEEP_LOADED, enabled)
+                                .apply()
+                        }
+                    )
+                }
+
+                Text(
+                    text = "翻訳テスト",
+                    color = palette.textPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                OutlinedTextField(
+                    value = translationTestInput,
+                    onValueChange = { translationTestInput = it.take(512) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("原文", fontSize = 11.sp) },
+                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                )
+                Button(
+                    onClick = {
+                        if (!translationTestRunning) {
+                            translationTestRunning = true
+                            translationTestResult = "翻訳中…"
+                            coroutineScope.launch {
+                                val input = translationTestInput.trim()
+                                val result = withContext(Dispatchers.IO) {
+                                    val file = TranslationModelManager.modelFile(context)
+                                    if (!TranslationModelManager.isReady(context) || !TranslationEngine.load(file)) {
+                                        "モデルを読み込めません"
+                                    } else {
+                                        val target = TranslationText.targetFor(input, translationTarget)
+                                        val completion = TranslationEngine.translate(
+                                            TranslationText.prompt(input, target),
+                                            512,
+                                            15_000
+                                        )
+                                        if (completion.finished && TranslationText.validOutput(completion.text)) {
+                                            completion.text.trim()
+                                        } else {
+                                            "失敗: ${completion.stopReason}"
+                                        }
+                                    }
+                                }
+                                if (!translationKeepLoaded) {
+                                    withContext(Dispatchers.IO) { TranslationEngine.close() }
+                                }
+                                translationTestResult = result
+                                translationTestRunning = false
+                            }
+                        }
+                    },
+                    enabled = translationModelReady && !translationTestRunning && downloading == null &&
+                        translationTestInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
+                ) {
+                    Text(
+                        text = if (translationTestRunning) "翻訳中…" else "翻訳を実行",
+                        fontSize = 12.sp,
+                        color = palette.textPrimary
+                    )
+                }
+                Text(
+                    text = "結果: $translationTestResult",
+                    color = palette.primaryAccentSoft,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        if (showTranslationDownloadDialog) {
+            AlertDialog(
+                onDismissRequest = { showTranslationDownloadDialog = false },
+                title = { Text("翻訳モデルをダウンロード") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "PLaMo 3 Translate 0.8B Q4_K_M（約547MB）をHugging Faceからダウンロードします。",
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "モバイル回線では通信量に注意してください。モデルはPLaMo Community Licenseで提供されます。読み込み中は数百MBのメモリを使用します。",
+                            fontSize = 12.sp
+                        )
+                        TextButton(onClick = {
+                            uriHandler.openUri(TranslationModelManager.LICENSE_URL)
+                        }) {
+                            Text("PLaMo Community License を開く", fontSize = 12.sp)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showTranslationDownloadDialog = false
+                        startTranslationDownload()
+                    }) {
+                        Text("同意してダウンロード")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showTranslationDownloadDialog = false }) {
+                        Text("キャンセル")
+                    }
+                }
+            )
+        }
+
         // --- Model Management & Benchmark Section (ZeroCon Model & 評価ベンチマーク) ---
         var isDebugExpanded by remember { mutableStateOf(false) }
 
@@ -1710,6 +2086,11 @@ fun MainScreen(
                     LicenseItem(
                         title = "LOUDS System Dictionary & Emoji Dictionary",
                         license = "Apache License 2.0 — Miwa (ensan-hcl) / Mozc & Unicode",
+                        palette = palette
+                    )
+                    LicenseItem(
+                        title = "PLaMo 3 Translate (Translation Model)",
+                        license = "PLaMo Community License — Copyright (c) Preferred Networks, Inc.",
                         palette = palette
                     )
                     LicenseItem(

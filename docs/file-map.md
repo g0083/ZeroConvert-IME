@@ -75,8 +75,9 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | `A/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt` | Android IMEライフサイクルと入力連携 |
 | 同 `KanaKanjiConverter.kt` / `ZenzNative.kt` | Kotlin変換処理 / native呼び出し |
 | 同 `assist/TypoCorrectionEngine.kt` / `PredictiveAssistEngine.kt` | Android固有の補正 / 先読み |
+| 同 `translation/` | 翻訳プロンプト・モデルDL/検証・世代管理・遅延ロード（試験機能） |
 | 同 `model/ModelManager.kt` | 組込み・取込みモデル選択 |
-| `A/main/cpp/zenz_jni.cpp` / `azookey_louds.cpp` / `CMakeLists.txt` | 推論JNI / 辞書読取 / nativeビルド |
+| `A/main/cpp/zenz_jni.cpp` / `assist_jni.cpp` / `azookey_louds.cpp` / `CMakeLists.txt` | 推論JNI / assist・翻訳Runtime / 辞書読取 / nativeビルド |
 | `data/generate_typo_dataset.py` / `generate_word_typo_30k.py` | タイポ学習データ生成 |
 | `data/build_distillation_corpus.py` / `generate_distilled_dataset.py` | 蒸留コーパス関連処理 |
 | `training/train_nano_v2.py` / `training/train_nano_v2_gentle.py` / `training/train_nano_v2_fullft.py` | 蒸留LoRA / gentle版 / 全層学習 |

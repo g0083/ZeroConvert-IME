@@ -44,9 +44,14 @@ await cp(checkout, path.join(stage, 'converter'), {
 const llama = path.join(stage, 'converter/Sources/llama.cpp');
 const native = path.join(root, 'android/app/src/main/cpp/llama.cpp');
 const pins = JSON.parse(await readFile(path.join(root, 'windows/server-swift/Package.resolved'), 'utf8')).pins;
+// The Windows converter is a local path dependency (Package.swift uses
+// ZEROCON_CONVERTER_SOURCE), so Package.resolved no longer pins it. Keep the
+// Android stage pinned to the converter revision prepared for Windows.
+const LOCAL_CONVERTER_REVISION = 'c228776b0b869f81ee2a1031ff9dbd679f4b3cd9';
 const converterPin = pins.find(pin => pin.identity === 'azookeykanakanjiconverter');
-if (execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== converterPin.state.revision) {
-  throw new Error('Windows converter checkout differs from Package.resolved; resolve the Windows dependency before building Android.');
+const converterRevision = converterPin?.state?.revision ?? LOCAL_CONVERTER_REVISION;
+if (execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== converterRevision) {
+  throw new Error('Windows converter checkout differs from the pinned Android converter revision; resolve the Windows dependency before building Android.');
 }
 const pinnedDependencies = pins.filter(pin => pin.identity !== 'azookeykanakanjiconverter').map(pin =>
   `.package(url: ${JSON.stringify(pin.location)}, ${pin.state.version ? `exact: ${JSON.stringify(pin.state.version)}` : `revision: ${JSON.stringify(pin.state.revision)}`})`
