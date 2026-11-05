@@ -1,18 +1,26 @@
 # ZeroConvert-IME
 
-Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減らす日本語IMEを開発しています。現在はタイポ補正の安定動作と先読み精度の改善に取り組んでいます。Android実装とモデル学習・評価コードも同じリポジトリで管理します。
+Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減らす日本語IMEを開発しています。現在はタイポ補正の安定動作と先読み精度の改善に加え、Windows/Androidの翻訳入力を試験提供しています。Android実装とモデル学習・評価コードも同じリポジトリで管理します。
 
 ## 📥 すぐに試す（最新リリース）
 
-最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.2.3)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
+最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.3.0)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
 
 | プラットフォーム | 配布ファイル | 説明 |
 |---|---|---|
-| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.2.3.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.3/ZeroConvert-IME-setup-v0.2.3.exe) | インストーラーを実行するだけでモデル・エンジン一式を自動セットアップ |
-| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.2.3-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.3/ZeroConvert-IME-v0.2.3-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK |
-| **Android (実機推奨)** | [**ZeroConvert-IME-v0.2.3-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.2.3/ZeroConvert-IME-v0.2.3-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK |
+| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.3.0.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.3.0/ZeroConvert-IME-setup-v0.3.0.exe) | 翻訳モデルPLaMo 0.8Bを含むインストーラー（約712MB）。モデル・エンジン一式を自動セットアップ |
+| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.3.0-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.3.0/ZeroConvert-IME-v0.3.0-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK。翻訳モデルは初回ON時に別途ダウンロード |
+| **Android (実機推奨)** | [**ZeroConvert-IME-v0.3.0-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.3.0/ZeroConvert-IME-v0.3.0-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK。翻訳モデルは初回ON時に別途ダウンロード |
 
-> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.2.3)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.2.3) をご覧ください。
+> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.3.0)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.3.0) をご覧ください。
+
+## 🌐 翻訳入力（v0.3.0・試験機能）
+
+Windowsでは `Ctrl+T` の翻訳バーから日本語→英語／英語→日本語の翻訳入力を、文字選択中の翻訳ポップアップからコピー・挿入を行えます。Androidではキーボードの翻訳アイコンで翻訳モードに入り、未確定文を休止後に訳文へ置き換えてEnterで確定します。選択文字列の翻訳バーにも対応します。
+
+翻訳は端末/PC内の **PLaMo 3 Translate 0.8B** で実行し、入力文を外部サーバーへ送信しません。Windowsインストーラーには0.8Bモデル（約573MB）を同梱しています。Android APKには同梱せず、初回ON時に確認のうえHugging Faceから約547MiBをダウンロードします（SHA-256・リビジョン固定）。2Bモデルは未同梱・未検証です。翻訳は試験機能で、品質・遅延・メモリは環境依存です。
+
+モデルはPLaMo Community Licenseで提供されます。ライセンス条件は [Androidの表示](android/THIRD_PARTY_LICENSES.md) / [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) を確認してください。
 
 ## 変換操作を減らす、独自のZeroCon Model Nano v4
 
@@ -70,12 +78,12 @@ ZeroConvert-IMEは、重みを差し替えるだけのIMEではありません�
 
 - **ライブ変換とストリーミング確定**：入力に追従して変換し、長文では先頭の変換が安定した部分を自然な境界で自動確定します。
 - **辞書とニューラル評価の統合**：辞書候補・読み・文脈・学習履歴を使って候補を組み立てます。かな漢字変換、タイポ補正、先読みを別の役割として扱い、通常候補を保持します。
-- **原打鍵からのタイポ補正**：ローマ字列、読み、補正後表記を区別し、固定規則・学習済み補正・辞書探索・専用モデルを組み合わせます。隣接キーの誤りも辞書候補の探索に使います。
+- **原打鍵からのタイポ補正**：ローマ字列、読み、補正後表記を区別し、固定規則・学習済み補正・辞書探索・メイン変換モデルによる尤度判定と再変換を組み合わせます。隣接キーの誤りも辞書候補の探索に使います。
 - **採用できる先読み**：文脈や変換済み表記を使って続きを提案し、補正を優先して表示します。提案を採用する操作と通常の確定学習を分けています。
 - **非同期結果の整合**：削除・追加入力・カーソル移動・入力先変更をまたぐ古い応答を抑止し、読み・文字数・候補IDを照合して反映します。
 - **AndroidでもWindowsの中核を共有**：現行の `:rebuilt` はWindowsのSwift変換エンジンとRustアシストを直接コンパイルし、自動確定の共通方針も利用します。Androidの入力・キーボード・ライフサイクルは専用ホストが担います。
 
-通常変換の選択肢は上記2種類です。タイポ補正専用のCorrector（corecctor）とWindowsのKeyboard Priorは別用途として維持しています。補正の取りこぼし・正常入力への誤補正・先読みの妥当性は引き続き改善中です。内部構成は [Windows変換ロジック](docs/windows-conversion-logic.md)、[Android共通エンジン](docs/android-shared-engine.md)、モデル配置は [モデル資産ガイド](docs/model-assets.md) を参照してください。
+通常変換の選択肢は上記2種類です。v0.2.3以降、タイポ補正は従来の独立したCorrectorサーバー（18090番）を完全撤廃し、Keyboard Prior（ネイティブ探索）とメイン変換モデル（ポート18091）による2段リランキング・漢字変換へ統合されました。補正の取りこぼし・正常入力への誤補正・先読みの妥当性は引き続き改善中です。内部構成は [Windows変換ロジック](docs/windows-conversion-logic.md)、[Android共通エンジン](docs/android-shared-engine.md)、モデル配置は [モデル資産ガイド](docs/model-assets.md) を参照してください。
 
 ## 構成
 
