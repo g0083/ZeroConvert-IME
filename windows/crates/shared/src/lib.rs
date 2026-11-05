@@ -28,6 +28,8 @@ pub mod ai_candidate {
     pub const PREDICTIVE: u64 = 999_902;
     /// ⚡ 動的マクロ (日付・時刻・インライン計算) candidate.
     pub const DYNAMIC_MACRO: u64 = 999_903;
+    /// Experimental Japanese-to-English translation (never a learning candidate).
+    pub const TRANSLATION: u64 = 999_904;
 
     /// Lowest id of the reserved AI assist range.
     const AI_ASSIST_RANGE_START: u64 = TYPO_CORRECTION;
@@ -44,10 +46,13 @@ pub mod ai_candidate {
 // Keep runtime prediction separate from the corrector (18090) and the settings
 // application's benchmark process (8090).
 pub const PREDICTION_SERVER_PORT: u16 = 18091;
+pub const TRANSLATION_SERVER_PORT: u16 = 18092;
 pub mod runtime_assets;
 
 #[cfg(windows)]
 pub mod model_update;
+pub mod translation_http;
+pub mod translation_session;
 
 // Desktop LOCAL pipe names are global in NPFS, so every leaf includes the
 // Terminal Services session ID. AppContainer clients resolve LOCAL inside their
@@ -695,6 +700,13 @@ pub struct GeneralConfig {
     pub predictive_conversion: bool,
     #[serde(default = "default_ai_assist_enabled")]
     pub experimental_ai_assist: bool,
+    #[serde(default)]
+    pub experimental_translation: bool,
+    #[serde(default = "default_translation_model")]
+    pub translation_model: String,
+    /// Keep the translation server/model loaded while translation is enabled.
+    #[serde(default)]
+    pub translation_keep_alive: bool,
     #[serde(default = "default_ai_engine")]
     pub experimental_ai_engine: String,
     #[serde(default = "default_ai_engine_port")]
@@ -726,6 +738,9 @@ impl Default for GeneralConfig {
             experimental_typo_correction: false,
             predictive_conversion: false,
             experimental_ai_assist: true,
+            experimental_translation: false,
+            translation_model: default_translation_model(),
+            translation_keep_alive: false,
             experimental_ai_engine: default_ai_engine(),
             experimental_ai_engine_port: default_ai_engine_port(),
             auto_commit_live_conversion: true,
@@ -864,6 +879,28 @@ mod tests {
             serde_json::from_str::<super::GeneralConfig>(&saved)
                 .unwrap()
                 .jev_conversion
+        );
+    }
+
+    #[test]
+    fn translation_is_opt_in_and_survives_config_roundtrip() {
+        let mut general: super::GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!general.experimental_translation);
+        assert!(!super::GeneralConfig::default().experimental_translation);
+        assert!(!general.translation_keep_alive);
+        assert!(!super::GeneralConfig::default().translation_keep_alive);
+        general.translation_keep_alive = true;
+        general.experimental_translation = true;
+        let saved = serde_json::to_string(&general).unwrap();
+        assert!(
+            serde_json::from_str::<super::GeneralConfig>(&saved)
+                .unwrap()
+                .experimental_translation
+        );
+        assert!(
+            serde_json::from_str::<super::GeneralConfig>(&saved)
+                .unwrap()
+                .translation_keep_alive
         );
     }
 
@@ -1597,6 +1634,10 @@ fn default_ai_assist_enabled() -> bool {
 
 fn default_ai_engine() -> String {
     "embedded".to_string()
+}
+
+fn default_translation_model() -> String {
+    "0.8b".to_string()
 }
 
 fn default_ai_engine_port() -> u16 {

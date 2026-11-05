@@ -36,6 +36,7 @@ impl TextServiceFactory {
 
     pub fn set_keyboard_disabled_state(&self, disabled: bool) -> Result<()> {
         if disabled {
+            self.stop_translation_mode();
             self.hide_selection_count();
             self.cancel_typo_assist();
             self.cancel_jev_conversion();
@@ -102,6 +103,7 @@ impl ITfThreadMgrEventSink_Impl for TextServiceFactory_Impl {
         if let Some(focus) = focus {
             self.borrow_mut()?.advise_text_layout_sink(focus.clone())?;
         }
+        self.stop_translation_mode();
         self.end_composition_for_tsf_event();
         self.set_keyboard_disabled_for_document_mgr(focus)?;
         ensure_ipc_service_for_tsf_event("OnSetFocus");
@@ -147,6 +149,7 @@ impl ITfThreadFocusSink_Impl for TextServiceFactory_Impl {
     #[macros::anyhow]
     fn OnKillThreadFocus(&self) -> Result<()> {
         self.clear_tracked_modifier_key_state();
+        self.stop_translation_mode();
         self.end_composition_for_tsf_event();
         self.set_keyboard_disabled_state(true)?;
 

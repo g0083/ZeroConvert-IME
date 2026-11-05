@@ -293,15 +293,16 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         if (assist && typeof assist.replacement === 'string') {
                             const applied = assist.status === 'applied';
                             const prediction = assist.status === 'prediction';
+                            const translation = assist.status === 'translation';
                             const diff = correctionDiff(String(assist.source || readingText), assist.replacement);
-                            const change = prediction ? escapeHtml(typeof assist.continuation === 'string' && assist.continuation ? assist.continuation : assist.replacement) :
+                            const change = translation ? '英訳: ' + escapeHtml(assist.replacement) : prediction ? escapeHtml(typeof assist.continuation === 'string' && assist.continuation ? assist.continuation : assist.replacement) :
                                 '<span class="assist-original">' + escapeHtml(diff.original) + '</span> → ' +
                                 '<span class="assist-replacement">' + diff.replacement + '</span>';
                             let assistHtml = '<span class="ai-assist-pill" role="status">' +
                                 '<span class="assist-change">' + change + '</span>' +
                                 '<span class="assist-action">' + (applied ? '補正済み · ' : '') +
                                 '<span class="ai-assist-tab">' + (applied ? 'Esc' : 'Tab') + '</span>' +
-                                (applied ? '戻す' : prediction ? 'で確定' : 'で補正') + '</span></span>';
+                                (applied ? '戻す' : prediction || translation ? 'で確定' : 'で補正') + '</span></span>';
                             if (prediction && assist.undoAvailable) {
                                 assistHtml += '<span class="assist-action">補正済み · Escで戻す</span>';
                             }

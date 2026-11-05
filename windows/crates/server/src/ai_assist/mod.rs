@@ -24,6 +24,7 @@ pub mod prediction;
 mod reading_check;
 pub mod romaji_decoder;
 pub mod runtime;
+pub mod translation;
 pub mod typo_variant;
 
 pub use dynamic_macro::{current_expansions, expand_dynamic_macros, MacroCandidate, MacroKind};

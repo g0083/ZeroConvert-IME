@@ -16,6 +16,7 @@ pub(super) struct TypoState {
     pub rejected_surface: Option<String>,
     pub hold_auto_commit: bool,
     pub primary_assist: Option<u64>,
+    pub translation_failed: bool,
     pub prediction_continuation: String,
     accepted: Vec<(String, String)>,
 }
@@ -29,6 +30,7 @@ pub(super) struct AppliedCorrection {
 }
 
 struct Pending {
+    translation: bool,
     generation: u64,
     timer: usize,
     started: Instant,
@@ -83,14 +85,20 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
         PENDING.with(|slot| *slot.borrow_mut() = Some(pending));
         return;
     }
-    if pending.started.elapsed() >= Duration::from_millis(1600) {
+    if pending.started.elapsed()
+        >= Duration::from_millis(if pending.translation { 42_000 } else { 1600 })
+    {
         return;
     }
     let mut results = Vec::new();
     if !pending.prediction_done {
         if let Some(result) = receive(&pending.receiver) {
             pending.prediction_done = true;
-            pending.prediction_result = result;
+            pending.prediction_result = if pending.translation {
+                Some(result.unwrap_or_default())
+            } else {
+                result
+            };
         }
     }
     if !pending.correction_done {
@@ -112,7 +120,7 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
         pending.started.elapsed(),
     ) {
         if let Some(result) = pending.prediction_result.take() {
-            results.push((2, result));
+            results.push((if pending.translation { 3 } else { 2 }, result));
         }
         if let Some(result) = pending.correction_result.take() {
             results.push((1, result));
@@ -155,12 +163,14 @@ fn merge_results(
     let mut choices = Vec::new();
     let mut auto_apply = false;
     for (kind, response) in responses {
-        let id = if kind == 1 {
+        let id = if kind == 3 {
+            shared::ai_candidate::TRANSLATION
+        } else if kind == 1 {
             shared::ai_candidate::TYPO_CORRECTION
         } else {
             shared::ai_candidate::PREDICTIVE
         };
-        auto_apply |= response.auto_apply;
+        auto_apply |= kind == 1 && response.auto_apply;
         if kind == 2 {
             state.typo.prediction_continuation = response.continuation;
         }
@@ -272,7 +282,85 @@ fn select_surface(candidates: &mut Candidates, surface: &str) {
     candidates.candidate_ids.insert(0, 0);
 }
 
+fn translation_surface(candidates: &Candidates) -> Option<&str> {
+    candidates
+        .candidate_ids
+        .iter()
+        .position(|id| *id == shared::ai_candidate::TRANSLATION)
+        .and_then(|i| candidates.texts.get(i))
+        .map(String::as_str)
+}
+
 impl TextServiceFactory {
+    pub(crate) fn translation_feature_enabled(&self) -> Result<bool> {
+        Ok(IMEState::app_config_snapshot()?
+            .app_config()
+            .general
+            .experimental_translation)
+    }
+
+    pub(crate) fn input_config_snapshot(&self) -> Result<crate::engine::state::AppConfigSnapshot> {
+        Ok(IMEState::app_config_snapshot()?
+            .for_translation_mode(self.borrow()?.translation_session.is_some()))
+    }
+
+    pub(crate) fn stop_translation_mode(&self) {
+        if !self
+            .borrow()
+            .is_ok_and(|service| service.translation_session.is_some())
+        {
+            return;
+        }
+        self.cancel_typo_assist();
+        if let Ok(mut service) = self.borrow_mut() {
+            service.translation_session = None;
+        }
+        if let Ok(Some(mut ipc)) = IMEState::ipc_service() {
+            let _ = ipc.update_candidate_window(Some(false), None, None, None, None);
+        }
+    }
+
+    pub(crate) fn toggle_translation_mode(&self, context: Option<&ITfContext>) -> Result<()> {
+        if let Some(context) = context {
+            self.borrow_mut()?.context = Some(context.clone());
+        }
+        if self.borrow()?.translation_session.is_some() {
+            if self.borrow()?.borrow_composition()?.state != CompositionState::None {
+                self.handle_action(
+                    &[ClientAction::RemoveText, ClientAction::EndComposition],
+                    CompositionState::None,
+                )?;
+            }
+            self.stop_translation_mode();
+            return Ok(());
+        }
+        if self.current_context_has_sensitive_input_scope() {
+            return Ok(());
+        }
+        self.cancel_typo_assist();
+        if IMEState::input_mode()? == InputMode::Latin {
+            self.handle_action(
+                &[ClientAction::SetIMEMode(InputMode::Kana)],
+                CompositionState::None,
+            )?;
+        }
+        self.borrow_mut()?.translation_session =
+            Some(shared::translation_session::TranslationSessionGuard::start()?);
+        let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
+        let candidates = self.borrow()?.borrow_composition()?.candidates.clone();
+        self.sync_candidate_window_update(
+            &mut ipc,
+            &candidates,
+            0,
+            Some(true),
+            true,
+            Some(""),
+            Some(false),
+            None,
+        )?;
+        self.begin_typo_assist()
+    }
+
     pub(crate) fn cancel_typo_assist(&self) {
         GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
         let pending = PENDING.with(|pending| pending.borrow_mut().take());
@@ -280,9 +368,10 @@ impl TextServiceFactory {
     }
 
     pub(super) fn begin_typo_assist(&self) -> Result<()> {
-        let config = IMEState::app_config_snapshot()?;
+        let config = self.input_config_snapshot()?;
         let config = config.app_config();
-        if !config.general.experimental_ai_assist
+        let translation = config.general.experimental_translation;
+        if (!translation && !config.general.experimental_ai_assist)
             || IMEState::input_mode()? == InputMode::Latin
             || IMEState::keyboard_disabled().unwrap_or(true)
         {
@@ -292,6 +381,13 @@ impl TextServiceFactory {
             let service = self.borrow()?;
             let state = service.borrow_composition()?;
             if !eligible(&state)
+                || (translation
+                    && state
+                        .candidates
+                        .hiragana
+                        .chars()
+                        .last()
+                        .is_some_and(|c| c.is_ascii_alphabetic()))
                 || service.disabled_context_observed
                 || state
                     .candidates
@@ -342,10 +438,10 @@ impl TextServiceFactory {
                 .max()
                 .unwrap_or(0),
             request_id: timer as u64,
-            kind: 2,
+            kind: if translation { 3 } else { 2 },
         };
         let task = ipc.assist_candidates_background(request.clone(), sender);
-        let (correction_task, correction_receiver) = if corrected {
+        let (correction_task, correction_receiver) = if corrected || translation {
             (None, None)
         } else {
             let (sender, receiver) = mpsc::channel();
@@ -358,6 +454,7 @@ impl TextServiceFactory {
         };
         PENDING.with(|pending| {
             *pending.borrow_mut() = Some(Pending {
+                translation,
                 generation: GENERATION.with(Cell::get),
                 timer,
                 started: Instant::now(),
@@ -368,7 +465,7 @@ impl TextServiceFactory {
                 correction_result: None,
                 prediction_result: None,
                 prediction_done: false,
-                correction_done: corrected,
+                correction_done: corrected || translation,
                 owner,
                 context,
                 composition,
@@ -389,10 +486,11 @@ impl TextServiceFactory {
         pending: &Pending,
         responses: Vec<(u32, shared::proto::GetAssistCandidatesResponse)>,
     ) -> Result<()> {
-        let config = IMEState::app_config_snapshot()?;
+        let config = self.input_config_snapshot()?;
         let config = config.app_config();
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
-        if !config.general.experimental_ai_assist
+        if pending.translation != config.general.experimental_translation
+            || (!pending.translation && !config.general.experimental_ai_assist)
             || IMEState::keyboard_disabled().unwrap_or(true)
             || self.current_context_has_sensitive_input_scope()
             || pending.context_key != ipc.assist_snapshot_key()
@@ -426,6 +524,19 @@ impl TextServiceFactory {
         if let Some(surface) = auto_surface.filter(|_| !config.general.jev_conversion) {
             self.apply_typo_correction(&surface, false)?;
             return self.begin_typo_assist();
+        }
+        if pending.translation {
+            self.borrow()?
+                .borrow_mut_composition()?
+                .typo
+                .translation_failed = translation_surface(&candidates).is_none();
+            if let Some(text) = translation_surface(&candidates) {
+                self.set_text(text, "")?;
+                let service = self.borrow()?;
+                let mut state = service.borrow_mut_composition()?;
+                state.preview = text.to_owned();
+                state.suffix.clear();
+            }
         }
         self.sync_candidate_window_after_text_update(
             &mut ipc,
@@ -556,7 +667,7 @@ impl TextServiceFactory {
             let _ = self.undo_typo_correction();
             return Err(error);
         }
-        let config = IMEState::app_config_snapshot()?;
+        let config = self.input_config_snapshot()?;
         self.sync_candidate_window_after_text_update(
             &mut ipc,
             &candidates,
@@ -591,7 +702,7 @@ impl TextServiceFactory {
         *self.borrow()?.borrow_mut_composition()? = restored;
         IMEState::set_ipc_service(ipc.clone())?;
         self.set_text(&baseline, "")?;
-        let config = IMEState::app_config_snapshot()?;
+        let config = self.input_config_snapshot()?;
         self.sync_candidate_window_after_text_update(
             &mut ipc,
             &candidates,
@@ -666,6 +777,122 @@ impl TextServiceFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn translation_tab_commits_english_and_keeps_japanese_source_until_acceptance() {
+        let mut config = AppConfig::default();
+        config.general.experimental_translation = true;
+        config.general.punctuation_commit = true;
+        let mut state = Composition {
+            state: CompositionState::Composing,
+            raw_input: "kaigihaashitadesu".into(),
+            preview: "会議は明日です".into(),
+            candidates: Candidates {
+                texts: vec!["会議は明日です".into()],
+                sub_texts: vec![String::new()],
+                hiragana: "かいぎはあしたです".into(),
+                corresponding_count: vec![16],
+                candidate_ids: vec![1],
+            },
+            ..Default::default()
+        };
+        let snapshot = state.candidates.clone();
+        let mut result = response(
+            shared::ai_candidate::TRANSLATION,
+            "The meeting is tomorrow.",
+            100,
+        );
+        result.auto_apply = true; // Never treat a translation as a typo replacement.
+        result.suggestions[0].corresponding_count = 16;
+        assert_eq!(merge_results(&mut state, vec![(3, result)]), None);
+        assert_eq!(state.candidates.texts[0], "会議は明日です");
+        assert_eq!(state.raw_input, "kaigihaashitadesu");
+        assert_eq!(
+            state.typo.primary_assist,
+            Some(shared::ai_candidate::TRANSLATION)
+        );
+        assert_eq!(state.candidates.corresponding_count[1], 16);
+        let plan = CompositionReducer::plan_actions_for_user_action(
+            &state,
+            &UserAction::Tab,
+            &InputMode::Kana,
+            false,
+            &config,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            (
+                CompositionState::None,
+                vec![
+                    ClientAction::CommitWithText("The meeting is tomorrow.".into()),
+                    ClientAction::EndComposition,
+                ]
+            )
+        );
+        assert_eq!(
+            translation_surface(&state.candidates),
+            Some("The meeting is tomorrow.")
+        );
+        let enter = CompositionReducer::plan_actions_for_user_action(
+            &state,
+            &UserAction::Enter,
+            &InputMode::Kana,
+            false,
+            &config,
+            false,
+        )
+        .unwrap();
+        assert_eq!(enter, plan);
+        let mut waiting = state.clone();
+        waiting.candidates = snapshot.clone();
+        waiting.typo.primary_assist = None;
+        for action in [UserAction::Enter, UserAction::Tab] {
+            assert_eq!(
+                CompositionReducer::plan_actions_for_user_action(
+                    &waiting,
+                    &action,
+                    &InputMode::Kana,
+                    false,
+                    &config,
+                    false
+                ),
+                Some((CompositionState::Composing, Vec::new()))
+            );
+        }
+        // A translation requested before a delete/retype must not attach afterward.
+        state.candidates = snapshot.clone();
+        state.raw_input.pop();
+        assert!(!matches_snapshot(
+            &state,
+            "kaigihaashitadesu",
+            &snapshot,
+            1,
+            1
+        ));
+        state.raw_input.push('u');
+        assert!(!matches_snapshot(
+            &state,
+            "kaigihaashitadesu",
+            &snapshot,
+            1,
+            2
+        ));
+        for phase in [
+            CompositionState::None,
+            CompositionState::Previewing,
+            CompositionState::Selecting,
+        ] {
+            state.state = phase;
+            assert!(!matches_snapshot(
+                &state,
+                "kaigihaashitadesu",
+                &snapshot,
+                1,
+                1
+            ));
+        }
+    }
     fn response(id: u64, text: &str, relevance: u32) -> shared::proto::GetAssistCandidatesResponse {
         shared::proto::GetAssistCandidatesResponse {
             suggestions: vec![shared::proto::Suggestion {

@@ -4,7 +4,21 @@ use std::path::{Path, PathBuf};
 pub const NANO_IQ4: &str = "zerocon-nano-v4-iq4nl-emb8.gguf";
 pub const NANO_Q8: &str = "zerocon-nano-v4-q8_0.gguf";
 pub const CORRECTOR: &str = "zerocon-model-corrector.gguf";
-pub const CUDA_VERSION: &str = "cuda-b4846-cu12.4";
+pub const TRANSLATION_0_8B: &str = "plamo-3-translate-0.8b-Q4_K_M.gguf";
+pub const TRANSLATION_2B: &str = "plamo-3-translate-2b-Q4_K_M.gguf";
+pub const TRANSLATION: &str = TRANSLATION_0_8B;
+pub const CUDA_VERSION: &str = "cuda-b12125-cu12.4";
+
+pub fn default_translation_model() -> &'static str {
+    "0.8b"
+}
+
+pub fn translation_model_filename(id: &str) -> &'static str {
+    match id {
+        "2b" | "plamo-3-translate-2b" => TRANSLATION_2B,
+        _ => TRANSLATION_0_8B,
+    }
+}
 
 pub fn default_model() -> String {
     "nano_v4_iq4_emb8".into()
@@ -56,7 +70,8 @@ pub fn backend(install: &Path, name: &str) -> PathBuf {
         if cached.join("installed.json").is_file() && cached.join("llama-server.exe").is_file() {
             return cached;
         }
-        return install.join("llama_cuda");
+        // Never mix a legacy b4846 DLL with the modern Swift ABI.
+        return install.join("llama_cuda_b12125");
     }
     install.join(if name.eq_ignore_ascii_case("vulkan") {
         "llama_vulkan"

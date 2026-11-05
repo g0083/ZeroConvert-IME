@@ -10,20 +10,20 @@ use std::{
 };
 use tauri::Emitter;
 
-const ENGINE_URL: &str = "https://github.com/fkunn1326/llama.cpp/releases/download/b4846/llama-b4846-bin-win-cuda-cu12.4-x64.zip";
-const ENGINE_HASH: &str = "5307b89aae1f076e031d6aab95e63df5cb96b8d3b1fa7828f412e283a0663019";
-const RUNTIME_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b4846/cudart-llama-bin-win-cu12.4-x64.zip";
+const ENGINE_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b12125/llama-b12125-bin-win-cuda-12.4-x64.zip";
+const ENGINE_HASH: &str = "9f8b5810501216f7e67e3d9d2b6cf3cd53a75ea8ad1fe23f78e663ed3b5aeabd";
+const RUNTIME_URL: &str = "https://github.com/ggml-org/llama.cpp/releases/download/b12125/cudart-llama-bin-win-cuda-12.4-x64.zip";
 const RUNTIME_HASH: &str = "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6";
-const DOWNLOAD_BYTES: u64 = 192_592_769 + 391_443_627;
+const DOWNLOAD_BYTES: u64 = 288_916_929 + 391_443_627;
 const REQUIRED: &[&str] = &[
     "llama-server.exe",
     "llama.dll",
     "ggml.dll",
     "ggml-base.dll",
-    "ggml-cpu.dll",
+    "ggml-cpu-x64.dll",
     "ggml-cuda.dll",
     "ggml-rpc.dll",
-    "llava_shared.dll",
+    "libomp.dll",
     "cudart64_12.dll",
     "cublas64_12.dll",
     "cublasLt64_12.dll",
@@ -233,8 +233,8 @@ mod tests {
         fs::create_dir_all(&stage_root).unwrap();
         let stage = tempfile::tempdir_in(&stage_root).unwrap();
         for (file, expected) in [
-            ("llama-b4846-cuda.zip", ENGINE_HASH),
-            ("cudart-b4846.zip", RUNTIME_HASH),
+            ("llama-b12125-cuda.zip", ENGINE_HASH),
+            ("cudart-b12125.zip", RUNTIME_HASH),
         ] {
             let path = root.join(".local/downloads").join(file);
             let mut input = fs::File::open(&path).unwrap();

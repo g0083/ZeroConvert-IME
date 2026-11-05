@@ -39,10 +39,13 @@ const USE_ZENZAI: bool = true;
 static ASSIST_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 static JEV_CONVERSION_ENABLED: AtomicBool = AtomicBool::new(false);
 static AI_ASSIST_ENABLED: AtomicBool = AtomicBool::new(false);
+static TRANSLATION_ENABLED: AtomicBool = AtomicBool::new(false);
+static TRANSLATION_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 static AI_ENGINE_IS_LM_STUDIO: AtomicBool = AtomicBool::new(false);
 static LAST_CONTEXT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
 fn reload_ai_assist_from_settings(config: &AppConfig) {
+    TRANSLATION_ENABLED.store(config.general.experimental_translation, Ordering::Relaxed);
     ai_assist::corrector::clear_cache();
     ai_assist::prediction::clear_cache();
     let enabled = config.general.experimental_ai_assist;
@@ -1910,6 +1913,42 @@ impl AzookeyService for MyAzookeyService {
         // snapshot request: no composition lock or Swift FFI on the worker.
         let request = request.into_inner();
         let config = current_assist_config();
+        if request.kind == 3 {
+            if !TRANSLATION_ENABLED.load(Ordering::Relaxed)
+                || request.input_count <= 0
+                || request.raw_input.chars().count() > 512
+                || !ai_assist::translation::valid_source(&request.baseline)
+            {
+                return Ok(Response::new(Default::default()));
+            }
+            let permit = TRANSLATION_REQUEST_SLOTS
+                .acquire()
+                .await
+                .map_err(|_| Status::unavailable("translation stopped"))?;
+            let response = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let text = TRANSLATION_ENABLED
+                    .load(Ordering::Relaxed)
+                    .then(|| ai_assist::translation::translate(&request.baseline))
+                    .flatten();
+                shared::proto::GetAssistCandidatesResponse {
+                    suggestions: text
+                        .into_iter()
+                        .map(|text| Suggestion {
+                            text,
+                            subtext: String::new(),
+                            corresponding_count: request.input_count,
+                            candidate_id: shared::ai_candidate::TRANSLATION,
+                        })
+                        .collect(),
+                    relevance: 100,
+                    ..Default::default()
+                }
+            })
+            .await
+            .map_err(|_| Status::internal("translation worker failed"))?;
+            return Ok(Response::new(response));
+        }
         if !config.enabled
             || !(2..=512).contains(&request.reading.chars().count())
             || request.raw_input.chars().count() > 512
@@ -3226,6 +3265,14 @@ impl AzookeyService for MyAzookeyService {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ai_assist::runtime::configure_settings_resolver(|| AppConfig::settings_path().ok());
+    // Child loader failures must exit instead of opening an invisible modal
+    // entry-point dialog. Workers inherit this process error mode.
+    unsafe {
+        use windows::Win32::System::Diagnostics::Debug::{
+            SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SEM_NOOPENFILEERRORBOX,
+        };
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    }
     shared::enable_redirection_guard().map_err(std::io::Error::other)?;
     install_panic_hook();
     let log_paths = reload_server_logging_from_settings();

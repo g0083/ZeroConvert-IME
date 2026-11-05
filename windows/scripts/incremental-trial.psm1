@@ -10,6 +10,8 @@ function Get-TrialInputGroups {
         macros = @('windows/crates/macros')
         server = @('windows/crates/server/src','windows/crates/server/Cargo.toml','windows/crates/server/build.rs')
         keyboard = @('windows/native/keyboard-prior','windows/scripts/build-keyboard-prior.ps1')
+        runtime = @('windows/scripts/prepare-modern-llama.py','windows/scripts/modern-llama.ps1')
+        'translation-model' = @('artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf','artifacts/models/plamo-3-translate-2b/plamo-3-translate-2b-Q4_K_M.gguf')
         ui = @('windows/crates/ui/src','windows/crates/ui/Cargo.toml','windows/crates/ui/build.rs')
         launcher = @('windows/crates/launcher/src','windows/crates/launcher/Cargo.toml','windows/crates/launcher/build.rs')
         frontend = @('windows/frontend/src','windows/frontend/public','windows/frontend/index.html',
@@ -47,7 +49,7 @@ function Get-TrialInputSnapshot([string]$Root, $Previous = $null) {
                 $name = $item.FullName.Substring($Root.TrimEnd('\').Length + 1).Replace('\','/')
                 $ticks = $item.LastWriteTimeUtc.Ticks.ToString()
                 # Large data directories use a stat cache; ordinary source is always content-hashed.
-                $cached = $group -in @('dictionary','emoji','models') -and $prior.ContainsKey($name) -and
+                $cached = $group -in @('dictionary','emoji','models','translation-model') -and $prior.ContainsKey($name) -and
                     $prior[$name].bytes -eq $item.Length -and $prior[$name].ticks -eq $ticks
                 $hash = if ($cached) { $prior[$name].sha256 } else { Get-ArtifactHash $item.FullName }
                 $files.Add([pscustomobject]@{ path=$name; bytes=$item.Length; ticks=$ticks; sha256=$hash })
@@ -71,6 +73,7 @@ function Get-TrialBuildPlan([string[]]$Changed) {
             'macros' { $null=$selected.Add('client') }
             'server' { foreach ($part in @('server','ui','frontend')) { $null=$selected.Add($part) } }
             'swift' { $null=$selected.Add('swift') }
+            'runtime' { foreach ($part in @('runtime','swift','keyboard','server','launcher')) { $null=$selected.Add($part) } }
             'deployment' { $null=$selected.Add('deployment'); $null=$selected.Add('models') }
             default { $null=$selected.Add($group) }
         }

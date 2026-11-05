@@ -58,7 +58,7 @@ Test-ArtifactEntries $staging $changes
 # A frontend-only edit must not restart the conversion engine or load models.
 $changedPaths = @($changes | ForEach-Object { $_.path }) + @($removals | ForEach-Object { $_.path })
 $frontendOnly = $UpdateDirectory -and @($changedPaths | Where-Object { $_ -notin @('frontend.exe','azookey-updater-helper.exe') }).Count -eq 0
-$needsRuntime = -not $UpdateDirectory -or @($changedPaths | Where-Object { $_ -match '^(launcher\.exe|ui\.exe|azookey-server\.(exe|dll)|llama_cpu/keyboard-prior\.exe|Dictionary/|EmojiDictionary/|models/|swift|Foundation|dispatch\.dll|BlocksRuntime\.dll|_Foundation)' }).Count -gt 0
+$needsRuntime = -not $UpdateDirectory -or @($changedPaths | Where-Object { $_ -match '^(launcher\.exe|ui\.exe|azookey-server\.(exe|dll)|llama_(cpu|vulkan)/|Dictionary/|EmojiDictionary/|models/|swift|Foundation|dispatch\.dll|BlocksRuntime\.dll|_Foundation)' }).Count -gt 0
 $needsFrontend = $needsRuntime -or @($changedPaths | Where-Object { $_ -in @('frontend.exe','azookey-updater-helper.exe') }).Count -gt 0
 $sessionId = (Get-Process -Id $PID).SessionId
 $running = @()

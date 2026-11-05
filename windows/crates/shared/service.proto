@@ -304,7 +304,8 @@ message GetAssistCandidatesRequest {
   int32 input_count = 4;
   uint64 request_id = 5;
   // 0: both (legacy), 1: correction, 2: prediction. Separate requests let a
-  // fast prediction arrive without waiting for correction inference.
+  // fast prediction arrive without waiting for correction inference. 3: translation
+  // of baseline to English, independent of correction/prediction settings.
   uint32 kind = 6;
 }
 message GetAssistCandidatesResponse {

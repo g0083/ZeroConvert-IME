@@ -546,11 +546,29 @@ impl IPCService {
         self.runtime.spawn(async move {
             // A pause in typing starts work; subsequent keys cancel this task.
             // 連続タイピング中のGPU/CPU推論競合・入力遅延を防ぐため、打鍵休止（180ms）を待つ
-            tokio::time::sleep(Duration::from_millis(180)).await;
+            let translation = request.kind == 3;
+            tokio::time::sleep(Duration::from_millis(if translation { 400 } else { 180 })).await;
+            if translation {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                loop {
+                    let ready = tokio::task::spawn_blocking(shared::translation_http::ready)
+                        .await
+                        .unwrap_or(false);
+                    if ready {
+                        break;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        let _ = result.send(None);
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+            let timeout = Duration::from_millis(if translation { 11_000 } else { 1300 });
             let mut request = tonic::Request::new(request);
-            request.set_timeout(Duration::from_millis(1300));
+            request.set_timeout(timeout);
             let response = tokio::time::timeout(
-                Duration::from_millis(1400),
+                timeout + Duration::from_millis(100),
                 client.get_assist_candidates(request),
             )
             .await

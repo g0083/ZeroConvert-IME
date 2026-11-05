@@ -41,20 +41,6 @@ fn repo_root_from_manifest() -> Option<PathBuf> {
 }
 
 fn find_worker_executable(root: &Path) -> Option<PathBuf> {
-    if let Some(repo) = repo_root_from_manifest() {
-        let target_dir = repo.join("windows/target/keyboard-prior");
-        if let Ok(entries) = std::fs::read_dir(&target_dir) {
-            let mut candidates: Vec<_> = entries
-                .filter_map(Result::ok)
-                .map(|e| e.path().join("keyboard-prior.exe"))
-                .filter(|p| p.is_file())
-                .collect();
-            candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
-            if let Some(latest) = candidates.pop() {
-                return Some(latest);
-            }
-        }
-    }
     let installed = root.join("llama_cpu/keyboard-prior.exe");
     if installed.is_file() {
         return Some(installed);
@@ -68,54 +54,10 @@ fn find_worker_executable(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn find_runtime_dir(root: &Path, executable: &Path) -> PathBuf {
-    let installed = root.join("llama_cpu");
-    if installed.join("llama.dll").is_file() {
-        return installed;
-    }
-    if let Some(repo) = repo_root_from_manifest() {
-        for rel in [
-            "ZeroConvertIME-windows/llama_cpu",
-            "artifacts/runtime/windows/llama_cpu",
-        ] {
-            let candidate = repo.join(rel);
-            if candidate.join("llama.dll").is_file() {
-                return candidate;
-            }
-        }
-    }
-    if let Some(parent) = executable.parent() {
-        if parent.join("llama.dll").is_file() {
-            return parent.to_path_buf();
-        }
-    }
-    installed
-}
-
-fn ensure_executable_with_dlls(executable: &Path, runtime_dir: &Path) -> PathBuf {
-    let Some(parent) = executable.parent() else {
-        return executable.to_path_buf();
-    };
-    if parent == runtime_dir {
-        return executable.to_path_buf();
-    }
-    if let Ok(entries) = std::fs::read_dir(runtime_dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let src = entry.path();
-            if src
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
-            {
-                if let Some(name) = src.file_name() {
-                    let dst = parent.join(name);
-                    if !dst.is_file() {
-                        let _ = std::fs::copy(&src, &dst);
-                    }
-                }
-            }
-        }
-    }
-    executable.to_path_buf()
+fn find_runtime_dir(_root: &Path, executable: &Path) -> PathBuf {
+    // The worker and its DLLs are one deployed ABI unit. Never combine a
+    // cached development EXE with DLLs found through the current directory/PATH.
+    executable.parent().unwrap_or(Path::new(".")).to_path_buf()
 }
 
 fn resolve_active_model(root: &Path) -> Option<PathBuf> {
@@ -166,7 +108,6 @@ impl Worker {
             return None;
         }
         let runtime_dir = find_runtime_dir(root, &executable);
-        let executable = ensure_executable_with_dlls(&executable, &runtime_dir);
         let existing_path = std::env::var("PATH").unwrap_or_default();
         let mut command = Command::new(&executable);
         command
@@ -183,7 +124,10 @@ impl Worker {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        let mut child = command.spawn().ok()?;
+        Self::from_child(command.spawn().ok()?, model)
+    }
+
+    fn from_child(mut child: Child, model: PathBuf) -> Option<Self> {
         let input = child.stdin.take()?;
         let output = child.stdout.take()?;
         let (send, receive) = mpsc::sync_channel(2);
@@ -501,5 +445,31 @@ mod tests {
         ] {
             assert_eq!(validated_reading(&response, "ああた"), None);
         }
+    }
+}
+
+#[cfg(test)]
+mod deployment_tests {
+    use super::*;
+    #[test]
+    fn deployed_worker_and_runtime_stay_in_the_same_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "worker-deployment-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let runtime = root.join("llama_cpu");
+        std::fs::create_dir(&runtime).unwrap();
+        let executable = runtime.join("keyboard-prior.exe");
+        std::fs::write(&executable, b"test fixture").unwrap();
+        assert_eq!(find_worker_executable(&root), Some(executable.clone()));
+        assert_eq!(find_runtime_dir(&root, &executable), runtime);
+        std::fs::remove_file(executable).unwrap();
+        std::fs::remove_dir(runtime).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

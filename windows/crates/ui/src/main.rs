@@ -31,6 +31,8 @@ use wry::WebContext;
 
 pub mod candidate;
 pub mod clipboard;
+pub mod copy_source;
+pub mod copy_translation;
 pub mod data_paths;
 pub mod indicator;
 pub mod ipc;
@@ -344,6 +346,13 @@ pub enum UserEvent {
     UpdateInputMethod(String),
     WindowAction(WindowAction),
     ClipboardUpdated,
+    CopyTranslationShow {
+        text: String,
+        owner: isize,
+        x: i32,
+        y: i32,
+    },
+    CopyTranslationHide,
     ToggleClipboardWindow,
     ClipboardPaste(u64),
     ClipboardTogglePin(u64),
@@ -351,6 +360,9 @@ pub enum UserEvent {
     ClipboardUpdateText(u64, String),
     ClipboardClose,
 }
+
+static COPY_POPUP_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -472,6 +484,9 @@ async fn main() -> anyhow::Result<()> {
     let clipboard_window_id = clipboard_window.id();
     let mut clipboard_window_visible = false;
     let mut clipboard_shown_at: Option<std::time::Instant> = None;
+
+    let mut copy_popup: Option<selection_ui::PopupThread> = None;
+    let mut copy_popup_visible = false;
 
     // handle window actions
     let proxy_clone = event_loop_proxy.clone();
@@ -640,6 +655,37 @@ async fn main() -> anyhow::Result<()> {
                     if let Ok(json) = serde_json::to_string(&items) {
                         evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
                     }
+                }
+                UserEvent::CopyTranslationShow { text, owner, x, y } => {
+                    copy_popup = None;
+                    COPY_POPUP_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
+                    let (count, truncated) = copy_translation::count_text(&text);
+                    if count == 0 {
+                        return;
+                    }
+                    if let Ok(popup_thread) = selection_ui::PopupThread::start() {
+                        let anchor = windows::Win32::Foundation::RECT {
+                            left: x,
+                            top: y,
+                            right: x,
+                            bottom: y,
+                        };
+                        popup_thread.send(selection_ui::Command::Selection {
+                            owner: owner as usize,
+                            anchor,
+                            count,
+                            truncated,
+                            text,
+                        });
+                        copy_popup_visible = true;
+                        COPY_POPUP_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
+                        copy_popup = Some(popup_thread);
+                    }
+                }
+                UserEvent::CopyTranslationHide => {
+                    copy_popup = None;
+                    copy_popup_visible = false;
+                    COPY_POPUP_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
                 UserEvent::ToggleClipboardWindow => {
                     let hwnd = clipboard_window.hwnd() as *mut std::ffi::c_void;

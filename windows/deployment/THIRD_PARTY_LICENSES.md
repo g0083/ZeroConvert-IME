@@ -87,3 +87,14 @@ copies or substantial portions of the Software.
 - **Notice**:
   - `corecctor` is the independently fine-tuned Japanese input typo correction model, distributed as ZeroCon Model Corrector (`zerocon-model-corrector.gguf`; legacy filename: `typo-corrector-xsmall-q4km.gguf`). It is fine-tuned from `zenz-v3.2-xsmall` (Apache-2.0) specifically for Japanese input typo correction, quantized to Q4_K_M.
   - Distributed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+
+---
+
+## 5. PLaMo 3 Translate (Translation Model)
+- **Model**: `pfnet/plamo-3-translate-0.8b` / `plamo-3-translate-2b` (quantized GGUF)
+- **Author**: Preferred Networks, Inc. (PFN), built on PLaMo 3 NICT (joint research with NICT)
+- **License**: PLaMo Community License
+- **Notice**:
+  - Used for on-device translation features.
+  - Free for personal, academic, and non-commercial use without registration. Commercial use is free for individuals/organizations with annual revenue of JPY 1 billion or less in the most recent fiscal year, subject to advance registration via PFN's form. Commercial use above that threshold requires a separate license agreement with PFN.
+  - Full license text: https://huggingface.co/pfnet (PLaMo Community License).

@@ -106,6 +106,33 @@ mod tests {
     }
 
     #[test]
+    fn translation_preference_only_affects_active_mode() {
+        let mut config = shared::AppConfig::default();
+        config.general.experimental_translation = true;
+        let snapshot = super::AppConfigSnapshot::new(
+            config,
+            AppConfigCacheKey::Unavailable {
+                reason: "test".into(),
+            },
+        );
+        assert!(
+            !snapshot
+                .clone()
+                .for_translation_mode(false)
+                .app_config()
+                .general
+                .experimental_translation
+        );
+        assert!(
+            snapshot
+                .for_translation_mode(true)
+                .app_config()
+                .general
+                .experimental_translation
+        );
+    }
+
+    #[test]
     fn app_config_cache_key_uses_missing_variant_for_absent_settings_file() {
         let root = unique_test_dir("missing-config");
         fs::create_dir_all(&root).expect("temp config dir should be created");
@@ -190,6 +217,7 @@ mod tests {
 #[derive(Clone, Debug)]
 pub(crate) struct AppConfigSnapshot {
     app_config: Arc<AppConfig>,
+    ordinary_config: Arc<AppConfig>,
     romaji_lookup: Arc<RomajiLookup>,
     cache_key: AppConfigCacheKey,
 }
@@ -200,16 +228,29 @@ impl AppConfigSnapshot {
         Arc::make_mut(&mut self.app_config)
             .shortcuts
             .reconversion_key = key;
+        Arc::make_mut(&mut self.ordinary_config)
+            .shortcuts
+            .reconversion_key = key;
         self
     }
 
     fn new(app_config: AppConfig, cache_key: AppConfigCacheKey) -> Self {
         let romaji_lookup = RomajiLookup::from_rows(&app_config.romaji_table.rows);
+        let mut ordinary_config = app_config.clone();
+        ordinary_config.general.experimental_translation = false;
         Self {
+            ordinary_config: Arc::new(ordinary_config),
             app_config: Arc::new(app_config),
             romaji_lookup: Arc::new(romaji_lookup),
             cache_key,
         }
+    }
+
+    pub(super) fn for_translation_mode(mut self, active: bool) -> Self {
+        if !active {
+            self.app_config = self.ordinary_config.clone();
+        }
+        self
     }
 
     pub(super) fn app_config(&self) -> &AppConfig {

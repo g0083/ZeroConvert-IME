@@ -2,10 +2,13 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
+import Foundation
 
 let swiftSettings: [SwiftSetting] = [
     .interoperabilityMode(.Cxx)
 ]
+let llamaRuntime = ProcessInfo.processInfo.environment["AZOOKEY_LLAMA_BACKEND_DIR"] ?? "../../artifacts/runtime/windows-b12125/llama_cpu"
+let llamaLinkFlags = ["llama", "ggml", "ggml-base"].flatMap { ["-Xlinker", "\(llamaRuntime)/\($0).lib"] }
 
 let package = Package(
     name: "azookey-server",
@@ -22,8 +25,8 @@ let package = Package(
         // Dependencies declare other packages that this package depends on.
         // .package(url: /* package url */, from: "1.0.0"),
         .package(
-            url: "https://github.com/batao9/AzooKeyKanaKanjiConverter",
-            revision: "c228776b0b869f81ee2a1031ff9dbd679f4b3cd9",
+            name: "AzooKeyKanaKanjiConverter",
+            path: ProcessInfo.processInfo.environment["ZEROCON_CONVERTER_SOURCE"] ?? "../../artifacts/dependencies/azookey-b12125",
             traits: ["Zenzai"]
         )
     ],
@@ -37,7 +40,8 @@ let package = Package(
                 .product(name: "KanaKanjiConverterModule", package: "azookeykanakanjiconverter"),
                 "ffi"
             ],
-            swiftSettings: swiftSettings
+            swiftSettings: swiftSettings,
+            linkerSettings: [.unsafeFlags(llamaLinkFlags)]
         ),
         .testTarget(
             name: "azookey-serverTests",
