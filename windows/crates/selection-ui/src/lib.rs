@@ -13,6 +13,14 @@ pub fn popup_position(anchor: RECT, work: RECT, width: i32, height: i32, gap: i3
     .clamp(work.top, (work.bottom - height).max(work.top));
     (left, top)
 }
+
+unsafe fn cursor_inside(hwnd: HWND) -> bool {
+    let mut pt = POINT::default();
+    let mut rect = RECT::default();
+    let _ = GetCursorPos(&mut pt);
+    let _ = GetWindowRect(hwnd, &mut rect);
+    pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom
+}
 use anyhow::Result;
 use shared::translation_session::TranslationSessionGuard;
 use std::{
@@ -25,7 +33,7 @@ use std::{
 use windows::{
     core::w,
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::Gdi::*,
         UI::{
             HiDpi::GetDpiForWindow,
@@ -574,6 +582,8 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
     }
     let mut was_mouse_down = false;
     let mut selection_shown_at: Option<Instant> = None;
+    let mut was_result_mouse_down = false;
+    let mut result_shown_at: Option<Instant> = None;
     loop {
         match receiver.recv_timeout(Duration::from_millis(16)) {
             Ok(command) => match command {
@@ -603,6 +613,9 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                 Command::Translate => {
                     view.translate();
                     selection_shown_at = None;
+                    if IsWindowVisible(view.result).as_bool() {
+                        result_shown_at = Some(Instant::now());
+                    }
                 }
             },
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -620,6 +633,9 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             1 => {
                 view.translate();
                 selection_shown_at = None;
+                if IsWindowVisible(view.result).as_bool() {
+                    result_shown_at = Some(Instant::now());
+                }
             }
             2 => view.close_result(),
             3 => {
@@ -632,11 +648,10 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             }
             _ => {}
         }
+        let is_mouse_down = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0)
+            || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000 != 0)
+            || (GetAsyncKeyState(VK_MBUTTON.0 as i32) as u16 & 0x8000 != 0);
         if IsWindowVisible(view.selection).as_bool() {
-            let is_mouse_down = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0)
-                || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000 != 0)
-                || (GetAsyncKeyState(VK_MBUTTON.0 as i32) as u16 & 0x8000 != 0);
-
             let is_esc_down = (GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000) != 0;
 
             if is_esc_down {
@@ -644,19 +659,11 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                 selection_shown_at = None;
             } else if is_mouse_down && !was_mouse_down {
                 if let Some(shown_at) = selection_shown_at {
-                    if shown_at.elapsed() >= Duration::from_millis(150) {
-                        let mut pt = windows::Win32::Foundation::POINT::default();
-                        let mut rect = RECT::default();
-                        let _ = GetCursorPos(&mut pt);
-                        let _ = GetWindowRect(view.selection, &mut rect);
-                        let inside = pt.x >= rect.left
-                            && pt.x <= rect.right
-                            && pt.y >= rect.top
-                            && pt.y <= rect.bottom;
-                        if !inside {
-                            let _ = ShowWindow(view.selection, SW_HIDE);
-                            selection_shown_at = None;
-                        }
+                    if shown_at.elapsed() >= Duration::from_millis(150)
+                        && !cursor_inside(view.selection)
+                    {
+                        let _ = ShowWindow(view.selection, SW_HIDE);
+                        selection_shown_at = None;
                     }
                 }
             }
@@ -664,6 +671,23 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
         } else {
             was_mouse_down = false;
             selection_shown_at = None;
+        }
+        if IsWindowVisible(view.result).as_bool() {
+            if is_mouse_down && !was_result_mouse_down {
+                if let Some(shown_at) = result_shown_at {
+                    if shown_at.elapsed() >= Duration::from_millis(150)
+                        && !cursor_inside(view.result)
+                        && !(IsWindowVisible(view.selection).as_bool()
+                            && cursor_inside(view.selection))
+                    {
+                        view.close_result();
+                    }
+                }
+            }
+            was_result_mouse_down = is_mouse_down;
+        } else {
+            was_result_mouse_down = false;
+            result_shown_at = None;
         }
         for update in updates.try_iter().take(32) {
             if update.generation == view.generation.load(Ordering::Acquire) {

@@ -12,9 +12,13 @@ use std::{
 use windows::{
     core::w,
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::*,
-        UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::*},
+        UI::{
+            HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
+            WindowsAndMessaging::*,
+        },
     },
 };
 
@@ -439,6 +443,14 @@ unsafe fn set_owner(hwnd: HWND, owner: isize) {
     SetWindowLongW(hwnd, GWLP_HWNDPARENT, owner as i32);
 }
 
+unsafe fn cursor_inside(hwnd: HWND) -> bool {
+    let mut pt = POINT::default();
+    let mut rect = RECT::default();
+    let _ = GetCursorPos(&mut pt);
+    let _ = GetWindowRect(hwnd, &mut rect);
+    pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     let ptr = get_user_data(hwnd) as *mut View;
     if !ptr.is_null() {
@@ -538,6 +550,8 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             view.selection = hwnd;
         }
     }
+    let mut was_mouse_down = false;
+    let mut result_shown_at: Option<Instant> = None;
     loop {
         match receiver.recv_timeout(Duration::from_millis(16)) {
             Ok(command) => match command {
@@ -561,7 +575,12 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                 Command::Hide => {
                     let _ = ShowWindow(view.selection, SW_HIDE);
                 }
-                Command::Translate => view.translate(),
+                Command::Translate => {
+                    view.translate();
+                    if IsWindowVisible(view.result).as_bool() {
+                        result_shown_at = Some(Instant::now());
+                    }
+                }
             },
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -575,7 +594,12 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             DispatchMessageW(&msg);
         }
         match std::mem::take(&mut view.action) {
-            1 => view.translate(),
+            1 => {
+                view.translate();
+                if IsWindowVisible(view.result).as_bool() {
+                    result_shown_at = Some(Instant::now());
+                }
+            }
             2 => view.close_result(),
             3 => {
                 view.copy();
@@ -592,6 +616,26 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                 }
                 view.place(view.result, 420, view.card_height());
             }
+        }
+        let is_mouse_down = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0)
+            || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000 != 0)
+            || (GetAsyncKeyState(VK_MBUTTON.0 as i32) as u16 & 0x8000 != 0);
+        if IsWindowVisible(view.result).as_bool() {
+            if is_mouse_down && !was_mouse_down {
+                if let Some(shown_at) = result_shown_at {
+                    if shown_at.elapsed() >= Duration::from_millis(150)
+                        && !cursor_inside(view.result)
+                        && !(IsWindowVisible(view.selection).as_bool()
+                            && cursor_inside(view.selection))
+                    {
+                        view.close_result();
+                    }
+                }
+            }
+            was_mouse_down = is_mouse_down;
+        } else {
+            was_mouse_down = false;
+            result_shown_at = None;
         }
         if !view.owner.is_invalid() && !IsWindow(view.owner).as_bool() {
             break;
