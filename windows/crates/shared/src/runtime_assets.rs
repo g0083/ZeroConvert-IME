@@ -9,8 +9,58 @@ pub const TRANSLATION_2B: &str = "plamo-3-translate-2b-Q4_K_M.gguf";
 pub const TRANSLATION: &str = TRANSLATION_0_8B;
 pub const CUDA_VERSION: &str = "cuda-b12125-cu12.4";
 
-pub fn default_translation_model() -> &'static str {
-    "0.8b"
+pub const TRANSLATION_0_8B_SHA256: &str =
+    "3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c";
+pub const TRANSLATION_2B_SHA256: &str =
+    "2c288ecc7ebfe60c3561726580da3583767f3c41ca3ef5c6825bf6c4cc060787";
+
+///同梱しない翻訳モデルのHugging Face配布URL（ピン留め版）。
+pub const TRANSLATION_0_8B_URL: &str = "https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/resolve/main/plamo-3-translate-0.8b-Q4_K_M.gguf";
+pub const TRANSLATION_2B_URL: &str = "https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/f2b4599dff9b3e45c62567eac15e83186b4cb64e/plamo-3-translate-2b-Q4_K_M.gguf";
+
+/// 概算サイズ（Bytes）。UIの表示にのみ使用し、検証はSHA-256で行う。
+pub const TRANSLATION_0_8B_SIZE_BYTES: u64 = 547_000_000;
+pub const TRANSLATION_2B_SIZE_BYTES: u64 = 1_940_000_000;
+
+pub fn translation_model_download_root() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("ZeroConIME")
+        .join("models")
+}
+
+pub fn translation_model_path(install: &Path, id: &str) -> PathBuf {
+    let filename = translation_model_filename(id);
+    let bundled = install.join("models").join(filename);
+    if bundled.is_file() {
+        return bundled;
+    }
+    translation_model_download_root().join(filename)
+}
+
+pub fn translation_model_sha256(id: &str) -> &'static str {
+    match translation_model_filename(id) {
+        TRANSLATION_0_8B => TRANSLATION_0_8B_SHA256,
+        TRANSLATION_2B => TRANSLATION_2B_SHA256,
+        _ => "",
+    }
+}
+
+pub fn translation_model_url(id: &str) -> &'static str {
+    match translation_model_filename(id) {
+        TRANSLATION_0_8B => TRANSLATION_0_8B_URL,
+        TRANSLATION_2B => TRANSLATION_2B_URL,
+        _ => TRANSLATION_0_8B_URL,
+    }
+}
+
+pub fn translation_model_size_hint(id: &str) -> Option<u64> {
+    match translation_model_filename(id) {
+        TRANSLATION_0_8B => Some(TRANSLATION_0_8B_SIZE_BYTES),
+        TRANSLATION_2B => Some(TRANSLATION_2B_SIZE_BYTES),
+        _ => None,
+    }
 }
 
 pub fn translation_model_filename(id: &str) -> &'static str {
@@ -18,6 +68,10 @@ pub fn translation_model_filename(id: &str) -> &'static str {
         "2b" | "plamo-3-translate-2b" => TRANSLATION_2B,
         _ => TRANSLATION_0_8B,
     }
+}
+
+pub fn default_translation_model() -> &'static str {
+    "0.8b"
 }
 
 pub fn default_model() -> String {
@@ -123,5 +177,35 @@ mod tests {
         let config: crate::ZenzaiConfig =
             serde_json::from_str(r#"{"enable":true,"profile":"","backend":"vulkan"}"#).unwrap();
         assert_eq!(config.model, "nano_v4_iq4_emb8");
+    }
+
+    #[test]
+    fn translation_model_prefers_bundled_copy_and_falls_back_to_user_cache() {
+        let root =
+            std::env::temp_dir().join(format!("zerocon-translation-model-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        let bundled = root.join("models").join(TRANSLATION_0_8B);
+        std::fs::write(&bundled, []).unwrap();
+        assert_eq!(translation_model_path(&root, "0.8b"), bundled);
+        std::fs::remove_file(&bundled).unwrap();
+        let download_root = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("ZeroConIME/models");
+        std::fs::create_dir_all(&download_root).unwrap();
+        let cached = download_root.join(TRANSLATION_0_8B);
+        std::fs::write(&cached, []).unwrap();
+        assert_eq!(translation_model_path(&root, "0.8b"), cached);
+        std::fs::remove_file(&cached).unwrap();
+        std::fs::remove_dir(root.join("models")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn translation_sha256_and_urls_are_pinned_per_release_channel() {
+        assert_eq!(translation_model_sha256("0.8b"), TRANSLATION_0_8B_SHA256);
+        assert_eq!(translation_model_url("0.8b"), TRANSLATION_0_8B_URL);
+        assert_eq!(translation_model_sha256("2b"), TRANSLATION_2B_SHA256);
+        assert_eq!(translation_model_url("2b"), TRANSLATION_2B_URL);
     }
 }

@@ -17,6 +17,7 @@ import { DebugSettings } from "@/components/debug-settings";
 import { RomajiEditor, normalizeRomajiRows, type RomajiRow } from "@/components/romaji-editor";
 import { Zenzai } from "@/pages/zenzai";
 import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config";
+import { downloadTranslationModel, getTranslationModelStatus } from "@/lib/translation-model";
 
 type WidthMode = "half" | "full";
 type LearningMode = "enabled" | "read_only" | "disabled";
@@ -183,6 +184,9 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
     const [romajiRows, setRomajiRows] = useState<RomajiRow[]>([]);
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
+    const [translationInstall, setTranslationInstall] = useState<{ modelId: string; sizeBytes: number | null } | null>(null);
+    const [translationProgress, setTranslationProgress] = useState<number | null>(null);
+    const translationConfirmResolve = useRef<((ok: boolean) => void) | null>(null);
     const liveConversionReadingAdjustmentSaveRef = useRef<{
         saving: boolean; pendingValue: number | null;
     }>({ saving: false, pendingValue: null });
@@ -270,6 +274,43 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             toast("学習履歴を削除できませんでした", { description: String(error) });
         }
     };
+
+    // 翻訳モデルは配布パッケージに同梱しないため、有効化時にHugging Faceから取得する。
+    const ensureTranslationModel = async (modelId: string): Promise<boolean> => {
+        const status = await getTranslationModelStatus(modelId);
+        if (status.installed) return true;
+        const confirmed = await new Promise<boolean>((resolve) => {
+            translationConfirmResolve.current = resolve;
+            setTranslationProgress(null);
+            setTranslationInstall({ modelId, sizeBytes: status.size_bytes });
+        });
+        return confirmed;
+    };
+
+    const confirmTranslationDownload = async () => {
+        const target = translationInstall;
+        if (!target) return;
+        setTranslationProgress(0);
+        try {
+            await downloadTranslationModel(target.modelId, setTranslationProgress);
+            toast.success("翻訳モデルをダウンロードしました");
+            translationConfirmResolve.current?.(true);
+        } catch (error) {
+            toast.error(`翻訳モデルのダウンロードに失敗しました: ${String(error)}`);
+            translationConfirmResolve.current?.(false);
+        } finally {
+            setTranslationInstall(null);
+            setTranslationProgress(null);
+            translationConfirmResolve.current = null;
+        }
+    };
+
+    const cancelTranslationInstall = () => {
+        translationConfirmResolve.current?.(false);
+        setTranslationInstall(null);
+        translationConfirmResolve.current = null;
+    };
+
     const flushLiveConversionReadingVerticalAdjustmentSave = async () => {
         const saveState = liveConversionReadingAdjustmentSaveRef.current;
         if (saveState.saving) return;
@@ -468,8 +509,16 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             </>}
             {page === "advanced" && <>
                 <SettingsSection title="翻訳モード・選択文字翻訳（試験機能）">
-                    <SettingsRow label="翻訳機能を有効にする" description="Ctrl+Tで専用翻訳入力バーを表示し、入力した日本語を英訳して確定します。文字選択中の翻訳ボタンやCtrl+Tで英→日フローティング翻訳も可能です。通常は使用時のみ翻訳サーバーを起動します。起動待ちを減らしたい場合は常時起動も選べます。" htmlFor="translation-input">
-                        <Switch id="translation-input" checked={generalValue.experimental_translation} onCheckedChange={(value) => void updateGeneralConfig("experimental_translation", value)} />
+                    <SettingsRow label="翻訳機能を有効にする" description="Ctrl+Tで専用翻訳入力バーを表示し、入力した日本語を英訳して確定します。文字選択中の翻訳ボタンやCtrl+Tで英→日フローティング翻訳も可能です。通常は使用時のみ翻訳サーバーを起動します。起動待ちを減らしたい場合は常時起動も選べます。翻訳モデルはインターネットからダウンロードします（0.8Bで約0.55GB）。" htmlFor="translation-input">
+                        <Switch id="translation-input" checked={generalValue.experimental_translation} onCheckedChange={(value) => {
+                            if (value) {
+                                void ensureTranslationModel(generalValue.translation_model || "0.8b").then((ok) => {
+                                    if (ok) void updateGeneralConfig("experimental_translation", true);
+                                });
+                            } else {
+                                void updateGeneralConfig("experimental_translation", false);
+                            }
+                        }} />
                     </SettingsRow>
                     {generalValue.experimental_translation && (
                         <>
@@ -477,11 +526,11 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                                 <Switch id="translation-keep-alive" checked={generalValue.translation_keep_alive} onCheckedChange={(value) => void updateGeneralConfig("translation_keep_alive", value)} />
                             </SettingsRow>
                             <SettingsRow label="翻訳モデル" description="0.8Bは軽量・高速・省メモリでCPUでも快適に動作します。2Bはより高精度な翻訳が可能です。" htmlFor="translation-model">
-                                <Select value={generalValue.translation_model || "0.8b"} onValueChange={(value) => void updateGeneralConfig("translation_model", value)}>
+                                <Select value={generalValue.translation_model || "0.8b"} onValueChange={(value) => void ensureTranslationModel(value).then((ok) => { if (ok) void updateGeneralConfig("translation_model", value); })}>
                                     <SelectTrigger id="translation-model" className="w-72"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="0.8b">PLaMo 3 Translate 0.8B（推奨・軽量高速）</SelectItem>
-                                        <SelectItem value="2b">PLaMo 3 Translate 2B（高精度）</SelectItem>
+                                        <SelectItem value="2b">PLaMo 3 Translate 2B（高精度・別途ダウンロード）</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </SettingsRow>
@@ -514,6 +563,22 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                 </SettingsSection>
                 <DebugSettings />
             </>}
+            <AlertDialog open={translationInstall !== null} onOpenChange={(open) => { if (!open) cancelTranslationInstall(); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>翻訳モデルをダウンロードしますか？</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            翻訳モデル（{translationInstall?.modelId === "2b" ? "PLaMo 3 Translate 2B" : "PLaMo 3 Translate 0.8B"}、約{translationInstall?.sizeBytes ? Math.ceil(translationInstall.sizeBytes / 1_000_000) : 550} MB）はインストーラーに同梱されていません。
+                            Hugging Faceからダウンロードします。インターネット接続が必要です。ダイアログを閉じると翻訳機能を有効にせず元に戻ります。
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    {translationProgress !== null && <p className="settings-description p-4" role="status" aria-live="polite">ダウンロード中… {translationProgress}%</p>}
+                    <AlertDialogFooter>
+                        <AlertDialogCancel onClick={() => cancelTranslationInstall()}>キャンセル</AlertDialogCancel>
+                        <AlertDialogAction disabled={translationProgress !== null} onClick={() => void confirmTranslationDownload()}>ダウンロードして使う</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 };

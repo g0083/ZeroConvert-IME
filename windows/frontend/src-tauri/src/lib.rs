@@ -4,6 +4,7 @@ mod ipc;
 mod jev_api;
 mod model_catalog;
 mod server_process;
+mod translation_model;
 mod updater;
 
 use serde::{Deserialize, Serialize};
@@ -466,16 +467,21 @@ fn check_capability() -> Capability {
         .is_some_and(|root| root.join("System32/nvcuda.dll").is_file());
 
     // Check for Vulkan availability
+    capability.vulkan = vulkan_available();
+
+    capability
+}
+
+/// vulkan-1.dll はGraphicsドライバーのディレクトリに置かれるため、
+/// PATH とカレントディレクトリから解決できるかで判定する。
+fn vulkan_available() -> bool {
     let vulkan_file = "vulkan-1.dll";
-    let vulkan_available = std::env::var("PATH")
+    std::env::var("PATH")
         .unwrap_or_default()
         .split(';')
         .map(PathBuf::from)
         .chain(std::iter::once(std::env::current_dir().unwrap_or_default()))
-        .any(|path| path.join(vulkan_file).exists());
-    capability.vulkan = vulkan_available;
-
-    capability
+        .any(|path| path.join(vulkan_file).exists())
 }
 
 #[tauri::command]
@@ -576,6 +582,44 @@ fn get_active_model(
     model_catalog::list(&active, &get_models_search_dirs()).map_err(|error| error.to_string())
 }
 
+fn install_dir_from_current_exe() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[tauri::command]
+fn translation_model_status(
+    state: tauri::State<AppState>,
+    model_id: Option<String>,
+) -> translation_model::Status {
+    let config = state
+        .settings
+        .lock()
+        .map_err(|e| e.to_string())
+        .ok()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    let model_id = model_id.unwrap_or_else(|| config.general.translation_model.clone());
+    let install_dir = install_dir_from_current_exe();
+    translation_model::status(&install_dir, &model_id)
+}
+
+#[tauri::command]
+async fn translation_model_download(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    model_id: Option<String>,
+) -> Result<translation_model::Status, String> {
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    let model_id = model_id.unwrap_or_else(|| config.general.translation_model.clone());
+    let install_dir = install_dir_from_current_exe();
+    translation_model::install(&install_dir, app, &model_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn to_hiragana(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -605,6 +649,12 @@ fn to_katakana(s: &str) -> String {
 static BENCHMARK_SERVER: std::sync::Mutex<Option<std::process::Child>> =
     std::sync::Mutex::new(None);
 static CURRENT_BENCHMARK_MODEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+// ベンチマーク用llama-serverは1つだけ起動する。クイックベンチマークと
+// ベンチマークページの個別実行が同じサーバーを奪い合わないようにする。
+fn benchmark_run_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(tokio::sync::Mutex::default)
+}
 
 fn stop_benchmark_server() {
     let mut server_guard = BENCHMARK_SERVER.lock().unwrap();
@@ -649,7 +699,13 @@ fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
 }
 
 async fn ensure_benchmark_server(config: &AppConfig) -> Result<(), String> {
-    let backend = config.zenzai.backend.as_str();
+    ensure_benchmark_server_with_backend(config, config.zenzai.backend.as_str()).await
+}
+
+async fn ensure_benchmark_server_with_backend(
+    config: &AppConfig,
+    backend: &str,
+) -> Result<(), String> {
     let server_exe = find_llama_server_exe(backend)
         .ok_or_else(|| format!("llama-server.exe not found for backend: {backend}"))?;
     let model_path = get_benchmark_model_path(config)?;
@@ -809,6 +865,8 @@ async fn run_benchmark_item(
     acceptable: Option<Vec<String>>,
     forbidden_examples: Option<Vec<String>>,
 ) -> Result<BenchmarkItemResult, String> {
+    // クイックベンチマークと並行してサーバーを組み替えない。
+    let _run_guard = benchmark_run_lock().lock().await;
     let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
     ensure_benchmark_server(&config).await?;
 
@@ -1010,6 +1068,124 @@ async fn run_ai_assist_benchmark_item(
     })
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct QuickBackendResult {
+    backend: String,
+    ok: bool,
+    avg_latency_ms: Option<f64>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct QuickBenchmarkResult {
+    results: Vec<QuickBackendResult>,
+    recommended: Option<String>,
+}
+
+/// 実測レイテンシが最も短かった、成功したバックエンドを推奨として選ぶ。
+fn recommend_quick_benchmark_backend(results: &[QuickBackendResult]) -> Option<String> {
+    results
+        .iter()
+        .filter(|result| result.ok)
+        .filter_map(|result| result.avg_latency_ms.map(|latency| (latency, result)))
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, result)| result.backend.clone())
+}
+
+const QUICK_BENCHMARK_WARMUP_REQUESTS: usize = 1;
+const QUICK_BENCHMARK_MEASURED_REQUESTS: usize = 3;
+const QUICK_BENCHMARK_PROMPT: &str = "\u{EE02}\u{EE00}きょうはいいてんきですね\u{EE01}";
+
+/// 指定バックエンドでllama-serverを起動し、ウォームアップ後の
+/// 推論リクエスト平均レイテンシ(ms)を返す。
+async fn measure_quick_benchmark_backend(config: &AppConfig, backend: &str) -> Result<f64, String> {
+    ensure_benchmark_server_with_backend(config, backend).await?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let request = serde_json::json!({
+        "prompt": QUICK_BENCHMARK_PROMPT,
+        "n_predict": 8,
+        "temperature": 0.0,
+        "samplers": ["temperature"],
+        "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
+    });
+
+    let mut samples = Vec::with_capacity(QUICK_BENCHMARK_MEASURED_REQUESTS);
+    for attempt in 0..QUICK_BENCHMARK_WARMUP_REQUESTS + QUICK_BENCHMARK_MEASURED_REQUESTS {
+        let started = std::time::Instant::now();
+        let response = client
+            .post("http://127.0.0.1:8090/completion")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("completion request failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "completion request failed: HTTP {}",
+                response.status()
+            ));
+        }
+        let _: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        if attempt >= QUICK_BENCHMARK_WARMUP_REQUESTS {
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    Ok(samples.iter().sum::<f64>() / samples.len() as f64)
+}
+
+async fn run_quick_benchmark_impl(config: &AppConfig) -> QuickBenchmarkResult {
+    let mut results = Vec::new();
+    let backends = [
+        ("cpu", shared::zenzai_cpu_backend_supported()),
+        ("vulkan", vulkan_available()),
+    ];
+    for (backend, available) in backends {
+        if !available {
+            results.push(QuickBackendResult {
+                backend: backend.to_string(),
+                ok: false,
+                avg_latency_ms: None,
+                error: Some("このPCでは利用できません".to_string()),
+            });
+            continue;
+        }
+        match measure_quick_benchmark_backend(config, backend).await {
+            Ok(avg_latency_ms) => results.push(QuickBackendResult {
+                backend: backend.to_string(),
+                ok: true,
+                avg_latency_ms: Some(avg_latency_ms),
+                error: None,
+            }),
+            Err(error) => results.push(QuickBackendResult {
+                backend: backend.to_string(),
+                ok: false,
+                avg_latency_ms: None,
+                error: Some(error),
+            }),
+        }
+    }
+
+    // 次の実行が正しい状態から始まるように、測定後にベンチマークサーバーを止める。
+    stop_benchmark_server();
+
+    QuickBenchmarkResult {
+        recommended: recommend_quick_benchmark_backend(&results),
+        results,
+    }
+}
+
+#[tauri::command]
+async fn run_quick_benchmark(
+    state: tauri::State<'_, AppState>,
+) -> Result<QuickBenchmarkResult, String> {
+    let _run_guard = benchmark_run_lock().lock().await;
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    Ok(run_quick_benchmark_impl(&config).await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState::new();
@@ -1041,6 +1217,9 @@ pub fn run() {
             restart_server,
             reset_learning_history,
             run_benchmark_item,
+            run_quick_benchmark,
+            translation_model_status,
+            translation_model_download,
             run_ai_assist_benchmark_item,
             get_active_model,
             switch_model
@@ -1378,6 +1557,39 @@ mod tests {
         .expect_err("injected restart failure should be returned");
 
         assert!(error.to_string().contains("lock-scope assertion"));
+    }
+
+    fn quick_backend_result(backend: &str, ok: bool, avg_latency_ms: f64) -> QuickBackendResult {
+        QuickBackendResult {
+            backend: backend.to_string(),
+            ok,
+            avg_latency_ms: ok.then_some(avg_latency_ms),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn quick_benchmark_recommends_only_the_fastest_successful_backend() {
+        let results = vec![
+            quick_backend_result("cpu", true, 210.0),
+            quick_backend_result("vulkan", true, 35.0),
+        ];
+        assert_eq!(
+            recommend_quick_benchmark_backend(&results).as_deref(),
+            Some("vulkan")
+        );
+
+        // 起動失敗・測定不能なバックエンドは推奨にならない。
+        let results = vec![
+            quick_backend_result("cpu", false, 0.0),
+            quick_backend_result("vulkan", true, 140.0),
+        ];
+        assert_eq!(
+            recommend_quick_benchmark_backend(&results).as_deref(),
+            Some("vulkan")
+        );
+
+        assert_eq!(recommend_quick_benchmark_backend(&[]), None);
     }
 
     #[test]

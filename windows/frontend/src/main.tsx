@@ -6,6 +6,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AppSidebar, settingsPages } from "@/components/app-sidebar";
 import { UpdateProvider } from "@/components/update-provider";
+import { FirstLaunchQuickBenchmark } from "@/components/first-launch-quick-benchmark";
 import { General } from "@/pages/general";
 import { Appearance } from "@/pages/appearance";
 import { About } from "@/pages/about";
@@ -24,6 +25,7 @@ function SettingsLayout() {
         <ThemeProvider>
             <UpdateProvider>
                 <SidebarProvider className="h-dvh min-h-0 overflow-hidden" style={{ "--sidebar-width": "14rem" } as React.CSSProperties}>
+                    <FirstLaunchQuickBenchmark />
                     <AppSidebar />
                     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
                         <header className="flex shrink-0 items-center gap-3 border-b px-4 py-4 sm:px-6">

@@ -9,9 +9,9 @@
 #endif
 #include BuildMetadataFile
 
-#define MyAppName "Azookey"
-#define MyAppPublisher "batao9"
-#define MyAppURL "https://github.com/batao9/azooKey-Windows/"
+#define MyAppName "ZeroConvert IME"
+#define MyAppPublisher "g0083"
+#define MyAppURL "https://github.com/g0083/ZeroConvert-IME/"
 #define MySettingsAppName "frontend.exe"
 #define MyLegacyNsisUninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\Azookey"
 #define MyInnoUninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{80B746D4-D74D-4345-8F81-47E06BCAB515}_is1"
@@ -21,9 +21,9 @@
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
 AppId={{80B746D4-D74D-4345-8F81-47E06BCAB515}
 #ifdef LocalZeroConPackage
-AppName=ZeroCon IME
+AppName=ZeroConvert IME
 SetupLogging=yes
-AppPublisher=ZeroCon IME
+AppPublisher=ZeroConvert IME
 AppPublisherURL=https://github.com/g0083/ZeroConvert-IME
 AppSupportURL=https://github.com/g0083/ZeroConvert-IME
 AppUpdatesURL=https://github.com/g0083/ZeroConvert-IME
@@ -52,7 +52,7 @@ DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
 OutputDir=../build
-OutputBaseFilename=azookey-setup
+OutputBaseFilename=zeroconvert-setup
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
@@ -63,8 +63,8 @@ RestartApplications=no
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 [Messages]
-FinishedRestartLabel=Azookey の更新を完了するには、Windows の再起動が必要です。再起動後に新しいバージョンが有効になります。今すぐ再起動しますか?
-FinishedRestartMessage=Azookey の更新を完了するには、Windows の再起動が必要です。%n%n再起動後に新しいバージョンが有効になります。今すぐ再起動しますか?
+FinishedRestartLabel=ZeroConvert IME の更新を完了するには、Windows の再起動が必要です。再起動後に新しいバージョンが有効になります。今すぐ再起動しますか?
+FinishedRestartMessage=ZeroConvert IME の更新を完了するには、Windows の再起動が必要です。%n%n再起動後に新しいバージョンが有効になります。今すぐ再起動しますか?
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -93,7 +93,11 @@ Source: "{#PayloadDir}/.azookey-startup-task.xml"; DestDir: "{app}"; Flags: igno
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
-Name: "{userdesktop}\ZeroCon IME"; IconFilename: "{app}\zeroconvert.ico"; Filename: "{app}\{#MySettingsAppName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userdesktop}\ZeroConvert IME"; IconFilename: "{app}\zeroconvert.ico"; Filename: "{app}\{#MySettingsAppName}"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Run]
+; 完了ページに「設定アプリを起動」チェックボックス（既定でチェック済み）を表示する。
+Filename: "{app}\{#MySettingsAppName}"; Description: "設定アプリを起動"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [InstallDelete]
 #ifdef LocalZeroConPackage
@@ -1541,8 +1545,8 @@ procedure ConfigureInstalledPayload();
 begin
   GrantAppContainerReadExecute(ExpandConstant('{app}\azookey.dll'));
   GrantAppContainerReadExecute(ExpandConstant('{app}\azookey32.dll'));
-  RegWriteStringValue(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'Description', 'ZeroCon IME');
-  RegWriteStringValue(HKLM32, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'Description', 'ZeroCon IME');
+  RegWriteStringValue(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'Description', 'ZeroConvert IME');
+  RegWriteStringValue(HKLM32, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'Description', 'ZeroConvert IME');
   RegWriteStringValue(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'IconFile', ExpandConstant('{app}\zeroconvert.ico'));
   RegWriteStringValue(HKLM32, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'IconFile', ExpandConstant('{app}\zeroconvert.ico'));
   RegWriteDWordValue(HKLM64, 'SOFTWARE\Microsoft\CTF\TIP\{FFDEFE79-2FC2-11EF-B16B-94E70B2C378C}\LanguageProfile\0x00000411\{FFDEFE7A-2FC2-11EF-B16B-94E70B2C378C}', 'IconIndex', 0);
@@ -1592,10 +1596,4 @@ begin
   begin
     DeleteStartupTaskBeforeUninstall();
   end;
-end;
-
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  if CurPageID = wpFinished then
-    WizardForm.RunList.Visible := False;
 end;
