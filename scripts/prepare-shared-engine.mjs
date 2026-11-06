@@ -8,7 +8,20 @@ import { execFileSync } from 'node:child_process';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cp = (source, destination, options = {}) => copy(source, destination, { preserveTimestamps: true, ...options });
 const stage = path.join(root, 'engine/build/swift');
-const checkout = path.join(root, 'windows/server-swift/.build/checkouts/AzooKeyKanaKanjiConverter');
+// The Windows converter is a vendored, checksum-pinned artifact. Resolve it
+// through the same preparation entry point the Windows build uses, so Android
+// always stages the exact converter revision Windows compiles with.
+const preparer = path.join(root, 'windows/scripts/prepare-modern-llama.py');
+const pinnedRevision = (await readFile(preparer, 'utf8')).match(/CONVERTER\s*=\s*'([0-9a-f]{40})'/)?.[1];
+if (!pinnedRevision) throw new Error('Could not read the pinned converter revision from prepare-modern-llama.py');
+const prepared = JSON.parse(execFileSync('python', [
+  path.join(root, 'scripts/run.py'), 'windows/scripts/prepare-modern-llama.py',
+], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }));
+const converterSource = path.resolve(prepared.converter);
+if (path.basename(converterSource) !== `AzooKeyKanaKanjiConverter-${pinnedRevision}`) {
+  throw new Error(`Vendored converter does not match the pinned revision ${pinnedRevision}; resolve the Windows dependency before building Android.`);
+}
+const converterRelative = path.relative(root, converterSource).split(path.sep).join('/');
 await mkdir(stage, { recursive: true });
 // Prune only stale generated files. Empty directories and build caches remain;
 // no repository sources, checkouts or recursively computed paths are deleted.
@@ -33,26 +46,17 @@ async function pruneStaleFiles(destination, source, generatedRoot = stage) {
   }
 }
 await pruneStaleFiles(path.join(stage, 'Sources'), path.join(root, 'windows/server-swift/Sources'));
-await pruneStaleFiles(path.join(stage, 'converter'), checkout);
+await pruneStaleFiles(path.join(stage, 'converter'), converterSource);
 await cp(path.join(root, 'windows/server-swift/Sources'), path.join(stage, 'Sources'), { recursive: true });
 await cp(path.join(root, 'engine/swift/AndroidBridge.swift'), path.join(stage, 'Sources/azookey-server/AndroidBridge.swift'));
 await cp(path.join(root, 'engine/native/inference_control.h'), path.join(stage, 'Sources/ffi/include/inference_control.h'));
 await writeFile(path.join(stage, 'Sources/ffi/include/android-host.h'), '#include "ffi.h"\n#include "inference_control.h"\n');
-await cp(checkout, path.join(stage, 'converter'), {
+await cp(converterSource, path.join(stage, 'converter'), {
   recursive: true, filter: source => !['.git', '.build', '.swiftpm', 'Tests', '.github'].includes(path.basename(source)),
 });
 const llama = path.join(stage, 'converter/Sources/llama.cpp');
 const native = path.join(root, 'android/app/src/main/cpp/llama.cpp');
 const pins = JSON.parse(await readFile(path.join(root, 'windows/server-swift/Package.resolved'), 'utf8')).pins;
-// The Windows converter is a local path dependency (Package.swift uses
-// ZEROCON_CONVERTER_SOURCE), so Package.resolved no longer pins it. Keep the
-// Android stage pinned to the converter revision prepared for Windows.
-const LOCAL_CONVERTER_REVISION = 'b14b61ccf83c15fdb8679b68baadcac5235ba17b';
-const converterPin = pins.find(pin => pin.identity === 'azookeykanakanjiconverter');
-const converterRevision = converterPin?.state?.revision ?? LOCAL_CONVERTER_REVISION;
-if (execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== converterRevision) {
-  throw new Error('Windows converter checkout differs from the pinned Android converter revision; resolve the Windows dependency before building Android.');
-}
 const pinnedDependencies = pins.filter(pin => pin.identity !== 'azookeykanakanjiconverter').map(pin =>
   `.package(url: ${JSON.stringify(pin.location)}, ${pin.state.version ? `exact: ${JSON.stringify(pin.state.version)}` : `revision: ${JSON.stringify(pin.state.revision)}`})`
 ).join(',\n');
@@ -98,7 +102,7 @@ async function fingerprint(dir, relative) {
 }
 await fingerprint(path.join(root, 'windows/server-swift/Sources'), 'windows/server-swift/Sources');
 await fingerprint(path.join(root, 'windows/crates/server/src/ai_assist'), 'windows/crates/server/src/ai_assist');
-await fingerprint(path.join(checkout, 'Sources/KanaKanjiConverterModule'), 'windows/server-swift/.build/checkouts/AzooKeyKanaKanjiConverter/Sources/KanaKanjiConverterModule');
+await fingerprint(path.join(converterSource, 'Sources/KanaKanjiConverterModule'), `${converterRelative}/Sources/KanaKanjiConverterModule`);
 await fingerprint(path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), 'windows/server-swift/azooKey_dictionary_storage/Dictionary');
 for (const directory of ['engine/swift', 'engine/native', 'engine/rust/src']) await fingerprint(path.join(root, directory), directory);
 for (const file of ['windows/crates/shared/src/conversion_policy.rs', 'windows/server-swift/Package.swift', 'windows/server-swift/Package.resolved', 'engine/rust/Cargo.toml', 'engine/rust/Cargo.lock',

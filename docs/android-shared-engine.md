@@ -9,7 +9,7 @@
 | 層 | 正本・利用方法 |
 |---|---|
 | 通常変換・N-best統合・辞書補正・変換学習 | Windowsの `server-swift/Sources` をそのままAndroidへコンパイル |
-| Swift変換ライブラリ | Windowsの `Package.resolved` と同じAzooKey revision・依存バージョン |
+| Swift変換ライブラリ | Windowsがビルドに使うvendored converter（`windows/scripts/prepare-modern-llama.py` がchecksum固定で用意し、`prepare-shared-engine.mjs` が同じ版をステージング）。残る依存はWindowsの `Package.resolved` の版 |
 | タイポ補正・先読み・動的マクロ | `engine/rust` がWindowsの `crates/server/src/ai_assist` を直接コンパイル |
 | 自動確定の境界・安定性判定 | `windows/crates/shared/src/conversion_policy.rs` を両ホストから利用 |
 | 推論・JNI・ファイル配置の差 | `engine/native`、`engine/swift`、Androidの `engine/WindowsEngine.kt` |
@@ -64,7 +64,9 @@ release署名、Git保存を行わない。
 
 新しいcloneでは [セットアップ](setup.md) に従ってサブモジュールとモデルを用意し、
 `swift package --package-path windows/server-swift resolve` でWindowsのpinに対応する
-依存ソースを取得する。Androidのモデル/資産準備は従来どおり
+依存ソースを取得する。Swift変換ライブラリはこの取得に含めず、Windowsと同じ
+vendored converterを `prepare-shared-engine.mjs` が `prepare-modern-llama.py` 経由で
+用意する。Androidのモデル/資産準備は従来どおり
 `scripts/prepare-android-assist-assets.ps1` を使う。個人のSDKパスや重みはGitに含めない。
 
 ```powershell
