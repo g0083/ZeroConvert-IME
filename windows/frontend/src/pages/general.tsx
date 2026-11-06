@@ -277,7 +277,13 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
 
     // 翻訳モデルは配布パッケージに同梱しないため、有効化時にHugging Faceから取得する。
     const ensureTranslationModel = async (modelId: string): Promise<boolean> => {
-        const status = await getTranslationModelStatus(modelId);
+        let status;
+        try {
+            status = await getTranslationModelStatus(modelId);
+        } catch (error) {
+            toast.error(`翻訳モデルの状態を確認できませんでした: ${String(error)}`);
+            return false;
+        }
         if (status.installed) return true;
         const confirmed = await new Promise<boolean>((resolve) => {
             translationConfirmResolve.current = resolve;
