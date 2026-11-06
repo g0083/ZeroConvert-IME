@@ -22,10 +22,10 @@ use utils::{
     get_candidate_window_position, get_candidate_window_position_with_ruby_clearance,
     get_ruby_window_size_for_rect, CandidateRect,
 };
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+    PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
 };
 use wry::WebContext;
 
@@ -343,6 +343,7 @@ pub enum UserEvent {
     },
     UpdateCandidates(String),
     UpdateSelection(i32),
+    CandidateClicked(i32),
     UpdateInputMethod(String),
     WindowAction(WindowAction),
     ClipboardUpdated,
@@ -431,6 +432,12 @@ async fn main() -> anyhow::Result<()> {
                             let height = height.as_f64().unwrap_or(0.0);
                             send_user_event(&proxy_clone, UserEvent::UpdateHeight(height as i32));
                         }
+                    } else if type_value == "select" {
+                        if let Some(index) = message.get("index").and_then(|value| value.as_i64()) {
+                            if let Ok(index) = i32::try_from(index) {
+                                send_user_event(&proxy_clone, UserEvent::CandidateClicked(index));
+                            }
+                        }
                     }
                 }
             }
@@ -509,6 +516,7 @@ async fn main() -> anyhow::Result<()> {
     let mut current_reading_vertical_adjustment =
         LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT;
     let mut current_input_method: Option<String> = None;
+    let mut current_engine_hwnd: u64 = 0;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -570,6 +578,25 @@ async fn main() -> anyhow::Result<()> {
                 UserEvent::UpdateSelection(index) => {
                     latest_selection = index;
                     evaluate_script(&candidate_webview, &format!("updateSelection({})", index));
+                }
+                UserEvent::CandidateClicked(index) => {
+                    // 候補クリック採用: 直近の更新元エンジン（変換中スレッド）へ通知する。
+                    // 非表示中や範囲外のクリックは無視する。
+                    if !current_window_visible
+                        || current_engine_hwnd == 0
+                        || index < 0
+                        || (index as usize) >= latest_candidates.len()
+                    {
+                        return;
+                    }
+                    unsafe {
+                        let _ = PostMessageW(
+                            HWND(current_engine_hwnd as *mut std::ffi::c_void),
+                            shared::ENGINE_CANDIDATE_SELECT_MESSAGE,
+                            WPARAM(index as usize),
+                            LPARAM(0),
+                        );
+                    }
                 }
                 UserEvent::UpdateInputMethod(input_method) => {
                     update_indicator(&indicator_webview, &input_method);
@@ -958,7 +985,11 @@ async fn main() -> anyhow::Result<()> {
                             reading,
                             candidate_list_visible,
                             reading_vertical_adjustment,
+                            engine_hwnd,
                         } => {
+                            if let Some(engine_hwnd) = engine_hwnd {
+                                current_engine_hwnd = engine_hwnd;
+                            }
                             if let Some(reading_vertical_adjustment) = reading_vertical_adjustment {
                                 current_reading_vertical_adjustment = reading_vertical_adjustment;
                             }

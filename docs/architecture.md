@@ -35,6 +35,7 @@ WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。�
 ```
 
 - `shared/service.proto` が変換RPC、`shared/window.proto` が表示側の契約。`shared/build.rs` がRust APIを生成する。
+- 候補ウィンドウのクリック採用は逆方向の通知になる。client DLLがスレッドごとにメッセージ専用ウィンドウを作り（`tsf/engine_message_window.rs`）、`UpdateCandidateWindow` でHWNDをui.exeへ告知する。ui.exeはクリックで `WM_APP` 系メッセージ（`shared::ENGINE_CANDIDATE_SELECT_MESSAGE`）をそのHWNDへ投げ、engineが `handle_external_candidate_selection` で選択＋Enter確定と同じ経路を実行する。
 - `CompositionOwner` は接続元のcomposition所有権を管理する。削除・文節移動・再変換を含め、クライアント予測状態とサーバーの正規状態を混同しない。
 - `launcher.exe` がサーバーと候補UIを起動・監視する。`Start-ZeroConvertIME.ps1` もlauncherを起点にする。サーバーやUIの単独起動は孤立プロセス・Pipe競合の原因になると同スクリプトに記載がある。
 - 設定UIはTauriコマンド→`shared::AppConfig`による保存→IPCでサーバー適用、という別経路。モデル切替・ベンチマークにも独自処理がある。

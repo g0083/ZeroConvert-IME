@@ -44,6 +44,9 @@ message UpdateCandidateWindowRequest {
   optional string reading = 6;
   optional bool candidate_list_visible = 7;
   optional int32 reading_vertical_adjustment = 8;
+  // 候補クリック採用要求を受け取るエンジン側メッセージウィンドウ。
+  // 直近の更新元（変換中スレッド）だけが告知し、UIはクリック時にここへ通知する。
+  optional uint64 engine_hwnd = 9;
 }
 
 // 候補ウィンドウ制御に対する空のレスポンス

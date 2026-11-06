@@ -15,9 +15,9 @@ use windows::{
         UI::TextServices::{
             CLSID_TF_CategoryMgr, ITfCategoryMgr, ITfFunctionProvider, ITfKeyEventSink,
             ITfKeystrokeMgr, ITfLangBarItemButton, ITfLangBarItemMgr, ITfSource, ITfSourceSingle,
-            ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadFocusSink,
-            ITfThreadMgr, ITfThreadMgrEventSink, TF_MOD_IGNORE_ALL_MODIFIER, TF_MOD_SHIFT,
-            TF_PRESERVEDKEY,
+            ITfTextInputProcessor, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl,
+            ITfThreadFocusSink, ITfThreadMgr, ITfThreadMgrEventSink, TF_MOD_IGNORE_ALL_MODIFIER,
+            TF_MOD_SHIFT, TF_PRESERVEDKEY,
         },
     },
 };
@@ -118,6 +118,19 @@ impl ITfTextInputProcessor_Impl for TextServiceFactory_Impl {
                 .cast::<ITfLangBarItemMgr>()?
                 .AddItem(&text_service.this::<ITfLangBarItemButton>()?)?;
         };
+
+        // Prepare the message window that adopts candidates clicked in the
+        // candidate UI. Failure is contained: clicks stay unavailable but the
+        // IME keeps working.
+        match super::engine_message_window::ensure_engine_message_window(
+            text_service.this::<ITfTextInputProcessor>()?,
+        ) {
+            Ok(_) => tracing::debug!("Engine message window ready"),
+            Err(error) => {
+                tracing::warn!(?error, "Failed to prepare the engine message window")
+            }
+        };
+
         drop(text_service);
         self.set_keyboard_disabled_for_document_mgr(doc_mgr.as_ref())?;
         match IMEState::ensure_ipc_service() {
@@ -209,6 +222,9 @@ impl ITfTextInputProcessor_Impl for TextServiceFactory_Impl {
 
         text_service.tid = 0;
         text_service.thread_mgr = None;
+        drop(text_service);
+
+        super::engine_message_window::dispose_engine_message_window();
 
         tracing::debug!("Deactivate success");
 

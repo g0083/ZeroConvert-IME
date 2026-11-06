@@ -7312,6 +7312,64 @@ impl TextServiceFactory {
         self.flush_deferred_user_actions()
     }
 
+    /// Adopts the candidate the user clicked in the candidate UI window. The
+    /// selection moves to the clicked index and the result commits exactly as
+    /// if Enter had been pressed with that selection. Returns false when there
+    /// is no active composition to adopt into.
+    #[tracing::instrument]
+    pub fn handle_external_candidate_selection(&self, index: i32) -> Result<bool> {
+        let composition = {
+            let text_service = self.borrow()?;
+            let composition = text_service.borrow_composition()?.clone();
+            composition
+        };
+        if !Self::external_candidate_selection_allowed(&composition) {
+            return Ok(false);
+        }
+        if !Self::ensure_ipc_service_for_key_event("external_candidate_selection") {
+            return Ok(false);
+        }
+        if self.has_deferred_input()? {
+            self.flush_deferred_user_actions()?;
+        }
+
+        // Move the selection to the clicked candidate while keeping the
+        // current composition state.
+        self.handle_action(
+            &[ClientAction::SetSelection(SetSelectionType::Number(index))],
+            composition.state.clone(),
+        )?;
+
+        let composition = {
+            let text_service = self.borrow()?;
+            let composition = text_service.borrow_composition()?.clone();
+            composition
+        };
+        if composition.state == CompositionState::None {
+            return Ok(true);
+        }
+        let config_snapshot = self.input_config_snapshot()?;
+        let mode = IMEState::input_mode()?;
+        let Some((transition, actions)) = Self::plan_actions_for_user_action_with_lookup(
+            &composition,
+            &UserAction::Enter,
+            &mode,
+            false,
+            config_snapshot.app_config(),
+            config_snapshot.romaji_lookup(),
+            false,
+        ) else {
+            return Ok(true);
+        };
+        self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)?;
+        Ok(true)
+    }
+
+    #[inline]
+    fn external_candidate_selection_allowed(composition: &Composition) -> bool {
+        composition.state != CompositionState::None && !composition.candidates.texts.is_empty()
+    }
+
     #[tracing::instrument]
     pub fn handle_action(
         &self,
