@@ -81,6 +81,10 @@ $pins = (Get-Content (Join-Path $repoRoot 'windows/server-swift/Package.resolved
 foreach ($pin in $pins) {
     $localCheckout = Join-Path $repoRoot "windows/server-swift/.build/checkouts/$($pin.identity)"
     if (Test-Path -LiteralPath $localCheckout) {
+        # The working checkout carries the pinned revision but not always the
+        # newer tags. Import the full tag set from the local bare mirror so the
+        # version requirements from Package.resolved resolve without a download.
+        & git -C $localCheckout fetch --tags origin --quiet
         & swift package --package-path $stage config set-mirror --original $pin.location --mirror ([uri]$localCheckout).AbsoluteUri
         if ($LASTEXITCODE -ne 0) { throw "Could not configure mirror for $($pin.identity)" }
     }
