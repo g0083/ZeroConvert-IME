@@ -355,7 +355,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun beforeKeyboardModeChange() {
         if (isTranslationMode()) {
-            exitTranslationMode(revert = true)
             return
         }
         confirmCurrent()
@@ -2445,10 +2444,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 return
             }
             if (ch.isISOControl()) return
-            englishComposing += ch
-            currentComposingSurface.value = englishComposing
-            setManagedComposingText(currentInputConnection, englishComposing, 1)
-            scheduleTranslation()
+            appendTranslationLiteral(ch.toString())
             return
         }
         if (ch == ' ') { handleEnglishSpace(); return }
@@ -2481,6 +2477,16 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     setManagedComposingText(currentInputConnection, englishComposing, 1)
                 } else {
                     setManagedComposingText(currentInputConnection, "", 0)
+                }
+                scheduleTranslation()
+            } else if (!composingText.isEmpty) {
+                val previous = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
+                composingText.deleteBackwardFromCursorPosition(composingText.convertTargetCursorPosition - previous)
+                currentComposingSurface.value = composingText.convertTargetBeforeCursor
+                if (composingText.isEmpty) {
+                    setManagedComposingText(currentInputConnection, "", 0)
+                } else {
+                    setManagedComposingText(currentInputConnection, composingText.convertTarget, 1)
                 }
                 scheduleTranslation()
             } else {

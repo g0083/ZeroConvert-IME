@@ -5355,6 +5355,14 @@ impl TextServiceFactory {
                         ],
                     ))
                 }
+                UserAction::ToggleInputMode if app_config.general.experimental_translation => {
+                    Some((
+                        CompositionState::None,
+                        vec![ClientAction::SetTemporaryLatin(
+                            !composition.temporary_latin,
+                        )],
+                    ))
+                }
                 UserAction::ToggleInputMode => Some((
                     CompositionState::None,
                     vec![match mode {
@@ -5490,6 +5498,14 @@ impl TextServiceFactory {
                         vec![ClientAction::SetSelection(SetSelectionType::Down)],
                     )),
                 },
+                UserAction::ToggleInputMode if app_config.general.experimental_translation => {
+                    Some((
+                        CompositionState::Composing,
+                        vec![ClientAction::SetTemporaryLatin(
+                            !composition.temporary_latin,
+                        )],
+                    ))
+                }
                 UserAction::ToggleInputMode => Some((
                     CompositionState::None,
                     vec![
@@ -5632,6 +5648,14 @@ impl TextServiceFactory {
                         vec![ClientAction::SetSelection(SetSelectionType::Down)],
                     )),
                 },
+                UserAction::ToggleInputMode if app_config.general.experimental_translation => {
+                    Some((
+                        CompositionState::Composing,
+                        vec![ClientAction::SetTemporaryLatin(
+                            !composition.temporary_latin,
+                        )],
+                    ))
+                }
                 UserAction::ToggleInputMode => Some((
                     CompositionState::None,
                     vec![
@@ -5691,7 +5715,7 @@ impl TextServiceFactory {
             start_temporary_latin,
         )?;
 
-        if composition.temporary_latin {
+        if composition.temporary_latin && !matches!(deferred.action, UserAction::ToggleInputMode) {
             let should_reset_on_confirm = matches!(
                 deferred.action,
                 UserAction::Enter | UserAction::CommitAndNextClause | UserAction::CommitFirstClause
