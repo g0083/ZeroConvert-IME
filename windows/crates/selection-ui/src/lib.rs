@@ -27,7 +27,13 @@ use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::Gdi::*,
-        UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::*},
+        UI::{
+            HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::{
+                GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+            },
+            WindowsAndMessaging::*,
+        },
     },
 };
 
@@ -327,15 +333,18 @@ impl View {
             self.text(dc, &self.count, (12, 0, 94, 38), 3, true);
             if self.enabled {
                 let button = RECT {
-                    left: self.px(100),
+                    left: self.px(98),
                     top: self.px(5),
-                    right: self.px(216),
+                    right: self.px(214),
                     bottom: self.px(33),
                 };
                 let brush = CreateSolidBrush(self.colors[1]);
                 FillRect(dc, &button, brush);
                 let _ = DeleteObject(brush);
-                self.text(dc, "翻訳  Ctrl+T", (108, 0, 210, 38), 4, true);
+                self.text(dc, "翻訳  Ctrl+T", (106, 0, 208, 38), 4, true);
+                self.text(dc, "×", (220, 0, 240, 38), 3, true);
+            } else {
+                self.text(dc, "×", (96, 0, 116, 38), 3, true);
             }
         } else {
             let status = match self.phase {
@@ -469,8 +478,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             WM_LBUTTONUP => {
                 let x = (lp.0 as u16 as i16 as i32) * 96 / (*ptr).scale;
                 let y = ((lp.0 >> 16) as u16 as i16 as i32) * 96 / (*ptr).scale;
-                (*ptr).action = if hwnd == (*ptr).selection && x >= 100 {
-                    1
+                (*ptr).action = if hwnd == (*ptr).selection {
+                    if (*ptr).enabled {
+                        if (98..=214).contains(&x) {
+                            1
+                        } else if x >= 218 {
+                            4
+                        } else {
+                            0
+                        }
+                    } else if x >= 94 {
+                        4
+                    } else {
+                        0
+                    }
                 } else if hwnd == (*ptr).result && x >= 378 && y < 44 {
                     2
                 } else if hwnd == (*ptr).result && x >= 300 && y >= (*ptr).card_height() - 44 {
@@ -551,6 +572,8 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             view.selection = hwnd;
         }
     }
+    let mut was_mouse_down = false;
+    let mut selection_shown_at: Option<Instant> = None;
     loop {
         match receiver.recv_timeout(Duration::from_millis(16)) {
             Ok(command) => match command {
@@ -569,12 +592,18 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                     view.count = format!("{}文字{}", count, if truncated { "+" } else { "" });
                     view.source = text;
                     view.configure();
-                    view.place(view.selection, if view.enabled { 224 } else { 104 }, 38);
+                    let width = if view.enabled { 248 } else { 120 };
+                    view.place(view.selection, width, 38);
+                    selection_shown_at = Some(Instant::now());
                 }
                 Command::Hide => {
                     let _ = ShowWindow(view.selection, SW_HIDE);
+                    selection_shown_at = None;
                 }
-                Command::Translate => view.translate(),
+                Command::Translate => {
+                    view.translate();
+                    selection_shown_at = None;
+                }
             },
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -588,13 +617,53 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             DispatchMessageW(&msg);
         }
         match std::mem::take(&mut view.action) {
-            1 => view.translate(),
+            1 => {
+                view.translate();
+                selection_shown_at = None;
+            }
             2 => view.close_result(),
             3 => {
                 view.copy();
                 view.close_result();
             }
+            4 => {
+                let _ = ShowWindow(view.selection, SW_HIDE);
+                selection_shown_at = None;
+            }
             _ => {}
+        }
+        if IsWindowVisible(view.selection).as_bool() {
+            let is_mouse_down = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0)
+                || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000 != 0)
+                || (GetAsyncKeyState(VK_MBUTTON.0 as i32) as u16 & 0x8000 != 0);
+
+            let is_esc_down = (GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000) != 0;
+
+            if is_esc_down {
+                let _ = ShowWindow(view.selection, SW_HIDE);
+                selection_shown_at = None;
+            } else if is_mouse_down && !was_mouse_down {
+                if let Some(shown_at) = selection_shown_at {
+                    if shown_at.elapsed() >= Duration::from_millis(150) {
+                        let mut pt = windows::Win32::Foundation::POINT::default();
+                        let mut rect = RECT::default();
+                        let _ = GetCursorPos(&mut pt);
+                        let _ = GetWindowRect(view.selection, &mut rect);
+                        let inside = pt.x >= rect.left
+                            && pt.x <= rect.right
+                            && pt.y >= rect.top
+                            && pt.y <= rect.bottom;
+                        if !inside {
+                            let _ = ShowWindow(view.selection, SW_HIDE);
+                            selection_shown_at = None;
+                        }
+                    }
+                }
+            }
+            was_mouse_down = is_mouse_down;
+        } else {
+            was_mouse_down = false;
+            selection_shown_at = None;
         }
         for update in updates.try_iter().take(32) {
             if update.generation == view.generation.load(Ordering::Acquire) {

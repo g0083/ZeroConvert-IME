@@ -8,6 +8,7 @@ function Get-TrialInputGroups {
         client = @('windows/crates/client')
         shared = @('windows/crates/shared')
         macros = @('windows/crates/macros')
+        selection_ui = @('windows/crates/selection-ui')
         server = @('windows/crates/server/src','windows/crates/server/Cargo.toml','windows/crates/server/build.rs')
         keyboard = @('windows/native/keyboard-prior','windows/scripts/build-keyboard-prior.ps1')
         runtime = @('windows/scripts/prepare-modern-llama.py','windows/scripts/modern-llama.ps1')
@@ -71,6 +72,7 @@ function Get-TrialBuildPlan([string[]]$Changed) {
         switch ($group) {
             { $_ -in @('rust','shared') } { foreach ($part in @('client','server','ui','launcher','frontend')) { $null=$selected.Add($part) } }
             'macros' { $null=$selected.Add('client') }
+            'selection_ui' { foreach ($part in @('client','ui')) { $null=$selected.Add($part) } }
             'server' { foreach ($part in @('server','ui','frontend')) { $null=$selected.Add($part) } }
             'swift' { $null=$selected.Add('swift') }
             'runtime' { foreach ($part in @('runtime','swift','keyboard','server','launcher')) { $null=$selected.Add($part) } }
