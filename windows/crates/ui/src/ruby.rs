@@ -117,6 +117,152 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         color: #4338CA;
                         border: 1px solid #A5B4FC;
                     }
+
+                    /* Translation Mode Card Styles */
+                    main.translation-mode {
+                        width: 380px;
+                        min-width: 320px;
+                        max-width: 440px;
+                        padding: 10px 14px;
+                        border-radius: 12px;
+                        background-color: var(--ime-background, #ffffff);
+                        border: 1px solid var(--ime-border, #cbd5e1);
+                        color: var(--ime-text, #0f172a);
+                        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+                    }
+                    main.translation-mode::after {
+                        display: none !important;
+                    }
+                    .translation-card {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 8px;
+                        width: 380px;
+                        max-width: 100%;
+                        box-sizing: border-box;
+                    }
+                    .translation-header {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        font-size: 11px;
+                        color: var(--ime-muted, #64748b);
+                    }
+                    .translation-badge {
+                        background: var(--ime-selection, #dbeafe);
+                        color: var(--ime-accent, #2563eb);
+                        padding: 2px 7px;
+                        border-radius: 5px;
+                        font-weight: 700;
+                        font-size: 11px;
+                        letter-spacing: 0.3px;
+                    }
+                    .translation-status {
+                        font-size: 11px;
+                        color: var(--ime-muted, #64748b);
+                    }
+                    .translation-content {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 4px;
+                        margin: 2px 0;
+                    }
+                    .translation-row {
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        font-size: 14px;
+                        line-height: 1.4;
+                    }
+                    .translation-label {
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: var(--ime-muted, #64748b);
+                        min-width: 44px;
+                        flex-shrink: 0;
+                    }
+                    .translation-label.en-label {
+                        font-weight: 700;
+                        color: var(--ime-accent, #2563eb);
+                    }
+                    .translation-text {
+                        flex: 1;
+                        min-width: 0;
+                        font-weight: 500;
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        color: var(--ime-text, #0f172a);
+                    }
+                    .translation-text.en-text {
+                        font-weight: 600;
+                        color: var(--ime-accent, #2563eb);
+                    }
+                    .translation-text.loading {
+                        color: var(--ime-muted, #64748b);
+                        font-style: italic;
+                        font-weight: 400;
+                    }
+                    .translation-footer {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        font-size: 11px;
+                        color: var(--ime-muted, #64748b);
+                        border-top: 1px solid var(--ime-border, #e2e8f0);
+                        padding-top: 6px;
+                        margin-top: 2px;
+                    }
+                    .translation-shortcuts {
+                        display: flex;
+                        gap: 10px;
+                        align-items: center;
+                    }
+                    .translation-shortcuts .key {
+                        background: var(--ime-surface, #f1f5f9);
+                        border: 1px solid var(--ime-border, #cbd5e1);
+                        border-radius: 4px;
+                        padding: 1px 5px;
+                        font-size: 10px;
+                        font-family: monospace;
+                        color: var(--ime-text, #0f172a);
+                    }
+                    .translation-model {
+                        font-size: 11px;
+                        color: var(--ime-muted, #64748b);
+                        font-weight: 600;
+                    }
+
+                    :root main.translation-mode {
+                        background: var(--ime-background);
+                        border-color: var(--ime-border);
+                        color: var(--ime-text);
+                    }
+                    :root .translation-badge {
+                        background: var(--ime-selection);
+                        color: var(--ime-accent);
+                    }
+                    :root .translation-shortcuts .key {
+                        background: var(--ime-surface);
+                        border-color: var(--ime-border);
+                        color: var(--ime-text);
+                    }
+                    :root .translation-footer {
+                        border-top-color: var(--ime-border);
+                    }
+                    :root .translation-text.en-text {
+                        color: var(--ime-accent);
+                    }
+                    :root .translation-label.en-label {
+                        color: var(--ime-accent);
+                    }
+                    :root .translation-status,
+                    :root .translation-label,
+                    :root .translation-model,
+                    :root .translation-text.loading,
+                    :root .translation-footer {
+                        color: var(--ime-muted);
+                    }
                     #measurement {
                         position: absolute;
                         left: 0;
@@ -159,6 +305,44 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             color: #E0E7FF;
                             border-color: #6366F1;
                         }
+                        main.translation-mode {
+                            background-color: #1e1e24;
+                            border-color: #3f3f4e;
+                            color: #f8fafc;
+                        }
+                        .translation-badge {
+                            background: #1e3a8a;
+                            color: #93c5fd;
+                        }
+                        .translation-header,
+                        .translation-status,
+                        .translation-label {
+                            color: #94a3b8;
+                        }
+                        .translation-label.en-label {
+                            color: #60a5fa;
+                        }
+                        .translation-text {
+                            color: #f8fafc;
+                        }
+                        .translation-text.en-text {
+                            color: #60a5fa;
+                        }
+                        .translation-text.loading {
+                            color: #94a3b8;
+                        }
+                        .translation-footer {
+                            border-top-color: #3f3f4e;
+                            color: #94a3b8;
+                        }
+                        .translation-shortcuts .key {
+                            background: #2b2b36;
+                            border-color: #3f3f4e;
+                            color: #f8fafc;
+                        }
+                        .translation-model {
+                            color: #94a3b8;
+                        }
                     }
                 </style>
                 <script>
@@ -199,9 +383,12 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             return;
                         }
 
+                        const isTranslation = main.classList.contains('translation-mode');
                         const mainStyle = window.getComputedStyle(main);
                         const bodyStyle = window.getComputedStyle(body);
-                        const maxContentWidth = maxOverlayWidth - horizontalBox(mainStyle) - horizontalBox(bodyStyle);
+                        const maxContentWidth = isTranslation
+                            ? Math.max(380, maxOverlayWidth)
+                            : (maxOverlayWidth - horizontalBox(mainStyle) - horizontalBox(bodyStyle));
                         measurementElement.style.maxWidth = Math.max(80, maxContentWidth) + "px";
                         const measurementRect = measurementElement.getBoundingClientRect();
                         const bodyHorizontal = horizontalBox(bodyStyle);
@@ -263,6 +450,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                     function updateReading(reading, requestId) {
                         const readingElement = document.getElementById('reading');
                         const measurementElement = document.getElementById('measurement');
+                        const main = document.querySelector('main');
                         if (!readingElement || !measurementElement) {
                             return;
                         }
@@ -274,41 +462,93 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         const text = typeof reading === 'string' ? reading : '';
                         
                         let readingText = text, assist = null;
+                        let translationData = null;
                         // Structured presentation travels in the existing reading envelope.
                         // Legacy tab hints remain readable during a rolling binary update.
                         try {
                             const value = JSON.parse(text);
-                            if (value && typeof value.reading === 'string' && value.assist) {
+                            if (value && value.translationMode) {
+                                translationData = value;
+                            } else if (value && typeof value.reading === 'string' && value.assist) {
                                 readingText = value.reading;
                                 assist = value.assist;
                             }
                         } catch (_) {}
-                        if (!assist && text.includes('\t')) {
-                            const parts = text.split('\t');
-                            readingText = parts[0];
-                            assist = { status: parts[1].startsWith('🔮') ? 'prediction' : 'proposal',
-                                source: readingText, replacement: parts[1].replace(/^[💡🔮]\s*/u, '').replace(' [Tab]', '') };
-                        }
+
                         readingElement.innerHTML = '';
-                        if (assist && typeof assist.replacement === 'string') {
-                            const applied = assist.status === 'applied';
-                            const prediction = assist.status === 'prediction';
-                            const translation = assist.status === 'translation';
-                            const diff = correctionDiff(String(assist.source || readingText), assist.replacement);
-                            const change = translation ? '英訳: ' + escapeHtml(assist.replacement) : prediction ? escapeHtml(typeof assist.continuation === 'string' && assist.continuation ? assist.continuation : assist.replacement) :
-                                '<span class="assist-original">' + escapeHtml(diff.original) + '</span> → ' +
-                                '<span class="assist-replacement">' + diff.replacement + '</span>';
-                            let assistHtml = '<span class="ai-assist-pill" role="status">' +
-                                '<span class="assist-change">' + change + '</span>' +
-                                '<span class="assist-action">' + (applied ? '補正済み · ' : '') +
-                                '<span class="ai-assist-tab">' + (applied ? 'Esc' : 'Tab') + '</span>' +
-                                (applied ? '戻す' : prediction || translation ? 'で確定' : 'で補正') + '</span></span>';
-                            if (prediction && assist.undoAvailable) {
-                                assistHtml += '<span class="assist-action">補正済み · Escで戻す</span>';
+
+                        if (translationData) {
+                            if (main) main.classList.add('translation-mode');
+                            const ja = translationData.source || '';
+                            const en = translationData.translation || '';
+                            const hasError = Boolean(translationData.translationError);
+                            const isLoading = !en && !hasError;
+                            const modelStr = String(translationData.model || '0.8b').toLowerCase();
+                            const modelTag = modelStr.includes('2b') ? '2B' : '0.8B';
+
+                            const statusText = hasError
+                                ? '翻訳失敗・入力し直して再試行'
+                                : (isLoading ? (ja ? '翻訳中' : '入力待ち') : 'リアルタイム英訳入力中');
+
+                            const jaText = ja || '入力待ち…';
+                            const enText = hasError
+                                ? '翻訳できませんでした。Escで取消'
+                                : (isLoading ? '翻訳中…' : en);
+                            const loadingClass = isLoading ? ' loading' : '';
+
+                            readingElement.innerHTML =
+                                '<div class="translation-card">' +
+                                    '<div class="translation-header">' +
+                                        '<span class="translation-badge">翻訳モード (PLaMo 3)</span>' +
+                                        '<span class="translation-status">' + escapeHtml(statusText) + '</span>' +
+                                    '</div>' +
+                                    '<div class="translation-content">' +
+                                        '<div class="translation-row ja">' +
+                                            '<span class="translation-label">日本語:</span>' +
+                                            '<span class="translation-text ja-text">' + escapeHtml(jaText) + '</span>' +
+                                        '</div>' +
+                                        '<div class="translation-row en">' +
+                                            '<span class="translation-label en-label">英訳:</span>' +
+                                            '<span class="translation-text en-text' + loadingClass + '">' + escapeHtml(enText) + '</span>' +
+                                        '</div>' +
+                                    '</div>' +
+                                    '<div class="translation-footer">' +
+                                        '<div class="translation-shortcuts">' +
+                                            '<span><span class="key">Enter</span> 確定</span>' +
+                                            '<span><span class="key">Esc</span> 取消</span>' +
+                                            '<span><span class="key">Ctrl+T</span> 終了</span>' +
+                                        '</div>' +
+                                        '<span class="translation-model">' + escapeHtml(modelTag) + '</span>' +
+                                    '</div>' +
+                                '</div>';
+                        } else {
+                            if (main) main.classList.remove('translation-mode');
+                            if (!assist && text.includes('\t')) {
+                                const parts = text.split('\t');
+                                readingText = parts[0];
+                                assist = { status: parts[1].startsWith('🔮') ? 'prediction' : 'proposal',
+                                    source: readingText, replacement: parts[1].replace(/^[💡🔮]\s*/u, '').replace(' [Tab]', '') };
                             }
-                            readingElement.innerHTML += assistHtml;
+                            if (assist && typeof assist.replacement === 'string') {
+                                const applied = assist.status === 'applied';
+                                const prediction = assist.status === 'prediction';
+                                const translation = assist.status === 'translation';
+                                const diff = correctionDiff(String(assist.source || readingText), assist.replacement);
+                                const change = translation ? '英訳: ' + escapeHtml(assist.replacement) : prediction ? escapeHtml(typeof assist.continuation === 'string' && assist.continuation ? assist.continuation : assist.replacement) :
+                                    '<span class="assist-original">' + escapeHtml(diff.original) + '</span> → ' +
+                                    '<span class="assist-replacement">' + diff.replacement + '</span>';
+                                let assistHtml = '<span class="ai-assist-pill" role="status">' +
+                                    '<span class="assist-change">' + change + '</span>' +
+                                    '<span class="assist-action">' + (applied ? '補正済み · ' : '') +
+                                    '<span class="ai-assist-tab">' + (applied ? 'Esc' : 'Tab') + '</span>' +
+                                    (applied ? '戻す' : prediction || translation ? 'で確定' : 'で補正') + '</span></span>';
+                                if (prediction && assist.undoAvailable) {
+                                    assistHtml += '<span class="assist-action">補正済み · Escで戻す</span>';
+                                }
+                                readingElement.innerHTML += assistHtml;
+                            }
+                            readingElement.innerHTML += '<span class="reading-text">' + escapeHtml(readingText) + '</span>';
                         }
-                        readingElement.innerHTML += '<span class="reading-text">' + escapeHtml(readingText) + '</span>';
 
                         // Measure the actual styled badges, including their margins,
                         // padding and borders. A plain-text approximation can be a few
