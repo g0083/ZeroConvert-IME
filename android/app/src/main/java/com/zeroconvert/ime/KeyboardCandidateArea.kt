@@ -11,23 +11,47 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zeroconvert.ime.assist.AiAssistResult
 import com.zeroconvert.ime.assist.AiAssistType
+
+/**
+ * Height of the reading and candidate bars. They follow the key height setting so the whole
+ * keyboard keeps one vertical rhythm; the 48/46 ratio keeps the default 46dp keys at 48dp bars.
+ */
+val KeyboardBarHeight: Dp
+    @Composable get() = LocalKeyboardKeyHeight.current * (48f / 46f)
+
+/**
+ * Space the key area adds around the rows: the 10dp vertical padding plus the slack that
+ * `Arrangement.SpaceEvenly` distributes between them. Shared by the IME and the settings preview.
+ */
+val KeyboardContentExtraHeight: Dp = 35.dp
+
+/**
+ * Height of the key area. The QWERTY number row is optional, so the row count has to be
+ * part of the calculation; otherwise hiding it leaves an empty band at the bottom.
+ */
+fun keyboardContentHeight(keyHeight: Dp, rowCount: Int): Dp =
+    keyHeight * rowCount + KeyboardContentExtraHeight
 
 @Composable
 fun SelectionCountLabel(count: SelectionCharacterCount, palette: ZeroConPalette, modifier: Modifier = Modifier) {
@@ -99,53 +123,76 @@ fun KeyboardAssistBar(
     onUndo: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(48.dp).background(palette.surface),
+        modifier = Modifier.fillMaxWidth().height(KeyboardBarHeight).background(palette.surface),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = when {
-                reading.isEmpty() -> "入力待ち"
-                correctionApplied -> "補正済み: $reading"
-                else -> "原文: $reading"
-            },
-            color = if (correctionApplied) palette.warningAmber else palette.textSecondary,
-            fontSize = 13.sp,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-        )
-        if (reading.isNotEmpty() && assist != null) {
-            val isTypo = assist.type == AiAssistType.TYPO_CORRECTION
-            val title = if (isTypo) "補正" else "先読み"
-            val color = if (isTypo) palette.warningAmber else palette.primaryAccentSoft
-            Surface(
-                color = color.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.dp)
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = "$title ${assist.text} を採用"
+        val label = when {
+            reading.isEmpty() -> "入力待ち"
+            correctionApplied -> "補正済み: "
+            else -> "原文: "
+        }
+        val fontSize = 13.sp
+        val measurer = rememberTextMeasurer()
+        val density = LocalDensity.current
+        // Fixed left half: an assist result appearing or disappearing must not resize the reading.
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight().padding(horizontal = 8.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            // The reading grows to the right, so overflow drops the oldest characters instead of the newest.
+            val availableWidth = if (constraints.hasBoundedWidth) with(density) { maxWidth.roundToPx() } else -1
+            val textStyle = LocalTextStyle.current.copy(fontSize = fontSize)
+            val text = remember(reading, label, availableWidth, textStyle, density.density, density.fontScale) {
+                if (reading.isEmpty() || availableWidth < 0) {
+                    label + reading
+                } else {
+                    label + TrailingTextFit.fit(reading) { candidate ->
+                        measurer.measure(label + candidate, textStyle, softWrap = false, maxLines = 1)
+                            .size.width <= availableWidth
                     }
-                    .clickable(onClick = onAdopt)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                }
+            }
+            Text(
+                text = text,
+                color = if (correctionApplied) palette.warningAmber else palette.textSecondary,
+                fontSize = fontSize,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip
+            )
+        }
+        // The assist slot keeps its width while idle so results never reflow the reading.
+        Box(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 2.dp)) {
+            if (reading.isNotEmpty() && assist != null) {
+                val isTypo = assist.type == AiAssistType.TYPO_CORRECTION
+                val title = if (isTypo) "補正" else "先読み"
+                val color = if (isTypo) palette.warningAmber else palette.primaryAccentSoft
+                Surface(
+                    color = color.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "$title ${assist.text} を採用"
+                        }
+                        .clickable(onClick = onAdopt)
                 ) {
-                    Text(text = title, color = color, fontSize = 12.sp, maxLines = 1, softWrap = false)
-                    Text(
-                        text = if (isTypo) assist.text else assist.continuation.ifEmpty { assist.text },
-                        color = palette.textPrimary,
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(text = title, color = color, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                        Text(
+                            text = if (isTypo) assist.text else assist.continuation.ifEmpty { assist.text },
+                            color = palette.textPrimary,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }
@@ -168,16 +215,22 @@ fun KeyboardAssistBar(
     }
 }
 
-/** Expanded candidates occupy the key area, so opening/closing them cannot resize the IME. */
+/**
+ * Expanded candidates occupy the key area, so opening/closing them cannot resize the IME.
+ * `extraHeight` reclaims the space of hidden bars (the emoji tab drops the reading and
+ * candidate bars) so the panel grows instead of leaving a gap.
+ */
 @Composable
 fun KeyboardContentArea(
     keyHeight: Dp,
     expanded: Boolean,
+    rowCount: Int = 5,
+    extraHeight: Dp = 0.dp,
     expandedContent: @Composable () -> Unit,
     keyboardContent: @Composable () -> Unit
 ) {
     Box(
-        modifier = Modifier.fillMaxWidth().height(keyHeight * 5 + 35.dp)
+        modifier = Modifier.fillMaxWidth().height(keyboardContentHeight(keyHeight, rowCount) + extraHeight)
             .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
     ) {
         CompositionLocalProvider(LocalKeyboardKeyHeight provides keyHeight) {

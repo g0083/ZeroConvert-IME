@@ -1637,8 +1637,10 @@ fun FlickPopupGuide(
         rawCenter.x
     }
 
+    // Only clamp against the bottom edge. Clamping the top edge would push the guide
+    // below the pressed key for the top row, which reads as a one-key downward shift.
     val clampedCenterY = if (popupState.rootHeightPx > 0f) {
-        (rawCenter.y - liftY).coerceIn(halfExtentPx + marginPx, popupState.rootHeightPx - halfExtentPx - marginPx)
+        (rawCenter.y - liftY).coerceAtMost(popupState.rootHeightPx - halfExtentPx - marginPx)
     } else {
         rawCenter.y - liftY
     }

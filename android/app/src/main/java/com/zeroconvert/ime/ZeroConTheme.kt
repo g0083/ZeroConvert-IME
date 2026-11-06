@@ -47,10 +47,22 @@ data class ZeroConPalette(
 )
 
 /**
+ * A selectable color theme. The ids and labels mirror
+ * `windows/crates/shared/themes.json` so both platforms offer the same choices.
+ */
+data class ZeroConTheme(
+    val id: String,
+    val label: String,
+    val palette: ZeroConPalette
+) {
+    val isDark: Boolean get() = palette.isDark
+}
+
+/**
  * Mirrors the Windows settings "dark_blue" palette so the Android settings
  * screen and keyboard share the same visual language.
  */
-val ZeroConDarkPalette = ZeroConPalette(
+val ZeroConDarkBluePalette = ZeroConPalette(
     isDark = true,
     canvas = Color(0xFF101722),
     surface = Color(0xFF182334),
@@ -69,10 +81,86 @@ val ZeroConDarkPalette = ZeroConPalette(
     borderSubtle = Color(0xFF344760)
 )
 
+val ZeroConGraphitePalette = ZeroConPalette(
+    isDark = true,
+    canvas = Color(0xFF18191C),
+    surface = Color(0xFF232529),
+    surfaceElevated = Color(0xFF34373D),
+    keyNormal = Color(0xFF34373D),
+    keyModifier = Color(0xFF292B30),
+    primaryAccent = Color(0xFFC0C7D4),
+    primaryAccentSoft = Color(0xFFD1D6DF),
+    onAccent = Color(0xFF22252B),
+    readyEmerald = Color(0xFF34D399),
+    warningAmber = Color(0xFFFBBF24),
+    danger = Color(0xFFF87171),
+    textPrimary = Color(0xFFF1F2F4),
+    textSecondary = Color(0xFFB0B4BD),
+    textMuted = Color(0xFF9EA1AA),
+    borderSubtle = Color(0xFF454951)
+)
+
+val ZeroConForestPalette = ZeroConPalette(
+    isDark = true,
+    canvas = Color(0xFF101E19),
+    surface = Color(0xFF182C23),
+    surfaceElevated = Color(0xFF254234),
+    keyNormal = Color(0xFF254234),
+    keyModifier = Color(0xFF1D3429),
+    primaryAccent = Color(0xFF80D5A5),
+    primaryAccentSoft = Color(0xFFA4E0BE),
+    onAccent = Color(0xFF102A1B),
+    readyEmerald = Color(0xFF34D399),
+    warningAmber = Color(0xFFFBBF24),
+    danger = Color(0xFFF87171),
+    textPrimary = Color(0xFFE7F5ED),
+    textSecondary = Color(0xFFA2C4B1),
+    textMuted = Color(0xFF90B09F),
+    borderSubtle = Color(0xFF355943)
+)
+
+val ZeroConPlumPalette = ZeroConPalette(
+    isDark = true,
+    canvas = Color(0xFF211727),
+    surface = Color(0xFF302139),
+    surfaceElevated = Color(0xFF47314F),
+    keyNormal = Color(0xFF47314F),
+    keyModifier = Color(0xFF382741),
+    primaryAccent = Color(0xFFD6A0ED),
+    primaryAccentSoft = Color(0xFFE1BAF2),
+    onAccent = Color(0xFF30143D),
+    readyEmerald = Color(0xFF34D399),
+    warningAmber = Color(0xFFFBBF24),
+    danger = Color(0xFFF87171),
+    textPrimary = Color(0xFFF5EAFA),
+    textSecondary = Color(0xFFC5ABCF),
+    textMuted = Color(0xFFB199BB),
+    borderSubtle = Color(0xFF604269)
+)
+
+val ZeroConSakuraPalette = ZeroConPalette(
+    isDark = false,
+    canvas = Color(0xFFFFF5F7),
+    surface = Color(0xFFFFFFFF),
+    surfaceElevated = Color(0xFFF9E4EB),
+    keyNormal = Color(0xFFFFFFFF),
+    keyModifier = Color(0xFFF9E4EB),
+    primaryAccent = Color(0xFFA72E5B),
+    primaryAccentSoft = Color(0xFFB75479),
+    onAccent = Color(0xFFFFFFFF),
+    readyEmerald = Color(0xFF047857),
+    warningAmber = Color(0xFFB45309),
+    danger = Color(0xFFB91C1C),
+    textPrimary = Color(0xFF442631),
+    textSecondary = Color(0xFF815763),
+    textMuted = Color(0xFF906A75),
+    borderSubtle = Color(0xFFE2B6C5)
+)
+
 /**
  * Mirrors the Windows settings "paper" light palette.
  */
-val ZeroConLightPalette = ZeroConPalette(
+val ZeroConPaperPalette = ZeroConPalette(
     isDark = false,
     canvas = Color(0xFFF7F5EF),
     surface = Color(0xFFFFFEFA),
@@ -91,16 +179,46 @@ val ZeroConLightPalette = ZeroConPalette(
     borderSubtle = Color(0xFFD3CBB7)
 )
 
-@Composable
-fun rememberZeroConPalette(themeMode: String = "system"): ZeroConPalette {
-    val systemDark = isSystemInDarkTheme()
-    val useDark = when (themeMode) {
-        "dark" -> true
-        "light" -> false
-        else -> systemDark
-    }
-    return if (useDark) ZeroConDarkPalette else ZeroConLightPalette
+/** Kept for callers that only need the default dark palette. */
+val ZeroConDarkPalette = ZeroConDarkBluePalette
+
+/** Kept for callers that only need the default light palette. */
+val ZeroConLightPalette = ZeroConPaperPalette
+
+const val ZERO_CON_THEME_SYSTEM = "system"
+const val ZERO_CON_THEME_DEFAULT_DARK = "dark_blue"
+const val ZERO_CON_THEME_DEFAULT_LIGHT = "paper"
+
+/** Selectable themes in display order: four dark palettes, then two light ones. */
+val ZeroConThemes: List<ZeroConTheme> = listOf(
+    ZeroConTheme("dark_blue", "ダークブルー", ZeroConDarkBluePalette),
+    ZeroConTheme("graphite", "グラファイト", ZeroConGraphitePalette),
+    ZeroConTheme("forest", "フォレスト", ZeroConForestPalette),
+    ZeroConTheme("plum", "プラム", ZeroConPlumPalette),
+    ZeroConTheme("sakura", "サクラ", ZeroConSakuraPalette),
+    ZeroConTheme("paper", "ペーパー", ZeroConPaperPalette)
+)
+
+fun zeroConThemeById(id: String): ZeroConTheme? = ZeroConThemes.firstOrNull { it.id == id }
+
+/**
+ * Resolves the stored theme setting to a concrete theme id.
+ * "system" follows the device dark mode; legacy "dark"/"light" values from
+ * earlier builds map to the default dark and light palettes.
+ */
+fun resolveZeroConThemeId(themeMode: String, systemDark: Boolean): String = when (themeMode) {
+    ZERO_CON_THEME_SYSTEM, "" -> if (systemDark) ZERO_CON_THEME_DEFAULT_DARK else ZERO_CON_THEME_DEFAULT_LIGHT
+    "dark" -> ZERO_CON_THEME_DEFAULT_DARK
+    "light" -> ZERO_CON_THEME_DEFAULT_LIGHT
+    else -> if (zeroConThemeById(themeMode) != null) themeMode else ZERO_CON_THEME_DEFAULT_DARK
 }
+
+fun resolveZeroConTheme(themeMode: String, systemDark: Boolean): ZeroConTheme =
+    zeroConThemeById(resolveZeroConThemeId(themeMode, systemDark)) ?: ZeroConThemes.first()
+
+@Composable
+fun rememberZeroConPalette(themeMode: String = ZERO_CON_THEME_SYSTEM): ZeroConPalette =
+    resolveZeroConTheme(themeMode, isSystemInDarkTheme()).palette
 
 fun ZeroConPalette.toColorScheme(): ColorScheme = if (isDark) {
     darkColorScheme(

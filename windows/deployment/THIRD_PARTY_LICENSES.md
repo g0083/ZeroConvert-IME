@@ -73,7 +73,7 @@ copies or substantial portions of the Software.
   - azooKey Dictionary Storage (Apache License 2.0 / BSD-3-Clause)
   - Google Mozc Dictionary Data (BSD 3-Clause License, Copyright 2010-2018 Google Inc.)
   - IPAdic (`mecab-ipadic`, ICOT / NAIST license)
-  - Unicode Emoji Data (`emoji_all_E15.1.txt`, Unicode License v3)
+  - Unicode Emoji Data (`emoji_all_E15.1.txt`, `emoji_catalog.tsv`, Unicode License v3)
   - Keyboard Typo Dictionary & Rewrite Data (see `keyboard-typo-dictionary-NOTICE.md` and `keyboard-typo-rewrite-NOTICE.md`)
 
 

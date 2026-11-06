@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -187,6 +188,11 @@ fun MainScreen(
     var isFlickOnly by remember {
         mutableStateOf(
             imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_FLICK_ONLY, true)
+        )
+    }
+    var isQwertyNumberRow by remember {
+        mutableStateOf(
+            imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, true)
         )
     }
     var keyboardKeyHeight by remember {
@@ -471,7 +477,15 @@ fun MainScreen(
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
                 val previewScale = (maxWidth / realKeyboardWidth).coerceAtMost(1f)
-                val realKeyboardHeight = (keyboardKeyHeight * 5 + 35).dp
+                // Mirror the IME: the two bars above the keys plus the key area, whose row
+                // count drops when the QWERTY number row is hidden. Reserving the bars keeps
+                // the bottom row inside the frame instead of clipping it.
+                val previewRowCount = if (
+                    japaneseLayout == JapaneseInputLayout.QWERTY.name && !isQwertyNumberRow
+                ) 4 else 5
+                val previewBarHeight = (keyboardKeyHeight * (48f / 46f)).dp
+                val realKeyboardHeight = previewBarHeight * 2 +
+                    keyboardContentHeight(keyboardKeyHeight.dp, previewRowCount)
                 val density = LocalDensity.current
                 Box(
                     modifier = Modifier
@@ -483,49 +497,75 @@ fun MainScreen(
                     Layout(
                         content = {
                             CompositionLocalProvider(LocalKeyboardKeyHeight provides keyboardKeyHeight.dp) {
-                                Box(
-                                    modifier = Modifier
-                                        .requiredWidth(realKeyboardWidth)
-                                        .height(realKeyboardHeight)
-                                        .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
-                                ) {
-                                    if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
-                                        Japanese12KeyFlickLayout(
-                                            keyBgColor = palette.keyNormal,
-                                            actionKeyBg = palette.keyModifier,
-                                            textColor = palette.textPrimary,
+                                Column(Modifier.requiredWidth(realKeyboardWidth).height(realKeyboardHeight)) {
+                                    KeyboardAssistBar(
+                                        reading = "",
+                                        assist = null,
+                                        correctionApplied = false,
+                                        palette = palette,
+                                        onAdopt = {},
+                                        onUndo = {}
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(KeyboardBarHeight)
+                                            .background(palette.surface)
+                                    ) {
+                                        HorizontalCandidateStrip(
+                                            reading = "",
+                                            candidates = listOf(Candidate("候補", "")),
                                             palette = palette,
-                                            rowHeight = (keyboardKeyHeight * (52f / 46f)).dp,
-                                            isFlickOnly = isFlickOnly,
-                                            onKanaInput = {},
-                                            onReplaceLastKana = {},
-                                            onToggleDakuten = {},
-                                            onDelete = {},
-                                            onSpace = {},
-                                            onEnter = {},
-                                            onCycleMode = {},
-                                            onOpenSymbols = {},
-                                            onOpenEmoji = {},
-                                            onCursorLeft = {},
-                                            onCursorRight = {}
+                                            onSelect = {},
+                                            modifier = Modifier.fillMaxSize()
                                         )
-                                    } else {
-                                        JapaneseQwertyLayout(
-                                            isShifted = false,
-                                            keyBgColor = palette.keyNormal,
-                                            actionKeyBg = palette.keyModifier,
-                                            textColor = palette.textPrimary,
-                                            onKeyPress = {},
-                                            onShiftToggle = {},
-                                            onDelete = {},
-                                            onSpace = {},
-                                            onEnter = {},
-                                            onCycleMode = {},
-                                            onOpenEmoji = {},
-                                            isComposing = false,
-                                            onCursorLeft = {},
-                                            onCursorRight = {}
-                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)
+                                            .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
+                                    ) {
+                                        if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
+                                            Japanese12KeyFlickLayout(
+                                                keyBgColor = palette.keyNormal,
+                                                actionKeyBg = palette.keyModifier,
+                                                textColor = palette.textPrimary,
+                                                palette = palette,
+                                                rowHeight = (keyboardKeyHeight * (52f / 46f)).dp,
+                                                isFlickOnly = isFlickOnly,
+                                                onKanaInput = {},
+                                                onReplaceLastKana = {},
+                                                onToggleDakuten = {},
+                                                onDelete = {},
+                                                onSpace = {},
+                                                onEnter = {},
+                                                onCycleMode = {},
+                                                onOpenSymbols = {},
+                                                onOpenEmoji = {},
+                                                onCursorLeft = {},
+                                                onCursorRight = {}
+                                            )
+                                        } else {
+                                            JapaneseQwertyLayout(
+                                                isShifted = false,
+                                                keyBgColor = palette.keyNormal,
+                                                actionKeyBg = palette.keyModifier,
+                                                textColor = palette.textPrimary,
+                                                palette = palette,
+                                                onKeyPress = {},
+                                                onShiftToggle = {},
+                                                onDelete = {},
+                                                onSpace = {},
+                                                onEnter = {},
+                                                onCycleMode = {},
+                                                onOpenEmoji = {},
+                                                isComposing = false,
+                                                onCursorLeft = {},
+                                                onCursorRight = {},
+                                                showNumberRow = isQwertyNumberRow
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -592,6 +632,21 @@ fun MainScreen(
                     fontSize = 12.sp
                 )
             }
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "上部の数字キー",
+                description = if (isQwertyNumberRow) {
+                    "QWERTY配列の最上段に 1〜0 の数字キーを表示します。"
+                } else {
+                    "数字キーを隠し、最上段の q〜p を上フリックすると 1〜0 を入力します。"
+                },
+                checked = isQwertyNumberRow,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isQwertyNumberRow = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, checked).apply()
+                }
+            )
             SettingsDivider(palette)
             SettingsSwitchRow(
                 title = "フリックのみ",
@@ -1649,17 +1704,12 @@ fun MainScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "Windows版設定画面と同じ配色を、設定画面とIMEキーボードに適用します。",
+                    text = "Windows版設定画面と同じ6種類の配色を、設定画面とIMEキーボードに適用します。",
                     color = palette.textMuted,
                     fontSize = 12.sp,
                     lineHeight = 17.sp
                 )
-                SettingsSegmented(
-                    options = listOf(
-                        "system" to "システム連動",
-                        "dark" to "ダークブルー",
-                        "light" to "ペーパー"
-                    ),
+                SettingsThemePicker(
                     selected = themeMode,
                     palette = palette,
                     onSelected = { mode ->
@@ -1690,7 +1740,7 @@ fun MainScreen(
                         }
                         Column {
                             Text(
-                                text = "プレビュー",
+                                text = "プレビュー — ${resolveZeroConTheme(themeMode, isSystemInDarkTheme()).label}",
                                 color = palette.textPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -1703,12 +1753,6 @@ fun MainScreen(
                         }
                     }
                 }
-                Text(
-                    text = "システム連動では端末のダークモードに合わせて、ダークブルーまたはペーパーを選択します。",
-                    color = palette.textMuted,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp
-                )
             }
         }
     }

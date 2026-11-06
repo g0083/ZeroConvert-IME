@@ -87,6 +87,8 @@ llama.cppはルートのgitlinkで固定し、独自変更は `patches/llama.cpp
 
 組込みモデルは `android/app/src/main/assets/zenz.gguf` と `assets/models/`。現在の選択肢・名前・期待サイズは [ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) を照合する。重みはGit対象外なので、新しいclone/worktreeだけではそろわない。モデルを含むAPKと、端末で実際に選択中の取込モデルも区別する。
 
+絵文字パレットの `assets/emoji_catalog.tsv` は、固定したUnicodeデータ `data/emoji/emoji-test-15.1.txt`（Unicode License v3、CLDR順）と、変換辞書と同じ `assets/emoji_all_E15.1.txt` の日本語キーワードから `node scripts/generate-android-emoji-catalog.mjs` が生成する。1,921件を9カテゴリに分け、肌色5段階を持つ323件は長押しで展開する。`--check` で同期を検査し、生成TSVを手編集しない。Unicodeデータを更新するときは版を上げたファイルを追加し、生成スクリプトの `SOURCE` と `UNICODE_GROUP_ORDER` を合わせて確認する。パレットの解析・検索・最近使用は `EmojiCatalog.kt`、最近使用の保存は `ime_settings` の `emoji_recent`。
+
 翻訳入力のPLaMo 3 Translate 0.8B（Q4_K_M、573,116,288 bytes、SHA-256固定）はAPKに同梱せず、設定画面で同意した場合だけHugging Faceから `files/translation/` へダウンロードする。取得・検証・削除は `translation/TranslationModelManager.kt`、遅延ロードは `translation/TranslationEngine.kt`、JNIは `assist_jni.cpp` のTranslation Runtimeが担当する。モデル・ライセンス・操作・未確認範囲は [Android翻訳入力](investigations/android-translation-input.md) を参照する。端末へ配布する場合は、ダウンロード済みモデルをAPKへ含めない。
 
 モデルを変更したら用途・元ファイル・量子化・サイズ・SHA-256を記録し、選択情報と端末内展開済みモデルが更新されることを確認する。組込みモデルは `BuiltInModelSpec.sha256` とサイズで既存ファイル・展開した一時ファイルを検証してから置き換える。保存済み選択先が管理下の組込みモデルであれば起動時にも検証する。利用者が取り込んだ別パスのモデルを同名だけで上書きしない。

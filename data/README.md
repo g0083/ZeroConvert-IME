@@ -30,3 +30,7 @@ ComposingText DLLへ1キーずつ通す。元グループを分けてから編�
 `add_qwerty_preservation.py`は同じ元グループの正常行だけを再生に加え、raw不明を明記する。
 実ユーザーの打鍵分布や未使用の外部テストとは区別する。ハッシュと結果は
 [QWERTY専用corrector記録](../reports/typo-assist/corrector-qwerty-v4-20261030.md)を参照。
+
+## 絵文字パレットの元データ
+
+`emoji/emoji-test-15.1.txt` は Unicode の `emoji-test.txt`（15.1、Unicode License v3）をそのまま固定したもの。Androidの絵文字パレットはこのファイルと `android/app/src/main/assets/emoji_all_E15.1.txt` の日本語キーワードから `node scripts/generate-android-emoji-catalog.mjs` で生成する。生成物は `android/app/src/main/assets/emoji_catalog.tsv` で、`--check` により同期を検査する。手で編集せず、版を上げるときは新しいファイルを追加して生成スクリプトの参照先を更新する。
