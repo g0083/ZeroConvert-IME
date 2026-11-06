@@ -90,10 +90,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_AUTO_COMMIT_ENABLED = "auto_commit_enabled"
         const val KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE = "auto_commit_rewind_on_backspace"
         const val KEY_AI_PROFILE = "ai_profile"
-        const val KEY_THEME_MODE = "theme_mode" // "system", "dark", "light"
+        // "system" or a ZeroConThemes id ("dark_blue", "graphite", "forest", "plum", "sakura", "paper").
+        // Legacy "dark"/"light" values are still resolved by resolveZeroConThemeId.
+        const val KEY_THEME_MODE = "theme_mode"
         const val KEY_JAPANESE_LAYOUT = "japanese_keyboard_layout" // "FLICK_12KEY", "QWERTY"
         const val KEY_KEY_HEIGHT_DP = "keyboard_key_height_dp" // int dp (40..64), default 46
         const val KEY_FLICK_ONLY = "flick_only" // boolean, default true
+        const val KEY_QWERTY_NUMBER_ROW = "qwerty_number_row" // boolean, default true
         const val KEY_VIBRATION_ENABLED = "vibration_enabled" // boolean, default true
         const val KEY_VIBRATION_DURATION = "vibration_duration" // int ms (5..50), default 15
         const val KEY_EXPERIMENTAL_AI_ASSIST = "experimental_ai_assist" // boolean, default true
@@ -109,6 +112,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_CLIPBOARD_RETENTION_HOURS = "clipboard_retention_hours"
         const val KEY_CLIPBOARD_SUGGESTION_MINUTES = "clipboard_suggestion_minutes"
         const val KEY_SCREENSHOT_CAPTURE = "screenshot_capture_enabled"
+        const val KEY_EMOJI_RECENT = "emoji_recent" // newline separated, most recent first
+        private const val EMOJI_CATALOG_ASSET = "emoji_catalog.tsv"
 
         private const val MIN_READING_LEN_FOR_AUTO_COMMIT = 16
         private const val MIN_TAIL_UNCOMMITTED_READING_LEN = 7
@@ -221,6 +226,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val japaneseLayoutState = mutableStateOf(JapaneseInputLayout.FLICK_12KEY)
     val keyboardKeyHeightState = mutableStateOf(46)
     val isFlickOnlyState = mutableStateOf(true)
+    val isQwertyNumberRowState = mutableStateOf(true)
     val isVibrationEnabledState = mutableStateOf(true)
     val vibrationDurationState = mutableStateOf(15)
     val isAiAssistEnabledState = mutableStateOf(true)
@@ -1097,6 +1103,47 @@ class ZeroConvertInputMethodService : InputMethodService(),
         getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit().putStringSet(KEY_CLIPBOARD_PINNED, pinnedTexts).apply()
     }
 
+    /**
+     * The palette catalog is ~1,900 rows, so it is parsed once off the main thread
+     * and kept in a state object the keyboard reads.
+     */
+    private fun loadEmojiCatalog() {
+        if (emojiCategoriesState.value.isNotEmpty()) return
+        serviceScope.launch {
+            val categories = withContext(Dispatchers.IO) {
+                try {
+                    assets.open(EMOJI_CATALOG_ASSET).bufferedReader(Charsets.UTF_8).useLines { lines ->
+                        EmojiCatalog.parse(lines)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load $EMOJI_CATALOG_ASSET", e)
+                    emptyList()
+                }
+            }
+            emojiCategoriesState.value = categories
+        }
+    }
+
+    private fun loadRecentEmoji() {
+        val stored = getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+            .getString(KEY_EMOJI_RECENT, null)
+        recentEmojiState.value = stored
+            ?.split('\n')
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.take(EmojiCatalog.RECENT_LIMIT)
+            ?: emptyList()
+    }
+
+    /** Records a committed emoji so the palette can offer it under "最近". */
+    fun recordRecentEmoji(emoji: String) {
+        val updated = EmojiCatalog.pushRecent(recentEmojiState.value, emoji)
+        if (updated == recentEmojiState.value) return
+        recentEmojiState.value = updated
+        getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_EMOJI_RECENT, updated.joinToString("\n")).apply()
+    }
+
     fun pasteClipboard(entry: ClipboardEntry, fromSuggestion: Boolean = false) {
         vibrateOnKeyPress()
         if (!composingText.isEmpty) {
@@ -1198,6 +1245,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         prefs.edit().putBoolean(KEY_FLICK_ONLY, enabled).apply()
     }
 
+    fun setQwertyNumberRow(enabled: Boolean) {
+        isQwertyNumberRowState.value = enabled
+        val prefs = getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_QWERTY_NUMBER_ROW, enabled).apply()
+    }
+
     fun vibrateOnKeyPress() {
         if (!isVibrationEnabledState.value) return
         val duration = vibrationDurationState.value.toLong().coerceIn(5L, 60L)
@@ -1257,6 +1310,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             JapaneseInputLayout.FLICK_12KEY
         }
         isFlickOnlyState.value = prefs.getBoolean(KEY_FLICK_ONLY, true)
+        isQwertyNumberRowState.value = prefs.getBoolean(KEY_QWERTY_NUMBER_ROW, true)
         keyboardKeyHeightState.value = prefs.getInt(KEY_KEY_HEIGHT_DP, 46).coerceIn(40, 64)
         isVibrationEnabledState.value = prefs.getBoolean(KEY_VIBRATION_ENABLED, true)
         vibrationDurationState.value = prefs.getInt(KEY_VIBRATION_DURATION, 15)
@@ -1335,6 +1389,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isClipboardSuggestionDismissed = mutableStateOf(false)
     val clipboardRetentionHoursState = mutableStateOf(1)
     val clipboardSuggestionMinutesState = mutableStateOf(ClipboardSuggestionPolicy.DEFAULT_MINUTES)
+    val emojiCategoriesState = mutableStateOf<List<EmojiCategory>>(emptyList())
+    val recentEmojiState = mutableStateOf<List<String>>(emptyList())
 
     // English (alphabet) composing buffer for predictive completion
     var englishComposing: String = ""
@@ -1529,6 +1585,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         reloadPreferences()
 
         com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(this)
+
+        loadRecentEmoji()
+        loadEmojiCatalog()
 
         // Init clipboard
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -2450,6 +2509,24 @@ class ZeroConvertInputMethodService : InputMethodService(),
         vibrateOnKeyPress()
         currentInputConnection?.commitText(text, 1)
         clearInput()
+    }
+
+    /**
+     * Emoji are committed as literal text: they must not enter the reading-based
+     * conversion or learning paths, but they do feed the palette's "最近" row.
+     */
+    fun commitEmoji(emoji: String) {
+        if (emoji.isEmpty()) return
+        if (isTranslationMode() && !committingTranslation) {
+            appendTranslationLiteral(emoji)
+            recordRecentEmoji(emoji)
+            return
+        }
+        vibrateOnKeyPress()
+        if (!composingText.isEmpty) confirmCurrent()
+        currentInputConnection?.commitText(emoji, 1)
+        clearInput()
+        recordRecentEmoji(emoji)
     }
 
     fun handleEnglishChar(ch: Char) {

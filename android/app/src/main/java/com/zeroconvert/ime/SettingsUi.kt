@@ -5,11 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -311,6 +313,125 @@ fun <T> SettingsSegmented(
                 }
             }
         }
+    }
+}
+
+/**
+ * Theme picker: a "system" toggle plus one swatch per palette. Each swatch
+ * previews its own colors so the choice is visible before it is applied.
+ */
+@Composable
+fun SettingsThemePicker(
+    selected: String,
+    palette: ZeroConPalette,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val systemDark = isSystemInDarkTheme()
+    val followsSystem = selected == ZERO_CON_THEME_SYSTEM
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        SettingsSwitchRow(
+            title = "システム連動",
+            description = if (followsSystem) {
+                "端末のダークモードに合わせて、ダークブルーまたはペーパーを使います。"
+            } else {
+                "オフのときは下で選んだテーマを、端末設定に関係なく使います。"
+            },
+            checked = followsSystem,
+            palette = palette,
+            onCheckedChange = { enabled ->
+                onSelected(
+                    if (enabled) ZERO_CON_THEME_SYSTEM
+                    else resolveZeroConThemeId(ZERO_CON_THEME_SYSTEM, systemDark)
+                )
+            }
+        )
+        ZeroConThemes.chunked(3).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                row.forEach { theme ->
+                    ThemeSwatch(
+                        theme = theme,
+                        selected = theme.id == selected,
+                        // In system mode no swatch is chosen, so mark the one the device resolves to.
+                        implied = followsSystem &&
+                            theme.id == resolveZeroConThemeId(selected, systemDark),
+                        palette = palette,
+                        onClick = { onSelected(theme.id) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(3 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeSwatch(
+    theme: ZeroConTheme,
+    selected: Boolean,
+    implied: Boolean,
+    palette: ZeroConPalette,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val swatch = theme.palette
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(swatch.canvas)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = when {
+                    selected -> palette.primaryAccent
+                    implied -> palette.primaryAccent.copy(alpha = 0.55f)
+                    else -> palette.borderSubtle
+                },
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .background(swatch.primaryAccent, RoundedCornerShape(4.dp))
+            )
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .background(swatch.surfaceElevated, RoundedCornerShape(4.dp))
+            )
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .background(swatch.keyNormal, RoundedCornerShape(4.dp))
+            )
+        }
+        Text(
+            text = theme.label,
+            color = swatch.textPrimary,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = if (theme.isDark) "暗色" else "明色",
+            color = swatch.textMuted,
+            fontSize = 10.sp,
+            lineHeight = 13.sp,
+            maxLines = 1
+        )
     }
 }
 
