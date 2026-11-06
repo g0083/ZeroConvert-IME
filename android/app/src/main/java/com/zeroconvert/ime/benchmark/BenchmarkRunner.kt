@@ -11,6 +11,8 @@ import java.io.InputStreamReader
 
 data class BenchmarkItem(
     val id: Int,
+    val subset: String,
+    val subsetLabel: String,
     val category: String,
     val leftContext: String,
     val target: String,
@@ -23,9 +25,11 @@ data class BenchmarkItem(
 data class TypoBenchmarkItem(
     val id: Int,
     val category: String,
+    val typoType: String,
+    val typoTypeLabel: String,
+    val isClean: Boolean,
     val context: String,
-    val rawRomaji: String,
-    val rawInput: String,
+    val inputReading: String,
     val targetReading: String,
     val expected: String,
     val acceptable: List<String>
@@ -41,6 +45,12 @@ data class PredictiveBenchmarkItem(
     val fullSentence: String
 )
 
+enum class BenchmarkKind {
+    CONVERSION,
+    TYPO,
+    PREDICTIVE
+}
+
 data class BenchmarkProgress(
     val current: Int,
     val total: Int,
@@ -50,10 +60,16 @@ data class BenchmarkProgress(
     val avgLatencyMs: Double,
     val lastItemDetail: String,
     val isRunning: Boolean,
-    val isFinished: Boolean
+    val isFinished: Boolean,
+    val kind: BenchmarkKind = BenchmarkKind.CONVERSION,
+    val falsePositiveCount: Int = 0
 )
 
 object BenchmarkRunner {
+
+    const val CONVERSION_DATASET_NAME = "かな漢字変換 480問"
+    const val TYPO_DATASET_NAME = "タイポ補正 300問"
+    const val PREDICTIVE_DATASET_NAME = "先読み 30問"
 
     fun loadDataset(context: Context): List<BenchmarkItem> {
         val list = mutableListOf<BenchmarkItem>()
@@ -66,6 +82,8 @@ object BenchmarkRunner {
                         if (trimmed.isNotEmpty()) {
                             val obj = JSONObject(trimmed)
                             val id = obj.optInt("id", 0)
+                            val subset = obj.optString("subset", "")
+                            val subsetLabel = obj.optString("subset_label", "")
                             val cat = obj.optString("category", "その他")
                             val rawCtx = obj.optString("left_context", "")
                             val ctx = if (rawCtx == "なし") "" else rawCtx
@@ -88,18 +106,18 @@ object BenchmarkRunner {
                                 }
                             }
 
-                            val focus = obj.optString("focus", "")
-
                             list.add(
                                 BenchmarkItem(
                                     id = id,
+                                    subset = subset,
+                                    subsetLabel = subsetLabel,
                                     category = cat,
                                     leftContext = ctx,
                                     target = target,
                                     expected = expected,
                                     acceptable = accList,
                                     forbidden = fbList,
-                                    focus = focus
+                                    focus = obj.optString("focus", "")
                                 )
                             )
                         }
@@ -173,7 +191,7 @@ object BenchmarkRunner {
             }
 
             val avgLat = totalLatency / (i + 1)
-            val detail = "#${item.id} [${item.target}] → 「$result」 ${if (isOk) "✓ OK" else "✗ NG"} (${latency.toLong()}ms)"
+            val detail = "#${item.id} [${item.target}] -> 「$result」 ${if (isOk) "OK" else "NG"} ($reason, ${latency.toLong()}ms)"
 
             onProgress(
                 BenchmarkProgress(
@@ -185,7 +203,8 @@ object BenchmarkRunner {
                     avgLatencyMs = avgLat,
                     lastItemDetail = detail,
                     isRunning = true,
-                    isFinished = false
+                    isFinished = false,
+                    kind = BenchmarkKind.CONVERSION
                 )
             )
         }
@@ -199,9 +218,10 @@ object BenchmarkRunner {
                 homophonePerfect = homophonePerfect,
                 homophoneTotal = homophoneTotal,
                 avgLatencyMs = finalAvg,
-                lastItemDetail = "ベンチマーク完了！ 正解数: $perfectCount / ${items.size}",
+                lastItemDetail = "かな漢字変換ベンチマーク完了: 正解数 $perfectCount / ${items.size}",
                 isRunning = false,
-                isFinished = true
+                isFinished = true,
+                kind = BenchmarkKind.CONVERSION
             )
         )
     }
@@ -216,30 +236,27 @@ object BenchmarkRunner {
                         val trimmed = line.trim()
                         if (trimmed.isNotEmpty()) {
                             val obj = JSONObject(trimmed)
-                            val id = obj.optInt("id", 0)
-                            val cat = obj.optString("category", "")
-                            val ctx = obj.optString("context", "")
-                            val romaji = obj.optString("raw_romaji", "")
-                            val raw = obj.optString("raw_input", "")
-                            val target = obj.optString("target_reading", "")
-                            val expected = obj.optString("expected", "")
-                            val accList = mutableListOf<String>()
+                            val inputReading = obj.optString("input_reading", obj.optString("raw_input", ""))
+                            val typoType = obj.optString("typo_type", obj.optString("category", ""))
+                            val acceptable = mutableListOf<String>()
                             val accArr = obj.optJSONArray("acceptable")
                             if (accArr != null) {
                                 for (i in 0 until accArr.length()) {
-                                    accList.add(accArr.getString(i))
+                                    acceptable.add(accArr.getString(i))
                                 }
                             }
                             list.add(
                                 TypoBenchmarkItem(
-                                    id = id,
-                                    category = cat,
-                                    context = ctx,
-                                    rawRomaji = romaji,
-                                    rawInput = raw,
-                                    targetReading = target,
-                                    expected = expected,
-                                    acceptable = accList
+                                    id = obj.optInt("id", 0),
+                                    category = obj.optString("category", ""),
+                                    typoType = typoType,
+                                    typoTypeLabel = obj.optString("typo_type_label", typoType),
+                                    isClean = obj.optBoolean("is_clean", false),
+                                    context = obj.optString("context", ""),
+                                    inputReading = inputReading,
+                                    targetReading = obj.optString("target_reading", ""),
+                                    expected = obj.optString("expected", ""),
+                                    acceptable = acceptable
                                 )
                             )
                         }
@@ -253,6 +270,22 @@ object BenchmarkRunner {
         return list
     }
 
+    internal fun isTypoCorrectionAccepted(item: TypoBenchmarkItem, correction: String?): Boolean {
+        if (correction == null) return false
+        if (correction == item.expected || item.acceptable.contains(correction)) return true
+        if (correction.replace(" ", "").replace("　", "") == item.expected.replace(" ", "").replace("　", "")) {
+            return true
+        }
+        return correction.contains(item.expected) || item.expected.contains(correction)
+    }
+
+    internal fun isCleanInputPreserved(item: TypoBenchmarkItem, correction: String?): Boolean {
+        if (correction == null) return true
+        if (correction == item.expected || correction == item.inputReading) return true
+        return correction.replace(" ", "").replace("　", "") ==
+            item.inputReading.replace(" ", "").replace("　", "")
+    }
+
     suspend fun runTypoBenchmark(
         context: Context,
         onProgress: (BenchmarkProgress) -> Unit
@@ -260,36 +293,55 @@ object BenchmarkRunner {
         val items = loadTypoDataset(context)
         if (items.isEmpty()) return@withContext
 
-        var perfectCount = 0
+        var successCount = 0
+        var typoTotal = 0
+        var typoCorrect = 0
+        var cleanTotal = 0
+        var cleanPreserved = 0
+        var falsePositiveCount = 0
         var totalLatency = 0.0
 
         for (i in items.indices) {
             val item = items[i]
             val t0 = System.currentTimeMillis()
             val correction = com.zeroconvert.ime.assist.ModelCorrector(ZenzNative.assistSession())
-                .suggest(item.context, item.rawInput, item.rawInput)?.text
+                .suggest(item.context, item.inputReading, item.inputReading)?.text
             val latency = (System.currentTimeMillis() - t0).toDouble()
             totalLatency += latency
 
-            val isMatch = (correction != null && (correction == item.expected || item.acceptable.contains(correction)))
-            if (isMatch) {
-                perfectCount++
+            val isPreserved: Boolean
+            if (item.isClean) {
+                cleanTotal++
+                isPreserved = isCleanInputPreserved(item, correction)
+                if (isPreserved) {
+                    cleanPreserved++
+                } else {
+                    falsePositiveCount++
+                }
+            } else {
+                typoTotal++
+                isPreserved = isTypoCorrectionAccepted(item, correction)
+                if (isPreserved) typoCorrect++
             }
+            if (isPreserved) successCount++
 
             val avgLat = totalLatency / (i + 1)
-            val detail = "#${item.id} [${item.rawInput}] → 「${correction ?: "(なし)"}」 ${if (isMatch) "✓ OK" else "✗ NG (正解: ${item.expected})"} (${latency.toLong()}ms)"
+            val detail = "#${item.id} [${item.inputReading}] -> 「${correction ?: "(なし)"}」 " +
+                "${if (isPreserved) "OK" else "NG"} (${latency.toLong()}ms)"
 
             onProgress(
                 BenchmarkProgress(
                     current = i + 1,
                     total = items.size,
-                    perfectCount = perfectCount,
-                    homophonePerfect = 0,
-                    homophoneTotal = 0,
+                    perfectCount = successCount,
+                    homophonePerfect = cleanPreserved,
+                    homophoneTotal = cleanTotal,
                     avgLatencyMs = avgLat,
                     lastItemDetail = detail,
                     isRunning = true,
-                    isFinished = false
+                    isFinished = false,
+                    kind = BenchmarkKind.TYPO,
+                    falsePositiveCount = falsePositiveCount
                 )
             )
         }
@@ -299,13 +351,16 @@ object BenchmarkRunner {
             BenchmarkProgress(
                 current = items.size,
                 total = items.size,
-                perfectCount = perfectCount,
-                homophonePerfect = 0,
-                homophoneTotal = 0,
+                perfectCount = successCount,
+                homophonePerfect = cleanPreserved,
+                homophoneTotal = cleanTotal,
                 avgLatencyMs = finalAvg,
-                lastItemDetail = "誤入力補正ベンチマーク完了！ 正解数: $perfectCount / ${items.size}",
+                lastItemDetail = "タイポ補正: $typoCorrect / $typoTotal 正解、" +
+                    "正常入力保持: $cleanPreserved / $cleanTotal（誤補正 $falsePositiveCount 件）",
                 isRunning = false,
-                isFinished = true
+                isFinished = true,
+                kind = BenchmarkKind.TYPO,
+                falsePositiveCount = falsePositiveCount
             )
         )
     }
@@ -387,7 +442,8 @@ object BenchmarkRunner {
             }
 
             val avgLat = totalLatency / (i + 1)
-            val detail = "#${item.id} [${item.partialInput}] → 「${pred ?: "(なし)"}」 ${if (isMatch) "✓ OK" else "✗ NG (正解: ${item.expectedContinuation})"} (${latency.toLong()}ms)"
+            val detail = "#${item.id} [${item.partialInput}] -> 「${pred ?: "(なし)"}」 " +
+                "${if (isMatch) "OK" else "NG (正解: ${item.expectedContinuation})"} (${latency.toLong()}ms)"
 
             onProgress(
                 BenchmarkProgress(
@@ -399,7 +455,8 @@ object BenchmarkRunner {
                     avgLatencyMs = avgLat,
                     lastItemDetail = detail,
                     isRunning = true,
-                    isFinished = false
+                    isFinished = false,
+                    kind = BenchmarkKind.PREDICTIVE
                 )
             )
         }
@@ -413,9 +470,10 @@ object BenchmarkRunner {
                 homophonePerfect = 0,
                 homophoneTotal = 0,
                 avgLatencyMs = finalAvg,
-                lastItemDetail = "先読みベンチマーク完了！ 正解数: $perfectCount / ${items.size}",
+                lastItemDetail = "先読みベンチマーク完了: 正解数 $perfectCount / ${items.size}",
                 isRunning = false,
-                isFinished = true
+                isFinished = true,
+                kind = BenchmarkKind.PREDICTIVE
             )
         )
     }

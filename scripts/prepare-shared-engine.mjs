@@ -47,7 +47,7 @@ const pins = JSON.parse(await readFile(path.join(root, 'windows/server-swift/Pac
 // The Windows converter is a local path dependency (Package.swift uses
 // ZEROCON_CONVERTER_SOURCE), so Package.resolved no longer pins it. Keep the
 // Android stage pinned to the converter revision prepared for Windows.
-const LOCAL_CONVERTER_REVISION = 'c228776b0b869f81ee2a1031ff9dbd679f4b3cd9';
+const LOCAL_CONVERTER_REVISION = 'b14b61ccf83c15fdb8679b68baadcac5235ba17b';
 const converterPin = pins.find(pin => pin.identity === 'azookeykanakanjiconverter');
 const converterRevision = converterPin?.state?.revision ?? LOCAL_CONVERTER_REVISION;
 if (execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== converterRevision) {

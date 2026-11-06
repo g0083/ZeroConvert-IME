@@ -18,6 +18,9 @@ internal class MorphologyLearningMemory(
     }
     private data class Key(val surface: String, val lcid: Int, val rcid: Int)
     private val byReading = linkedMapOf<String, LinkedHashMap<Key, Entry>>()
+    // Prefix index over learned readings, rebuilt lazily after mutations (query is a prefix of the key).
+    private val byReadingPrefix = java.util.TreeMap<String, MutableList<Entry>>()
+    private var prefixIndexDirty = true
     val size: Int get() = byReading.values.sumOf { it.size }
     fun all(): List<Entry> = byReading.values.flatMap { it.values }
 
@@ -33,6 +36,7 @@ internal class MorphologyLearningMemory(
 
     private fun put(entry: Entry) {
         byReading.getOrPut(entry.reading) { linkedMapOf() }[Key(entry.surface, entry.lcid, entry.rcid)] = entry
+        prefixIndexDirty = true
     }
 
     /** Bounded substring-index lookup; never scan all history on a keystroke. */
@@ -46,6 +50,24 @@ internal class MorphologyLearningMemory(
             if (found.add(key)) byReading[key]?.values?.let { result.addAll(it) }
         }
         return result
+    }
+
+    /** Learned readings that start with the query (continuation candidates), most frequent first. */
+    fun prefixMatching(reading: String, limit: Int = 8): List<Entry> {
+        if (reading.isEmpty() || reading.length > 512) return emptyList()
+        if (prefixIndexDirty) {
+            byReadingPrefix.clear()
+            for (entries in byReading.values) for (entry in entries.values) {
+                byReadingPrefix.getOrPut(entry.reading) { mutableListOf() }.add(entry)
+            }
+            prefixIndexDirty = false
+        }
+        val endExclusive = reading.dropLast(1) + (reading.last() + 1)
+        return byReadingPrefix.subMap(reading, endExclusive).values
+            .asSequence().flatten()
+            .sortedWith(compareByDescending<Entry> { it.count }.thenByDescending { it.lastUsedDay })
+            .take(limit)
+            .toList()
     }
 
     fun age(today: Int = day()) {
@@ -117,7 +139,10 @@ internal class MorphologyLearningMemory(
         }
     }
 
-    fun clear() = byReading.clear()
+    fun clear() {
+        byReading.clear()
+        prefixIndexDirty = true
+    }
 
     fun writeTo(output: OutputStream) {
         val bytes = ByteArrayOutputStream()

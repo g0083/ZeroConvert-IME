@@ -863,7 +863,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (!setComposingPreview(ic, savedOriginalSurface)) return
         corrections.revert(composingText)
         currentComposingSurface.value = composingText.convertTargetBeforeCursor
-        predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
+        predictedCandidate.value = (savedOriginalCandidates.firstOrNull { !it.isLearningPrediction }
+            ?: savedOriginalCandidates.firstOrNull())?.text.orEmpty()
         lastInferredSurface = savedOriginalInferredReading
         lastInferredResult = savedOriginalResult
         candidatesList.clear()
@@ -1631,6 +1632,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleChar(ch: Char) {
         vibrateOnKeyPress()
         if (isConfirming) return
+        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
 
         if (isTranslationMode() && (ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
@@ -1713,6 +1715,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleKana(kana: String) {
         vibrateOnKeyPress()
         if (isConfirming) return
+        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
 
         if (isTranslationMode() && (kana == "、" || kana == "。" || kana == "？" || kana == "！")) {
@@ -1931,7 +1934,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     if (connection !== currentInputConnection || !requestGate.isCurrent(ticket, requestKey()) || !editorContextIsCurrent()) {
                         return@withContext
                     }
-                    val aiCand = (results.firstOrNull { it.isAI } ?: results.firstOrNull())?.previewForReading(surface).orEmpty()
+                    // Learning-history prefix predictions are candidate-bar only: never inline.
+                    val inlineBase = { results.firstOrNull { !it.isLearningPrediction } ?: results.firstOrNull() }
+                    val aiCand = (results.firstOrNull { it.isAI } ?: inlineBase())?.previewForReading(surface).orEmpty()
                     if (composingText.isAtEndIndex && surface.isNotEmpty() && aiCand.isNotEmpty() &&
                         !hasTrailingIncompleteRomaji(surface) && !corrections.holdsAutoCommit
                     ) {
@@ -1951,7 +1956,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         }
                     }
                     val previousResult = lastInferredResult
-                    val best = results.firstOrNull()?.previewForReading(surface).orEmpty()
+                    val best = inlineBase()?.previewForReading(surface).orEmpty()
                     candidatesList.clear()
                     candidatesList.addAll(results)
                     predictedCandidate.value = best
@@ -2023,6 +2028,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val originalInput = composingText.clone()
 
         val connection = currentInputConnection ?: return
+        var showContinuations = false
         connection.beginBatchEdit()
         try {
             if (!connection.commitText(prefixSurface, 1)) return
@@ -2077,13 +2083,18 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 triggerDebouncedConversion(remainingReading)
             } else {
                 clearInput()
+                showContinuations = true
             }
         } finally { connection.endBatchEdit() }
+        if (showContinuations && connection === currentInputConnection) {
+            showPostCommitContinuations(connection)
+        }
     }
 
     fun handleDelete() {
         vibrateOnKeyPress()
         if (isConfirming) return
+        clearPostCommitCandidates()
         if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
             revertAiAssist()
             return
@@ -2231,6 +2242,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isTranslationMode()) return
         if (conversionRange.active) { adjustConversionRange(-1); return }
         vibrateOnKeyPress()
+        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
             val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
@@ -2247,6 +2259,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isTranslationMode()) return
         if (conversionRange.active) { adjustConversionRange(1); return }
         vibrateOnKeyPress()
+        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
             val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, 1)
@@ -2403,7 +2416,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 withContext(Dispatchers.Main) {
                     if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey()) && editorContextIsCurrent()) {
                         isConfirming = false
-                        val candidate = results.firstOrNull()
+                        // Explicit conversion adopts the regular top candidate, not a learning-history prediction.
+                        val candidate = results.firstOrNull { !it.isLearningPrediction } ?: results.firstOrNull()
                         commitText((candidate?.text ?: currentSurface) + trailingText, committedCandidate = candidate, trailingText = trailingText)
                     }
                 }
@@ -2441,6 +2455,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleEnglishChar(ch: Char) {
         vibrateOnKeyPress()
         if (isConfirming) return
+        clearPostCommitCandidates()
         if (isTranslationMode()) {
             if (ch == ' ') {
                 handleEnglishSpace()
@@ -2591,6 +2606,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val previousLearningBefore = previousLearningSegment
         val learningRevisionBefore = KanaKanjiConverter.learningHistoryRevision
         cancelPendingInference(edited = false)
+        var showContinuations = false
         connection.beginBatchEdit()
         try {
             if (!connection.commitText(text, 1)) return
@@ -2630,8 +2646,36 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 } else clearCandidateList()
             } else {
                 clearInput()
+                showContinuations = true
             }
         } finally { connection.endBatchEdit() }
+        if (showContinuations && connection === currentInputConnection) {
+            showPostCommitContinuations(connection)
+        }
+    }
+
+    /**
+     * Gboard-style next-word prediction: after a full commit, offer the learned chunk that
+     * follows the committed text. Tapping one inserts it directly (no reading needed).
+     */
+    private fun showPostCommitContinuations(connection: android.view.inputmethod.InputConnection) {
+        if (isTranslationMode() || isSensitiveInput() || !isPredictiveConversionEnabled()) return
+        if (!LearningPolicy.canRead) return
+        val before = connection.getTextBeforeCursor(128, 0)?.toString()?.trimEnd().orEmpty()
+        if (before.isEmpty()) return
+        val continuations = KanaKanjiConverter.postCommitContinuations(before)
+        if (continuations.isEmpty()) return
+        candidatesList.clear()
+        candidatesList.addAll(continuations)
+        predictedCandidate.value = ""
+        lastInferredSurface = ""
+        lastInferredResult = ""
+    }
+
+    private fun clearPostCommitCandidates() {
+        if (composingText.isEmpty && englishComposing.isEmpty() && candidatesList.isNotEmpty()) {
+            candidatesList.clear()
+        }
     }
 
     private fun clearCandidateList() {
