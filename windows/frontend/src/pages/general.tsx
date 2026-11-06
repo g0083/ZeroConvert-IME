@@ -406,7 +406,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     <SettingsRow label="Space / Tab まで候補を非表示" htmlFor="candidate-delay">
                         <Switch id="candidate-delay" checked={generalValue.show_candidate_window_after_space} onCheckedChange={(value) => void updateGeneralConfig("show_candidate_window_after_space", value)} />
                     </SettingsRow>
-                    <SettingsRow label="予測変換" description="入力途中の読みから単語・フレーズの予測変換候補を提示します（デフォルト: オフ）" htmlFor="predictive-conversion">
+                    <SettingsRow label="予測変換（入力中の読みから）" description="入力途中の読みから単語・フレーズの予測変換候補を提示します（デフォルト: オフ）。変換後の文の続き予測（先読み）は下のAIアシストで設定します。" htmlFor="predictive-conversion">
                         <Switch id="predictive-conversion" checked={generalValue.predictive_conversion} onCheckedChange={(value) => void updateGeneralConfig("predictive_conversion", value)} />
                     </SettingsRow>
                     <SettingsRow label="ライブ変換中の読みを表示" htmlFor="live-reading">
@@ -437,6 +437,30 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                             </div>
                         </SettingsRow>
                     </div>}
+                </SettingsSection>
+                <SettingsSection title="タイポ補正と先読み">
+                    <SettingsRow label="タイポ補正モデル" description="Nano v4 メインモデルに統合。読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で高速処理します。">
+                        <span className="text-sm font-medium">ZeroCon Model Nano v4（メインモデル統合）</span>
+                    </SettingsRow>
+                    <SettingsRow label="AIアシスト（タイポ補正・文の先読み）" description="Nano v4 メインモデルによる統合タイポ補正と、変換後の文の続きの先読みを有効にします。候補はTabキーで採用できます。入力中の読みに対する辞書予測は上の「予測変換」で設定します。" htmlFor="ai-assist">
+                        <Switch id="ai-assist" checked={generalValue.experimental_ai_assist} onCheckedChange={(value) => void updateGeneralConfig("experimental_ai_assist", value)} />
+                    </SettingsRow>
+                    {generalValue.experimental_ai_assist && (
+                        <>
+                            <SettingsRow label="タイポ補正の実行方法" description="通常は内蔵推論エンジンが自動処理します。LM Studioは開発者向けの接続先です。" htmlFor="ai-engine">
+                                <Select value={generalValue.experimental_ai_engine || "embedded"} onValueChange={(value) => void updateGeneralConfig("experimental_ai_engine", value)}>
+                                    <SelectTrigger id="ai-engine" className="w-64"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="embedded">内蔵推論エンジン (推奨・メインモデル統合)</SelectItem>
+                                        <SelectItem value="lm_studio">LM Studio (検証・デバッグ用)</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </SettingsRow>
+                            <SettingsRow label="先読みモデル" description="漢字変換と同じバックエンドを使用します（既定: Vulkan）。バックエンドは上のZeroCon AI設定から変更できます。">
+                                <span className="text-sm">ZeroCon Model</span>
+                            </SettingsRow>
+                        </>
+                    )}
                 </SettingsSection>
                 <SettingsSection title="変換学習">
                     <SettingsRow label="学習と履歴の使用" htmlFor="learning-mode">
@@ -539,30 +563,6 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                                         <SelectItem value="2b">PLaMo 3 Translate 2B（高精度・別途ダウンロード）</SelectItem>
                                     </SelectContent>
                                 </Select>
-                            </SettingsRow>
-                        </>
-                    )}
-                </SettingsSection>
-                <SettingsSection title="タイポ補正と先読み">
-                    <SettingsRow label="タイポ補正モデル" description="Nano v4 メインモデルに統合。読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で高速処理します。">
-                        <span className="text-sm font-medium">ZeroCon Model Nano v4（メインモデル統合）</span>
-                    </SettingsRow>
-                    <SettingsRow label="タイポ補正・先読みを使う" description="Nano v4 メインモデルによる統合タイポ補正と続きの先読みを有効にします。補正・先読み候補はTabキーで採用できます。" htmlFor="ai-assist">
-                        <Switch id="ai-assist" checked={generalValue.experimental_ai_assist} onCheckedChange={(value) => void updateGeneralConfig("experimental_ai_assist", value)} />
-                    </SettingsRow>
-                    {generalValue.experimental_ai_assist && (
-                        <>
-                            <SettingsRow label="タイポ補正の実行方法" description="通常は内蔵推論エンジンが自動処理します。LM Studioは開発者向けの接続先です。" htmlFor="ai-engine">
-                                <Select value={generalValue.experimental_ai_engine || "embedded"} onValueChange={(value) => void updateGeneralConfig("experimental_ai_engine", value)}>
-                                    <SelectTrigger id="ai-engine" className="w-64"><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="embedded">内蔵推論エンジン (推奨・メインモデル統合)</SelectItem>
-                                        <SelectItem value="lm_studio">LM Studio (検証・デバッグ用)</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </SettingsRow>
-                            <SettingsRow label="先読みモデル" description="漢字変換と同じバックエンドを使用します（既定: Vulkan）。バックエンドは漢字変換の設定から変更できます。">
-                                <span className="text-sm">ZeroCon Model</span>
                             </SettingsRow>
                         </>
                     )}
