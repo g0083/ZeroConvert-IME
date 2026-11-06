@@ -100,6 +100,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_AUTO_TYPO_CORRECTION = "auto_typo_correction" // boolean, default true
         const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction" // Windows default: false
         const val KEY_PREDICTIVE_CONVERSION = "predictive_conversion" // boolean, Android default: true, Windows default: false
+        const val KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE = "english_space_adopts_candidate" // boolean, default false: insert space without adopting top candidate
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
         const val KEY_TRANSLATION_ENABLED = "translation_enabled" // boolean, default false
         const val KEY_TRANSLATION_TARGET = "translation_target" // "auto", "en", "ja"
@@ -226,6 +227,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isAutoTypoCorrectionState = mutableStateOf(true)
     val isDictionaryTypoCorrectionState = mutableStateOf(false)
     val isPredictiveConversionState = mutableStateOf(true)
+    val isEnglishSpaceAdoptsCandidateState = mutableStateOf(false)
     val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
     val aiAssistAdoptedState = mutableStateOf(false)
@@ -1261,6 +1263,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isAutoTypoCorrectionState.value = prefs.getBoolean(KEY_AUTO_TYPO_CORRECTION, true)
         isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, false)
         isPredictiveConversionState.value = prefs.getBoolean(KEY_PREDICTIVE_CONVERSION, true)
+        isEnglishSpaceAdoptsCandidateState.value = prefs.getBoolean(KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
         predictiveModelState.value = "zerocon"
         clipboardSuggestionMinutesState.value = ClipboardSuggestionPolicy.normalizeMinutes(
@@ -2517,7 +2520,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return
         }
         if (englishComposing.isNotEmpty()) {
-            commitEnglishBuffer()
+            commitEnglishBuffer(useTopCandidate = isEnglishSpaceAdoptsCandidateState.value)
         }
         currentInputConnection?.commitText(" ", 1)
     }

@@ -178,6 +178,9 @@ fun MainScreen(
     var isPredictiveConversion by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, true))
     }
+    var isEnglishSpaceAdoptsCandidate by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false))
+    }
     var learningMode by remember { mutableStateOf(LearningMode.from(imePrefs.getString(LearningPolicy.KEY, null))) }
     var learningMenuExpanded by remember { mutableStateOf(false) }
     var isAutoTypoCorrection by remember {
@@ -904,6 +907,26 @@ fun MainScreen(
                     Switch(checked = isPredictiveConversion, onCheckedChange = { checked ->
                         isPredictiveConversion = checked
                         imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, checked).apply()
+                    })
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("英字入力のスペースで先頭候補を採用", color = palette.textPrimary, fontSize = 13.sp)
+                        Text(if (isEnglishSpaceAdoptsCandidate) {
+                            "【ON】英字モードでスペースを押すと、変換候補の先頭を確定してからスペースを入力します。"
+                        } else {
+                            "【OFF (デフォルト)】英字モードでスペースを押すと、入力したままの文字を確定してスペースを入力します。変換候補は採用しません。"
+                        },
+                            color = palette.textSecondary, fontSize = 11.sp)
+                    }
+                    Switch(checked = isEnglishSpaceAdoptsCandidate, onCheckedChange = { checked ->
+                        isEnglishSpaceAdoptsCandidate = checked
+                        imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, checked).apply()
                     })
                 }
 

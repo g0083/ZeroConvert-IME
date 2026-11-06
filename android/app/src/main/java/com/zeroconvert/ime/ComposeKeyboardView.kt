@@ -266,25 +266,6 @@ fun KeyboardRootView(
                         }
                     }
 
-                    // Clipboard toggle button
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
-                            .clickable {
-                                activeTab = if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                        painter = painterResource(R.drawable.ic_clipboard),
-                        contentDescription = "Clipboard",
-                        tint = if (activeTab == KeyboardTab.CLIPBOARD) accentColor else palette.textSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
                     if (imeService.translationEnabledState.value) {
                         Box(
                             modifier = Modifier
@@ -301,7 +282,26 @@ fun KeyboardRootView(
                             )
                         }
                     }
-            } else {
+
+                    // Clipboard toggle button
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
+                            .clickable {
+                                activeTab = if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_clipboard),
+                            contentDescription = "Clipboard",
+                            tint = if (activeTab == KeyboardTab.CLIPBOARD) accentColor else palette.textSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else {
                 // While converting (candidates are displayed), hide layout switcher & clipboard to maximize candidate space!
                 // Keep only the translation toggle and the Down chevron.
                 if (imeService.translationEnabledState.value) {
