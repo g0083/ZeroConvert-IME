@@ -43,6 +43,7 @@ pub enum WindowAction {
         reading: Option<String>,
         candidate_list_visible: Option<bool>,
         reading_vertical_adjustment: Option<i32>,
+        engine_hwnd: Option<u64>,
     },
 }
 
@@ -161,6 +162,7 @@ impl WindowServiceProto for WindowService {
             reading: request.reading,
             candidate_list_visible: request.candidate_list_visible,
             reading_vertical_adjustment: request.reading_vertical_adjustment,
+            engine_hwnd: request.engine_hwnd,
         })
         .await
     }
@@ -244,6 +246,7 @@ mod tests {
                 reading: Some("こうほ".to_string()),
                 candidate_list_visible: Some(true),
                 reading_vertical_adjustment: Some(4),
+                engine_hwnd: Some(0x1234),
             }))
             .await
             .expect("batched update should be sent");
@@ -258,6 +261,7 @@ mod tests {
                 reading,
                 candidate_list_visible,
                 reading_vertical_adjustment,
+                engine_hwnd,
             } => {
                 assert_eq!(visible, Some(true));
                 let position = position.expect("position should be included");
@@ -271,6 +275,7 @@ mod tests {
                 assert_eq!(reading, Some("こうほ".to_string()));
                 assert_eq!(candidate_list_visible, Some(true));
                 assert_eq!(reading_vertical_adjustment, Some(4));
+                assert_eq!(engine_hwnd, Some(0x1234));
             }
             action => panic!("unexpected action: {action:?}"),
         }

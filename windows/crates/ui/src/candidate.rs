@@ -224,6 +224,7 @@ fn candidate_html() -> String {
                         const li = document.createElement('li');
                         const text = document.createElement('span');
                         li.className = 'candidate-item';
+                        li.dataset.index = String(index);
                         text.className = 'candidate-text';
                         text.textContent = currentCandidates[index];
                         text.title = currentCandidates[index];
@@ -416,6 +417,20 @@ fn candidate_html() -> String {
                         if (candidateList) {
                             candidateList.addEventListener('scroll', scheduleRenderCandidateRange, {
                                 passive: true,
+                            });
+                            candidateList.addEventListener('click', (event) => {
+                                const item = event.target.closest('li.candidate-item');
+                                if (!item) {
+                                    return;
+                                }
+                                const index = Number(item.dataset.index);
+                                if (!Number.isInteger(index) || index < 0) {
+                                    return;
+                                }
+                                window.ipc.postMessage(JSON.stringify({
+                                    type: 'select',
+                                    index,
+                                }));
                             });
                         }
                         adjustWindowSize();

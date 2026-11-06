@@ -49,6 +49,10 @@ pub const PREDICTION_SERVER_PORT: u16 = 18091;
 pub const TRANSLATION_SERVER_PORT: u16 = 18092;
 pub mod runtime_assets;
 
+/// WM_APP range message the candidate UI posts to the engine message window
+/// when the user clicks a candidate. wParam carries the zero-based index.
+pub const ENGINE_CANDIDATE_SELECT_MESSAGE: u32 = 0x8000 + 0x4B1;
+
 #[cfg(windows)]
 pub mod model_update;
 pub mod translation_http;

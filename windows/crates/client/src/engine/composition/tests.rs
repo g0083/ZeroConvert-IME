@@ -4141,3 +4141,83 @@ fn test_ui_show_pill() {
     println!("update_candidate_window_with_reading result: {:?}", res);
     std::thread::sleep(std::time::Duration::from_millis(500));
 }
+
+#[test]
+fn external_candidate_selection_requires_active_composition_with_candidates() {
+    let mut composition = Composition::default();
+    assert!(!TextServiceFactory::external_candidate_selection_allowed(
+        &composition
+    ));
+
+    composition.state = CompositionState::Previewing;
+    assert!(!TextServiceFactory::external_candidate_selection_allowed(
+        &composition
+    ));
+
+    composition.candidates = candidates(&["変換", "返還"], &[], "へんかん", &[3, 3]);
+    assert!(TextServiceFactory::external_candidate_selection_allowed(
+        &composition
+    ));
+
+    composition.state = CompositionState::Composing;
+    assert!(TextServiceFactory::external_candidate_selection_allowed(
+        &composition
+    ));
+}
+
+#[test]
+fn apply_set_selection_number_selects_the_requested_candidate() {
+    let mut preview = "変換".to_string();
+    let mut suffix = String::new();
+    let mut raw_input = "henkannno".to_string();
+    let mut raw_hiragana = "へんかんの".to_string();
+    let mut fixed_prefix = String::new();
+    let mut corresponding_count = 3;
+    let mut selection_index = 0;
+    let mut candidates = candidates(
+        &["変換", "返還", "変換之"],
+        &["", "", ""],
+        "へんかんの",
+        &[3, 3, 4],
+    );
+    let mut clause_snapshots = Vec::new();
+    let mut future_clause_snapshots = Vec::new();
+    let mut current_clause_is_split_derived = false;
+    let mut current_clause_is_direct_split_remainder = false;
+    let mut current_clause_has_split_left_neighbor = false;
+    let mut current_clause_split_group_id = None;
+    let mut current_clause_consumed_prefix_restore = None;
+    let mut current_clause_right_boundary_displacement = 0;
+    let mut current_clause_right_boundary_origin = None;
+    let mut current_clause_remainder_origin = None;
+    let mut next_split_group_id = 1;
+
+    let mut state = ClauseActionStateMut {
+        preview: &mut preview,
+        suffix: &mut suffix,
+        raw_input: &mut raw_input,
+        raw_hiragana: &mut raw_hiragana,
+        fixed_prefix: &mut fixed_prefix,
+        corresponding_count: &mut corresponding_count,
+        selection_index: &mut selection_index,
+        candidates: &mut candidates,
+        clause_snapshots: &mut clause_snapshots,
+        future_clause_snapshots: &mut future_clause_snapshots,
+        current_clause_is_split_derived: &mut current_clause_is_split_derived,
+        current_clause_is_direct_split_remainder: &mut current_clause_is_direct_split_remainder,
+        current_clause_is_pending_remainder: &mut false,
+        current_clause_has_split_left_neighbor: &mut current_clause_has_split_left_neighbor,
+        current_clause_right_boundary_displacement: &mut current_clause_right_boundary_displacement,
+        current_clause_right_boundary_origin: &mut current_clause_right_boundary_origin,
+        current_clause_split_group_id: &mut current_clause_split_group_id,
+        current_clause_consumed_prefix_restore: &mut current_clause_consumed_prefix_restore,
+        current_clause_remainder_origin: &mut current_clause_remainder_origin,
+        next_split_group_id: &mut next_split_group_id,
+    };
+
+    TextServiceFactory::apply_set_selection(&mut state, &SetSelectionType::Number(1));
+
+    assert_eq!(selection_index, 1);
+    assert_eq!(preview, "返還");
+    assert_eq!(corresponding_count, 3);
+}

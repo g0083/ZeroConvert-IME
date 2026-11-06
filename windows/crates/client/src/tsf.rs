@@ -1,5 +1,6 @@
 pub(super) mod display_attribute;
 pub(super) mod edit_session;
+pub(super) mod engine_message_window;
 pub(super) mod factory;
 pub(super) mod function_provider;
 pub(super) mod key_event_sink;

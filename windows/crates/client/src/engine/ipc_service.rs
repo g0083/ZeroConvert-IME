@@ -2758,6 +2758,7 @@ impl IPCService {
                 reading: reading.map(ToString::to_string),
                 candidate_list_visible,
                 reading_vertical_adjustment,
+                engine_hwnd: crate::tsf::engine_message_window::current_thread_engine_hwnd(),
             });
             request.set_timeout(UI_RPC_DEADLINE);
             self.with_window_client_delivery(
