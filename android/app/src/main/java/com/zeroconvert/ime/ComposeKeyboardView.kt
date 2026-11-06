@@ -1963,7 +1963,7 @@ fun SymbolsPanel(
                 ) {
                     Text(
                         text = cat.title,
-                        color = if (isSelected) Color.White else textColor,
+                        color = if (isSelected) palette.onAccent else textColor,
                         fontSize = 13.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                     )

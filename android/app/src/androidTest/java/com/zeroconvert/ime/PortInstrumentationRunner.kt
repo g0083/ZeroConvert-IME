@@ -32,6 +32,7 @@ class PortInstrumentationRunner : Instrumentation() {
     private var keyboardUiOnly = false
     private var clipboardUiOnly = false
     private var pendingRomajiOnly = false
+    private var learningChainOnly = false
     private var performanceArguments: Bundle? = null
     private fun findNode(matches: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
@@ -120,12 +121,18 @@ class PortInstrumentationRunner : Instrumentation() {
         keyboardUiOnly = arguments?.getString("keyboardUiOnly") == "true"
         clipboardUiOnly = arguments?.getString("clipboardUiOnly") == "true"
         pendingRomajiOnly = arguments?.getString("pendingRomajiOnly") == "true"
+        learningChainOnly = arguments?.getString("learningChainOnly") == "true"
         performanceArguments = arguments?.takeIf { it.getString("enginePerformance") == "true" }
         start()
     }
     override fun onStart() {
         if (pendingRomajiOnly) {
             val result = LearningPolicy.withoutWrites { PendingRomajiRegression(this).run() }
+            finish(result.first, result.second)
+            return
+        }
+        if (learningChainOnly) {
+            val result = LearningPolicy.withoutWrites { LearningChainRegression(this).run() }
             finish(result.first, result.second)
             return
         }

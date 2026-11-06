@@ -90,6 +90,26 @@ class MorphologyLearningMemoryTest {
         assertTrue(memory.matching("エエ").isEmpty())
     }
 
+    @Test fun prefixMatchingFindsReadingsThatContinueFromTheTypedPrefix() {
+        val memory = MorphologyLearningMemory(alphabet, day = { 100 })
+        // 今日 + は + 天気が + いい: clause bigrams キョウハ / ハテンキガ / テンキガイイ and the whole selection.
+        memory.record(listOf(
+            word("キョウ", "今日", 100, 101),
+            word("ハ", "は", 600, 601),
+            word("テンキガ", "天気が", 700, 701),
+            word("イイ", "いい", 562, 563)
+        ))
+        val fromHa = memory.prefixMatching("ハ")
+        assertTrue(fromHa.any { it.reading == "ハテンキガ" && it.surface == "は天気が" })
+        assertTrue(memory.prefixMatching("キョ").any { it.reading == "キョウハ" && it.surface == "今日は" })
+        assertTrue(memory.prefixMatching("テン").any { it.reading == "テンキガイイ" && it.surface == "天気がいい" })
+        assertTrue(memory.prefixMatching("ヌ").isEmpty())
+        // Frequent continuations rank first: キョウバン (count 3) beats キョウハ (count 1).
+        repeat(3) { memory.record(listOf(word("キョウ", "今日", 100, 101), word("バン", "晩", 562, 563))) }
+        val order = memory.prefixMatching("キョ").map { it.reading }
+        assertTrue(order.indexOf("キョウバン") < order.indexOf("キョウハ"))
+    }
+
     @Test fun binaryRoundTripPreservesMorphologyAndCorruptionCannotReplaceLiveData() {
         val memory = MorphologyLearningMemory(alphabet, day = { 100 })
         memory.record(listOf(word("ネコ", "猫", 1288, 1289, 12), word("イヌ", "犬")))

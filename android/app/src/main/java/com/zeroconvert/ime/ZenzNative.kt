@@ -15,7 +15,8 @@ data class Candidate(
     val segments: List<DictionarySegment> = emptyList(),
     val learningAllowed: Boolean = true,
     val engineCandidateId: String = "",
-    val engineConsumedReading: Int? = null
+    val engineConsumedReading: Int? = null,
+    val isLearningPrediction: Boolean = false
 ) {
     fun previewForReading(reading: String): String = text + engineConsumedReading
         ?.takeIf { it in 1..reading.length }?.let { reading.substring(it) }.orEmpty()

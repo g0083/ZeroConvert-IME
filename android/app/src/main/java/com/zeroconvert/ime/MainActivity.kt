@@ -3,39 +3,72 @@ package com.zeroconvert.ime
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Bundle
 import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.zeroconvert.ime.benchmark.BenchmarkKind
 import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
 import com.zeroconvert.ime.model.ModelInfo
@@ -62,27 +95,25 @@ class MainActivity : ComponentActivity() {
             KanaKanjiConverter.ensureInitialized(applicationContext)
             val ok = ZenzNative.init(applicationContext)
             modelStatus.value = if (ok) {
-                "● ${ZenzNative.currentModelName} — 準備完了"
+                "${ZenzNative.currentModelName} — 準備完了"
             } else {
                 "エラー: モデルのロードに失敗しました"
             }
         }
 
         setContent {
-            MaterialTheme {
-                MainScreen(
-                    modelStatus = modelStatus.value,
-                    onModelStatusChange = { modelStatus.value = it },
-                    onEnableKeyboard = {
-                        val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
-                        startActivity(intent)
-                    },
-                    onSelectKeyboard = {
-                        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-                        imm?.showInputMethodPicker()
-                    }
-                )
-            }
+            MainScreen(
+                modelStatus = modelStatus.value,
+                onModelStatusChange = { modelStatus.value = it },
+                onEnableKeyboard = {
+                    val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                    startActivity(intent)
+                },
+                onSelectKeyboard = {
+                    val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.showInputMethodPicker()
+                }
+            )
         }
     }
 }
@@ -94,7 +125,7 @@ fun MainScreen(
     onEnableKeyboard: () -> Unit,
     onSelectKeyboard: () -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val imePrefs = remember {
         context.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
     }
@@ -105,6 +136,7 @@ fun MainScreen(
     val palette = rememberZeroConPalette(themeMode)
 
     var testText by remember { mutableStateOf("") }
+    var selectedTab by rememberSaveable { mutableStateOf("input") }
     val scrollState = rememberScrollState()
 
     fun isKeyboardEnabled(): Boolean =
@@ -135,6 +167,9 @@ fun MainScreen(
             keyboardEnabled = isKeyboardEnabled()
             keyboardSelected = isKeyboardSelected()
         }
+    }
+    LaunchedEffect(selectedTab) {
+        scrollState.scrollTo(0)
     }
     val coroutineScope = rememberCoroutineScope()
 
@@ -194,8 +229,12 @@ fun MainScreen(
         mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_RETENTION_HOURS, 1))
     }
     var clipboardSuggestionMinutes by remember {
-        mutableStateOf(ClipboardSuggestionPolicy.normalizeMinutes(imePrefs.getInt(
-            ZeroConvertInputMethodService.KEY_CLIPBOARD_SUGGESTION_MINUTES, ClipboardSuggestionPolicy.DEFAULT_MINUTES)))
+        mutableStateOf(ClipboardSuggestionPolicy.normalizeMinutes(
+            imePrefs.getInt(
+                ZeroConvertInputMethodService.KEY_CLIPBOARD_SUGGESTION_MINUTES,
+                ClipboardSuggestionPolicy.DEFAULT_MINUTES
+            )
+        ))
     }
     var screenshotCapture by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, true))
@@ -244,27 +283,6 @@ fun MainScreen(
         }
     }
 
-    if (showScreenshotPermissionRationale) {
-        AlertDialog(
-            onDismissRequest = { showScreenshotPermissionRationale = false },
-            title = { Text("写真へのアクセスを許可") },
-            text = {
-                Text(
-                    "スクリーンショットをキーボードのクリップボード履歴へ自動保存するため、写真と動画へのアクセスが必要です。保存対象はスクリーンショットだけです。"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showScreenshotPermissionRationale = false
-                    screenshotPermissionLauncher.launch(screenshotPermission)
-                }) { Text("許可する") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showScreenshotPermissionRationale = false }) { Text("後で") }
-            }
-        )
-    }
-
     var userDictList by remember { mutableStateOf<List<UserDictEntry>>(emptyList()) }
     var newDictReading by remember { mutableStateOf("") }
     var newDictWord by remember { mutableStateOf("") }
@@ -281,873 +299,658 @@ fun MainScreen(
         mutableStateOf<BenchmarkProgress?>(null)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .verticalScroll(scrollState)
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Spacer(modifier = Modifier.height(12.dp))
+    var availableModels by remember {
+        mutableStateOf<List<ModelInfo>>(emptyList())
+    }
+    var isImporting by remember { mutableStateOf(false) }
+    var directTestResult by remember { mutableStateOf("未実行") }
+    LaunchedEffect(context) {
+        availableModels = withContext(Dispatchers.IO) {
+            ModelManager.getAvailableModels(context)
+        }
+    }
 
-        // --- Header: ZeroCon Logo & Brand Identity ---
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            ZeroConLogo(size = 54.dp)
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "ZeroCon Keyboard",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = palette.textPrimary
-                )
-                Text(
-                    text = "ZeroCon AI 搭載 — オンデバイスニューラル日本語入力",
-                    fontSize = 12.sp,
-                    color = palette.textSecondary,
-                    lineHeight = 17.sp
-                )
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isImporting = true
+                val res = ModelManager.importModelFromUri(context, uri)
+                res.onSuccess { newModel: ModelInfo ->
+                    availableModels = ModelManager.getAvailableModels(context)
+                    ModelManager.selectModel(context, newModel)
+                    availableModels = ModelManager.getAvailableModels(context)
+                    onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                }
+                isImporting = false
             }
         }
+    }
 
-        // --- Status Card ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(10.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = modelStatus,
-                    color = if (modelStatus.contains("準備完了")) palette.readyEmerald else palette.warningAmber,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+    fun applyTranslationEnabled(on: Boolean) {
+        if (!on) {
+            translationEnabled = false
+            imePrefs.edit()
+                .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                .apply()
+            return
         }
+        if (translationModelReady || TranslationModelManager.isReady(context)) {
+            translationModelReady = true
+            translationEnabled = true
+            imePrefs.edit()
+                .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, true)
+                .apply()
+        } else if (translationDownloadJob?.isActive != true) {
+            showTranslationDownloadDialog = true
+        }
+    }
 
-        // --- Setup Action Buttons ---
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Button(
-                onClick = onEnableKeyboard,
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent)
-            ) {
-                Text("1. キーボードを有効化", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 2)
+    fun startTranslationDownload() {
+        if (translationDownloadJob?.isActive == true) return
+        translationDownloadError = null
+        translationProgress = TranslationModelManager.Progress(0)
+        translationDownloadJob = coroutineScope.launch {
+            val result = TranslationModelManager.download(context) { progress ->
+                coroutineScope.launch(Dispatchers.Main) { translationProgress = progress }
             }
-
-            if (keyboardEnabled) {
-                Button(
-                    onClick = onSelectKeyboard,
-                    modifier = Modifier.weight(1f).height(52.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                ) {
-                    Text("2. 入力方法を選択", fontSize = 13.sp, color = palette.textPrimary, fontWeight = FontWeight.Medium, maxLines = 2)
+            translationProgress = null
+            result.onSuccess {
+                translationDownloadError = null
+                translationModelReady = true
+                translationEnabled = true
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, true)
+                    .apply()
+                android.widget.Toast.makeText(context, "翻訳モデルを保存しました", android.widget.Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                translationDownloadError = error.message ?: "ダウンロードに失敗しました"
+                translationModelReady = TranslationModelManager.isReady(context)
+                if (!translationModelReady) {
+                    translationEnabled = false
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                        .apply()
                 }
             }
         }
+    }
 
-        if (keyboardSelected) {
-        // --- Input Test Area ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+    @Composable
+    fun SetupSectionContent() {
+        SettingsSection("キーボードの準備", palette) {
+            SettingsRow(
+                title = "キーボードを有効化",
+                description = "Androidの設定でZeroCon Keyboardを有効にします。",
+                palette = palette
+            ) {
+                SettingsPrimaryButton(
+                    text = "開く",
+                    palette = palette,
+                    onClick = onEnableKeyboard
+                )
+            }
+            SettingsDivider(palette)
+            SettingsRow(
+                title = "入力方法を選択",
+                description = if (keyboardEnabled) {
+                    "現在の入力方法をZeroCon Keyboardに切り替えます。"
+                } else {
+                    "先にキーボードを有効化してください。"
+                },
+                palette = palette
+            ) {
+                SettingsSecondaryButton(
+                    text = "選択",
+                    palette = palette,
+                    onClick = onSelectKeyboard,
+                    enabled = keyboardEnabled
+                )
+            }
+        }
+        Text(
+            text = "キーボードを有効化してZeroCon Keyboardを選択すると、入力テストと各設定が利用できます。",
+            color = palette.textMuted,
+            fontSize = 12.sp,
+            lineHeight = 17.sp
+        )
+    }
+
+    @Composable
+    fun InputTabContent() {
+        SettingsSection("入力テスト", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text(
                     text = "入力テストエリア",
-                    fontWeight = FontWeight.SemiBold,
                     color = palette.textPrimary,
-                    fontSize = 15.sp
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = testText,
                     onValueChange = { testText = it },
-                    placeholder = { Text("ここをタップして ZeroCon Keyboard をテスト...", color = palette.textMuted) },
+                    placeholder = { Text("ここをタップして ZeroCon Keyboard をテスト", color = palette.textMuted) },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = palette.textPrimary,
-                        unfocusedTextColor = palette.textPrimary,
-                        focusedBorderColor = palette.primaryAccent,
-                        unfocusedBorderColor = palette.borderSubtle
-                    )
+                    textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+                    colors = settingsTextFieldColors(palette)
                 )
             }
         }
 
-        // --- ZeroCon AI Conversion & Auto-Commit Settings Card ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
+        SettingsSection("キーボード", palette) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "ZeroCon AI 変換・入力設定",
-                    fontWeight = FontWeight.Bold,
-                    color = palette.textPrimary,
-                    fontSize = 15.sp
+                    text = "日本語入力キーボード配列",
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
                 )
+                SettingsSegmented(
+                    options = listOf(
+                        JapaneseInputLayout.FLICK_12KEY.name to "12キー（フリック）",
+                        JapaneseInputLayout.QWERTY.name to "QWERTY（ローマ字）"
+                    ),
+                    selected = japaneseLayout,
+                    palette = palette,
+                    onSelected = { layout ->
+                        japaneseLayout = layout
+                        imePrefs.edit()
+                            .putString(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, layout)
+                            .apply()
+                    }
+                )
+            }
 
-                // 0. Japanese Keyboard Layout (12-Key Flick vs QWERTY)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
+                val previewScale = (maxWidth / realKeyboardWidth).coerceAtMost(1f)
+                val realKeyboardHeight = (keyboardKeyHeight * 5 + 35).dp
+                val density = LocalDensity.current
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(realKeyboardHeight * previewScale)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(palette.canvas)
+                ) {
+                    Layout(
+                        content = {
+                            CompositionLocalProvider(LocalKeyboardKeyHeight provides keyboardKeyHeight.dp) {
+                                Box(
+                                    modifier = Modifier
+                                        .requiredWidth(realKeyboardWidth)
+                                        .height(realKeyboardHeight)
+                                        .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
+                                ) {
+                                    if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
+                                        Japanese12KeyFlickLayout(
+                                            keyBgColor = palette.keyNormal,
+                                            actionKeyBg = palette.keyModifier,
+                                            textColor = palette.textPrimary,
+                                            palette = palette,
+                                            rowHeight = (keyboardKeyHeight * (52f / 46f)).dp,
+                                            isFlickOnly = isFlickOnly,
+                                            onKanaInput = {},
+                                            onReplaceLastKana = {},
+                                            onToggleDakuten = {},
+                                            onDelete = {},
+                                            onSpace = {},
+                                            onEnter = {},
+                                            onCycleMode = {},
+                                            onOpenSymbols = {},
+                                            onOpenEmoji = {},
+                                            onCursorLeft = {},
+                                            onCursorRight = {}
+                                        )
+                                    } else {
+                                        JapaneseQwertyLayout(
+                                            isShifted = false,
+                                            keyBgColor = palette.keyNormal,
+                                            actionKeyBg = palette.keyModifier,
+                                            textColor = palette.textPrimary,
+                                            onKeyPress = {},
+                                            onShiftToggle = {},
+                                            onDelete = {},
+                                            onSpace = {},
+                                            onEnter = {},
+                                            onCycleMode = {},
+                                            onOpenEmoji = {},
+                                            isComposing = false,
+                                            onCursorLeft = {},
+                                            onCursorRight = {}
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    ) { measurables, constraints ->
+                        val realWidthPx = with(density) { realKeyboardWidth.roundToPx() }
+                        val realHeightPx = with(density) { realKeyboardHeight.roundToPx() }
+                        val keyboard = measurables.single().measure(Constraints.fixed(realWidthPx, realHeightPx))
+                        val previewHeightPx = (realHeightPx * previewScale).roundToInt()
+                            .coerceIn(constraints.minHeight, constraints.maxHeight)
+                        layout(constraints.maxWidth, previewHeightPx) {
+                            keyboard.placeWithLayer(0, 0) {
+                                scaleX = previewScale
+                                scaleY = previewScale
+                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                            }
+                        }
+                    }
+                }
+            }
+
+            SettingsDivider(palette)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "日本語入力キーボード配列",
-                        fontWeight = FontWeight.SemiBold,
+                        text = "キーの高さ",
                         color = palette.textPrimary,
-                        fontSize = 13.sp
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val is12Key = (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name)
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (is12Key) palette.primaryAccent else palette.keyModifier,
-                            border = BorderStroke(1.dp, if (is12Key) palette.primaryAccentSoft else palette.borderSubtle),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    japaneseLayout = JapaneseInputLayout.FLICK_12KEY.name
-                                    imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, japaneseLayout).apply()
-                                }
-                        ) {
-                            Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "12キー（フリック）",
-                                    color = if (is12Key) Color.White else palette.textPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (is12Key) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        }
-
-                        val isQwerty = (japaneseLayout == JapaneseInputLayout.QWERTY.name)
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isQwerty) palette.primaryAccent else palette.keyModifier,
-                            border = BorderStroke(1.dp, if (isQwerty) palette.primaryAccentSoft else palette.borderSubtle),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    japaneseLayout = JapaneseInputLayout.QWERTY.name
-                                    imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, japaneseLayout).apply()
-                                }
-                        ) {
-                            Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "QWERTY（ローマ字）",
-                                    color = if (isQwerty) Color.White else palette.textPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (isQwerty) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = "${keyboardKeyHeight} dp",
+                        color = palette.primaryAccentSoft,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                // Render at the device keyboard's real width, then scale the entire
-                // result uniformly. Reflowing it into this narrower settings card would
-                // otherwise change key proportions and clip the flick helper text.
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
-                    val previewScale = (maxWidth / realKeyboardWidth).coerceAtMost(1f)
-                    val realKeyboardHeight = (keyboardKeyHeight * 5 + 35).dp
-                    val density = LocalDensity.current
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(realKeyboardHeight * previewScale)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(palette.canvas)
-                    ) {
-                        Layout(
-                            content = {
-                                CompositionLocalProvider(LocalKeyboardKeyHeight provides keyboardKeyHeight.dp) {
-                                    Box(
-                                        modifier = Modifier
-                                            .requiredWidth(realKeyboardWidth)
-                                            .height(realKeyboardHeight)
-                                            .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
-                                    ) {
-                                if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
-                                    Japanese12KeyFlickLayout(
-                                        keyBgColor = palette.keyNormal,
-                                        actionKeyBg = palette.keyModifier,
-                                        textColor = palette.textPrimary,
-                                        palette = palette,
-                                        rowHeight = (keyboardKeyHeight * (52f / 46f)).dp,
-                                        isFlickOnly = isFlickOnly,
-                                        onKanaInput = {},
-                                        onReplaceLastKana = {},
-                                        onToggleDakuten = {},
-                                        onDelete = {},
-                                        onSpace = {},
-                                        onEnter = {},
-                                        onCycleMode = {},
-                                        onOpenSymbols = {},
-                                        onOpenEmoji = {},
-                                        onCursorLeft = {},
-                                        onCursorRight = {}
-                                    )
-                                } else {
-                                    JapaneseQwertyLayout(
-                                        isShifted = false,
-                                        keyBgColor = palette.keyNormal,
-                                        actionKeyBg = palette.keyModifier,
-                                        textColor = palette.textPrimary,
-                                        onKeyPress = {},
-                                        onShiftToggle = {},
-                                        onDelete = {},
-                                        onSpace = {},
-                                        onEnter = {},
-                                        onCycleMode = {},
-                                        onOpenEmoji = {},
-                                        isComposing = false,
-                                        onCursorLeft = {},
-                                        onCursorRight = {}
-                                    )
-                                }
-                            }
-                                }
-                            }
-                        ) { measurables, constraints ->
-                            val realWidthPx = with(density) { realKeyboardWidth.roundToPx() }
-                            val realHeightPx = with(density) { realKeyboardHeight.roundToPx() }
-                            val keyboard = measurables.single().measure(Constraints.fixed(realWidthPx, realHeightPx))
-                            val previewHeightPx = (realHeightPx * previewScale).roundToInt()
-                                .coerceIn(constraints.minHeight, constraints.maxHeight)
-                            layout(constraints.maxWidth, previewHeightPx) {
-                                keyboard.placeWithLayer(0, 0) {
-                                    scaleX = previewScale
-                                    scaleY = previewScale
-                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
-                                }
-                            }
-                        }
-                    }
+                Slider(
+                    value = keyboardKeyHeight.toFloat(),
+                    onValueChange = { value ->
+                        keyboardKeyHeight = value.toInt().coerceIn(40, 64)
+                        imePrefs.edit()
+                            .putInt(ZeroConvertInputMethodService.KEY_KEY_HEIGHT_DP, keyboardKeyHeight)
+                            .apply()
+                    },
+                    valueRange = 40f..64f,
+                    steps = 23,
+                    colors = SliderDefaults.colors(
+                        thumbColor = palette.primaryAccent,
+                        activeTrackColor = palette.primaryAccent,
+                        inactiveTrackColor = palette.surfaceElevated
+                    )
+                )
+                Text(
+                    text = "QWERTYと12キーのキーボード全体の高さに反映されます。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp
+                )
+            }
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "フリックのみ",
+                description = if (isFlickOnly) {
+                    "連続タップしても文字が進まず、フリックで各段を入力します。"
+                } else {
+                    "連続タップで あ→い→う→え→お とトグル入力します。"
+                },
+                checked = isFlickOnly,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isFlickOnly = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_FLICK_ONLY, checked).apply()
                 }
+            )
+        }
 
-                // 0b. Flick Only Switch
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SettingsSection("操作フィードバック", palette) {
+            SettingsSwitchRow(
+                title = "キー操作バイブレーション",
+                description = "キー入力やフリック、デリート操作時に触覚フィードバックを発生させます。",
+                checked = isVibrationEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isVibrationEnabled = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_VIBRATION_ENABLED, checked).apply()
+                }
+            )
+            if (isVibrationEnabled) {
+                SettingsDivider(palette)
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "キーの高さ",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "${keyboardKeyHeight} dp",
-                            color = palette.primaryAccent,
+                            text = "振動の長さ: ${vibrationDuration}ms",
+                            color = palette.textSecondary,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium
+                        )
+                        SettingsSecondaryButton(
+                            text = "テスト",
+                            palette = palette,
+                            modifier = Modifier.height(32.dp),
+                            onClick = {
+                                try {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                        val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                                        vm?.defaultVibrator?.vibrate(
+                                            android.os.VibrationEffect.createOneShot(
+                                                vibrationDuration.toLong(),
+                                                android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                                            )
+                                        )
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                            v?.vibrate(
+                                                android.os.VibrationEffect.createOneShot(
+                                                    vibrationDuration.toLong(),
+                                                    android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                                                )
+                                            )
+                                        } else {
+                                            @Suppress("DEPRECATION")
+                                            v?.vibrate(vibrationDuration.toLong())
+                                        }
+                                    }
+                                } catch (_: Exception) {
+                                }
+                            }
                         )
                     }
                     Slider(
-                        value = keyboardKeyHeight.toFloat(),
+                        value = vibrationDuration.toFloat(),
                         onValueChange = { value ->
-                            keyboardKeyHeight = value.toInt().coerceIn(40, 64)
+                            vibrationDuration = value.toInt()
                             imePrefs.edit()
-                                .putInt(ZeroConvertInputMethodService.KEY_KEY_HEIGHT_DP, keyboardKeyHeight)
+                                .putInt(ZeroConvertInputMethodService.KEY_VIBRATION_DURATION, vibrationDuration)
                                 .apply()
                         },
-                        valueRange = 40f..64f,
-                        steps = 23,
+                        valueRange = 5f..50f,
+                        steps = 8,
                         colors = SliderDefaults.colors(
                             thumbColor = palette.primaryAccent,
                             activeTrackColor = palette.primaryAccent,
-                            inactiveTrackColor = palette.keyModifier
+                            inactiveTrackColor = palette.surfaceElevated
                         )
                     )
+                }
+            }
+        }
+
+        SettingsSection("入力方法", palette) {
+            SettingsRow(
+                title = "キーボードを有効化",
+                description = "Androidの設定でZeroCon Keyboardを有効にします。",
+                palette = palette
+            ) {
+                SettingsSecondaryButton(
+                    text = "開く",
+                    palette = palette,
+                    onClick = onEnableKeyboard
+                )
+            }
+            SettingsDivider(palette)
+            SettingsRow(
+                title = "入力方法を選択",
+                description = "現在の入力方法をZeroCon Keyboardに切り替えます。",
+                palette = palette
+            ) {
+                SettingsSecondaryButton(
+                    text = "選択",
+                    palette = palette,
+                    onClick = onSelectKeyboard,
+                    enabled = keyboardEnabled
+                )
+            }
+        }
+    }
+
+    @Composable
+    fun ConversionTabContent() {
+        SettingsSection("変換動作", palette) {
+            SettingsSwitchRow(
+                title = "入力中のリアルタイムAI変換",
+                description = if (isRealtimeInline) {
+                    "エディタ上の文字をZeroCon AIの推論結果で置換し、上部に原文を表示します。"
+                } else {
+                    "エディタ上はひらがなを表示し、候補バーから変換を選択します。"
+                },
+                checked = isRealtimeInline,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isRealtimeInline = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_REALTIME_INLINE, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "ストリーミング自動確定",
+                description = "16文字以上の入力中、直近5回のAI推論で変化しなかった先頭の文節を自動確定し、文脈を維持します。",
+                checked = isAutoCommitEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isAutoCommitEnabled = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "自動確定直後のBackspaceで未確定に戻す",
+                description = "自動確定された直後にBackspaceを押した際、確定済みテキストを未確定のひらがなに戻して再変換できるようにします。",
+                checked = isAutoCommitRewind,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isAutoCommitRewind = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "予測変換",
+                description = "入力途中の読みから単語・フレーズの候補を提示します。",
+                checked = isPredictiveConversion,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isPredictiveConversion = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "ローマ字入力の辞書補正",
+                description = "促音・撥音の重複や登録済みの誤入力を通常候補に加えます。フリック入力は対象外です。",
+                checked = isDictionaryTypoCorrection,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isDictionaryTypoCorrection = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "英字入力のスペースで先頭候補を採用",
+                description = if (isEnglishSpaceAdoptsCandidate) {
+                    "英字モードでスペースを押すと、変換候補の先頭を確定してからスペースを入力します。"
+                } else {
+                    "英字モードでスペースを押すと、入力したままの文字を確定してスペースを入力します。"
+                },
+                checked = isEnglishSpaceAdoptsCandidate,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isEnglishSpaceAdoptsCandidate = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, checked)
+                        .apply()
+                }
+            )
+        }
+
+        SettingsSection("AIアシスト", palette) {
+            SettingsSwitchRow(
+                title = "AIアシスト",
+                badge = "試験",
+                description = if (isAiAssistEnabled) {
+                    "誤入力の補正や文脈に応じた先読みを表示します。補正はタップで採用し、確定前ならBackspaceで元に戻せます。"
+                } else {
+                    "補正・先読み候補を表示しません。通常のかな漢字変換は引き続き使用できます。"
+                },
+                checked = isAiAssistEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isAiAssistEnabled = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST, checked)
+                        .apply()
+                }
+            )
+            if (isAiAssistEnabled) {
+                SettingsDivider(palette)
+                SettingsSwitchRow(
+                    title = "根拠のある誤入力を自動補正",
+                    description = "採用・確定の実績や一意な打鍵修正を使用します。確定前なら元に戻せます。",
+                    checked = isAutoTypoCorrection,
+                    palette = palette,
+                    onCheckedChange = { enabled ->
+                        isAutoTypoCorrection = enabled
+                        imePrefs.edit()
+                            .putBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, enabled)
+                            .apply()
+                    }
+                )
+                SettingsNote(
+                    text = "先読みは選択中のZeroCon変換モデルを使用します。誤入力補正は専用Correctorモデルを使用します。",
+                    palette = palette
+                )
+            }
+        }
+
+        SettingsSection("ZeroCon AI プロファイル", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "QWERTYと12キーのキーボード全体の高さに反映されます。",
-                        color = palette.textSecondary,
+                        text = "プロファイル",
+                        color = palette.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "${aiProfile.length} / 25",
+                        color = palette.textMuted,
                         fontSize = 11.sp
                     )
                 }
-
-                Row(
+                Text(
+                    text = "専門分野や書き手のペルソナを指定すると、ZeroCon AIが文脈に合わせて同音異義語を優先変換します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                OutlinedTextField(
+                    value = aiProfile,
+                    onValueChange = { value ->
+                        val capped = value.take(25)
+                        aiProfile = capped
+                        imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_AI_PROFILE, capped).apply()
+                    },
+                    placeholder = { Text("例: ソフトウェアエンジニア", color = palette.textMuted, fontSize = 13.sp) },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text(
-                            text = "フリックのみ（連続同一タップを即時入力）",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isFlickOnly) {
-                                "【ON (推奨)】「ああ」と連続タップしても文字が進まず即時入力されます。フリックで各段を入力します。"
-                            } else {
-                                "【OFF】連続タップで あ→い→う→え→お とケータイ打ち（トグル入力）します。"
-                            },
-                            color = palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Switch(
-                        checked = isFlickOnly,
-                        onCheckedChange = { checked ->
-                            isFlickOnly = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_FLICK_ONLY, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.primaryAccent,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.keyModifier
-                        )
+                    colors = settingsTextFieldColors(palette)
+                )
+            }
+        }
+    }
+
+    @Composable
+    fun DataTabContent() {
+        SettingsSection("学習と履歴", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "学習と履歴の使用",
+                    color = palette.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "選択した変換結果を学習し、次回同じ読みを入力した際の候補順位に反映します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                Box {
+                    SettingsSecondaryButton(
+                        text = learningMode.label,
+                        palette = palette,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { learningMenuExpanded = true }
                     )
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
-
-                // Tap Vibration (Haptic Feedback) Settings
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text(
-                            text = "キー操作バイブレーション（タップ時の振動）",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "キー入力やフリック、デリート操作時に心地よい触覚振動フィードバックを発生させます。",
-                            color = palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Switch(
-                        checked = isVibrationEnabled,
-                        onCheckedChange = { checked ->
-                            isVibrationEnabled = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_VIBRATION_ENABLED, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.primaryAccent,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.keyModifier
-                        )
-                    )
-                }
-
-                if (isVibrationEnabled) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp, bottom = 4.dp)
+                    DropdownMenu(
+                        expanded = learningMenuExpanded,
+                        onDismissRequest = { learningMenuExpanded = false }
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "振動の長さ: ${vibrationDuration}ms",
-                                fontSize = 12.sp,
-                                color = palette.textSecondary,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = palette.primaryAccent.copy(alpha = 0.15f),
-                                modifier = Modifier.clickable {
-                                    try {
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                            val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
-                                            vm?.defaultVibrator?.vibrate(android.os.VibrationEffect.createOneShot(vibrationDuration.toLong(), android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                        } else {
-                                            @Suppress("DEPRECATION")
-                                            val v = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                                v?.vibrate(android.os.VibrationEffect.createOneShot(vibrationDuration.toLong(), android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                            } else {
-                                                @Suppress("DEPRECATION")
-                                                v?.vibrate(vibrationDuration.toLong())
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        // ignore
-                                    }
-                                }
-                            ) {
-                                Text(
-                                    text = "⚡ テスト振動",
-                                    color = palette.primaryAccentSoft,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                        Slider(
-                            value = vibrationDuration.toFloat(),
-                            onValueChange = { value ->
-                                vibrationDuration = value.toInt()
-                                imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_VIBRATION_DURATION, vibrationDuration).apply()
-                            },
-                            valueRange = 5f..50f,
-                            steps = 8,
-                            colors = SliderDefaults.colors(
-                                thumbColor = palette.primaryAccent,
-                                activeTrackColor = palette.primaryAccent,
-                                inactiveTrackColor = palette.keyModifier
-                            )
-                        )
-                    }
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text("学習と履歴の使用", color = palette.textPrimary, fontSize = 13.sp)
-                    Box {
-                        TextButton(onClick = { learningMenuExpanded = true }) { Text(learningMode.label) }
-                        DropdownMenu(expanded = learningMenuExpanded, onDismissRequest = { learningMenuExpanded = false }) {
-                            LearningMode.entries.forEach { mode ->
-                                DropdownMenuItem(text = { Text(mode.label) }, onClick = {
+                        LearningMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.label) },
+                                onClick = {
                                     learningMode = mode
                                     learningMenuExpanded = false
                                     imePrefs.edit().putString(LearningPolicy.KEY, mode.storageValue).apply()
-                                })
-                            }
-                        }
-                    }
-                }
-
-                // 1. Streaming Auto-Commit Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text(
-                            text = "ストリーミング自動確定（長文入力時に固まった文節を自動確定）",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "16文字以上の入力中、直近5回のAI推論で変化しなかった先頭の漢字・カタカナ文節を自動確定し、文脈を維持します。",
-                            color = palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Switch(
-                        checked = isAutoCommitEnabled,
-                        onCheckedChange = { checked ->
-                            isAutoCommitEnabled = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.primaryAccent,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.keyModifier
-                        )
-                    )
-                }
-
-                // 2. Auto-Commit Backspace Rewind Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text(
-                            text = "自動確定直後のBackspaceで未確定に戻す（OFF時は通常通り1文字ずつ削除）",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "自動確定された直後にBackspaceを押した際、確定済みテキストを未確定のひらがなに戻して再変換できるようにします。",
-                            color = palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Switch(
-                        checked = isAutoCommitRewind,
-                        onCheckedChange = { checked ->
-                            isAutoCommitRewind = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.primaryAccent,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.keyModifier
-                        )
-                    )
-                }
-
-                // 3. Realtime Inline Conversion Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text(
-                            text = "入力中のリアルタイムAI変換反映",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isRealtimeInline) {
-                                "【ON】エディタ上の文字をZeroCon AI推論結果でリアルタイム置換し、上部に「原文: 〜」を表示します。"
-                            } else {
-                                "【OFF (推奨)】エディタ上はひらがなを表示し、候補バーからAI変換を選択・スペースで確定します。"
-                            },
-                            color = if (isRealtimeInline) palette.primaryAccentSoft else palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Switch(
-                        checked = isRealtimeInline,
-                        onCheckedChange = { checked ->
-                            isRealtimeInline = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_REALTIME_INLINE, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.primaryAccent,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.keyModifier
-                        )
-                    )
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text("ローマ字入力の辞書補正（実験的）", color = palette.textPrimary, fontSize = 13.sp)
-                        Text("促音・撥音の重複や登録済みの誤入力を通常候補に加えます。フリック入力は対象外です。",
-                            color = palette.textSecondary, fontSize = 11.sp)
-                    }
-                    Switch(checked = isDictionaryTypoCorrection, onCheckedChange = { checked ->
-                        isDictionaryTypoCorrection = checked
-                        imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, checked).apply()
-                    })
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text("予測変換", color = palette.textPrimary, fontSize = 13.sp)
-                        Text("入力途中の読みから単語・フレーズの候補を提示します（デフォルト: オン）。",
-                            color = palette.textSecondary, fontSize = 11.sp)
-                    }
-                    Switch(checked = isPredictiveConversion, onCheckedChange = { checked ->
-                        isPredictiveConversion = checked
-                        imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, checked).apply()
-                    })
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text("英字入力のスペースで先頭候補を採用", color = palette.textPrimary, fontSize = 13.sp)
-                        Text(if (isEnglishSpaceAdoptsCandidate) {
-                            "【ON】英字モードでスペースを押すと、変換候補の先頭を確定してからスペースを入力します。"
-                        } else {
-                            "【OFF (デフォルト)】英字モードでスペースを押すと、入力したままの文字を確定してスペースを入力します。変換候補は採用しません。"
-                        },
-                            color = palette.textSecondary, fontSize = 11.sp)
-                    }
-                    Switch(checked = isEnglishSpaceAdoptsCandidate, onCheckedChange = { checked ->
-                        isEnglishSpaceAdoptsCandidate = checked
-                        imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, checked).apply()
-                    })
-                }
-
-                // 3b. Experimental AI Assist (Typo Correction & Predictive Assist) Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "AIアシスト（誤入力補正💡・先読み🔮）",
-                                fontWeight = FontWeight.SemiBold,
-                                color = palette.textPrimary,
-                                fontSize = 13.sp
+                                }
                             )
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = palette.primaryAccent.copy(alpha = 0.15f)
-                            ) {
-                                Text(
-                                    text = "実験的",
-                                    color = palette.primaryAccentSoft,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isAiAssistEnabled) {
-                                "【ON】誤入力の補正や文脈に応じた先読みを表示します。補正はタップで採用し、確定前ならBackspaceで元に戻せます。先読みはタップで確定します。"
-                            } else {
-                                "【OFF】補正・先読み候補を表示しません。通常のかな漢字変換は引き続き使用できます。"
-                            },
-                            color = if (isAiAssistEnabled) palette.primaryAccentSoft else palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Switch(
-                        checked = isAiAssistEnabled,
-                        onCheckedChange = { checked ->
-                            isAiAssistEnabled = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.primaryAccent,
-                            uncheckedThumbColor = palette.textSecondary,
-                            uncheckedTrackColor = palette.keyModifier
-                        )
-                    )
-                }
-
-                if (isAiAssistEnabled) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("根拠のある誤入力を自動補正", color = palette.textPrimary, fontSize = 13.sp)
-                            Text("採用・確定の実績や一意な打鍵修正を使用します。確定前なら元に戻せます。",
-                                color = palette.textSecondary, fontSize = 11.sp)
-                        }
-                        Switch(checked = isAutoTypoCorrection, onCheckedChange = { enabled ->
-                            isAutoTypoCorrection = enabled
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, enabled).apply()
-                        })
-                    }
-                    Text(
-                        text = "先読みは選択中のZeroCon変換モデルを使用します。誤入力補正は専用Correctorモデルを使用します。",
-                        fontSize = 12.sp,
-                        color = palette.textSecondary,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
-
-                // 4. ZeroCon AI Profile (\uEE03) Setting
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "ZeroCon AI プロファイル (最大25文字)",
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "${aiProfile.length} / 25",
-                            color = palette.textMuted,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Text(
-                        text = "専門分野や書き手のペルソナ（例:「ソフトウェアエンジニア」「医療従事者」）を指定すると、ZeroCon AI が文脈に合わせて同音異義語を優先変換します。",
-                        color = palette.textSecondary,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp
-                    )
-                    OutlinedTextField(
-                        value = aiProfile,
-                        onValueChange = { v ->
-                            val capped = v.take(25)
-                            aiProfile = capped
-                            imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_AI_PROFILE, capped).apply()
-                        },
-                        placeholder = { Text("例: ソフトウェアエンジニア", color = palette.textMuted, fontSize = 13.sp) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = palette.textPrimary,
-                            unfocusedTextColor = palette.textPrimary,
-                            focusedBorderColor = palette.primaryAccent,
-                            unfocusedBorderColor = palette.borderSubtle
-                        )
-                    )
-                }
-
-                // 5. Theme Mode Selector (Obsidian Dark / Platinum Light / System)
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = "カラーテーマ (Obsidian & Platinum Slate)",
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.textPrimary,
-                        fontSize = 13.sp
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val modes = listOf(
-                            "system" to "システム連動",
-                            "dark" to "ダーク",
-                            "light" to "ライト"
-                        )
-                        for ((modeKey, label) in modes) {
-                            val selected = (themeMode == modeKey)
-                            Button(
-                                onClick = {
-                                    themeMode = modeKey
-                                    imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_THEME_MODE, modeKey).apply()
-                                },
-                                modifier = Modifier.weight(1f).height(38.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (selected) palette.primaryAccent else palette.keyModifier
-                                )
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 12.sp,
-                                    color = if (selected) Color.White else palette.textPrimary,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
                         }
                     }
                 }
             }
-        }
-
-        // --- Clipboard Settings Card ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(text = "クリップボード設定", fontWeight = FontWeight.Bold, color = palette.textPrimary, fontSize = 15.sp)
-                ClipboardSuggestionDurationSetting(clipboardSuggestionMinutes, palette) { minutes ->
-                    clipboardSuggestionMinutes = minutes
-                    imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_SUGGESTION_MINUTES, minutes).apply()
-                }
-                Text(text = "履歴の保持時間: ${clipboardRetention}時間", color = palette.textSecondary, fontSize = 12.sp)
-                Slider(
-                    value = clipboardRetention.toFloat(),
-                    onValueChange = { v ->
-                        clipboardRetention = v.toInt().coerceIn(1, 24)
-                        imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_RETENTION_HOURS, clipboardRetention).apply()
-                    },
-                    valueRange = 1f..24f,
-                    steps = 22,
-                    colors = SliderDefaults.colors(thumbColor = palette.primaryAccent, activeTrackColor = palette.primaryAccent, inactiveTrackColor = palette.keyModifier)
+            SettingsDivider(palette)
+            SettingsRow(
+                title = "変換学習メモリ",
+                description = "${learningCount}件 学習済み。候補バーから選択した変換結果を記憶し、次回同じ読みを入力した際に第1候補へ優先表示します。",
+                palette = palette
+            ) {
+                SettingsSecondaryButton(
+                    text = "履歴をリセット",
+                    palette = palette,
+                    onClick = {
+                        coroutineScope.launch {
+                            learningCount = withContext(Dispatchers.IO) {
+                                KanaKanjiConverter.clearLearningMemory(context)
+                                KanaKanjiConverter.getLearningCount(context)
+                            }
+                        }
+                    }
                 )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "スクリーンショットを自動保存", fontWeight = FontWeight.SemiBold, color = palette.textPrimary, fontSize = 13.sp)
-                        Text(text = "新しいスクリーンショットをクリップボード履歴に自動追加します。", color = palette.textSecondary, fontSize = 11.sp)
-                    }
-                    Switch(
-                        checked = screenshotCapture,
-                        onCheckedChange = { checked ->
-                            if (checked && context.checkSelfPermission(screenshotPermission) != PackageManager.PERMISSION_GRANTED) {
-                                showScreenshotPermissionRationale = true
-                            }
-                            screenshotCapture = checked
-                            imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, checked).apply()
-                        },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = palette.primaryAccent, uncheckedThumbColor = palette.textSecondary, uncheckedTrackColor = palette.keyModifier)
-                    )
-                }
             }
         }
 
-        // --- User Dictionary & Learning Memory Card ---
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
+        SettingsSection("ユーザー辞書", palette) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1158,87 +961,64 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "ユーザー辞書 & 変換学習メモリ",
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary,
-                        fontSize = 15.sp
-                    )
-                    Text(
                         text = "登録数: ${userDictList.size}件",
                         color = palette.primaryAccentSoft,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
-
                 Text(
-                    text = "よく使う固有名詞や専門用語を登録すると、候補バーの最上位に表示され、ZeroCon AI の推論ヒントとしても自動活用されます。",
-                    color = palette.textSecondary,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp
+                    text = "よく使う固有名詞や専門用語を登録すると、候補バーの上位に表示されます。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
                 )
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedTextField(
                         value = newDictReading,
                         onValueChange = { newDictReading = it },
-                        placeholder = { Text("よみ (ひらがな)", color = palette.textMuted, fontSize = 12.sp) },
+                        placeholder = { Text("よみ（ひらがな）", color = palette.textMuted, fontSize = 12.sp) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = palette.textPrimary,
-                            unfocusedTextColor = palette.textPrimary,
-                            focusedBorderColor = palette.primaryAccent,
-                            unfocusedBorderColor = palette.borderSubtle
-                        )
+                        colors = settingsTextFieldColors(palette)
                     )
                     OutlinedTextField(
                         value = newDictWord,
                         onValueChange = { newDictWord = it },
-                        placeholder = { Text("単語 (表記)", color = palette.textMuted, fontSize = 12.sp) },
+                        placeholder = { Text("単語（表記）", color = palette.textMuted, fontSize = 12.sp) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = palette.textPrimary,
-                            unfocusedTextColor = palette.textPrimary,
-                            focusedBorderColor = palette.primaryAccent,
-                            unfocusedBorderColor = palette.borderSubtle
-                        )
+                        colors = settingsTextFieldColors(palette)
                     )
-                    Button(
-                        onClick = {
-                            val reading = newDictReading
-                            val word = newDictWord
-                            coroutineScope.launch {
-                                val updated = withContext(Dispatchers.IO) {
-                                    if (KanaKanjiConverter.addUserDictEntry(context, reading, word))
-                                        KanaKanjiConverter.getUserDictionary(context) else null
-                                }
-                                if (updated != null) {
-                                    userDictList = updated
-                                    if (newDictReading == reading && newDictWord == word) {
-                                        newDictReading = ""
-                                        newDictWord = ""
-                                    }
+                }
+                SettingsPrimaryButton(
+                    text = "辞書に追加",
+                    palette = palette,
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    onClick = {
+                        val reading = newDictReading
+                        val word = newDictWord
+                        coroutineScope.launch {
+                            val updated = withContext(Dispatchers.IO) {
+                                if (KanaKanjiConverter.addUserDictEntry(context, reading, word))
+                                    KanaKanjiConverter.getUserDictionary(context) else null
+                            }
+                            if (updated != null) {
+                                userDictList = updated
+                                if (newDictReading == reading && newDictWord == word) {
+                                    newDictReading = ""
+                                    newDictWord = ""
                                 }
                             }
-                        },
-                        modifier = Modifier.height(48.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent),
-                        contentPadding = PaddingValues(horizontal = 14.dp)
-                    ) {
-                        Text("追加", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
                     }
-                }
-
+                )
                 if (userDictList.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (entry in userDictList) {
+                        userDictList.forEach { entry ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1271,185 +1051,116 @@ fun MainScreen(
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
-                                Text(
-                                    text = "削除",
-                                    color = palette.textSecondary,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .clickable {
-                                            coroutineScope.launch {
-                                                userDictList = withContext(Dispatchers.IO) {
-                                                    KanaKanjiConverter.removeUserDictEntry(context, entry)
-                                                    KanaKanjiConverter.getUserDictionary(context)
-                                                }
+                                TextButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            userDictList = withContext(Dispatchers.IO) {
+                                                KanaKanjiConverter.removeUserDictEntry(context, entry)
+                                                KanaKanjiConverter.getUserDictionary(context)
                                             }
                                         }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
+                                    }
+                                ) {
+                                    Text("削除", color = palette.danger, fontSize = 12.sp)
+                                }
                             }
                         }
                     }
                 }
-
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
-
-                // Learning Memory Status & Reset
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text(
-                            text = "変換学習メモリ (${learningCount}件 学習済み)",
-                            color = palette.textPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "候補バーから選択した変換結果を記憶し、次回同じ読みを入力した際に第1候補へ優先表示します。",
-                            color = palette.textSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Button(
-                        onClick = {
-                            coroutineScope.launch {
-                                learningCount = withContext(Dispatchers.IO) {
-                                    KanaKanjiConverter.clearLearningMemory(context)
-                                    KanaKanjiConverter.getLearningCount(context)
-                                }
-                            }
-                        },
-                        modifier = Modifier.height(36.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.keyModifier),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
-                    ) {
-                        Text("履歴リセット", fontSize = 12.sp, color = palette.textPrimary)
-                    }
-                }
             }
         }
 
-        // --- Translation input (experimental) ---
-        fun applyTranslationEnabled(on: Boolean) {
-            if (!on) {
-                translationEnabled = false
+        SettingsSection("クリップボード", palette) {
+            ClipboardSuggestionDurationSetting(clipboardSuggestionMinutes, palette) { minutes ->
+                clipboardSuggestionMinutes = minutes
                 imePrefs.edit()
-                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                    .putInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_SUGGESTION_MINUTES, minutes)
                     .apply()
-                return
             }
-            if (translationModelReady || TranslationModelManager.isReady(context)) {
-                translationModelReady = true
-                translationEnabled = true
-                imePrefs.edit()
-                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, true)
-                    .apply()
-            } else if (translationDownloadJob?.isActive != true) {
-                showTranslationDownloadDialog = true
-            }
-        }
-
-        fun startTranslationDownload() {
-            if (translationDownloadJob?.isActive == true) return
-            translationDownloadError = null
-            translationProgress = TranslationModelManager.Progress(0)
-            translationDownloadJob = coroutineScope.launch {
-                val result = TranslationModelManager.download(context) { progress ->
-                    coroutineScope.launch(Dispatchers.Main) { translationProgress = progress }
-                }
-                translationProgress = null
-                result.onSuccess {
-                    translationDownloadError = null
-                    translationModelReady = true
-                    translationEnabled = true
-                    imePrefs.edit()
-                        .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, true)
-                        .apply()
-                    android.widget.Toast.makeText(context, "翻訳モデルを保存しました", android.widget.Toast.LENGTH_SHORT).show()
-                }.onFailure { error ->
-                    translationDownloadError = error.message ?: "ダウンロードに失敗しました"
-                    translationModelReady = TranslationModelManager.isReady(context)
-                    if (!translationModelReady) {
-                        translationEnabled = false
-                        imePrefs.edit()
-                            .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
-                            .apply()
-                    }
-                }
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
+            SettingsDivider(palette)
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "翻訳入力（試験）",
-                    fontWeight = FontWeight.Bold,
-                    color = palette.textPrimary,
-                    fontSize = 15.sp
-                )
-                Text(
-                    text = "日本語入力の未確定文を翻訳し、Enterで訳文を確定します。選択文字列の翻訳・挿入にも対応します。翻訳は端末内で実行され、入力文は送信されません。",
+                    text = "履歴の保持時間: ${clipboardRetention}時間",
                     color = palette.textSecondary,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "翻訳機能を有効にする",
-                            color = palette.textPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = if (translationModelReady) {
-                                "モデル: ダウンロード済み"
-                            } else {
-                                "モデル: 未ダウンロード"
-                            },
-                            color = if (translationModelReady) palette.readyEmerald else palette.textMuted,
-                            fontSize = 11.sp
-                        )
+                Slider(
+                    value = clipboardRetention.toFloat(),
+                    onValueChange = { value ->
+                        clipboardRetention = value.toInt().coerceIn(1, 24)
+                        imePrefs.edit()
+                            .putInt(ZeroConvertInputMethodService.KEY_CLIPBOARD_RETENTION_HOURS, clipboardRetention)
+                            .apply()
+                    },
+                    valueRange = 1f..24f,
+                    steps = 22,
+                    colors = SliderDefaults.colors(
+                        thumbColor = palette.primaryAccent,
+                        activeTrackColor = palette.primaryAccent,
+                        inactiveTrackColor = palette.surfaceElevated
+                    )
+                )
+            }
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "スクリーンショットを自動保存",
+                description = "新しいスクリーンショットをクリップボード履歴に自動追加します。",
+                checked = screenshotCapture,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    if (checked && context.checkSelfPermission(screenshotPermission) != PackageManager.PERMISSION_GRANTED) {
+                        showScreenshotPermissionRationale = true
                     }
-                    Switch(
-                        checked = translationEnabled,
-                        onCheckedChange = { applyTranslationEnabled(it) }
-                    )
+                    screenshotCapture = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_SCREENSHOT_CAPTURE, checked)
+                        .apply()
                 }
+            )
+        }
+    }
 
-                if (translationEnabled && !translationModelReady) {
-                    Text(
-                        text = "翻訳モデルがありません。下のボタンからダウンロードしてください。",
-                        color = palette.textSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-
-                val downloading = translationProgress
-                if (downloading != null) {
+    @Composable
+    fun TranslationTabContent() {
+        SettingsSection("翻訳入力", palette) {
+            SettingsNote(
+                text = "日本語入力の未確定文を翻訳し、Enterで訳文を確定します。選択文字列の翻訳・挿入にも対応します。翻訳は端末内で実行され、入力文は送信されません。",
+                palette = palette
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "翻訳機能を有効にする",
+                description = if (translationModelReady) {
+                    "モデル: ダウンロード済み"
+                } else {
+                    "モデル: 未ダウンロード"
+                },
+                checked = translationEnabled,
+                palette = palette,
+                onCheckedChange = { applyTranslationEnabled(it) }
+            )
+            if (translationEnabled && !translationModelReady) {
+                SettingsNote(
+                    text = "翻訳モデルがありません。下のボタンからダウンロードしてください。",
+                    palette = palette
+                )
+            }
+            val downloading = translationProgress
+            if (downloading != null) {
+                SettingsDivider(palette)
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     LinearProgressIndicator(
-                        progress = downloading.fraction,
-                        modifier = Modifier.fillMaxWidth()
+                        progress = { downloading.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = palette.primaryAccent,
+                        trackColor = palette.surfaceElevated
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1463,7 +1174,7 @@ fun MainScreen(
                                 "${downloading.downloaded / (1024 * 1024)} / ${downloading.total / (1024 * 1024)} MB"
                             },
                             color = palette.textSecondary,
-                            fontSize = 11.sp
+                            fontSize = 12.sp
                         )
                         TextButton(onClick = {
                             translationDownloadJob?.cancel()
@@ -1475,125 +1186,115 @@ fun MainScreen(
                         }
                     }
                 }
-                translationDownloadError?.let { message ->
-                    Text(text = message, color = palette.textSecondary, fontSize = 11.sp)
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Button(
+            }
+            translationDownloadError?.let { message ->
+                SettingsNote(text = message, palette = palette)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SettingsPrimaryButton(
+                    text = if (translationModelReady) "再ダウンロード" else "モデルをダウンロード",
+                    palette = palette,
+                    onClick = {
+                        if (translationModelReady) {
+                            startTranslationDownload()
+                        } else {
+                            showTranslationDownloadDialog = true
+                        }
+                    },
+                    modifier = Modifier.weight(1f).height(42.dp),
+                    enabled = downloading == null
+                )
+                if (translationModelReady) {
+                    SettingsSecondaryButton(
+                        text = "削除",
+                        palette = palette,
                         onClick = {
-                            if (translationModelReady) {
-                                startTranslationDownload()
-                            } else {
-                                showTranslationDownloadDialog = true
+                            translationEnabled = false
+                            translationModelReady = false
+                            translationTestResult = "未実行"
+                            imePrefs.edit()
+                                .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
+                                .apply()
+                            coroutineScope.launch(Dispatchers.IO) {
+                                TranslationModelManager.delete(context)
                             }
                         },
-                        enabled = downloading == null,
-                        modifier = Modifier.weight(1f).height(42.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent)
-                    ) {
-                        Text(
-                            text = if (translationModelReady) "再ダウンロード" else "翻訳モデルをダウンロード",
-                            fontSize = 12.sp,
-                            color = Color.White
-                        )
-                    }
-                    if (translationModelReady) {
-                        Button(
-                            onClick = {
-                                translationEnabled = false
-                                translationModelReady = false
-                                translationTestResult = "未実行"
-                                imePrefs.edit()
-                                    .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_ENABLED, false)
-                                    .apply()
-                                coroutineScope.launch(Dispatchers.IO) {
-                                    TranslationModelManager.delete(context)
-                                }
-                            },
-                            enabled = !translationEnabled && downloading == null,
-                            modifier = Modifier.height(42.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                        ) {
-                            Text("削除", fontSize = 12.sp, color = palette.textPrimary)
-                        }
-                    }
+                        modifier = Modifier.height(42.dp),
+                        enabled = !translationEnabled && downloading == null
+                    )
                 }
-
+            }
+            SettingsDivider(palette)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text(
                     text = "翻訳方向",
                     color = palette.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
+                SettingsSegmented(
+                    options = listOf(
                         TranslationText.AUTO to "自動",
                         TranslationText.EN to "英語へ",
                         TranslationText.JA to "日本語へ"
-                    ).forEach { (value, label) ->
-                        FilterChip(
-                            selected = translationTarget == value,
-                            onClick = {
-                                translationTarget = value
-                                imePrefs.edit()
-                                    .putString(ZeroConvertInputMethodService.KEY_TRANSLATION_TARGET, value)
-                                    .apply()
-                            },
-                            label = { Text(label, fontSize = 11.sp) }
-                        )
+                    ),
+                    selected = translationTarget,
+                    palette = palette,
+                    onSelected = { value ->
+                        translationTarget = value
+                        imePrefs.edit()
+                            .putString(ZeroConvertInputMethodService.KEY_TRANSLATION_TARGET, value)
+                            .apply()
                     }
+                )
+            }
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "翻訳モデルを常時読み込む",
+                description = "OFFでは翻訳モード終了時に約573MBのモデルを解放します。",
+                checked = translationKeepLoaded,
+                palette = palette,
+                onCheckedChange = { enabled ->
+                    translationKeepLoaded = enabled
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_KEEP_LOADED, enabled)
+                        .apply()
                 }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "翻訳モデルを常時読み込む",
-                            color = palette.textPrimary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "OFFでは翻訳モード終了時に約573MBのモデルを解放します。",
-                            color = palette.textMuted,
-                            fontSize = 10.sp
-                        )
-                    }
-                    Switch(
-                        checked = translationKeepLoaded,
-                        onCheckedChange = { enabled ->
-                            translationKeepLoaded = enabled
-                            imePrefs.edit()
-                                .putBoolean(ZeroConvertInputMethodService.KEY_TRANSLATION_KEEP_LOADED, enabled)
-                                .apply()
-                        }
-                    )
-                }
-
+            )
+            SettingsDivider(palette)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text(
                     text = "翻訳テスト",
                     color = palette.textPrimary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
                 )
                 OutlinedTextField(
                     value = translationTestInput,
                     onValueChange = { translationTestInput = it.take(512) },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("原文", fontSize = 11.sp) },
-                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+                    colors = settingsTextFieldColors(palette)
                 )
-                Button(
+                SettingsSecondaryButton(
+                    text = if (translationTestRunning) "翻訳中…" else "翻訳を実行",
+                    palette = palette,
+                    enabled = translationModelReady && !translationTestRunning && downloading == null &&
+                        translationTestInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
                     onClick = {
                         if (!translationTestRunning) {
                             translationTestRunning = true
@@ -1625,25 +1326,592 @@ fun MainScreen(
                                 translationTestRunning = false
                             }
                         }
-                    },
-                    enabled = translationModelReady && !translationTestRunning && downloading == null &&
-                        translationTestInput.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                ) {
-                    Text(
-                        text = if (translationTestRunning) "翻訳中…" else "翻訳を実行",
-                        fontSize = 12.sp,
-                        color = palette.textPrimary
-                    )
-                }
+                    }
+                )
                 Text(
                     text = "結果: $translationTestResult",
                     color = palette.primaryAccentSoft,
                     fontSize = 12.sp
                 )
             }
+        }
+    }
+
+    @Composable
+    fun BenchmarkTabContent() {
+        SettingsSection("ZeroCon Model", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "現在のモデル",
+                            color = palette.textMuted,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = ZenzNative.currentModelName,
+                            color = palette.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    SettingsBadge("使用中", palette)
+                }
+                availableModels.forEach { model ->
+                    SettingsInnerCard(palette) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = model.name,
+                                        color = if (model.isSelected) palette.primaryAccentSoft else palette.textPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (model.isSelected) FontWeight.SemiBold else FontWeight.Medium
+                                    )
+                                    if (model.isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Check,
+                                            contentDescription = "使用中",
+                                            tint = palette.readyEmerald,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = model.sizeMb,
+                                    color = palette.textMuted,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (!model.isSelected) {
+                                    SettingsPrimaryButton(
+                                        text = "切替",
+                                        palette = palette,
+                                        modifier = Modifier.height(32.dp),
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                ModelManager.selectModel(context, model)
+                                                availableModels = ModelManager.getAvailableModels(context)
+                                                onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                                            }
+                                        }
+                                    )
+                                }
+                                if (!model.isDefault) {
+                                    IconButton(
+                                        onClick = {
+                                            ModelManager.deleteModel(context, model)
+                                            availableModels = ModelManager.getAvailableModels(context)
+                                            onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Delete,
+                                            contentDescription = "モデルを削除",
+                                            tint = palette.textSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                SettingsSecondaryButton(
+                    text = if (isImporting) "モデルをコピー中…" else "GGUFモデルを追加",
+                    palette = palette,
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    enabled = !isImporting,
+                    onClick = { filePickerLauncher.launch(arrayOf("*/*")) }
+                )
+            }
+        }
+
+        SettingsSection("単体推論テスト", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "ZeroCon AIがモデル単体で正しく推論できるかを確認します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                SettingsSecondaryButton(
+                    text = "単体推論を実行（ワタシ → ?）",
+                    palette = palette,
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    onClick = {
+                        coroutineScope.launch {
+                            val (result, elapsed) = withContext(Dispatchers.IO) {
+                                val t0 = System.currentTimeMillis()
+                                val res = ZenzNative.convert("", "ワタシ", aiProfile)
+                                res to (System.currentTimeMillis() - t0)
+                            }
+                            directTestResult = "「ワタシ」→「$result」 (${elapsed}ms)"
+                        }
+                    }
+                )
+                Text(
+                    text = "結果: $directTestResult",
+                    color = palette.primaryAccentSoft,
+                    fontSize = 13.sp
+                )
+            }
+        }
+
+        SettingsSection("評価ベンチマーク", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "端末上で評価データセットを一括推論し、正解率と平均レイテンシを測定します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "評価データセット",
+                        color = palette.textPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    SettingsBadge("最新", palette)
+                }
+                Text(
+                    text = "${BenchmarkRunner.CONVERSION_DATASET_NAME}（基本230・高難度250） / " +
+                        "${BenchmarkRunner.TYPO_DATASET_NAME}（タイポ255・正常入力45） / " +
+                        BenchmarkRunner.PREDICTIVE_DATASET_NAME,
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                SettingsPrimaryButton(
+                    text = if (benchmarkProgress?.isRunning == true) {
+                        "ベンチマーク実行中…"
+                    } else {
+                        "かな漢字変換ベンチマークを実行"
+                    },
+                    palette = palette,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    enabled = benchmarkProgress?.isRunning != true,
+                    onClick = {
+                        coroutineScope.launch {
+                            BenchmarkRunner.runBenchmark(context) { progress ->
+                                benchmarkProgress = progress
+                            }
+                        }
+                    }
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SettingsSecondaryButton(
+                        text = BenchmarkRunner.TYPO_DATASET_NAME,
+                        palette = palette,
+                        modifier = Modifier.weight(1f).height(38.dp),
+                        enabled = benchmarkProgress?.isRunning != true,
+                        onClick = {
+                            coroutineScope.launch {
+                                BenchmarkRunner.runTypoBenchmark(context) { progress ->
+                                    benchmarkProgress = progress
+                                }
+                            }
+                        }
+                    )
+                    SettingsSecondaryButton(
+                        text = BenchmarkRunner.PREDICTIVE_DATASET_NAME,
+                        palette = palette,
+                        modifier = Modifier.weight(1f).height(38.dp),
+                        enabled = benchmarkProgress?.isRunning != true,
+                        onClick = {
+                            coroutineScope.launch {
+                                BenchmarkRunner.runPredictiveBenchmark(context) { progress ->
+                                    benchmarkProgress = progress
+                                }
+                            }
+                        }
+                    )
+                }
+                benchmarkProgress?.let { progress ->
+                    val fraction = if (progress.total > 0) {
+                        progress.current.toFloat() / progress.total
+                    } else {
+                        0f
+                    }
+                    val accuracy = if (progress.current > 0) {
+                        progress.perfectCount.toFloat() / progress.current * 100f
+                    } else {
+                        0f
+                    }
+                    SettingsDivider(palette)
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                        color = if (progress.isFinished) palette.readyEmerald else palette.primaryAccent,
+                        trackColor = palette.surfaceElevated
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "進捗: ${progress.current} / ${progress.total} 問（${(fraction * 100).toInt()}%）",
+                            color = palette.textPrimary,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "平均: ${String.format("%.1f", progress.avgLatencyMs)} ms/問",
+                            color = palette.warningAmber,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "正解率: ${String.format("%.1f", accuracy)}%（${progress.perfectCount}/${progress.current}）",
+                            color = palette.readyEmerald,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        when (progress.kind) {
+                            BenchmarkKind.CONVERSION -> Text(
+                                text = "同音異義: ${if (progress.homophoneTotal > 0) String.format("%.1f", progress.homophonePerfect.toFloat() / progress.homophoneTotal * 100f) else "0.0"}%",
+                                color = palette.primaryAccentSoft,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            BenchmarkKind.TYPO -> Text(
+                                text = "誤補正: ${progress.falsePositiveCount}件",
+                                color = if (progress.falsePositiveCount > 0) palette.danger else palette.readyEmerald,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            BenchmarkKind.PREDICTIVE -> Unit
+                        }
+                    }
+                    if (progress.kind == BenchmarkKind.TYPO) {
+                        Text(
+                            text = "正常入力保持: ${progress.homophonePerfect} / ${progress.homophoneTotal}",
+                            color = palette.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    SettingsInnerCard(palette) {
+                        Text(
+                            text = progress.lastItemDetail,
+                            color = palette.textSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun AppearanceTabContent() {
+        SettingsSection("カラーテーマ", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Windows版設定画面と同じ配色を、設定画面とIMEキーボードに適用します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                SettingsSegmented(
+                    options = listOf(
+                        "system" to "システム連動",
+                        "dark" to "ダークブルー",
+                        "light" to "ペーパー"
+                    ),
+                    selected = themeMode,
+                    palette = palette,
+                    onSelected = { mode ->
+                        themeMode = mode
+                        imePrefs.edit()
+                            .putString(ZeroConvertInputMethodService.KEY_THEME_MODE, mode)
+                            .apply()
+                    }
+                )
+                SettingsInnerCard(palette) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(palette.primaryAccent, RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "あ",
+                                color = palette.onAccent,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "プレビュー",
+                                color = palette.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "候補: 日本語 / にほんご",
+                                color = palette.textSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = "システム連動では端末のダークモードに合わせて、ダークブルーまたはペーパーを選択します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            }
+        }
+    }
+
+    @Composable
+    fun AboutTabContent() {
+        SettingsSection("ZeroCon Keyboard", palette) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ZeroConLogo(size = 44.dp)
+                    Column {
+                        Text(
+                            text = "ZeroCon Keyboard",
+                            color = palette.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "バージョン ${BuildConfig.VERSION_NAME}",
+                            color = palette.textMuted,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                Text(
+                    text = "ZeroCon Model Nano v4 によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            }
+            SettingsDivider(palette)
+            SettingsRow(
+                title = "変換モデル",
+                description = "かな漢字変換・タイポ補正・先読みで共用します。",
+                palette = palette
+            ) {
+                Text(
+                    text = ZenzNative.currentModelName,
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.End,
+                    maxLines = 2
+                )
+            }
+            SettingsDivider(palette)
+            SettingsRow(
+                title = "推論",
+                description = "入力文は端末内で処理されます。",
+                palette = palette
+            ) {
+                Text(
+                    text = "オンデバイス",
+                    color = palette.textSecondary,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        SettingsSection("オープンソースライセンス", palette) {
+            LicenseRow(
+                title = "azooKey / AzooKeyKanaKanjiConverter",
+                license = "MIT License — Copyright (c) 2023-2026 Miwa (ensan-hcl)",
+                palette = palette
+            )
+            SettingsDivider(palette)
+            LicenseRow(
+                title = "Zenz / zenz-v3.2 Neural Models",
+                license = "Apache License 2.0 — Copyright (c) Miwa Keita (ensan-hcl)",
+                palette = palette
+            )
+            SettingsDivider(palette)
+            LicenseRow(
+                title = "LOUDS System Dictionary & Emoji Dictionary",
+                license = "Apache License 2.0 — Miwa (ensan-hcl) / Mozc & Unicode",
+                palette = palette
+            )
+            SettingsDivider(palette)
+            LicenseRow(
+                title = "PLaMo 3 Translate",
+                license = "PLaMo Community License — Copyright (c) Preferred Networks, Inc.",
+                palette = palette
+            )
+            SettingsDivider(palette)
+            LicenseRow(
+                title = "llama.cpp",
+                license = "MIT License — Copyright (c) 2023-2026 Georgi Gerganov and contributors",
+                palette = palette
+            )
+        }
+    }
+
+    val colorScheme = remember(palette) { palette.toColorScheme() }
+    val typography = remember { zeroConTypography() }
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = typography
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.canvas)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    ZeroConLogo(size = 48.dp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ZeroCon Keyboard",
+                            color = palette.textPrimary,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.3).sp
+                        )
+                        Text(
+                            text = "ZeroCon AI 搭載 — オンデバイス日本語入力",
+                            color = palette.textSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+                val statusText = modelStatus.removePrefix("● ").trim()
+                SettingsStatusPill(
+                    text = statusText,
+                    ready = statusText.contains("準備完了"),
+                    palette = palette
+                )
+            }
+
+            if (keyboardSelected) {
+                SettingsTabBar(
+                    tabs = SettingsTabs,
+                    selectedId = selectedTab,
+                    palette = palette,
+                    onSelected = { selectedTab = it }
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    when (selectedTab) {
+                        "input" -> InputTabContent()
+                        "conversion" -> ConversionTabContent()
+                        "data" -> DataTabContent()
+                        "translation" -> TranslationTabContent()
+                        "benchmark" -> BenchmarkTabContent()
+                        "appearance" -> AppearanceTabContent()
+                        "about" -> AboutTabContent()
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    SetupSectionContent()
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+            }
+        }
+
+        if (showScreenshotPermissionRationale) {
+            AlertDialog(
+                onDismissRequest = { showScreenshotPermissionRationale = false },
+                title = { Text("写真へのアクセスを許可") },
+                text = {
+                    Text(
+                        "スクリーンショットをキーボードのクリップボード履歴へ自動保存するため、写真と動画へのアクセスが必要です。保存対象はスクリーンショットだけです。"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showScreenshotPermissionRationale = false
+                        screenshotPermissionLauncher.launch(screenshotPermission)
+                    }) { Text("許可する") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showScreenshotPermissionRationale = false }) { Text("後で") }
+                }
+            )
         }
 
         if (showTranslationDownloadDialog) {
@@ -1682,456 +1950,11 @@ fun MainScreen(
                 }
             )
         }
-
-        // --- Model Management & Benchmark Section (ZeroCon Model & 評価ベンチマーク) ---
-        var isDebugExpanded by remember { mutableStateOf(false) }
-
-        var availableModels by remember {
-            mutableStateOf<List<ModelInfo>>(ModelManager.getAvailableModels(context))
-        }
-        var isImporting by remember { mutableStateOf(false) }
-
-        val filePickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-            contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-        ) { uri ->
-            if (uri != null) {
-                coroutineScope.launch {
-                    isImporting = true
-                    val res = ModelManager.importModelFromUri(context, uri)
-                    res.onSuccess { newModel: ModelInfo ->
-                        availableModels = ModelManager.getAvailableModels(context)
-                        ModelManager.selectModel(context, newModel)
-                        availableModels = ModelManager.getAvailableModels(context)
-                        onModelStatusChange("● ${ZenzNative.currentModelName} — 準備完了")
-                    }
-                    isImporting = false
-                }
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { isDebugExpanded = !isDebugExpanded },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "ZeroCon Model 管理 & 推論ベンチマーク",
-                            fontWeight = FontWeight.Bold,
-                            color = palette.textPrimary,
-                            fontSize = 15.sp
-                        )
-                        Text(
-                            text = "量子化モデルの切替・外部GGUFの追加・230問評価ベンチマーク",
-                            color = palette.textSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Text(
-                        text = if (isDebugExpanded) "▲ 閉じる" else "▼ 展開",
-                        color = palette.primaryAccentSoft,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                if (isDebugExpanded) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(palette.borderSubtle)
-                    )
-
-                    // 1. Model Management & Switching Section
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = palette.surfaceElevated),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "ZeroCon Model 切替",
-                                    fontWeight = FontWeight.Bold,
-                                    color = palette.textPrimary,
-                                    fontSize = 14.sp
-                                )
-                                Text(
-                                    text = "現在: ${ZenzNative.currentModelName}",
-                                    color = palette.readyEmerald,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-
-                            for (model in availableModels) {
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = if (model.isSelected) palette.primaryAccent.copy(alpha = 0.14f) else palette.surface
-                                    ),
-                                    border = BorderStroke(
-                                        1.dp,
-                                        if (model.isSelected) palette.primaryAccent.copy(alpha = 0.5f) else palette.borderSubtle
-                                    ),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = model.name,
-                                                color = if (model.isSelected) palette.primaryAccentSoft else palette.textPrimary,
-                                                fontSize = 13.sp,
-                                                fontWeight = if (model.isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                            Text(
-                                                text = model.sizeMb,
-                                                color = palette.textMuted,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            if (model.isSelected) {
-                                                Text(
-                                                    text = "✓ 使用中",
-                                                    color = palette.readyEmerald,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    modifier = Modifier.padding(horizontal = 6.dp)
-                                                )
-                                            } else {
-                                                Button(
-                                                    onClick = {
-                                                        coroutineScope.launch {
-                                                            ModelManager.selectModel(context, model)
-                                                            availableModels = ModelManager.getAvailableModels(context)
-                                                            onModelStatusChange("● ${ZenzNative.currentModelName} — 準備完了")
-                                                        }
-                                                    },
-                                                    modifier = Modifier.height(34.dp),
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent),
-                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
-                                                ) {
-                                                    Text("切替", fontSize = 12.sp, color = Color.White)
-                                                }
-                                            }
-
-                                            if (!model.isDefault) {
-                                                IconButton(
-                                                    onClick = {
-                                                        ModelManager.deleteModel(context, model)
-                                                        availableModels = ModelManager.getAvailableModels(context)
-                                                        onModelStatusChange("● ${ZenzNative.currentModelName} — 準備完了")
-                                                    },
-                                                    modifier = Modifier.size(32.dp)
-                                                ) {
-                                                    Text("✕", fontSize = 14.sp, color = palette.textSecondary)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            Button(
-                                onClick = {
-                                    filePickerLauncher.launch(arrayOf("*/*"))
-                                },
-                                enabled = !isImporting,
-                                modifier = Modifier.fillMaxWidth().height(42.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                            ) {
-                                Text(
-                                    text = if (isImporting) "モデルをコピー中…" else "＋ GGUFモデルを端末から追加",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.textPrimary
-                                )
-                            }
-                        }
-                    }
-
-                    // 2. Direct Inference Quick Test
-                    var directTestResult by remember { mutableStateOf("未実行") }
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = palette.surfaceElevated),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                text = "ZeroCon AI 単体推論テスト",
-                                fontWeight = FontWeight.Bold,
-                                color = palette.textPrimary,
-                                fontSize = 14.sp
-                            )
-                            Button(
-                                onClick = {
-                                    CoroutineScope(Dispatchers.IO).launch {
-                                        val t0 = System.currentTimeMillis()
-                                        val res = ZenzNative.convert("", "ワタシ", aiProfile)
-                                        val dt = System.currentTimeMillis() - t0
-                                        directTestResult = "「ワタシ」→「$res」 (${dt}ms)"
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth().height(40.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                            ) {
-                                Text("単体推論を実行 (ワタシ → ?)", fontSize = 13.sp, color = palette.textPrimary)
-                            }
-                            Text(text = "結果: $directTestResult", color = palette.primaryAccentSoft, fontSize = 13.sp)
-                        }
-                    }
-
-                    // 3. Benchmark Section
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = palette.surfaceElevated),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                text = "230問 評価データセット・ベンチマーク",
-                                fontWeight = FontWeight.Bold,
-                                color = palette.textPrimary,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = "同音異義語・文脈依存等 230問を端末上で一括推論し、正解率と平均レイテンシを測定します。",
-                                color = palette.textSecondary,
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp
-                            )
-
-                            Button(
-                                onClick = {
-                                    coroutineScope.launch {
-                                        BenchmarkRunner.runBenchmark(context) { p ->
-                                            benchmarkProgress = p
-                                        }
-                                    }
-                                },
-                                enabled = benchmarkProgress?.isRunning != true,
-                                modifier = Modifier.fillMaxWidth().height(44.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = palette.primaryAccent)
-                            ) {
-                                Text(
-                                    text = if (benchmarkProgress?.isRunning == true) "ベンチマーク実行中…" else "全230問ベンチマークを実行",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            BenchmarkRunner.runTypoBenchmark(context) { p ->
-                                                benchmarkProgress = p
-                                            }
-                                        }
-                                    },
-                                    enabled = benchmarkProgress?.isRunning != true,
-                                    modifier = Modifier.weight(1f).height(38.dp),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                                ) {
-                                    Text("💡 誤入力補正テスト (35問)", fontSize = 11.sp, color = palette.textPrimary, fontWeight = FontWeight.SemiBold)
-                                }
-
-                                Button(
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            BenchmarkRunner.runPredictiveBenchmark(context) { p ->
-                                                benchmarkProgress = p
-                                            }
-                                        }
-                                    },
-                                    enabled = benchmarkProgress?.isRunning != true,
-                                    modifier = Modifier.weight(1f).height(38.dp),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = palette.keyNormal)
-                                ) {
-                                    Text("🔮 先読みテスト (30問)", fontSize = 11.sp, color = palette.textPrimary, fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-
-                            benchmarkProgress?.let { prog ->
-                                val fraction = if (prog.total > 0) prog.current.toFloat() / prog.total else 0f
-                                val acc = if (prog.current > 0) (prog.perfectCount.toFloat() / prog.current * 100) else 0f
-                                val homophoneAcc = if (prog.homophoneTotal > 0) (prog.homophonePerfect.toFloat() / prog.homophoneTotal * 100) else 0f
-
-                                LinearProgressIndicator(
-                                    progress = { fraction },
-                                    modifier = Modifier.fillMaxWidth().height(8.dp),
-                                    color = if (prog.isFinished) palette.readyEmerald else palette.primaryAccent,
-                                    trackColor = palette.keyModifier
-                                )
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = "進捗: ${prog.current} / ${prog.total} 問 (${(fraction * 100).toInt()}%)",
-                                        color = palette.textPrimary,
-                                        fontSize = 12.sp
-                                    )
-                                    Text(
-                                        text = "平均: ${String.format("%.1f", prog.avgLatencyMs)} ms/問",
-                                        color = palette.warningAmber,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = "総合正解率: ${String.format("%.1f", acc)}% (${prog.perfectCount}/${prog.current})",
-                                        color = palette.readyEmerald,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "同音異義: ${String.format("%.1f", homophoneAcc)}%",
-                                        color = palette.primaryAccentSoft,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(containerColor = palette.canvas),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = prog.lastItemDetail,
-                                        color = palette.textSecondary,
-                                        fontSize = 11.sp,
-                                        modifier = Modifier.padding(8.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- About & Third-Party Open Source Licenses Section ---
-        var isLicenseExpanded by remember { mutableStateOf(false) }
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = palette.surface),
-            border = BorderStroke(1.dp, palette.borderSubtle),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { isLicenseExpanded = !isLicenseExpanded },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "ZeroCon について & オープンソースライセンス",
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary,
-                        fontSize = 14.sp
-                    )
-                    Text(
-                        text = if (isLicenseExpanded) "▲ 閉じる" else "▼ 表示",
-                        color = palette.primaryAccentSoft,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                if (isLicenseExpanded) {
-                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(palette.borderSubtle))
-                    LicenseItem(
-                        title = "azooKey / AzooKeyKanaKanjiConverter",
-                        license = "MIT License — Copyright (c) 2023-2026 Miwa (ensan-hcl)",
-                        palette = palette
-                    )
-                    LicenseItem(
-                        title = "Zenz / zenz-v3.2 Neural Models",
-                        license = "Apache License 2.0 — Copyright (c) Miwa Keita (ensan-hcl)",
-                        palette = palette
-                    )
-                    LicenseItem(
-                        title = "LOUDS System Dictionary & Emoji Dictionary",
-                        license = "Apache License 2.0 — Miwa (ensan-hcl) / Mozc & Unicode",
-                        palette = palette
-                    )
-                    LicenseItem(
-                        title = "PLaMo 3 Translate (Translation Model)",
-                        license = "PLaMo Community License — Copyright (c) Preferred Networks, Inc.",
-                        palette = palette
-                    )
-                    LicenseItem(
-                        title = "llama.cpp",
-                        license = "MIT License — Copyright (c) 2023-2026 Georgi Gerganov and contributors",
-                        palette = palette
-                    )
-                }
-            }
-        }
-
-        }
-        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
 @Composable
-private fun LicenseItem(
+private fun LicenseRow(
     title: String,
     license: String,
     palette: ZeroConPalette
@@ -2139,21 +1962,20 @@ private fun LicenseItem(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(palette.surfaceElevated)
-            .padding(10.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(
             text = title,
             color = palette.textPrimary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
         )
         Text(
             text = license,
-            color = palette.textSecondary,
-            fontSize = 11.sp
+            color = palette.textMuted,
+            fontSize = 12.sp,
+            lineHeight = 17.sp
         )
     }
 }

@@ -744,7 +744,7 @@ fun Japanese12KeyFlickLayout(
                 ) {
                     Text(
                         text = "確定",
-                        color = Color.White,
+                        color = palette.onAccent,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1122,7 +1122,7 @@ fun English12KeyFlickLayout(
                 ) {
                     Text(
                         text = "確定",
-                        color = Color.White,
+                        color = palette.onAccent,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1473,7 +1473,7 @@ fun FlickNumericPadLayout(
                 ) {
                     Text(
                         text = "確定",
-                        color = Color.White,
+                        color = palette.onAccent,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1756,7 +1756,7 @@ private fun PopupCell(
         ) {
             Text(
                 text = text,
-                color = if (isSelected) Color.White else palette.textPrimary,
+                color = if (isSelected) palette.onAccent else palette.textPrimary,
                 fontSize = if (isSelected) 20.sp else 16.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
             )
