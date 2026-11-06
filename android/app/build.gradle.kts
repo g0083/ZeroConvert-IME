@@ -23,8 +23,8 @@ android {
         applicationId = "com.zeroconvert.ime"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "2.0.12-dev"
+        versionCode = 15
+        versionName = "2.0.13-dev"
         buildConfigField("boolean", "WINDOWS_ENGINE", "false")
 
         testInstrumentationRunner = "com.zeroconvert.ime.PortInstrumentationRunner"
