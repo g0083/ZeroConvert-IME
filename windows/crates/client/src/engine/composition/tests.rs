@@ -3501,6 +3501,30 @@ fn translation_mode_keeps_punctuation_in_the_uncommitted_japanese_sentence() {
 }
 
 #[test]
+fn translation_mode_toggle_input_mode_toggles_temporary_latin_without_ending_composition() {
+    let mut config = AppConfig::default();
+    config.general.experimental_translation = true;
+    let composition = Composition {
+        state: CompositionState::Composing,
+        preview: "明日の".into(),
+        raw_input: "ashitano".into(),
+        temporary_latin: false,
+        ..Default::default()
+    };
+    let (transition, actions) = TextServiceFactory::plan_actions_for_user_action(
+        &composition,
+        &UserAction::ToggleInputMode,
+        &InputMode::Kana,
+        false,
+        &config,
+        false,
+    )
+    .unwrap();
+    assert_eq!(transition, CompositionState::Composing);
+    assert_eq!(actions, vec![ClientAction::SetTemporaryLatin(true)]);
+}
+
+#[test]
 fn punctuation_commit_respects_punctuation_style_and_width_for_output() {
     let mut app_config = AppConfig::default();
     app_config.general.punctuation_commit = true;
