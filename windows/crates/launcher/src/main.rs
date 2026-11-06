@@ -1173,9 +1173,10 @@ fn translation_server_spec_for_session(
     {
         return None;
     }
-    let filename =
-        shared::runtime_assets::translation_model_filename(&config.general.translation_model);
-    let model = install_dir.join("models").join(filename);
+    let model = shared::runtime_assets::translation_model_path(
+        install_dir,
+        &config.general.translation_model,
+    );
     let backend = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
     (model.is_file() && backend.join("llama-server.exe").is_file()).then_some(AssistServerSpec {
         model,

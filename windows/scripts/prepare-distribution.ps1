@@ -75,14 +75,8 @@ try {
         if ((Get-ArtifactHash (Join-Path $payloadRoot ('models\' + $model.filename))) -ne $model.sha256) { throw "Distribution model changed: $($model.name)" }
     }
     # Use maintained distribution defaults, never this user's live settings or learning.
-    # The tested translation default is PLaMo 3 Translate 0.8B. The 2B model is
-    # optional and not bundled; shipping only the validated 0.8B keeps the
-    # installer under GitHub's per-asset limit and matches settings.json.
-    $translationModel = Join-Path $repoRoot 'artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf'
-    if (Test-Path -LiteralPath $translationModel -PathType Leaf) {
-        if ((Get-ArtifactHash $translationModel) -ne '3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c') { throw 'Translation model hash mismatch.' }
-        Copy-PayloadFile $translationModel 'models/plamo-3-translate-0.8b-Q4_K_M.gguf'
-    }
+    # The translation model is not bundled: enabling 翻訳機能 in the settings app
+    # downloads the pinned PLaMo 3 GGUF from Hugging Face on demand.
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $windowsRoot 'deployment') -File) {
         if ($file.Extension -in @('.ps1', '.bat', '.md', '.json')) {
             Copy-PayloadFile $file.FullName $file.Name

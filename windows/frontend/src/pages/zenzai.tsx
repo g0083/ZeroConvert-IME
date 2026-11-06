@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SettingsRow, SettingsSection } from "@/components/settings-section";
 import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config";
 import { createDebouncedSaver, type ConfigSaveState } from "@/lib/config-save-controller.js";
+import { BACKEND_LABELS, loadQuickBenchmarkRecommendation, runQuickBenchmark, saveQuickBenchmarkResult, type QuickBackendId, type QuickBenchmarkResult } from "@/lib/quick-benchmark";
 
 const PROFILE_SAVE_DELAY_MS = 500;
 
@@ -43,6 +44,10 @@ export const Zenzai = () => {
     const [cudaBytes, setCudaBytes] = useState(0);
     const [cudaInstalling, setCudaInstalling] = useState(false);
     const [cudaProgress, setCudaProgress] = useState(0);
+    const savedRecommendation = useMemo(() => loadQuickBenchmarkRecommendation(), []);
+    const [quickBenchmark, setQuickBenchmark] = useState<QuickBenchmarkResult | null>(savedRecommendation);
+    const [recommendedBackend, setRecommendedBackend] = useState<QuickBackendId | null>(savedRecommendation?.recommended ?? null);
+    const [quickBenchmarkRunning, setQuickBenchmarkRunning] = useState(false);
     const profileEdited = useRef(false);
     const profileSaver = useMemo(() => createDebouncedSaver<string, any>({
         delayMs: PROFILE_SAVE_DELAY_MS,
@@ -167,6 +172,22 @@ export const Zenzai = () => {
         }
     };
 
+    const handleQuickBenchmark = async () => {
+        if (quickBenchmarkRunning) return;
+        setQuickBenchmarkRunning(true);
+        setQuickBenchmark(null);
+        try {
+            const result = await runQuickBenchmark();
+            setQuickBenchmark(result);
+            saveQuickBenchmarkResult(result);
+            setRecommendedBackend(result.recommended);
+        } catch (error) {
+            toast.error(`クイックベンチマークを実行できませんでした: ${error}`);
+        } finally {
+            setQuickBenchmarkRunning(false);
+        }
+    };
+
     const handleModelChange = async (newModelId: string) => {
         if (newModelId === activeModelId || isSwitchingModel) return;
         setIsSwitchingModel(true);
@@ -228,13 +249,26 @@ export const Zenzai = () => {
                     <Select value={value.backend} disabled={capabilityError || cudaInstalling || runtimeApplying || isSwitchingModel} onValueChange={(backend) => void handleBackendChange(backend)}>
                         <SelectTrigger id="zenzai-backend"><SelectValue placeholder="バックエンドを選択" /></SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="cpu" disabled={!capability.cpu}>CPU (非推奨){!capability.cpu && " — AVX 対応 CPU が必要"}</SelectItem>
-                            <SelectItem value="cuda" disabled={!capability.cuda}>CUDA (NVIDIA GPU){!capability.cuda && " — NVIDIAドライバーが必要"}</SelectItem>
-                            <SelectItem value="vulkan" disabled={!capability.vulkan}>Vulkan{!capability.vulkan && " — このPCでは未対応"}</SelectItem>
+                            <SelectItem value="cpu" disabled={!capability.cpu}>{recommendedBackend === "cpu" ? "CPU (推奨)" : "CPU"}{!capability.cpu && " — AVX 対応 CPU が必要"}</SelectItem>
+                            <SelectItem value="cuda" disabled={!capability.cuda}>{recommendedBackend === "cuda" ? "CUDA (NVIDIA GPU) (推奨)" : "CUDA (NVIDIA GPU)"}{!capability.cuda && " — NVIDIAドライバーが必要"}</SelectItem>
+                            <SelectItem value="vulkan" disabled={!capability.vulkan}>{recommendedBackend === "vulkan" ? "Vulkan (推奨)" : "Vulkan"}{!capability.vulkan && " — このPCでは未対応"}</SelectItem>
                         </SelectContent>
                     </Select>
                 </SettingsRow>
                 {capabilityError && <p className="px-4 pb-3 text-xs text-destructive" role="alert">バックエンドの対応状況を取得できませんでした。</p>}
+                <SettingsRow label="クイックベンチマーク" description="CPUとVulkanで同じ推論を実測し、完了まで数十秒かかります。レイテンシが短い方を推奨バックエンドとして表示します。" htmlFor="zenzai-quick-benchmark">
+                    <Button id="zenzai-quick-benchmark" variant="outline" disabled={quickBenchmarkRunning || runtimeApplying || cudaInstalling || isSwitchingModel} onClick={() => void handleQuickBenchmark()}>
+                        {quickBenchmarkRunning ? "測定中…" : "実行"}
+                    </Button>
+                </SettingsRow>
+                {quickBenchmark && !quickBenchmarkRunning && <div className="px-4 pb-4 space-y-1" role="status" aria-live="polite">
+                    {quickBenchmark.results.map((result) => (
+                        <p key={result.backend} className="settings-description">
+                            {BACKEND_LABELS[result.backend] ?? result.backend}: {result.ok && result.avg_latency_ms !== null ? `平均 ${result.avg_latency_ms.toFixed(0)} ms` : result.error ?? "測定できませんでした"}
+                        </p>
+                    ))}
+                    {quickBenchmark.recommended && <p className="text-xs font-medium text-foreground">推奨: {BACKEND_LABELS[quickBenchmark.recommended] ?? quickBenchmark.recommended}（実測レイテンシが最も短いバックエンド）</p>}
+                </div>}
                 {value.backend === "cpu" && <p className="settings-description px-4 pb-3">
                     CPUバックエンドには AVX 対応 CPU が必要です。未対応の場合は標準変換を使います。
                 </p>}
