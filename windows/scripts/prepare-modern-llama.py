@@ -2,14 +2,19 @@
 
 Never edits an installed IME, an existing dependency checkout, or model weights.
 """
+import argparse
 import hashlib
 import json
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import converter_patch
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = '7d516e2'
@@ -67,7 +72,31 @@ def import_library(directory, name):
     subprocess.run(['llvm-dlltool', '-m', 'i386:x86-64', '-d', str(definition), '-l', str(directory / (name + '.lib'))], check=True)
 
 
+def check_converter():
+    """Verify the converter patch anchors against the pinned archive.
+
+    Runs without a toolchain, so a converter revision bump fails here instead of
+    only in the Android build that stages the same patched sources.
+    """
+    archive = fetch('converter.zip', f'https://codeload.github.com/batao9/AzooKeyKanaKanjiConverter/zip/{CONVERTER}',
+                    'acbf8398b67891f51ba37cdc16ae6f5514798ffea1e7270077915b433a93866e')
+    prefix = 'AzooKeyKanaKanjiConverter-' + CONVERTER + '/'
+    with zipfile.ZipFile(archive) as package:
+        modulemap = package.read(prefix + converter_patch.MODULEMAP_PATH).decode('utf-8')
+        context = package.read(prefix + converter_patch.ZENZ_CONTEXT_PATH).decode('utf-8')
+    converter_patch.patch_modulemap(modulemap)
+    converter_patch.patch_zenz_context(context)
+    print(json.dumps({'converter': CONVERTER, 'anchors': 'ok'}))
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check-converter', action='store_true',
+                        help='Verify the converter patch anchors and exit without preparing anything.')
+    options = parser.parse_args()
+    if options.check_converter:
+        check_converter()
+        return
     key = sha(Path(__file__))[:12]
     runtime = ROOT / ('artifacts/runtime/windows-b12125-' + key)
     converter_root = ROOT / ('artifacts/dependencies/azookey-b12125-' + key)
@@ -99,22 +128,12 @@ def main():
     for name in HEADERS:
         shutil.copy2(include / name, headers / name)
     module_map = headers / 'module.modulemap'
-    module_map.write_text(module_map.read_text().replace('link "llama"', 'link "llama"\n    link "ggml"\n    link "ggml-base"'))
-    context = converter / 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Zenzai/Zenz/ZenzContext.swift'
-    text = context.read_text(encoding='utf-8')
-    replacements = {
-        'model_params.use_mmap = true': 'model_params.load_mode = LLAMA_LOAD_MODE_MMAP',
-        'ctx_params.n_ctx = 512': 'ctx_params.n_ctx = 1024\n        ctx_params.n_seq_max = 2\n        ctx_params.kv_unified = true',
-        'llama_backend_init()': 'if let path = ProcessInfo.processInfo.environment["AZOOKEY_LLAMA_BACKEND_DIR"] {\n            ggml_backend_load_all_from_path(path)\n        } else { ggml_backend_load_all() }\n        llama_backend_init()',
-        'llama_kv_cache_seq_rm(context,': 'llama_memory_seq_rm(llama_get_memory(context),',
-        'llama_kv_cache_seq_cp(context,': 'llama_memory_seq_cp(llama_get_memory(context),',
-        'llama_kv_cache_seq_pos_max(self.context,': 'llama_memory_seq_pos_max(llama_get_memory(self.context),',
-    }
-    for old, new in replacements.items():
-        if old not in text:
-            raise ValueError('Converter patch no longer applies: ' + old)
-        text = text.replace(old, new)
-    context.write_text(text, encoding='utf-8')
+    module_map.write_text(converter_patch.patch_modulemap(module_map.read_text()))
+    context = converter / converter_patch.ZENZ_CONTEXT_PATH
+    context.write_text(
+        converter_patch.patch_zenz_context(context.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
     # Preserve redistributable MSVC/plutil inputs from the original immutable
     # dependency store; do not import live application binaries or settings.
     legacy = ROOT / 'artifacts/runtime/windows'

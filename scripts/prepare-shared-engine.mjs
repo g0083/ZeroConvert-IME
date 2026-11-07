@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { NATIVE_INPUTS, SHARED_INPUTS, SKIPPED_SOURCE_NAMES } from './shared-engine-inputs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cp = (source, destination, options = {}) => copy(source, destination, { preserveTimestamps: true, ...options });
@@ -95,6 +96,7 @@ await cp(path.join(root, 'android/app/src/main/assets/emoji_all_E15.1.txt'), pat
 const sourceFiles = [];
 async function fingerprint(dir, relative) {
   for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a,b) => a.name.localeCompare(b.name))) {
+    if (SKIPPED_SOURCE_NAMES.includes(entry.name)) continue;
     const rel = `${relative}/${entry.name}`;
     if (entry.isDirectory()) await fingerprint(path.join(dir, entry.name), rel);
     else sourceFiles.push({ path: rel, sha256: createHash('sha256').update(await readFile(path.join(dir, entry.name))).digest('hex') });
@@ -105,8 +107,7 @@ await fingerprint(path.join(root, 'windows/crates/server/src/ai_assist'), 'windo
 await fingerprint(path.join(converterSource, 'Sources/KanaKanjiConverterModule'), `${converterRelative}/Sources/KanaKanjiConverterModule`);
 await fingerprint(path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), 'windows/server-swift/azooKey_dictionary_storage/Dictionary');
 for (const directory of ['engine/swift', 'engine/native', 'engine/rust/src']) await fingerprint(path.join(root, directory), directory);
-for (const file of ['windows/crates/shared/src/conversion_policy.rs', 'windows/server-swift/Package.swift', 'windows/server-swift/Package.resolved', 'engine/rust/Cargo.toml', 'engine/rust/Cargo.lock',
-  'android/app/src/main/cpp/zenz_jni.cpp', 'android/app/src/main/cpp/assist_jni.cpp', 'android/app/src/main/cpp/azookey_louds.cpp', 'android/app/src/main/cpp/azookey_louds.h']) {
+for (const file of [...NATIVE_INPUTS, ...SHARED_INPUTS]) {
   sourceFiles.push({ path: file, sha256: createHash('sha256').update(await readFile(path.join(root, file))).digest('hex') });
 }
 await writeFile(path.join(assets, 'sources.json'), JSON.stringify({ schema: 1, sourceFiles }, null, 2) + '\n');
