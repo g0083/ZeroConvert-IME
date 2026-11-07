@@ -5,6 +5,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Application identity and toolchain levels live in gradle.properties so a
+// second host cannot drift from them.
+fun requiredProperty(name: String): String =
+    providers.gradleProperty(name).orNull
+        ?: error("Missing $name in android/gradle.properties")
+
 val sharedHostAssets by tasks.registering(Sync::class) {
     from("../app/src/main/assets") {
         exclude("dictionary/reverse-v2.bin")
@@ -17,15 +23,15 @@ val sharedHostAssets by tasks.registering(Sync::class) {
 
 android {
     namespace = "com.zeroconvert.ime"
-    compileSdk = 34
-    ndkVersion = "27.1.12297006"
+    compileSdk = requiredProperty("zerocon.compileSdk").toInt()
+    ndkVersion = requiredProperty("zerocon.ndkVersion")
 
     defaultConfig {
         applicationId = "com.zeroconvert.ime"
-        minSdk = 26
-        targetSdk = 34
-        versionCode = 15
-        versionName = "2.0.13-dev"
+        minSdk = requiredProperty("zerocon.minSdk").toInt()
+        targetSdk = requiredProperty("zerocon.targetSdk").toInt()
+        versionCode = requiredProperty("zerocon.versionCode").toInt()
+        versionName = requiredProperty("zerocon.versionName")
         buildConfigField("boolean", "WINDOWS_ENGINE", "true")
 
         testInstrumentationRunner = "com.zeroconvert.ime.PortInstrumentationRunner"
@@ -178,18 +184,31 @@ tasks.matching { it.name == "packageDebug" || it.name == "packageRelease" }.conf
     outputs.upToDateWhen { false }
 }
 
+// The whole JVM suite runs here. An allow-list silently stopped covering tests
+// added later, so the shared-engine host could regress without any test
+// noticing. Exclusions are per test method and must state why.
 tasks.withType<Test>().configureEach {
     filter {
-        includeTestsMatching("com.zeroconvert.ime.SharedEngineInputTest")
-        includeTestsMatching("com.zeroconvert.ime.ConversionModelSelectionTest")
-        includeTestsMatching("com.zeroconvert.ime.ComposingTextTest")
-        includeTestsMatching("com.zeroconvert.ime.FlickInputAndModifierTest")
-        includeTestsMatching("com.zeroconvert.ime.KeyboardShiftStateTest")
-        includeTestsMatching("com.zeroconvert.ime.ComposingEditorStateTest")
-        includeTestsMatching("com.zeroconvert.ime.EditorContextTest")
-        includeTestsMatching("com.zeroconvert.ime.SelectionCharacterCountTest")
-        includeTestsMatching("com.zeroconvert.ime.ClipboardSuggestionPolicyTest")
-        includeTestsMatching("com.zeroconvert.ime.PendingRomajiTest")
+        // These assert the legacy Kotlin correction/prediction pipeline, which
+        // `WINDOWS_ENGINE=true` bypasses: the shared engine owns that behaviour
+        // and `cargo test --manifest-path engine/rust/Cargo.toml` covers it.
+        excludeTestsMatching("com.zeroconvert.ime.AiAssistTest.offlineCorrectionStillWorksWithoutPredictionModel")
+        excludeTestsMatching("com.zeroconvert.ime.AutomaticAssistTest.fastPredictionIsPublishedWhileCorrectorIsStillWorking")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.truncatedReadingNeedsACompletedClauseAndRejectsTimeouts")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.correctionAndPredictionUseIndependentModelsAndWeakCorrectionCannotHidePrediction")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.completedCorrectorPreemptsFuzzyRulesAndUnchangedOutputVetoesThem")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.extendsReadingThenConvertsWholeReadingAndReturnsOnlySuffix")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.longCorrectionKeepsConvertedPrefixAtAlignedPunctuation")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.directSurfaceRestoresReadingForPrediction")
+        excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.multilineContextIsBoundedAndNormalizedWithoutSuppressingPrediction")
+        excludeTestsMatching("com.zeroconvert.ime.WindowsTypoPortTest.modelUnavailableUsesNewRulesWithoutAutomaticallyApplyingThem")
+        // These call the shared engine's JNI entry points, which a JVM test
+        // cannot load. They need the instrumentation runner on a device.
+        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.prefixMatchesAreSuggestedForTwoOrMoreChars")
+        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.committedSegmentsDriveGboardStyleContinuation")
+        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.longLearnedSurfacesWithoutSegmentsAreNotPredicted")
+        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.prefixPredictionsComeFromTheMostRecentLearningsFirst")
+        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.prefixPredictionUsesLearnedPredictionSurfaceOnly")
     }
 }
 

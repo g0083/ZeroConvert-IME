@@ -19,7 +19,7 @@
 | キーボード・候補表示・設定 | 同 `ComposeKeyboardView.kt`、`FlickKeyboardView.kt`、`MainActivity.kt` |
 | モデル配置・選択・切替 | 同 `model/ModelManager.kt`、`ZenzNative.kt` |
 | JNI・推論・LOUDS辞書 | `app/src/main/cpp/zenz_jni.cpp`、`azookey_louds.cpp`、`azookey_louds.h`、`CMakeLists.txt` |
-| SDK・ABI・版・ビルド | `app/build.gradle.kts`、`build.gradle.kts`、`gradle/wrapper/gradle-wrapper.properties` |
+| SDK・ABI・版・ビルド | `gradle.properties`（版・SDK・NDKの正本）、`rebuilt/build.gradle.kts`、`gradle/wrapper/gradle-wrapper.properties` |
 | 権限・IME登録・コンテンツ共有 | `app/src/main/AndroidManifest.xml`、`app/src/main/res/xml/` |
 | JVM回帰テスト | `app/src/test/java/com/zeroconvert/ime/` |
 
@@ -36,7 +36,7 @@
 
 ## テストと端末反映
 
-- Windows上ではandroid/でGradle wrapperを使う。製品コード変更の基本確認は `./gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`。変更範囲に応じてテストを絞る場合は選定理由を記録する。文書のみならリンク・参照内容・差分確認でよい。
+- Windows上ではandroid/でGradle wrapperを使う。モジュールは `:rebuilt` だけ。製品コード変更の基本確認は `./gradlew.bat :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug`。JVMテストは除外リスト方式なので、新しいテストは自動的に実行される。除外を足すときはメソッド単位で理由を書く。文書のみならリンク・参照内容・差分確認でよい。
 - 入力不具合は実際の打鍵/フリック、待機、採用、追加入力、Backspace/Delete、カーソル・範囲選択、確定/取消、入力先切替の順序を再構成し、必要な回帰テストを追加する。
 - JVMテストではAndroid APIの既定値返却が有効で、JNIロード失敗を捕捉する経路もある。成功だけでnative辞書・モデル・InputConnection・IMEライフサイクルの成功と判断しない。
 - `app/src/androidTest/` の `PortInstrumentationRunner` はplatform Instrumentationを使い、debug専用の `PortTestActivity` でInputConnection・native資産・実IME操作を検査する。`assembleDebugAndroidTest` でテストAPKを作り、対象を固定して `am instrument -w -r` で実行し、tests/failuresと個別結果を確認する。connected testタスクのNO-SOURCE/0件を成功としない。テストにはIMEの画面表示と合成入力を使うため、指定端末だけで実行する。
@@ -47,7 +47,7 @@
 
 ## 配布とGit保存
 
-- 現行app/build.gradle.ktsはrelease署名設定なし。`assembleRelease` 成功やunsigned APKを、そのまま配布可能と報告しない。debug APKは開発・限定試験用、正式配布は管理したrelease鍵で署名・検証する。
+- 現行rebuilt/build.gradle.ktsはrelease署名設定なし。`assembleRelease` 成功やunsigned APKを、そのまま配布可能と報告しない。debug APKは開発・限定試験用、正式配布は管理したrelease鍵で署名・検証する。
 - 配布時は前回配布よりversionCodeを増やし、versionNameを明示する。applicationIdと更新用署名の互換性を保持する。鍵を勝手に新規作成・交換しない。
 - 最終署名済みAPKを固定保存し、その同じAPKを端末でテストして配布する。テスト後に再ビルド・再署名した場合は別成果物として再確認する。AABは直接端末インストールするAPKとは別物。
 - 配布候補はルートの `dist/android/<日時>/` に保存し、SHA-256、アプリID、版、署名証明書指紋、Gitコミット/未コミット差分、ABI、モデル情報、テスト結果を記録する。入力履歴・端末固有識別情報・鍵の秘密値は配布記録に入れない。

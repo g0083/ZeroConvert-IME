@@ -147,7 +147,7 @@ class ModelAssistTest {
     }
 
     @Test fun packagedReverseDictionarySupportsRealHomophonesAndCompoundWords() {
-        val dictionary = ReverseReadingDictionary(java.io.File("src/main/assets/dictionary/reverse-v2.bin").readBytes())
+        val dictionary = ReverseReadingDictionary(TestAssets.file("dictionary/reverse-v2.bin").readBytes())
         assertTrue(dictionary.matches("今日", "きょう"))
         assertTrue(dictionary.matches("今日", "こんにち"))
         assertTrue(dictionary.matches("統一", "とういつ"))

@@ -21,13 +21,15 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Native engine build failed: $abi" }
         }
     }
+    & node scripts/check-shared-engine-pins.mjs
+    if ($LASTEXITCODE -ne 0) { throw 'Android Swift pins differ from the Windows pins.' }
     & node scripts/check-shared-engine.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Shared engine source/binary verification failed.' }
     & python scripts/check-android-native.py
     if ($LASTEXITCODE -ne 0) { throw 'Android native dependency verification failed.' }
     Push-Location android
     try {
-        & .\gradlew.bat "-PuniversalApk=$($UniversalApk.IsPresent.ToString().ToLowerInvariant())" :app:testDebugUnitTest :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
+        & .\gradlew.bat "-PuniversalApk=$($UniversalApk.IsPresent.ToString().ToLowerInvariant())" :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
         if ($LASTEXITCODE -ne 0) { throw 'Android checks or APK build failed.' }
     } finally { Pop-Location }
     & python scripts/check-android-apk.py

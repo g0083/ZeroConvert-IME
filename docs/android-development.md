@@ -1,15 +1,16 @@
 # Android版の修正・テスト・端末反映・配布
 
-新しいWindows共通エンジン版は `:rebuilt`。構造・ビルド入口・移行・未確認点は
-[Android新構成](android-shared-engine.md) を参照。以下の `:app` の記録と過去の実機結果は従来版のもの。
+Windows共通エンジン版は `:rebuilt`。構造・ビルド入口・移行・未確認点は
+[Android新構成](android-shared-engine.md) を参照。2026-11-08に `:app` モジュールを廃止し、
+`android/app/` は `:rebuilt` がコンパイルする共有ソースの置き場になった。
+以下の `:app` を含む記述と過去の実機結果は従来版の記録である。
 
 共通エンジン版の導入用APKはCPU別に出力する。ARM64実機は
 `android/rebuilt/build/outputs/apk/debug/rebuilt-arm64-v8a-debug.apk`、x86_64は
 `rebuilt-x86_64-debug.apk`。現在の出力は同じフォルダの `output-metadata.json` で確認する。
 `Build-Android.bat -UniversalApk` では両CPUを含む `rebuilt-universal-debug.apk` も作成できる。
 旧 `rebuilt-debug.apk` は新しいビルドで更新されないので導入しない。
-`Build-Android.bat` の検査に `:app:testDebugUnitTest` が含まれていても、
-旧構成の `android/app/build/outputs/apk/debug/app-debug.apk` は更新されない。
+`Build-Android.bat` は `:rebuilt` だけをビルドする。`android/app/build/` は生成されない。
 2026-10-26、vivoへ旧1.0.0のAPKを再導入したため英字Enter修正が反映されなかった。
 版・ハッシュで修正版を識別する。詳細は [英字Enterの記録](investigations/android-english-enter.md)。
 
@@ -35,10 +36,10 @@ Git保存はこの流れと別の操作。コミットしただけ、APKを作�
 | 項目 | 現在の設定・状況 |
 |---|---|
 | applicationId / namespace | `com.zeroconvert.ime` |
-| 版 | `app/build.gradle.kts` のversionCode=1、versionName=1.0.0 |
-| SDK | compile/target 34、min 26 |
+| 版 | `android/gradle.properties` の `zerocon.versionCode` / `zerocon.versionName` |
+| SDK | `android/gradle.properties` の `zerocon.compileSdk` / `zerocon.targetSdk` / `zerocon.minSdk` |
 | ビルド | Gradle wrapper 8.7、Android Gradle Plugin 8.3.2、Kotlin 1.9.23、JDK 17 |
-| native | NDK 27.1.12297006、CMake 3.22.1、C++17、llama.cpp/JNI |
+| native | `zerocon.ndkVersion`、CMake 3.22.1、C++17、`engine/native` のJNI |
 | ABI | arm64-v8a、x86_64 |
 | JVMテスト | 入力状態、フリック、補正・定型句先読み、自動確定のテストあり |
 | 端末内テスト | `PortInstrumentationRunner`。debug専用入力欄で実InputConnection・native辞書/モデル・IME操作を検証 |
@@ -98,16 +99,18 @@ llama.cppはルートのgitlinkで固定し、独自変更は `patches/llama.cpp
 以下のGradleコマンドは **android/内のPowerShell** で実行する。
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest
-.\gradlew.bat :app:lintDebug
-.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :rebuilt:testDebugUnitTest
+.\gradlew.bat :rebuilt:lintDebug
+.\gradlew.bat :rebuilt:assembleDebug
 ```
 
-基本はこの3段階。テストは `app/build/reports/tests/testDebugUnitTest/`、lintは `app/build/reports/`、debug APKは通常 `app/build/outputs/apk/debug/app-debug.apk` に出る。実際の出力と終了コードを確認する。過去のAPKやログがあるだけでは今回の成功としない。
+基本はこの3段階。テストは `rebuilt/build/reports/tests/testDebugUnitTest/`、lintは `rebuilt/build/reports/`、debug APKは `rebuilt/build/outputs/apk/debug/` に出る。実際の出力と終了コードを確認する。過去のAPKやログがあるだけでは今回の成功としない。
+
+JVMテストは除外リスト方式で、新しいテストは自動的に実行される。除外はメソッド単位で、旧Kotlin補正・先読み経路（共有エンジンが代替）とJVMからロードできないJNI呼び出しの2種類だけ。除外を足すときは理由を書く。
 
 純粋なKotlinの入力・候補選択ロジックはJVMテストへ、InputConnection・IMEライフサイクル・JNI・モデル読込・実際のキーボード表示は端末確認へ割り当てる。JVMテスト設定の `isReturnDefaultValues=true` と、nativeロード失敗を捕捉する経路があるため、ホスト単体テストでnative機能を検証したつもりにならない。
 
-端末内テストはplatform Instrumentationの専用runnerを使う。`:app:assembleDebugAndroidTest` で `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` を作り、指定端末へ本体APKとテストAPKを更新した後に `adb -s <serial> shell am instrument -w -r com.zeroconvert.ime.test/com.zeroconvert.ime.PortInstrumentationRunner` を実行する。`tests` が正の件数で `failures=0`、各項目がPASSであることを確認する。シェルの終了コード0だけで成功と判断しない。runnerは制御した入力欄を開き、IME画面を操作する。通常の利用アプリの文書は使わず、既定IMEを変更しない。`:app:connectedDebugAndroidTest` の0件/NO-SOURCEを成功の代わりにしない。
+端末内テストはplatform Instrumentationの専用runnerを使う。`:rebuilt:assembleDebugAndroidTest` で `rebuilt/build/outputs/apk/androidTest/debug/` のテストAPKを作り、指定端末へ本体APKとテストAPKを更新した後に `adb -s <serial> shell am instrument -w -r com.zeroconvert.ime.test/com.zeroconvert.ime.PortInstrumentationRunner` を実行する。`tests` が正の件数で `failures=0`、各項目がPASSであることを確認する。シェルの終了コード0だけで成功と判断しない。runnerは制御した入力欄を開き、IME画面を操作する。通常の利用アプリの文書は使わず、既定IMEを変更しない。`:rebuilt:connectedDebugAndroidTest` の0件/NO-SOURCEを成功の代わりにしない。
 
 既存データで精度も測定する場合は同じrunnerへ `-e quality true` を追加する。基本動作の検査に補正35例・正常入力8例・先読み30例の検査を加え、`files/port-quality.jsonl` に合成入力の測定結果を保存する。正常入力への不要な補正提案は検査失敗になる。精度値と機能検査を分けて報告し、期待値との不一致を単なるビルド成功で覆わない。学習はプロセス内で抑止し、利用者の学習モード設定を一時変更しない。画面を点灯・解除してアプリを前面にした状態で実行する。runnerの画面起動待ちには10秒の上限がある。検証用Activityが前面にある間だけKEEP_SCREEN_ONを使い、永続的な画面設定は変更しない。
 
@@ -125,7 +128,7 @@ llama.cppはルートのgitlinkで固定し、独自変更は `patches/llama.cpp
 ```powershell
 # android/内。serialは確認した対象へ置き換える。
 $androidSerial = '<対象端末のserial>'
-$androidApk = (Resolve-Path '.\app\build\outputs\apk\debug\app-debug.apk').Path
+$androidApk = (Resolve-Path '.\rebuilt\build\outputs\apk\debug\rebuilt-arm64-v8a-debug.apk').Path
 Get-FileHash -Algorithm SHA256 -LiteralPath $androidApk
 adb -s $androidSerial install -r $androidApk
 adb -s $androidSerial shell dumpsys package com.zeroconvert.ime

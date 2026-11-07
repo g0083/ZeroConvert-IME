@@ -20,5 +20,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "ZeroConvert-IME"
-include(":app")
+// One application module. `app/` holds the shared sources and assets that
+// `:rebuilt` compiles; it is not a Gradle module of its own, so the version,
+// SDK levels and native build cannot drift between two hosts.
 include(":rebuilt")

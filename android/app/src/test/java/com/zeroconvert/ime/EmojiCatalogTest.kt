@@ -61,7 +61,7 @@ class EmojiCatalogTest {
 
     @Test fun generatedCatalogCoversEveryCategoryWithSearchableKeywords() {
         val generated = EmojiCatalog.parse(
-            java.io.File("src/main/assets/emoji_catalog.tsv").bufferedReader(Charsets.UTF_8).readLines().asSequence()
+            TestAssets.file("emoji_catalog.tsv").bufferedReader(Charsets.UTF_8).readLines().asSequence()
         )
         assertEquals(
             listOf("smileys", "people", "nature", "food", "travel", "activities", "objects", "symbols", "flags"),
