@@ -71,6 +71,9 @@ vendored converterを `prepare-shared-engine.mjs` が `prepare-modern-llama.py` 
 
 ```powershell
 cargo test --locked --manifest-path engine/rust/Cargo.toml --lib -- --test-threads=1
+python scripts/run.py windows/scripts/test_converter_patch.py
+python scripts/run.py windows/scripts/prepare-modern-llama.py --check-converter
+node scripts/check-shared-engine-inputs.mjs
 powershell -File scripts/build-android-shared-engine.ps1 -Abi arm64-v8a
 powershell -File scripts/build-android-shared-engine.ps1 -Abi x86_64
 node scripts/check-shared-engine.mjs
@@ -78,6 +81,14 @@ python scripts/check-android-native.py
 # android/内
 .\gradlew.bat :app:testDebugUnitTest :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
 ```
+
+ツールチェーン不要の3コマンドはCIの `shared-engine-inputs` ジョブでも実行する。
+converterのパッチは `windows/scripts/converter_patch.py` のアンカーが正本で、
+`prepare-modern-llama.py` はそれを適用するだけ。converterのpinを上げるときは
+同じコミットでアンカーを直し、`--check-converter` で確認する。指紋の対象は
+`scripts/shared-engine-inputs.mjs` が正本で、`libzenz_jni.so` に実際に
+コンパイルされる `assist_jni.h` と `keyboard_typo_dictionary.inc` を含む。
+未コンパイルの `mod.rs.bak` は対象外。
 
 生成物は `engine/build/`。ステージングされたSwiftソースやnativeを手編集しない。
 このPCはSwift6.4.1、NDK27.1.12297006、JDK17、Gradle8.7を使用する。

@@ -25,6 +25,25 @@ jobs:
         run: cargo test --locked --manifest-path engine/rust/Cargo.toml --lib -- --test-threads=1
       - name: Shared Rust formatting
         run: cargo fmt --manifest-path engine/rust/Cargo.toml -- --check
+  shared-engine-inputs:
+    # The Android host compiles the Windows Swift sources and the pinned
+    # converter. Nothing else in CI reads them, so a Windows-side change could
+    # break only the Android build. These checks need no NDK or Swift toolchain.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Converter patch anchors
+        run: python scripts/run.py windows/scripts/test_converter_patch.py
+      - name: Pinned converter still matches the patch anchors
+        run: python scripts/run.py windows/scripts/prepare-modern-llama.py --check-converter
+      - name: Shared engine fingerprint inputs
+        run: node scripts/check-shared-engine-inputs.mjs
   source-checks:
     runs-on: windows-latest
     steps:
