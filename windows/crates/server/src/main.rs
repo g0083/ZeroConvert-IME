@@ -41,6 +41,11 @@ static JEV_CONVERSION_ENABLED: AtomicBool = AtomicBool::new(false);
 static AI_ASSIST_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRANSLATION_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRANSLATION_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+// Latest translation request's cancellation token. A new kind==3 request
+// cancels the previous worker so the fresh baseline is not queued behind it.
+static TRANSLATION_CANCEL: std::sync::Mutex<
+    Option<Arc<ai_assist::translation::TranslationCancel>>,
+> = std::sync::Mutex::new(None);
 static AI_ENGINE_IS_LM_STUDIO: AtomicBool = AtomicBool::new(false);
 static LAST_CONTEXT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
@@ -1921,6 +1926,16 @@ impl AzookeyService for MyAzookeyService {
             {
                 return Ok(Response::new(Default::default()));
             }
+            // A newer translation request supersedes the running one: cancel it
+            // so the llama-server slot frees within a poll slice instead of
+            // blocking the fresh request for up to the full 10s deadline.
+            let cancel = Arc::new(ai_assist::translation::TranslationCancel::new());
+            {
+                let mut current = TRANSLATION_CANCEL.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(previous) = current.replace(Arc::clone(&cancel)) {
+                    previous.cancel();
+                }
+            }
             let permit = TRANSLATION_REQUEST_SLOTS
                 .acquire()
                 .await
@@ -1929,7 +1944,9 @@ impl AzookeyService for MyAzookeyService {
                 let _permit = permit;
                 let text = TRANSLATION_ENABLED
                     .load(Ordering::Relaxed)
-                    .then(|| ai_assist::translation::translate(&request.baseline))
+                    .then(|| {
+                        ai_assist::translation::translate_cancellable(&request.baseline, &cancel)
+                    })
                     .flatten();
                 shared::proto::GetAssistCandidatesResponse {
                     suggestions: text
@@ -3929,5 +3946,43 @@ mod path_tests {
         assert_eq!(suggestions[0].text, "歯科医に診てもらう");
         assert_eq!(suggestions[1].text, "歯科医");
         assert_eq!(suggestions[2].text, "しかいにみてもらう");
+    }
+}
+
+#[cfg(test)]
+mod translation_supersede_tests {
+    use shared::proto::azookey_service_server::AzookeyService;
+    use std::sync::atomic::Ordering;
+
+    // A newer kind==3 request must cancel the previous worker's token so the
+    // fresh baseline is not queued behind a superseded 10s generation.
+    #[tokio::test]
+    async fn newer_translation_request_cancels_the_previous_token() {
+        super::TRANSLATION_ENABLED.store(true, Ordering::Relaxed);
+        let first = std::sync::Arc::new(super::ai_assist::translation::TranslationCancel::new());
+        {
+            let mut current = super::TRANSLATION_CANCEL
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *current = Some(std::sync::Arc::clone(&first));
+        }
+        let service = super::MyAzookeyService::default();
+        // The request fails fast (no llama-server in tests) but the handler must
+        // still have swapped in a fresh token and cancelled the old one.
+        let _ = service
+            .get_assist_candidates(tonic::Request::new(
+                shared::proto::GetAssistCandidatesRequest {
+                    baseline: "会議は明日です。".into(),
+                    raw_input: "kaigi".into(),
+                    input_count: 5,
+                    kind: 3,
+                    ..Default::default()
+                },
+            ))
+            .await;
+        assert!(
+            first.is_cancelled_for_test(),
+            "the previous request's token must be cancelled by a newer request"
+        );
     }
 }

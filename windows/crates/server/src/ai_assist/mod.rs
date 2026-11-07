@@ -276,6 +276,77 @@ fn simple_http_post(port: u16, path: &str, body_json: &Value, timeout_ms: u64) -
     }
 }
 
+/// Cancellable variant for long-running completions (translation). The read
+/// loop polls in short slices; on cancellation the socket is dropped mid-read
+/// so the server aborts the superseded generation instead of finishing it.
+fn simple_http_post_cancellable(
+    port: u16,
+    path: &str,
+    body_json: &Value,
+    timeout_ms: u64,
+    cancel: &translation::TranslationCancel,
+) -> Option<Value> {
+    if let Some(response) = runtime::complete_override(port, path, body_json, timeout_ms) {
+        return response;
+    }
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream =
+        TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_millis(timeout_ms)).ok()?;
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(timeout_ms)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(timeout_ms)));
+
+    let body_str = body_json.to_string();
+    let request = format!(
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        path, port, body_str.len(), body_str
+    );
+
+    if stream.write_all(request.as_bytes()).is_err() {
+        return None;
+    }
+
+    let mut response_buf = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        // Poll in short slices so cancellation is noticed within ~200ms even
+        // while the server is still generating the response body.
+        stream
+            .set_read_timeout(Some(remaining.min(Duration::from_millis(200))))
+            .ok()?;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => response_buf.extend_from_slice(&chunk[..count]),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                if cancel.is_cancelled() {
+                    return None;
+                }
+                continue;
+            }
+            Err(_) => return None,
+        }
+        if response_buf.len() > 128 * 1024 {
+            return None;
+        }
+    }
+    let response_str = String::from_utf8_lossy(&response_buf);
+
+    if let Some(pos) = response_str.find("\r\n\r\n") {
+        let json_part = &response_str[pos + 4..];
+        serde_json::from_str(json_part).ok()
+    } else {
+        None
+    }
+}
+
 /// Damerau-Levenshtein 編集距離アルゴリズム（挿入、削除、置換、隣接文字転倒）
 pub fn to_katakana(s: &str) -> String {
     s.chars()
