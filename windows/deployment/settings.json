@@ -42,6 +42,7 @@
     "experimental_typo_correction": false,
     "auto_commit_live_conversion": true,
     "auto_commit_rewind_on_backspace": false,
+    "follow_input_scope_mode": false,
     "experimental_ai_assist": true,
     "experimental_translation": false,
     "translation_model": "0.8b",

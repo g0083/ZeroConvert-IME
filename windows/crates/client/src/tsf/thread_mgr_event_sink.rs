@@ -1,12 +1,23 @@
-use windows::Win32::UI::TextServices::{
-    ITfContext, ITfDocumentMgr, ITfThreadFocusSink_Impl, ITfThreadMgrEventSink_Impl,
+use std::{cell::Cell, rc::Rc};
+
+use windows::{
+    core::AsImpl as _,
+    Win32::UI::TextServices::{
+        ITfContext, ITfDocumentMgr, ITfTextInputProcessor, ITfThreadFocusSink_Impl,
+        ITfThreadMgrEventSink_Impl, TF_DEFAULT_SELECTION, TF_SELECTION,
+    },
 };
 
 use anyhow::Result;
 
-use crate::engine::state::{keyboard_disabled_from_context, IMEState};
+use crate::engine::{
+    composition::CompositionState,
+    input_mode::InputMode,
+    input_scope_mode::mode_for_scopes,
+    state::{keyboard_disabled_from_context, IMEState},
+};
 
-use super::edit_session::has_same_com_identity;
+use super::edit_session::{has_same_com_identity, request_async_read_edit_session};
 use super::factory::{TextServiceFactory, TextServiceFactory_Impl};
 
 fn ensure_ipc_service_for_tsf_event(event: &str) {
@@ -15,6 +26,24 @@ fn ensure_ipc_service_for_tsf_event(event: &str) {
         Ok(false) => {}
         Err(error) => tracing::warn!(?error, event, "IPC service is unavailable during TSF event"),
     }
+}
+
+/// Input mode implied by the InputScope of the current selection, if any.
+fn input_scope_mode_for_cookie(context: &ITfContext, cookie: u32) -> Option<InputMode> {
+    let mut selection = [TF_SELECTION::default()];
+    let mut fetched = 0;
+    unsafe {
+        context
+            .GetSelection(cookie, TF_DEFAULT_SELECTION, &mut selection, &mut fetched)
+            .ok()?;
+    }
+    if fetched == 0 {
+        return None;
+    }
+    let range = selection[0].range.as_ref()?;
+    let range = unsafe { range.Clone().ok()? };
+    let scopes = TextServiceFactory::range_input_scopes(cookie, context, &range).ok()?;
+    mode_for_scopes(&scopes)
 }
 
 impl TextServiceFactory {
@@ -76,6 +105,88 @@ impl TextServiceFactory {
 
         self.set_keyboard_disabled_state(disabled)
     }
+
+    /// Align the input mode with the focused field's InputScope.
+    ///
+    /// This runs only when input starts, so a mode the user picks while typing is
+    /// never overwritten. The scope is read in one asynchronous edit session and
+    /// applied from its completion, never from inside the edit session.
+    pub(crate) fn request_input_scope_mode_switch(
+        &self,
+        focus: Option<&ITfDocumentMgr>,
+    ) -> Result<()> {
+        let Some(focus) = focus else {
+            return Ok(());
+        };
+        if !self.follow_input_scope_mode_enabled()? || IMEState::keyboard_disabled()? {
+            return Ok(());
+        }
+        let (tid, this, context) = {
+            let text_service = self.borrow()?;
+            let composing = text_service
+                .borrow_composition()
+                .is_ok_and(|composition| composition.state != CompositionState::None);
+            if composing || text_service.tid == 0 {
+                return Ok(());
+            }
+            let context = unsafe { focus.GetTop()? };
+            if keyboard_disabled_from_context(&context) {
+                return Ok(());
+            }
+            (
+                text_service.tid,
+                text_service.this::<ITfTextInputProcessor>()?,
+                context,
+            )
+        };
+
+        let requested = Rc::new(Cell::new(None));
+        let callback = Rc::new({
+            let context = context.clone();
+            let requested = requested.clone();
+            move |cookie| {
+                requested.set(input_scope_mode_for_cookie(&context, cookie));
+                Ok(())
+            }
+        });
+        let completion = Rc::new({
+            let this = this.clone();
+            let context = context.clone();
+            move || {
+                let Some(mode) = requested.take() else {
+                    return;
+                };
+                let factory = unsafe { this.as_impl() };
+                let Ok(mut text_service) = factory.borrow_mut() else {
+                    return;
+                };
+                // A newer focus target must not receive this field's mode.
+                let still_focused = text_service
+                    .layout_sink_context
+                    .as_ref()
+                    .is_some_and(|current| has_same_com_identity(current, &context));
+                let composing = text_service
+                    .borrow_composition()
+                    .is_ok_and(|composition| composition.state != CompositionState::None);
+                if still_focused && !composing {
+                    // The mode switch resolves its target context from here; focus
+                    // arrives before the first key, which would otherwise set it.
+                    text_service.context = Some(context.clone());
+                }
+                drop(text_service);
+                if !still_focused || composing || IMEState::keyboard_disabled().unwrap_or(true) {
+                    return;
+                }
+                if IMEState::input_mode().is_ok_and(|current| current == mode) {
+                    return;
+                }
+                if let Err(error) = factory.request_input_mode_switch_after_composition(mode) {
+                    tracing::debug!(?error, "Skip InputScope input mode switch");
+                }
+            }
+        });
+        request_async_read_edit_session(tid, context, callback, completion)
+    }
 }
 
 impl ITfThreadMgrEventSink_Impl for TextServiceFactory_Impl {
@@ -107,6 +218,9 @@ impl ITfThreadMgrEventSink_Impl for TextServiceFactory_Impl {
         self.end_composition_for_tsf_event();
         self.set_keyboard_disabled_for_document_mgr(focus)?;
         ensure_ipc_service_for_tsf_event("OnSetFocus");
+        if let Err(error) = self.request_input_scope_mode_switch(focus) {
+            tracing::debug!(?error, "Skip InputScope input mode switch on focus");
+        }
 
         if focus.is_none() {
             let mut text_service = self.borrow_mut()?;

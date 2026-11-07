@@ -51,6 +51,7 @@ type GeneralConfigState = {
     experimental_ai_engine: string;
     auto_commit_live_conversion: boolean;
     auto_commit_rewind_on_backspace: boolean;
+    follow_input_scope_mode: boolean;
 };
 type CharacterWidthGroupsState = Record<
     "alphabet" | "number" | "bracket" | "comma_period" | "middle_dot_corner_bracket" |
@@ -79,6 +80,7 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     experimental_ai_engine: "embedded",
     auto_commit_live_conversion: true,
     auto_commit_rewind_on_backspace: false,
+    follow_input_scope_mode: false,
 };
 const LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MIN = -12;
 const LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_MAX = 12;
@@ -522,6 +524,9 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                             <Switch id={key} checked={shortcutValue[stateKey]} onCheckedChange={(value) => void updateShortcut(key, value)} />
                         </SettingsRow>
                     ))}
+                    <SettingsRow label="入力欄に合わせて自動切り替え" description="入力欄が英数字・数値・URL等を宣言している場合は英数、かな・漢字を宣言している場合は日本語で入力を始めます。入力中に切り替えたモードはそのまま使えます。" htmlFor="follow-input-scope-mode">
+                        <Switch id="follow-input-scope-mode" checked={generalValue.follow_input_scope_mode} onCheckedChange={(value) => void updateGeneralConfig("follow_input_scope_mode", value)} />
+                    </SettingsRow>
                 </SettingsSection>
                 <SettingsSection title="再変換">
                     <SettingsRow label="再変換キー" description="選択した文章はSpaceでも再変換できます。「無効」の場合はSpaceによる再変換も停止します。" htmlFor="reconversion-key">
