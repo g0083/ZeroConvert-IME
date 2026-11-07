@@ -4795,24 +4795,21 @@ impl TextServiceFactory {
         )
     }
 
-    fn input_scope_list_contains_sensitive(input_scope: &ITfInputScope) -> bool {
+    fn input_scope_list(input_scope: &ITfInputScope) -> Result<Vec<InputScope>> {
         unsafe {
             let mut scopes_ptr: *mut InputScope = std::ptr::null_mut();
             let mut scope_count = 0;
-            if input_scope
+            let scopes = input_scope
                 .GetInputScopes(&mut scopes_ptr, &mut scope_count)
-                .is_err()
-            {
-                return false;
-            }
-            if scopes_ptr.is_null() {
-                return false;
-            }
-
-            let scopes = std::slice::from_raw_parts(scopes_ptr, scope_count as usize);
-            let sensitive = scopes.iter().copied().any(Self::is_sensitive_input_scope);
+                .map(|()| {
+                    if scopes_ptr.is_null() || scope_count == 0 {
+                        Vec::new()
+                    } else {
+                        std::slice::from_raw_parts(scopes_ptr, scope_count as usize).to_vec()
+                    }
+                });
             CoTaskMemFree(Some(scopes_ptr.cast()));
-            sensitive
+            Ok(scopes?)
         }
     }
 
@@ -4851,11 +4848,23 @@ impl TextServiceFactory {
         context: &ITfContext,
         range: &ITfRange,
     ) -> Result<bool> {
+        Ok(Self::range_input_scopes(cookie, context, range)?
+            .iter()
+            .copied()
+            .any(Self::is_sensitive_input_scope))
+    }
+
+    /// InputScope list declared for `range`, empty when the host declares none.
+    pub(crate) fn range_input_scopes(
+        cookie: u32,
+        context: &ITfContext,
+        range: &ITfRange,
+    ) -> Result<Vec<InputScope>> {
         let property = unsafe { context.GetAppProperty(&GUID_PROP_INPUTSCOPE)? };
         let value = unsafe { property.GetValue(cookie, range)? };
         let unknown = IUnknown::try_from(&value)?;
         let input_scope = unknown.cast::<ITfInputScope>()?;
-        Ok(Self::input_scope_list_contains_sensitive(&input_scope))
+        Self::input_scope_list(&input_scope)
     }
 
     fn current_context_has_sensitive_input_scope(&self) -> bool {

@@ -721,6 +721,9 @@ pub struct GeneralConfig {
     pub auto_commit_rewind_on_backspace: bool,
     #[serde(default = "default_theme_color")]
     pub theme_color: String,
+    /// Follow the focused field's InputScope when input starts.
+    #[serde(default)]
+    pub follow_input_scope_mode: bool,
 }
 
 impl Default for GeneralConfig {
@@ -750,6 +753,7 @@ impl Default for GeneralConfig {
             auto_commit_live_conversion: true,
             auto_commit_rewind_on_backspace: false,
             theme_color: default_theme_color(),
+            follow_input_scope_mode: false,
         }
     }
 }
@@ -1056,6 +1060,32 @@ mod tests {
         let enabled: GeneralConfig =
             serde_json::from_str(r#"{"experimental_typo_correction":true}"#).unwrap();
         assert!(enabled.experimental_typo_correction);
+    }
+
+    #[test]
+    fn follow_input_scope_mode_defaults_to_off() {
+        let default_config = GeneralConfig::default();
+        assert!(!default_config.follow_input_scope_mode);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(!deserialized.follow_input_scope_mode);
+
+        let enabled: GeneralConfig =
+            serde_json::from_str(r#"{"follow_input_scope_mode":true}"#).unwrap();
+        assert!(enabled.follow_input_scope_mode);
+    }
+
+    #[test]
+    fn settings_without_follow_input_scope_mode_still_load() {
+        let legacy = r#"{
+            "jev_conversion": true,
+            "punctuation_style": "touten_kuten",
+            "space_input": "always_half",
+            "experimental_ai_assist": true
+        }"#;
+        let general: GeneralConfig = serde_json::from_str(legacy).unwrap();
+        assert!(general.jev_conversion);
+        assert!(!general.follow_input_scope_mode);
     }
 
     #[test]

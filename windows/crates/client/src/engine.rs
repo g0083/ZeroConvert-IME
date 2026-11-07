@@ -2,6 +2,7 @@ pub(super) mod client_action;
 pub(super) mod composition;
 pub(super) mod full_width;
 pub(super) mod input_mode;
+pub(super) mod input_scope_mode;
 pub(super) mod ipc_service;
 pub(super) mod romaji_lookup;
 pub(super) mod state;
