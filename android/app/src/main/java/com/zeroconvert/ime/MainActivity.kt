@@ -192,7 +192,12 @@ fun MainScreen(
     }
     var isQwertyNumberRow by remember {
         mutableStateOf(
-            imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, true)
+            imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, false)
+        )
+    }
+    var isFollowInputTypeMode by remember {
+        mutableStateOf(
+            imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_FOLLOW_INPUT_TYPE_MODE, false)
         )
     }
     var keyboardKeyHeight by remember {
@@ -477,13 +482,13 @@ fun MainScreen(
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
                 val previewScale = (maxWidth / realKeyboardWidth).coerceAtMost(1f)
-                // Mirror the IME: the two bars above the keys plus the key area, whose row
-                // count drops when the QWERTY number row is hidden. Reserving the bars keeps
-                // the bottom row inside the frame instead of clipping it.
+                // Mirror the IME: the two bars above the keys plus the key area, which grows to
+                // five rows only for the QWERTY layout with the number row shown. Reserving the
+                // bars keeps the bottom row inside the frame instead of clipping it.
                 val previewRowCount = if (
-                    japaneseLayout == JapaneseInputLayout.QWERTY.name && !isQwertyNumberRow
-                ) 4 else 5
-                val previewBarHeight = (keyboardKeyHeight * (48f / 46f)).dp
+                    japaneseLayout == JapaneseInputLayout.QWERTY.name && isQwertyNumberRow
+                ) 5 else 4
+                val previewBarHeight = (keyboardKeyHeight * 0.8f).dp
                 val realKeyboardHeight = previewBarHeight * 2 +
                     keyboardContentHeight(keyboardKeyHeight.dp, previewRowCount)
                 val density = LocalDensity.current
@@ -532,7 +537,11 @@ fun MainScreen(
                                                 actionKeyBg = palette.keyModifier,
                                                 textColor = palette.textPrimary,
                                                 palette = palette,
-                                                rowHeight = (keyboardKeyHeight * (52f / 46f)).dp,
+                                                rowHeight = keyboardRowHeight(
+                                                    keyboardKeyHeight.dp,
+                                                    rowCount = 5,
+                                                    targetRowCount = 4
+                                                ),
                                                 isFlickOnly = isFlickOnly,
                                                 onKanaInput = {},
                                                 onReplaceLastKana = {},
@@ -660,6 +669,20 @@ fun MainScreen(
                 onCheckedChange = { checked ->
                     isFlickOnly = checked
                     imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_FLICK_ONLY, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "入力欄に合わせてモードを切替",
+                description = "数値・電話・URL・メール等の入力欄では、その入力欄に合ったモードで"
+                    + "キーボードを開きます。開いた後に切り替えたモードはそのまま使えます。",
+                checked = isFollowInputTypeMode,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isFollowInputTypeMode = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_FOLLOW_INPUT_TYPE_MODE, checked)
+                        .apply()
                 }
             )
         }

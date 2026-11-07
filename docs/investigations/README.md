@@ -8,6 +8,8 @@
 - `android-cursor-ownership.md`: カーソル移動時の所有権判定
 - `android-cursor-prefix-regression.md`: カーソル前変換の復旧と検証
 - `android-mode-switch.md`: 入力モード切替時の英字保持仕様
+- `android-input-type-mode.md`: 入力先の inputType に合わせたキーボードモード自動切替（実装計画）
+- `windows-input-scope-mode.md`: 入力先の InputScope に合わせた入力モード自動切替（実装計画）
 - `android-pending-romaji.md`: 入力途中のローマ字保護仕様
 - `android-prefix-cursor.md`: カーソル前入力の制御
 - `android-selection-count.md`: 選択範囲の文字数カウント

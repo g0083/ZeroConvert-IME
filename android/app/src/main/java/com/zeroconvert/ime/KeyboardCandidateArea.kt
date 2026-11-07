@@ -34,11 +34,11 @@ import com.zeroconvert.ime.assist.AiAssistResult
 import com.zeroconvert.ime.assist.AiAssistType
 
 /**
- * Height of the reading and candidate bars. They follow the key height setting so the whole
- * keyboard keeps one vertical rhythm; the 48/46 ratio keeps the default 46dp keys at 48dp bars.
+ * Height of the reading and candidate bars: 80% of the key height setting, so the bars stay
+ * compact while still following the keys.
  */
 val KeyboardBarHeight: Dp
-    @Composable get() = LocalKeyboardKeyHeight.current * (48f / 46f)
+    @Composable get() = LocalKeyboardKeyHeight.current * 0.8f
 
 /**
  * Space the key area adds around the rows: the 10dp vertical padding plus the slack that
@@ -46,12 +46,23 @@ val KeyboardBarHeight: Dp
  */
 val KeyboardContentExtraHeight: Dp = 35.dp
 
+/** Vertical padding inside the key area (4dp above the rows, 6dp below). */
+val KeyboardContentPadding: Dp = 10.dp
+
 /**
- * Height of the key area. The QWERTY number row is optional, so the row count has to be
- * part of the calculation; otherwise hiding it leaves an empty band at the bottom.
+ * Height of the key area. Hiding the QWERTY number row makes four rows the baseline for the
+ * whole keyboard, so the numeric and emoji modes shrink to it instead of growing past it.
  */
 fun keyboardContentHeight(keyHeight: Dp, rowCount: Int): Dp =
     keyHeight * rowCount + KeyboardContentExtraHeight
+
+/**
+ * Row height that fits [rowCount] fixed-height rows into the key area sized for
+ * [targetRowCount] rows. The 12-key layout needs this: it stacks five rows but has to keep
+ * the four-row height of the QWERTY layout.
+ */
+fun keyboardRowHeight(keyHeight: Dp, rowCount: Int, targetRowCount: Int): Dp =
+    (keyboardContentHeight(keyHeight, targetRowCount) - KeyboardContentPadding) / rowCount
 
 @Composable
 fun SelectionCountLabel(count: SelectionCharacterCount, palette: ZeroConPalette, modifier: Modifier = Modifier) {

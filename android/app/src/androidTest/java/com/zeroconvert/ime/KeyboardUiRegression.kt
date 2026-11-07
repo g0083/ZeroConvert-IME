@@ -38,6 +38,9 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
         val fontScale: Float = 1f,
         val candidates: List<Candidate> = listOf(Candidate("通常候補", "")),
         val emoji: Boolean = false,
+        val symbols: Boolean = false,
+        val shifted: Boolean = false,
+        val numberRow: Boolean = false,
         val revision: Int = 0
     )
     private val state = mutableStateOf(Case())
@@ -49,6 +52,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
     private var undone = 0
     private var typed = ""
     private var emojiTyped = ""
+    private var symbolTyped = ""
     private val emojiCategories: List<EmojiCategory> by lazy {
         instrumentation.targetContext.assets.open("emoji_catalog.tsv")
             .bufferedReader(Charsets.UTF_8).useLines { EmojiCatalog.parse(it) }
@@ -163,6 +167,31 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
         checkNotNull(found) { "Missing UI element: $label" }.getBoundsInScreen(it)
     }
 
+    /** Every on-screen node carrying the label, so the guide can be told from a key label. */
+    private fun nodeBounds(label: String): List<Rect> {
+        if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+        val found = mutableListOf<Rect>()
+        fun visit(node: AccessibilityNodeInfo) {
+            if (node.contentDescription?.toString() == label || node.text?.toString() == label) {
+                found += Rect().also { node.getBoundsInScreen(it) }
+            }
+            for (index in 0 until node.childCount) node.getChild(index)?.let { visit(it) }
+        }
+        for (window in instrumentation.uiAutomation.windows) {
+            if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION || !window.isActive) continue
+            window.root?.takeIf { it.packageName == instrumentation.targetContext.packageName }
+                ?.let { visit(it) }
+        }
+        return found
+    }
+
+    private fun moveTo(x: Float, y: Float, downTime: Long) {
+        val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_MOVE, x, y, 0)
+        try { check(instrumentation.uiAutomation.injectInputEvent(event, true)) }
+        finally { event.recycle() }
+        instrumentation.waitForIdleSync()
+    }
+
     private fun touch(rect: Rect, action: Int, downTime: Long) {
         val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action,
             rect.exactCenterX(), rect.exactCenterY(), 0)
@@ -184,8 +213,8 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                 val b = it.boundsInWindow()
                 frame = Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt())
             }) {
-                // The emoji tab hides both bars, exactly like the real keyboard.
-                if (!sample.emoji) {
+                // The emoji and symbol tabs hide both bars, exactly like the real keyboard.
+                if (!sample.emoji && !sample.symbols) {
                     KeyboardAssistBar(sample.reading, sample.assist, sample.applied, ZeroConDarkPalette,
                         onAdopt = { adopted++ },
                         onUndo = { undone++; state.value = state.value.copy(applied = false, assist = null) })
@@ -200,7 +229,10 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                     body = Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt())
                 }) {
                     KeyboardContentArea(sample.keyHeight.dp, sample.expanded,
-                        extraHeight = if (sample.emoji) KeyboardBarHeight * 2 else 0.dp,
+                        // The QWERTY number row is optional, so the fixture has to size the
+                        // key area like the IME does or the rows drift out of the window.
+                        rowCount = if (sample.numberRow) 5 else 4,
+                        extraHeight = if (sample.emoji || sample.symbols) KeyboardBarHeight * 2 else 0.dp,
                         expandedContent = {
                             ExpandedCandidatePanel(listOf(Candidate(longText, sample.reading)), true,
                                 ZeroConDarkPalette, {}, {})
@@ -220,6 +252,20 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                     onSpace = {},
                                     onEnter = {}
                                 )
+                            } else if (sample.symbols) {
+                                SymbolsPanel(
+                                    keyBgColor = ZeroConDarkPalette.keyNormal,
+                                    actionKeyBg = ZeroConDarkPalette.keyModifier,
+                                    textColor = ZeroConDarkPalette.textPrimary,
+                                    palette = ZeroConDarkPalette,
+                                    onSelect = { symbolTyped += it },
+                                    onBackToQwerty = {},
+                                    onDelete = {},
+                                    onSpace = {},
+                                    onEnter = {},
+                                    onCursorLeft = {},
+                                    onCursorRight = {}
+                                )
                             } else if (sample.flick) {
                                 Japanese12KeyFlickLayout(
                                     keyBgColor = ZeroConDarkPalette.keyNormal,
@@ -232,12 +278,13 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                     onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
                                 )
                             } else {
-                                JapaneseQwertyLayout(false, ZeroConDarkPalette.keyNormal,
+                                JapaneseQwertyLayout(sample.shifted, ZeroConDarkPalette.keyNormal,
                                     ZeroConDarkPalette.keyModifier, ZeroConDarkPalette.textPrimary,
                                     ZeroConDarkPalette,
                                     onKeyPress = { typed += it }, onShiftToggle = {}, onDelete = {},
                                     onSpace = {}, onEnter = {}, onCycleMode = {}, onOpenEmoji = {},
-                                    isComposing = sample.reading.isNotEmpty(), onCursorLeft = {}, onCursorRight = {})
+                                    isComposing = sample.reading.isNotEmpty(), onCursorLeft = {}, onCursorRight = {},
+                                    showNumberRow = sample.numberRow)
                             }
                         })
                 }
@@ -315,6 +362,57 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                     check(typed == if (flick) "あ" else "a") { "Touch lost or entered a different character: $typed" }
                 }
             }
+            // The hidden number row moves the digits onto the up-flick of q..p, so the
+            // guide must show the character that the same gesture will commit. "w" is used
+            // because its 2/@ never collide with another key label in the fixture.
+            fun flickGuide(shifted: Boolean, midGestureShift: Boolean = false): String {
+                val keyLabel = if (shifted) "Wを入力、上フリックで@を入力" else "wを入力、上フリックで2を入力"
+                update(Case(numberRow = false, shifted = shifted))
+                typed = ""
+                val key = bounds(keyLabel)
+                // The guide floats above the pressed key, while the up-flick hint sits inside
+                // it, so the position separates the two nodes that share the same text.
+                fun guideShows(label: String) = nodeBounds(label).any { it.bottom <= key.top }
+                val downTime = SystemClock.uptimeMillis()
+                touch(key, MotionEvent.ACTION_DOWN, downTime)
+                if (midGestureShift) update(Case(numberRow = false, shifted = true))
+                moveTo(key.exactCenterX(), key.exactCenterY() - 60f * density, downTime)
+                // A shift toggle mid-touch must not split the guide from the committed
+                // character: both come from the state the gesture started with.
+                val expected = if (shifted) "@" else "2"
+                val stale = if (expected == "2") "@" else "2"
+                waitFor("Guide did not show $expected") { guideShows(expected) }
+                check(!guideShows(stale)) { "Guide still showed $stale: " + texts() }
+                touch(key, MotionEvent.ACTION_UP, downTime)
+                waitFor("Guide stayed on screen after release") { !guideShows(expected) }
+                check(typed == expected) { "Flick committed $typed instead of $expected" }
+                return typed
+            }
+            test("number_row_toggle_changes_the_key_area_by_one_row") {
+                // The row is optional, so turning it on must add exactly one key height and
+                // leave no empty band; the bottom row has to stay inside the frame either way.
+                update(Case(numberRow = false))
+                val withoutRow = Rect(frame)
+                val bottomWithout = bounds("◀").bottom
+                update(Case(numberRow = true))
+                val withRow = Rect(frame)
+                val bottomWith = bounds("◀").bottom
+                val rowHeight = 46 * density
+                check(kotlin.math.abs(withRow.height() - withoutRow.height() - rowHeight) <= 2f) {
+                    "Number row changed the height by ${withRow.height() - withoutRow.height()} instead of $rowHeight"
+                }
+                check(bottomWith <= withRow.bottom && bottomWithout <= withoutRow.bottom) {
+                    "Bottom row left the frame: $bottomWith vs ${withRow.bottom}"
+                }
+                update(Case(numberRow = false))
+            }
+            test("flick_guide_follows_the_shift_state") {
+                flickGuide(shifted = false)
+                flickGuide(shifted = true)
+            }
+            test("flick_guide_matches_the_committed_character") {
+                flickGuide(shifted = false, midGestureShift = true)
+            }
             val choices = List(12) { Candidate("候補${it}の表示", "かんじ", cost = it.toFloat()) }
             val candidateCase = Case(reading = "かんじ", candidates = choices)
             fun scrollAwayFromFirst() {
@@ -385,7 +483,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                     height to reading
                 }
                 for ((keyHeight, barHeight) in measured) {
-                    val expected = keyHeight * (48f / 46f) * density
+                    val expected = keyHeight * 0.8f * density
                     check(kotlin.math.abs(barHeight - expected) <= 2f) {
                         "Bar height $barHeight does not follow ${keyHeight}dp keys (expected $expected)"
                     }
@@ -439,22 +537,45 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
             }
             fun cellLabel(entry: EmojiEntry) =
                 entry.keywords.firstOrNull()?.let { "$it ${entry.emoji}" } ?: entry.emoji
-            test("emoji_panel_hides_the_reading_and_candidate_bars") {
-                update(Case(reading = "あい", candidates = listOf(Candidate("愛", "あい"))))
+            /** Both the emoji and symbol tabs drop the bars and grow their panel instead. */
+            fun checkPanelReclaimsTheBars(tab: String, sample: Case) {
+                // A short key height keeps the grown panel inside the fixture window, so the
+                // measurement is not clipped by the screen.
+                val base = Case(keyHeight = 40, reading = "あい", candidates = listOf(Candidate("愛", "あい")))
+                update(base)
                 val qwertyFrame = Rect(frame)
                 val qwertyBody = Rect(body)
-                check(node("変換候補 愛") != null) { "Candidate strip missing before the emoji tab" }
-                update(Case(emoji = true, reading = "あい", candidates = listOf(Candidate("愛", "あい"))))
-                // The palette takes over the whole height, so the bars must be gone but the
+                check(node("変換候補 愛") != null) { "Candidate strip missing before the $tab tab" }
+                update(sample.copy(keyHeight = 40, reading = "あい", candidates = listOf(Candidate("愛", "あい"))))
+                // The panel takes over the whole height, so the bars must be gone but the
                 // IME must not resize when the user switches tabs.
-                check(node("変換候補 愛") == null) { "Emoji tab kept the candidate strip: " + texts() }
-                check(readingNode() == null) { "Emoji tab kept the reading bar: " + texts() }
-                check(frame == qwertyFrame) { "Emoji tab resized the IME: $frame vs $qwertyFrame" }
-                // Two 48dp bars at the current density moved into the palette.
-                val reclaimed = (body.height() - qwertyBody.height()).toFloat()
-                check(reclaimed >= 2 * 48 * density - 2) {
-                    "Emoji grid did not reclaim the hidden bars: $body vs $qwertyBody"
+                check(node("変換候補 愛") == null) { "$tab tab kept the candidate strip: " + texts() }
+                check(readingNode() == null) { "$tab tab kept the reading bar: " + texts() }
+                check(frame == qwertyFrame) { "$tab tab resized the IME: $frame vs $qwertyFrame" }
+                // The panel must now start where the two bars used to start, so their
+                // combined height reappears as panel height.
+                val barsHeight = qwertyBody.top - qwertyFrame.top
+                check(barsHeight > 0) { "Bars had no height before the $tab tab: $qwertyBody" }
+                check(body.top == qwertyFrame.top) {
+                    "$tab panel did not move up to the frame top: $body vs $qwertyFrame"
                 }
+                val reclaimed = body.height() - qwertyBody.height()
+                check(reclaimed >= barsHeight - 2) {
+                    "$tab panel did not reclaim the hidden bars: $body vs $qwertyBody"
+                }
+            }
+            test("emoji_panel_hides_the_reading_and_candidate_bars") {
+                checkPanelReclaimsTheBars("Emoji", Case(emoji = true))
+            }
+            test("symbols_panel_hides_the_reading_and_candidate_bars") {
+                checkPanelReclaimsTheBars("Symbols", Case(symbols = true))
+            }
+            test("symbols_panel_commits_the_tapped_symbol") {
+                symbolTyped = ""
+                update(Case(symbols = true))
+                val first = symbolCategories.first().symbols.first()
+                click(first)
+                check(symbolTyped == first) { "Symbol tab committed '$symbolTyped' instead of '$first'" }
             }
             test("emoji_panel_categories_and_commit") {
                 emojiTyped = ""
@@ -516,17 +637,21 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
             test("assist_adopt_and_large_undo_target") {
                 update(Case(reading = longText, assist = prediction, applied = true))
                 val before = Rect(frame)
+                val barHeight = readingBarHeight()
                 val undo = bounds("補正を取り消す")
-                check(undo.width() >= 48 * density - 1 && undo.height() >= 48 * density - 1)
+                // The bar follows the key height, so the target fills the bar rather than
+                // keeping a fixed 48dp height; only the width has a minimum.
+                check(undo.height() == barHeight) { "Undo target does not fill the assist bar: $undo vs $barHeight" }
+                check(undo.width() >= 48 * density - 1) { "Undo target is too narrow: $undo" }
                 val adopt = bounds("先読み $longText を採用")
                 var downTime = SystemClock.uptimeMillis()
                 touch(adopt, MotionEvent.ACTION_DOWN, downTime)
                 touch(adopt, MotionEvent.ACTION_UP, downTime)
-                check(adopted == 1)
+                check(adopted == 1) { "Adopt tap missed: adopt=$adopt frame=$frame" }
                 downTime = SystemClock.uptimeMillis()
                 touch(undo, MotionEvent.ACTION_DOWN, downTime)
                 touch(undo, MotionEvent.ACTION_UP, downTime)
-                check(undone == 1 && !state.value.applied)
+                check(undone == 1 && !state.value.applied) { "Undo tap missed: undone=$undone applied=${state.value.applied}" }
                 check(frame == before) { "Undo resized the IME" }
             }
         } catch (failure: Throwable) {

@@ -54,6 +54,8 @@ Android には Windows のような別プロセス RPC はない。モデル推�
 
 主な設定キー: `realtime_inline_conversion`, `auto_commit_enabled`, `auto_commit_rewind_on_backspace`, `experimental_ai_assist`, `auto_typo_correction`, `experimental_predictive_model`（廃止・互換）、`ai_profile` など。
 
+QWERTY の句読点・シフト記号 (`isImmediateCommitChar`) は composition を即時確定する。数字は Windows の `UserAction::Number` → `AppendText` と同じく composition に加わり、読みと変換に含まれる（`n` 直後の数字は「ん」を確定させる）。翻訳モードでは数字も `isTranslationLiteralChar` で読みへ反映して再翻訳する。
+
 ### 2.2 ローマ字→かな
 
 `ComposingText` が `input: MutableList<InputElement>`（原打鍵列）と `convertTarget`（読み/かな列）を管理する。`DefaultRomanToKana.table` でローマ字→かな変換を行う。入力スタイル `ROMAN2KANA` / `DIRECT` / `FROZEN` を区別する。
@@ -262,7 +264,15 @@ Windows と同様:
 - AI アシスト採用 (`adoptAiAssist`) は `corrections.apply` で内部状態を更新し、`triggerDebouncedConversion` で再変換。
 - `TypoLearning` で補正の採用履歴を管理 (3 回以上で自動反映)。
 
-### 8.4 動的マクロ (`DynamicMacro`)
+### 8.4 確定後の続き候補 (post-commit continuation)
+
+`commitText` は composition をすべて確定したとき `showPostCommitContinuations` を呼び、`KanaKanjiConverter.postCommitContinuations` が学習済み文節列から「次に続く語」を候補バーに出す。タップすると読み入力なしでその語を挿入する。
+
+- 文の途中で続けられるよう、候補は確定後も表示したままにする。
+- スペースと改行は文の区切りなので、その確定では続き候補を出さない。`commitText(offerContinuations = false)` を `confirmAsync` / `confirmCurrent` から渡し、`handleSpace` と `handleEnter` が指定する。`handleEnglishSpace` と改行送信前の `handleEnter` は `clearPostCommitCandidates` で既存の候補も消す。
+- `showPostCommitContinuations` はカーソル直前が空白・改行なら何も出さない。確定済み文脈の末尾が区切り文字のときに古い続き候補が復活しないための二重の防御。
+
+### 8.5 動的マクロ (`DynamicMacro`)
 
 日時・計算などの決定的展開。Windows の `dynamic_macro.rs` に対応。
 

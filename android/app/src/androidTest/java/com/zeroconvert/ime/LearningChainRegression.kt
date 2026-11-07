@@ -176,6 +176,37 @@ class LearningChainRegression(private val instrumentation: Instrumentation) {
                 }
                 waitFor("Next chunk いい did not appear after 今日はとても") { node("変換候補 いい") != null }
             }
+            test("space_and_newline_end_the_continuation_bar") {
+                onUi {
+                    editor.field.setText("")
+                    (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(editor.field)
+                }
+                SystemClock.sleep(200)
+                typeLetters("kyou")
+                waitFor("Learned 今日 candidate missing for space test") { node("変換候補 今日") != null }
+                check(click("変換候補 今日"))
+                waitFor("Next chunk は did not appear before the space") { node("変換候補 は") != null }
+                check(click("日本語を入力")) { "Space key not found" }
+                waitFor("Space did not commit a space after 今日") {
+                    onUi { editor.field.text.toString() } == "今日 "
+                }
+                waitFor("Space kept the next-word prediction visible") { node("変換候補 は") == null }
+
+                onUi {
+                    editor.field.setText("")
+                    (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(editor.field)
+                }
+                SystemClock.sleep(200)
+                typeLetters("kyou")
+                waitFor("Learned 今日 candidate missing for newline test") { node("変換候補 今日") != null }
+                check(click("変換候補 今日"))
+                waitFor("Next chunk は did not appear before the newline") { node("変換候補 は") != null }
+                check(click("Enter")) { "Enter key not found" }
+                waitFor("Enter did not insert a newline after 今日") {
+                    onUi { editor.field.text.toString() } == "今日\n"
+                }
+                waitFor("Enter kept the next-word prediction visible") { node("変換候補 は") == null }
+            }
         } finally {
             onUi {
                 prefs.edit().apply {

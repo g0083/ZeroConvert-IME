@@ -180,13 +180,13 @@ val ZeroConPaperPalette = ZeroConPalette(
 )
 
 /** Kept for callers that only need the default dark palette. */
-val ZeroConDarkPalette = ZeroConDarkBluePalette
+val ZeroConDarkPalette = ZeroConGraphitePalette
 
 /** Kept for callers that only need the default light palette. */
 val ZeroConLightPalette = ZeroConPaperPalette
 
 const val ZERO_CON_THEME_SYSTEM = "system"
-const val ZERO_CON_THEME_DEFAULT_DARK = "dark_blue"
+const val ZERO_CON_THEME_DEFAULT_DARK = "graphite"
 const val ZERO_CON_THEME_DEFAULT_LIGHT = "paper"
 
 /** Selectable themes in display order: four dark palettes, then two light ones. */

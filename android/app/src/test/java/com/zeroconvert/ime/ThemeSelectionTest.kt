@@ -20,8 +20,14 @@ class ThemeSelectionTest {
         assertEquals(listOf(true, true, true, true, false, false), ZeroConThemes.map { it.isDark })
     }
 
+    @Test fun graphiteIsTheDefaultDarkTheme() {
+        assertEquals("graphite", ZERO_CON_THEME_DEFAULT_DARK)
+        assertEquals(ZeroConGraphitePalette, ZeroConDarkPalette)
+        assertEquals(ZeroConGraphitePalette, resolveZeroConTheme(ZERO_CON_THEME_SYSTEM, systemDark = true).palette)
+    }
+
     @Test fun systemModeFollowsTheDeviceDarkMode() {
-        assertEquals("dark_blue", resolveZeroConThemeId(ZERO_CON_THEME_SYSTEM, systemDark = true))
+        assertEquals("graphite", resolveZeroConThemeId(ZERO_CON_THEME_SYSTEM, systemDark = true))
         assertEquals("paper", resolveZeroConThemeId(ZERO_CON_THEME_SYSTEM, systemDark = false))
     }
 
@@ -32,19 +38,19 @@ class ThemeSelectionTest {
     }
 
     @Test fun legacyDarkAndLightValuesStillResolve() {
-        assertEquals("dark_blue", resolveZeroConThemeId("dark", systemDark = false))
+        assertEquals("graphite", resolveZeroConThemeId("dark", systemDark = false))
         assertEquals("paper", resolveZeroConThemeId("light", systemDark = true))
     }
 
     @Test fun unknownValuesFallBackToTheDefaultDarkTheme() {
-        assertEquals("dark_blue", resolveZeroConThemeId("midnight", systemDark = false))
+        assertEquals("graphite", resolveZeroConThemeId("midnight", systemDark = false))
         assertNull(zeroConThemeById("midnight"))
         assertNotNull(zeroConThemeById("graphite"))
     }
 
     @Test fun unsetValueBehavesLikeSystemMode() {
         assertEquals("paper", resolveZeroConThemeId("", systemDark = false))
-        assertEquals("dark_blue", resolveZeroConThemeId("", systemDark = true))
+        assertEquals("graphite", resolveZeroConThemeId("", systemDark = true))
     }
 
     @Test fun everyThemeKeepsReadableContrastAgainstItsOwnBackground() {

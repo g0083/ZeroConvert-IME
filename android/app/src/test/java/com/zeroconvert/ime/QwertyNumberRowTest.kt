@@ -1,7 +1,9 @@
 package com.zeroconvert.ime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QwertyNumberRowTest {
@@ -36,5 +38,20 @@ class QwertyNumberRowTest {
         assertEquals('(', QwertyNumberRow.shiftedSymbolFor('o'))
         assertEquals(')', QwertyNumberRow.shiftedSymbolFor('p'))
         assertNull(QwertyNumberRow.shiftedSymbolFor('a'))
+    }
+
+    @Test fun digitsComposeWhilePunctuationStillCommits() {
+        // Digits join the composition (Windows UserAction::Number parity)...
+        for (digit in '0'..'9') {
+            assertFalse(ZeroConvertInputMethodService.isImmediateCommitChar(digit))
+            assertTrue(ZeroConvertInputMethodService.isTranslationLiteralChar(digit))
+        }
+        // ...while punctuation and shifted symbols keep committing immediately.
+        for (punct in listOf('、', '。', '.', ',', '?', '!', '？', '！', '．', '，')) {
+            assertTrue(ZeroConvertInputMethodService.isImmediateCommitChar(punct))
+        }
+        for (symbol in "!@#$%^&*()") {
+            assertTrue(ZeroConvertInputMethodService.isImmediateCommitChar(symbol))
+        }
     }
 }

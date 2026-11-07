@@ -65,6 +65,48 @@ class FlickInputAndModifierTest {
     }
 
     @Test
+    fun testKanaModifierDirectForms() {
+        // Gboard's 小゛゜ key flicks select the target form directly.
+        assertEquals('っ', KanaModifier.toSmall('つ'))
+        assertEquals('っ', KanaModifier.toSmall('っ'))
+        assertEquals('ゃ', KanaModifier.toSmall('や'))
+        assertEquals('ぁ', KanaModifier.toSmall('あ'))
+        assertEquals('ま', KanaModifier.toSmall('ま'))
+        assertEquals('ッ', KanaModifier.toSmall('ツ'))
+
+        assertEquals('が', KanaModifier.toDakuten('か'))
+        assertEquals('が', KanaModifier.toDakuten('が'))
+        assertEquals('ぎ', KanaModifier.toDakuten('き'))
+        assertEquals('づ', KanaModifier.toDakuten('つ'))
+        assertEquals('づ', KanaModifier.toDakuten('っ'))
+        assertEquals('ゔ', KanaModifier.toDakuten('う'))
+        assertEquals('ば', KanaModifier.toDakuten('ぱ'))
+        assertEquals('あ', KanaModifier.toDakuten('あ'))
+        assertEquals('ガ', KanaModifier.toDakuten('カ'))
+
+        assertEquals('ぱ', KanaModifier.toHandakuten('は'))
+        assertEquals('ぱ', KanaModifier.toHandakuten('ば'))
+        assertEquals('ぱ', KanaModifier.toHandakuten('ぱ'))
+        assertEquals('ぴ', KanaModifier.toHandakuten('ひ'))
+        assertEquals('か', KanaModifier.toHandakuten('か'))
+        assertEquals('パ', KanaModifier.toHandakuten('ハ'))
+
+        assertEquals('が', KanaModifier.modify('か', KanaModifierKind.DAKUTEN))
+        assertEquals('ぱ', KanaModifier.modify('は', KanaModifierKind.HANDAKUTEN))
+        assertEquals('っ', KanaModifier.modify('つ', KanaModifierKind.SMALL))
+        assertEquals('が', KanaModifier.modify('か', KanaModifierKind.TOGGLE))
+    }
+
+    @Test
+    fun testModifierKeyFlickDirectionsMatchGboard() {
+        val keyMod = FlickKeyDefinitions.keyMod
+        assertEquals("゛", keyMod.left)
+        assertEquals("小", keyMod.up)
+        assertEquals("゜", keyMod.right)
+        assertEquals("", keyMod.down)
+    }
+
+    @Test
     fun testCalculateFlickDirection() {
         val threshold = 20f
 
