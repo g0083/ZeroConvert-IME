@@ -3,7 +3,10 @@ param(
     [string]$AndroidNdk = "$env:LOCALAPPDATA/Android/Sdk/ndk/27.1.12297006",
     [string]$SwiftHome = "$env:LOCALAPPDATA/Programs/Swift",
     [string]$SwiftVersion = '6.4.1',
-    [switch]$SwiftOnly
+    [switch]$SwiftOnly,
+    # Optional speed-up: reuse the Windows checkouts instead of downloading.
+    # Off by default so the build resolves from engine/Package.resolved alone.
+    [switch]$UseLocalMirrors
 )
 Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 $ErrorActionPreference = 'Stop'
@@ -75,19 +78,27 @@ $swiftFlags = @('-resource-dir', "$sdk/usr/lib/swift", '-tools-directory', $ndkB
     'extra-cpp-flags' = @('-std=c++17')
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $destination -Encoding UTF8
 
-# Use the exact revisions already resolved for Windows. Mirrors avoid downloading
-# a second checkout, while never editing the existing dependency sources.
-$pins = (Get-Content (Join-Path $repoRoot 'windows/server-swift/Package.resolved') -Raw | ConvertFrom-Json).pins
-foreach ($pin in $pins) {
-    $localCheckout = Join-Path $repoRoot "windows/server-swift/.build/checkouts/$($pin.identity)"
-    if (Test-Path -LiteralPath $localCheckout) {
-        # The working checkout carries the pinned revision but not always the
-        # newer tags. Import the full tag set from the local bare mirror so the
-        # version requirements from Package.resolved resolve without a download.
-        & git -C $localCheckout fetch --tags origin --quiet
-        & swift package --package-path $stage config set-mirror --original $pin.location --mirror ([uri]$localCheckout).AbsoluteUri
-        if ($LASTEXITCODE -ne 0) { throw "Could not configure mirror for $($pin.identity)" }
+# Dependencies resolve from engine/Package.resolved, which is committed and kept
+# equal to the Windows pins by scripts/check-shared-engine-pins.mjs. The Windows
+# checkouts are only an optional download shortcut, never the source of truth.
+$mirrorConfig = Join-Path $stage '.swiftpm/configuration/mirrors.json'
+if ($UseLocalMirrors) {
+    $pins = (Get-Content (Join-Path $repoRoot 'engine/Package.resolved') -Raw | ConvertFrom-Json).pins
+    foreach ($pin in $pins) {
+        $localCheckout = Join-Path $repoRoot "windows/server-swift/.build/checkouts/$($pin.identity)"
+        if (Test-Path -LiteralPath $localCheckout) {
+            # The working checkout carries the pinned revision but not always the
+            # newer tags. Import the full tag set from the local bare mirror so the
+            # version requirements from Package.resolved resolve without a download.
+            & git -C $localCheckout fetch --tags origin --quiet
+            & swift package --package-path $stage config set-mirror --original $pin.location --mirror ([uri]$localCheckout).AbsoluteUri
+            if ($LASTEXITCODE -ne 0) { throw "Could not configure mirror for $($pin.identity)" }
+        }
     }
+} elseif (Test-Path -LiteralPath $mirrorConfig) {
+    # A mirror left by an earlier run would silently override the committed pins.
+    # This file lives in the generated staging tree, never in repository sources.
+    Remove-Item -LiteralPath $mirrorConfig -Force
 }
 # Host cancellation around the existing llama call; no converter source rewrite.
 $controlObject = Join-Path $nativeBuild 'inference_control.o'

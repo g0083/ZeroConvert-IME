@@ -44,6 +44,12 @@ def main():
             if hashlib.sha256(shared_reverse).digest() != hashlib.sha256(
                 (ROOT / 'engine/build/assets/shared-engine/Dictionary/Reverse/reverse-v2.bin').read_bytes()).digest():
                 raise ValueError(f'{apk.name}: wrong shared reverse dictionary')
+            # The packaged lock is what identifies the engine revision this APK
+            # was built from, so it must be the committed one.
+            packaged_lock = archive.read('assets/shared-engine/lock.json')
+            if packaged_lock != (ROOT / 'engine/shared-engine.lock.json').read_bytes():
+                raise ValueError(f'{apk.name}: packaged engine lock differs from engine/shared-engine.lock.json')
+            engine_lock = json.loads(packaged_lock)
             catalog = json.loads((ROOT / 'windows/deployment/model-catalog.json').read_text(encoding='utf-8'))
             specs = [m for m in catalog['models'] if m['id'].startswith('nano_v4_')]
             expected_models = {'assets/models/' + m['filename'] for m in specs}
@@ -61,6 +67,7 @@ def main():
                 if hashlib.sha256(archive.read(name)).digest() != hashlib.sha256(model.read_bytes()).digest():
                     raise ValueError(f'{apk.name}: model was changed or omitted: {name}')
         print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; runtime closure, CPU backends, shared reverse and model hashes verified.')
+        print(f'  engine lock: converter {engine_lock["converterRevision"]}, swift {engine_lock["swiftSources"][:12]}')
 
 
 if __name__ == '__main__':

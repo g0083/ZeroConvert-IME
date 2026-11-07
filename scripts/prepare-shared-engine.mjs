@@ -12,11 +12,14 @@ const stage = path.join(root, 'engine/build/swift');
 // The Windows converter is a vendored, checksum-pinned artifact. Resolve it
 // through the same preparation entry point the Windows build uses, so Android
 // always stages the exact converter revision Windows compiles with.
+// `--converter-only` skips the Windows llama runtime, which Android does not
+// use: the staged headers come from the Android llama.cpp submodule below. That
+// keeps this staging step runnable on a machine without the Windows toolchain.
 const preparer = path.join(root, 'windows/scripts/prepare-modern-llama.py');
 const pinnedRevision = (await readFile(preparer, 'utf8')).match(/CONVERTER\s*=\s*'([0-9a-f]{40})'/)?.[1];
 if (!pinnedRevision) throw new Error('Could not read the pinned converter revision from prepare-modern-llama.py');
 const prepared = JSON.parse(execFileSync('python', [
-  path.join(root, 'scripts/run.py'), 'windows/scripts/prepare-modern-llama.py',
+  path.join(root, 'scripts/run.py'), 'windows/scripts/prepare-modern-llama.py', '--converter-only',
 ], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }));
 const converterSource = path.resolve(prepared.converter);
 if (path.basename(converterSource) !== `AzooKeyKanaKanjiConverter-${pinnedRevision}`) {
@@ -57,7 +60,10 @@ await cp(converterSource, path.join(stage, 'converter'), {
 });
 const llama = path.join(stage, 'converter/Sources/llama.cpp');
 const native = path.join(root, 'android/app/src/main/cpp/llama.cpp');
-const pins = JSON.parse(await readFile(path.join(root, 'windows/server-swift/Package.resolved'), 'utf8')).pins;
+// Android resolves its Swift dependencies from this committed file, not from
+// the Windows checkout. `scripts/check-shared-engine-pins.mjs` keeps it equal to
+// the Windows pins so a Windows bump cannot silently leave Android behind.
+const pins = JSON.parse(await readFile(path.join(root, 'engine/Package.resolved'), 'utf8')).pins;
 const pinnedDependencies = pins.filter(pin => pin.identity !== 'azookeykanakanjiconverter').map(pin =>
   `.package(url: ${JSON.stringify(pin.location)}, ${pin.state.version ? `exact: ${JSON.stringify(pin.state.version)}` : `revision: ${JSON.stringify(pin.state.revision)}`})`
 ).join(',\n');
@@ -111,4 +117,30 @@ for (const file of [...NATIVE_INPUTS, ...SHARED_INPUTS]) {
   sourceFiles.push({ path: file, sha256: createHash('sha256').update(await readFile(path.join(root, file))).digest('hex') });
 }
 await writeFile(path.join(assets, 'sources.json'), JSON.stringify({ schema: 1, sourceFiles }, null, 2) + '\n');
+
+// One committed record of the engine revision an APK was built from. The
+// per-file manifest above decides rebuilds; this digest set is what a packaged
+// APK can be matched against without shipping thousands of file hashes.
+const digestOf = entries => createHash('sha256')
+  .update(entries.map(entry => `${entry.path}:${entry.sha256}`).join('\n')).digest('hex');
+const group = prefix => sourceFiles.filter(entry => entry.path.startsWith(prefix));
+const fileDigest = async file => createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
+const lock = {
+  schema: 1,
+  converterRevision: pinnedRevision,
+  converterPatch: await fileDigest('windows/scripts/converter_patch.py'),
+  swiftPins: await fileDigest('engine/Package.resolved'),
+  rustLock: await fileDigest('engine/rust/Cargo.lock'),
+  swiftSources: digestOf(group('windows/server-swift/Sources/')),
+  converterSources: digestOf(group(`${converterRelative}/Sources/KanaKanjiConverterModule/`)),
+  dictionary: digestOf(group('windows/server-swift/azooKey_dictionary_storage/Dictionary/')),
+  engineSources: digestOf([
+    ...group('engine/swift/'), ...group('engine/native/'), ...group('engine/rust/src/'),
+  ]),
+  nativeSources: digestOf(group('android/app/src/main/cpp/')),
+};
+const lockText = JSON.stringify(lock, null, 2) + '\n';
+await writeFile(path.join(root, 'engine/shared-engine.lock.json'), lockText);
+await writeFile(path.join(assets, 'lock.json'), lockText);
 console.log('Staged Windows Swift sources, native header adapter, dictionary and source fingerprints.');
+console.log(`Shared engine lock: converter ${lock.converterRevision}, swift ${lock.swiftSources.slice(0, 12)}.`);

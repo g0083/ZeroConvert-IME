@@ -89,17 +89,58 @@ def check_converter():
     print(json.dumps({'converter': CONVERTER, 'anchors': 'ok'}))
 
 
+def prepare_converter(converter_root):
+    """Fetch, extract and patch the pinned converter. Idempotent.
+
+    Needs no Windows toolchain, so the Android staging step can call this alone
+    and stay independent of the Windows llama runtime.
+    """
+    converter = converter_root / ('AzooKeyKanaKanjiConverter-' + CONVERTER)
+    # The patch is part of the prepared content, so a changed patch must
+    # re-extract instead of reusing an already-patched tree. The stamp covers
+    # exactly the inputs that decide the result, which keeps the directory name
+    # stable: an unrelated edit to this script must not invalidate the Android
+    # fingerprint and force a rebuild of both ABIs.
+    stamp = hashlib.sha256(
+        (CONVERTER + sha(Path(converter_patch.__file__))).encode('utf-8')
+    ).hexdigest()
+    marker = converter_root / 'prepared.json'
+    if converter.is_dir() and marker.is_file() and json.loads(marker.read_text()).get('stamp') == stamp:
+        return converter
+    if converter_root.is_dir():
+        shutil.rmtree(converter_root)
+    archive = fetch('converter.zip', f'https://codeload.github.com/batao9/AzooKeyKanaKanjiConverter/zip/{CONVERTER}',
+                    'acbf8398b67891f51ba37cdc16ae6f5514798ffea1e7270077915b433a93866e')
+    extract(archive, converter_root)
+    module_map = converter / converter_patch.MODULEMAP_PATH
+    module_map.write_text(converter_patch.patch_modulemap(module_map.read_text()))
+    context = converter / converter_patch.ZENZ_CONTEXT_PATH
+    context.write_text(
+        converter_patch.patch_zenz_context(context.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
+    marker.write_text(json.dumps({'stamp': stamp, 'converter': CONVERTER}))
+    return converter
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check-converter', action='store_true',
                         help='Verify the converter patch anchors and exit without preparing anything.')
+    parser.add_argument('--converter-only', action='store_true',
+                        help='Prepare only the pinned converter, without the Windows llama runtime.')
     options = parser.parse_args()
     if options.check_converter:
         check_converter()
         return
     key = sha(Path(__file__))[:12]
     runtime = ROOT / ('artifacts/runtime/windows-b12125-' + key)
-    converter_root = ROOT / ('artifacts/dependencies/azookey-b12125-' + key)
+    # Stable name: the converter revision and the patch stamp already decide the
+    # content, and this path is recorded in the Android source fingerprint.
+    converter_root = ROOT / 'artifacts/dependencies/azookey-b12125'
+    if options.converter_only:
+        print(json.dumps({'converter': str(prepare_converter(converter_root)), 'revision': REVISION}))
+        return
     receipt = runtime / 'prepared.json'
     if receipt.is_file():
         print(receipt.read_text())
@@ -120,20 +161,10 @@ def main():
     for name, (relative, expected) in HEADERS.items():
         source = fetch(name, f'https://raw.githubusercontent.com/ggml-org/llama.cpp/{REVISION}/{relative}', expected)
         shutil.copy2(source, include / name)
-    archive = fetch('converter.zip', f'https://codeload.github.com/batao9/AzooKeyKanaKanjiConverter/zip/{CONVERTER}',
-                    'acbf8398b67891f51ba37cdc16ae6f5514798ffea1e7270077915b433a93866e')
-    extract(archive, converter_root)
-    converter = converter_root / ('AzooKeyKanaKanjiConverter-' + CONVERTER)
+    converter = prepare_converter(converter_root)
     headers = converter / 'Sources/llama.cpp'
     for name in HEADERS:
         shutil.copy2(include / name, headers / name)
-    module_map = headers / 'module.modulemap'
-    module_map.write_text(converter_patch.patch_modulemap(module_map.read_text()))
-    context = converter / converter_patch.ZENZ_CONTEXT_PATH
-    context.write_text(
-        converter_patch.patch_zenz_context(context.read_text(encoding='utf-8')),
-        encoding='utf-8',
-    )
     # Preserve redistributable MSVC/plutil inputs from the original immutable
     # dependency store; do not import live application binaries or settings.
     legacy = ROOT / 'artifacts/runtime/windows'

@@ -1,24 +1,29 @@
 # Android新構成とWindows共通変換エンジン
 
 2026-10-24。従来のKotlin/C++移植とは別に `:rebuilt` アプリを追加した。
-既存の `:app` と進行中の変更は保持する。新構成も `com.zeroconvert.ime` を使い、
-互換署名での更新によって設定を引き継ぐ。未検証の新構成を端末へ自動適用しない。
+新構成も `com.zeroconvert.ime` を使い、互換署名での更新によって設定を引き継ぐ。
+未検証の新構成を端末へ自動適用しない。
+
+2026-11-08、`:app` モジュールを廃止し `:rebuilt` に一本化した。`android/app/` は
+Gradleモジュールではなく、`:rebuilt` がコンパイルする共有ソースと資産の置き場として残る。
+版・SDK・NDKは `android/gradle.properties` の `zerocon.versionCode` 等が正本で、
+`rebuilt/build.gradle.kts` はそこから読む。二つのホストが別々の値を持つ状態をなくすため。
 
 ## 構造と変更する場所
 
 | 層 | 正本・利用方法 |
 |---|---|
 | 通常変換・N-best統合・辞書補正・変換学習 | Windowsの `server-swift/Sources` をそのままAndroidへコンパイル |
-| Swift変換ライブラリ | Windowsがビルドに使うvendored converter（`windows/scripts/prepare-modern-llama.py` がchecksum固定で用意し、`prepare-shared-engine.mjs` が同じ版をステージング）。残る依存はWindowsの `Package.resolved` の版 |
+| Swift変換ライブラリ | Windowsがビルドに使うvendored converter（`windows/scripts/prepare-modern-llama.py` がchecksum固定で用意し、`prepare-shared-engine.mjs` が同じ版をステージング）。パッチは `windows/scripts/converter_patch.py` が正本 |
+| Swift依存のpin | `engine/Package.resolved`（コミット済み）。Windowsの `windows/server-swift/Package.resolved` と一致することを `check-shared-engine-pins.mjs` が検査する |
 | タイポ補正・先読み・動的マクロ | `engine/rust` がWindowsの `crates/server/src/ai_assist` を直接コンパイル |
 | 自動確定の境界・安定性判定 | `windows/crates/shared/src/conversion_policy.rs` を両ホストから利用 |
 | 推論・JNI・ファイル配置の差 | `engine/native`、`engine/swift`、Androidの `engine/WindowsEngine.kt` |
 | キーボード・設定・編集操作 | 既存Compose/Flick/設定画面/InputMethodServiceの同じソース |
 
-`BuildConfig.WINDOWS_ENGINE` は `:app` ではfalse、`:rebuilt` ではtrue。
-後者の変換順位、補正判定、先読みプロンプト/出力検査をKotlinで再実装しない。
-Androidの文脈取得、入力先照合、機密入力抑止、世代管理、InputConnection操作は
-ホストに残す。新しい文節操作モードや専用操作UIは追加しない。
+`BuildConfig.WINDOWS_ENGINE` は常にtrue。変換順位、補正判定、先読みプロンプト/出力検査を
+Kotlinで再実装しない。Androidの文脈取得、入力先照合、機密入力抑止、世代管理、
+InputConnection操作はホストに残す。新しい文節操作モードや専用操作UIは追加しない。
 
 原打鍵、ROMAN2KANA/DIRECT/FROZEN、composition separatorをSwiftへ渡す。
 UTF-16サロゲートペアはUTF-8 ABIへ渡す前に結合する。Swiftの読みとAndroidの
@@ -62,10 +67,12 @@ Windowsの正本を変更 → Windowsと共通Rustのテスト
 ビルドは端末更新、IME選択、
 release署名、Git保存を行わない。
 
-新しいcloneでは [セットアップ](setup.md) に従ってサブモジュールとモデルを用意し、
-`swift package --package-path windows/server-swift resolve` でWindowsのpinに対応する
-依存ソースを取得する。Swift変換ライブラリはこの取得に含めず、Windowsと同じ
-vendored converterを `prepare-shared-engine.mjs` が `prepare-modern-llama.py` 経由で
+新しいcloneでは [セットアップ](setup.md) に従ってサブモジュールとモデルを用意する。
+AndroidのSwift依存は `engine/Package.resolved` から解決するので、Windowsのcheckoutを
+用意しなくてもビルドできる。`-UseLocalMirrors` を付けた場合だけ、既存の
+`windows/server-swift/.build/checkouts` をミラーとして使ってダウンロードを省く。
+Swift変換ライブラリはこの取得に含めず、Windowsと同じvendored converterを
+`prepare-shared-engine.mjs` が `prepare-modern-llama.py --converter-only` 経由で
 用意する。Androidのモデル/資産準備は従来どおり
 `scripts/prepare-android-assist-assets.ps1` を使う。個人のSDKパスや重みはGitに含めない。
 
@@ -73,22 +80,36 @@ vendored converterを `prepare-shared-engine.mjs` が `prepare-modern-llama.py` 
 cargo test --locked --manifest-path engine/rust/Cargo.toml --lib -- --test-threads=1
 python scripts/run.py windows/scripts/test_converter_patch.py
 python scripts/run.py windows/scripts/prepare-modern-llama.py --check-converter
+node scripts/prepare-shared-engine.mjs
+node scripts/check-shared-engine-pins.mjs
 node scripts/check-shared-engine-inputs.mjs
+node scripts/check-shared-engine-lock.mjs
 powershell -File scripts/build-android-shared-engine.ps1 -Abi arm64-v8a
 powershell -File scripts/build-android-shared-engine.ps1 -Abi x86_64
 node scripts/check-shared-engine.mjs
 python scripts/check-android-native.py
 # android/内
-.\gradlew.bat :app:testDebugUnitTest :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
+.\gradlew.bat :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
 ```
 
-ツールチェーン不要の3コマンドはCIの `shared-engine-inputs` ジョブでも実行する。
+ツールチェーン不要のコマンドはCIの `shared-engine-inputs` ジョブでも実行する。
 converterのパッチは `windows/scripts/converter_patch.py` のアンカーが正本で、
 `prepare-modern-llama.py` はそれを適用するだけ。converterのpinを上げるときは
 同じコミットでアンカーを直し、`--check-converter` で確認する。指紋の対象は
 `scripts/shared-engine-inputs.mjs` が正本で、`libzenz_jni.so` に実際に
 コンパイルされる `assist_jni.h` と `keyboard_typo_dictionary.inc` を含む。
 未コンパイルの `mod.rs.bak` は対象外。
+
+`engine/shared-engine.lock.json` は、そのソース群から作ったAPKを識別する記録で、
+`prepare-shared-engine.mjs` が生成する。ソースを変えたら再生成して同じコミットに含める。
+`check-shared-engine-lock.mjs` が古いロックを拒否し、`check-android-apk.py` が
+APK内の `assets/shared-engine/lock.json` と突き合わせる。converter revision、
+Swiftソース、converterソース、辞書、engineソース、nativeソース、Rust lock、
+Swift pinのダイジェストを保持する。
+
+`:rebuilt` のJVMテストは許可リストではなく除外リストで運用する。除外は
+メソッド単位で、旧Kotlin補正・先読み経路（共有エンジンが代替）と、
+JVMからロードできないJNI呼び出しの2種類だけ。新しいテストは自動的に実行される。
 
 生成物は `engine/build/`。ステージングされたSwiftソースやnativeを手編集しない。
 このPCはSwift6.4.1、NDK27.1.12297006、JDK17、Gradle8.7を使用する。

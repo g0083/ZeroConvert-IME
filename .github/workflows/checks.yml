@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -42,8 +44,17 @@ jobs:
         run: python scripts/run.py windows/scripts/test_converter_patch.py
       - name: Pinned converter still matches the patch anchors
         run: python scripts/run.py windows/scripts/prepare-modern-llama.py --check-converter
+      - name: Stage the shared Swift sources
+        # Runs the real staging step, so a converter patch that no longer
+        # applies, a missing dictionary submodule, or an unparsable dependency
+        # pin fails here instead of only in the Android build.
+        run: node scripts/prepare-shared-engine.mjs
+      - name: Android Swift pins match the Windows pins
+        run: node scripts/check-shared-engine-pins.mjs
       - name: Shared engine fingerprint inputs
         run: node scripts/check-shared-engine-inputs.mjs
+      - name: Committed engine lock matches the staged sources
+        run: node scripts/check-shared-engine-lock.mjs
   source-checks:
     runs-on: windows-latest
     steps:
