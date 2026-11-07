@@ -1,9 +1,45 @@
 //! PLaMo 3 Translate (0.8B / 2B), isolated from the conversion engine and its context.
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 // Keep in sync with shared::TRANSLATION_SERVER_PORT. The shared conversion
 // engine compiles this module on Android without the Windows `shared` crate.
 const TRANSLATION_SERVER_PORT: u16 = 18092;
+
+/// Cancellation token shared between the request handler and the blocking
+/// translation worker. Dropping the token cancels; the worker checks it
+/// between read slices so a superseded translation stops holding the slot.
+pub struct TranslationCancel {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl TranslationCancel {
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_cancelled_for_test(&self) -> bool {
+        self.is_cancelled()
+    }
+}
+
+impl Default for TranslationCancel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub fn valid_source(source: &str) -> bool {
     (1..=512).contains(&source.chars().count())
@@ -31,17 +67,36 @@ fn output(value: &Value) -> Option<String> {
     .then(|| text.to_owned())
 }
 
-pub fn translate_to(source: &str, target_lang: &str) -> Option<String> {
+/// Cancellable auto-direction variant used by the kind==3 request handler.
+pub fn translate_cancellable(source: &str, cancel: &TranslationCancel) -> Option<String> {
+    let has_japanese = source
+        .chars()
+        .any(|c| ('ぁ'..='ヿ').contains(&c) || ('一'..='鿿').contains(&c));
+    let target_lang = if has_japanese { "en" } else { "ja" };
+    translate_to_cancellable(source, target_lang, cancel)
+}
+
+/// Cancellable variant. The llama-server HTTP response is read in short slices;
+/// when `cancel` fires, the socket is dropped mid-read so llama-server frees the
+/// generation slot instead of finishing a superseded prompt.
+pub fn translate_to_cancellable(
+    source: &str,
+    target_lang: &str,
+    cancel: &TranslationCancel,
+) -> Option<String> {
     if !valid_source(source) {
         return None;
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        if cancel.is_cancelled() {
+            return None;
+        }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             return None;
         }
-        let response = super::simple_http_post(
+        let response = super::simple_http_post_cancellable(
             TRANSLATION_SERVER_PORT,
             "/completion",
             &json!({
@@ -53,9 +108,13 @@ pub fn translate_to(source: &str, target_lang: &str) -> Option<String> {
                 "stop": ["<|plamo:bos|>", "<|plamo:tag|>"]
             }),
             remaining.as_millis().max(1) as u64,
+            cancel,
         );
         if let Some(response) = response {
             return output(&response);
+        }
+        if cancel.is_cancelled() {
+            return None;
         }
         // Cold starts return connection-refused / 503 before the model is ready.
         std::thread::sleep(
@@ -63,14 +122,6 @@ pub fn translate_to(source: &str, target_lang: &str) -> Option<String> {
                 .min(deadline.saturating_duration_since(std::time::Instant::now())),
         );
     }
-}
-
-pub fn translate(source: &str) -> Option<String> {
-    let has_japanese = source
-        .chars()
-        .any(|c| ('ぁ'..='ヿ').contains(&c) || ('一'..='鿿').contains(&c));
-    let target_lang = if has_japanese { "en" } else { "ja" };
-    translate_to(source, target_lang)
 }
 
 #[cfg(test)]
@@ -97,12 +148,82 @@ mod tests {
             }
         }
         super::super::runtime::with_backend(Box::new(Backend), || {
+            let cancel = TranslationCancel::new();
             assert_eq!(
-                translate("会議は明日です。").as_deref(),
+                translate_cancellable("会議は明日です。", &cancel).as_deref(),
                 Some("The meeting is tomorrow.")
             );
-            assert!(translate("<|plamo:tag|>日本語").is_none());
+            assert!(translate_cancellable("<|plamo:tag|>日本語", &cancel).is_none());
         });
+    }
+    #[test]
+    fn cancelled_translation_returns_none_without_waiting_for_the_deadline() {
+        struct Backend;
+        impl super::super::runtime::CompletionBackend for Backend {
+            fn complete(
+                &self,
+                _port: u16,
+                _path: &str,
+                _body: &Value,
+                _timeout_ms: u64,
+            ) -> Option<Value> {
+                // Simulate a slow server: the worker observes cancellation
+                // between retries instead of producing a superseded result.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Some(json!({"content":"stale result", "stop_type":"eos"}))
+            }
+        }
+        let cancel = TranslationCancel::new();
+        cancel.cancel();
+        super::super::runtime::with_backend(Box::new(Backend), || {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                translate_cancellable("会議は明日です。", &cancel),
+                None,
+                "a cancelled request must not return a translation"
+            );
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "cancellation must be observed promptly"
+            );
+        });
+    }
+    #[test]
+    fn cancelling_after_start_stops_the_worker_before_completion() {
+        struct Backend;
+        impl super::super::runtime::CompletionBackend for Backend {
+            fn complete(
+                &self,
+                _port: u16,
+                _path: &str,
+                _body: &Value,
+                _timeout_ms: u64,
+            ) -> Option<Value> {
+                None
+            }
+        }
+        // Without the override the request would retry against a missing
+        // server for the full 10s deadline; cancellation must cut it short.
+        let cancel = TranslationCancel::new();
+        let worker_cancel = TranslationCancel::new();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                worker_cancel.cancel();
+            });
+            super::super::runtime::with_backend(Box::new(Backend), || {
+                let started = std::time::Instant::now();
+                assert_eq!(
+                    translate_cancellable("会議は明日です。", &worker_cancel),
+                    None
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(5),
+                    "mid-flight cancellation must end the retry loop early"
+                );
+            });
+        });
+        let _ = cancel;
     }
     #[test]
     fn pfml3_source_and_target_are_separate() {
