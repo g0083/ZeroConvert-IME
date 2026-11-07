@@ -87,7 +87,12 @@ fun KeyboardRootView(
     onClipboardPaste: (ClipboardEntry, Boolean) -> Unit = { _, _ -> }
 ) {
     var activeTab by remember { mutableStateOf(KeyboardTab.MAIN) }
-    var keyboardMode by remember { mutableStateOf(KeyboardMode.JAPANESE) }
+    // A new input view (another app, or the clipboard editor activity) starts on the keys, so
+    // a panel left open in the previous session cannot hide them.
+    val inputViewEpoch = imeService.inputViewEpochState.value
+    LaunchedEffect(inputViewEpoch) { activeTab = KeyboardTab.MAIN }
+    // The service owns the mode so onStartInputView can seed it from the editor's inputType.
+    val keyboardMode = imeService.keyboardModeState.value
     var shiftState by remember { mutableStateOf(KeyboardShiftState()) }
     val isShifted = shiftState.isShifted
     val doubleTapTimeoutMillis = LocalViewConfiguration.current.doubleTapTimeoutMillis
@@ -124,8 +129,11 @@ fun KeyboardRootView(
                 .background(bgColor)
                 .navigationBarsPadding()
         ) {
-            // The emoji tab hides both bars so the palette gets the whole height.
-            if (activeTab != KeyboardTab.EMOJI) {
+            // The emoji, symbol, and clipboard tabs hide both bars so their panel gets the
+            // whole height.
+            if (activeTab != KeyboardTab.EMOJI && activeTab != KeyboardTab.SYMBOLS &&
+                activeTab != KeyboardTab.CLIPBOARD
+            ) {
                 KeyboardAssistBar(
                     reading = currentSurface,
                     assist = aiAssistResult.takeIf { keyboardMode != KeyboardMode.ENGLISH && !translation.active },
@@ -181,7 +189,8 @@ fun KeyboardRootView(
                                 modifier = Modifier.weight(1f).fillMaxHeight()
                             )
                         } else {
-                            // Empty state: settings button (far left) + layout switcher (right).
+                            // Empty state: the clipboard suggestion (if any) or the settings
+                            // button takes the left area; the toolbar on the right stays visible.
                             Row(
                                 modifier = Modifier
                                     .weight(1f)
@@ -190,28 +199,65 @@ fun KeyboardRootView(
                                 horizontalArrangement = Arrangement.Start,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = actionKeyBg.copy(alpha = 0.6f),
-                                    modifier = Modifier.clickable { imeService.openSettings() }
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                if (suggestion != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = actionKeyBg.copy(alpha = 0.9f),
+                                        modifier = Modifier.clickable { onClipboardPaste(suggestion, true) }
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Settings,
-                                            contentDescription = "Settings",
-                                            tint = palette.primaryAccentSoft,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = "ZeroCon AI",
-                                            color = palette.textSecondary,
-                                            fontSize = 11.5.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_clipboard),
+                                                contentDescription = "Clipboard",
+                                                tint = textColor,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            if (suggestion.isImage) {
+                                                ClipboardImageThumbnail(
+                                                    uri = suggestion.imageUri!!,
+                                                    contentDescription = "Image",
+                                                    modifier = Modifier.size(32.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                            }
+                                            Text(
+                                                text = suggestion.preview,
+                                                color = textColor,
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = actionKeyBg.copy(alpha = 0.6f),
+                                        modifier = Modifier.clickable { imeService.openSettings() }
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Settings,
+                                                contentDescription = "Settings",
+                                                tint = palette.primaryAccentSoft,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "ZeroCon AI",
+                                                color = palette.textSecondary,
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -269,13 +315,17 @@ fun KeyboardRootView(
                                             tint = palette.primaryAccentSoft,
                                             modifier = Modifier.size(13.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(3.dp))
-                                        Text(
-                                            text = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) "QWERTY" else "12キー",
-                                            color = palette.textSecondary,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                        // While a clipboard suggestion is visible the label is
+                                        // dropped so the suggestion keeps room for its preview.
+                                        if (suggestion == null) {
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) "QWERTY" else "12キー",
+                                                color = palette.textSecondary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -351,54 +401,9 @@ fun KeyboardRootView(
                     }
                     }
 
-                    // Clipboard suggestion overlay.
-                    // It is drawn on top of the ZeroConAI settings button and the layout switcher,
-                    // exactly like conversion candidates take over the candidate area.
-                    if (suggestion != null) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .padding(start = 8.dp, end = 44.dp)
-                                .fillMaxWidth()
-                                .fillMaxHeight()
-                                .background(surfaceColor),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = actionKeyBg.copy(alpha = 0.9f),
-                                modifier = Modifier.clickable { onClipboardPaste(suggestion, true) }
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_clipboard),
-                                        contentDescription = "Clipboard",
-                                        tint = textColor,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    if (suggestion.isImage) {
-                                        ClipboardImageThumbnail(
-                                            uri = suggestion.imageUri!!,
-                                            contentDescription = "Image",
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                    }
-                                    Text(
-                                        text = suggestion.preview,
-                                        color = textColor,
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    // The clipboard suggestion now lives inside the empty-state row, so the
+                    // layout switcher, translation toggle, and clipboard button stay visible
+                    // and clickable while the suggestion is shown.
                     }
                 }
             }
@@ -413,7 +418,7 @@ fun KeyboardRootView(
                 if (activeTab != KeyboardTab.MAIN) {
                     activeTab = KeyboardTab.MAIN
                 } else {
-                    keyboardMode = when (keyboardMode) {
+                    imeService.keyboardModeState.value = when (keyboardMode) {
                         KeyboardMode.JAPANESE -> KeyboardMode.ENGLISH
                         KeyboardMode.ENGLISH -> KeyboardMode.NUMERIC
                         KeyboardMode.NUMERIC -> KeyboardMode.JAPANESE
@@ -422,23 +427,28 @@ fun KeyboardRootView(
             }
 
             // --- 2. Main Content (Tab Switch) ---
-            // The QWERTY number row is optional, so the key area shrinks with it instead of
-            // leaving an empty band. Other tabs and layouts keep their fixed row count.
-            val qwertyWithoutNumberRow = !imeService.isQwertyNumberRowState.value &&
-                (keyboardMode == KeyboardMode.ENGLISH ||
-                    imeService.japaneseLayoutState.value == JapaneseInputLayout.QWERTY)
-            val keyRowCount = if (
+            // Only the QWERTY layout can show the number row, so only it grows to five rows.
+            // The 12-key and numeric layouts stack four rows and keep the four-row baseline in
+            // every mode, which is the height of the English 12-key layout.
+            val showsQwertyNumberRow = imeService.isQwertyNumberRowState.value &&
                 activeTab == KeyboardTab.MAIN &&
                 keyboardMode != KeyboardMode.NUMERIC &&
-                qwertyWithoutNumberRow
-            ) 4 else 5
+                imeService.japaneseLayoutState.value == JapaneseInputLayout.QWERTY
+            val keyRowCount = if (showsQwertyNumberRow) 5 else 4
             KeyboardContentArea(
                 keyHeight = keyHeight,
                 expanded = isCandidatesExpanded && candidates.isNotEmpty(),
                 rowCount = keyRowCount,
-                // The emoji tab hides the reading and candidate bars, so their height
-                // belongs to the palette instead of leaving an empty band.
-                extraHeight = if (activeTab == KeyboardTab.EMOJI) KeyboardBarHeight * 2 else 0.dp,
+                // The emoji, symbol, and clipboard tabs hide the reading and candidate bars, so
+                // their height belongs to the panel instead of leaving an empty band.
+                extraHeight = if (
+                    activeTab == KeyboardTab.EMOJI || activeTab == KeyboardTab.SYMBOLS ||
+                    activeTab == KeyboardTab.CLIPBOARD
+                ) {
+                    KeyboardBarHeight * 2
+                } else {
+                    0.dp
+                },
                 expandedContent = {
                     ExpandedCandidatePanel(
                         candidates = candidates,
@@ -463,7 +473,7 @@ fun KeyboardRootView(
                                         actionKeyBg = actionKeyBg,
                                         textColor = textColor,
                                         palette = palette,
-                                        rowHeight = keyHeight * (52f / 46f),
+                                        rowHeight = keyboardRowHeight(keyHeight, rowCount = 4, targetRowCount = keyRowCount),
                                         isFlickOnly = imeService.isFlickOnlyState.value,
                                         onKanaInput = { kana ->
                                             imeService.handleKana(kana)
@@ -473,6 +483,9 @@ fun KeyboardRootView(
                                         },
                                         onToggleDakuten = {
                                             imeService.handleDakutenToggle()
+                                        },
+                                        onKanaModifier = { kind ->
+                                            imeService.handleKanaModifier(kind)
                                         },
                                         onDelete = onDeleteChar,
                                         onSpace = {
@@ -523,7 +536,7 @@ fun KeyboardRootView(
                                         actionKeyBg = actionKeyBg,
                                         textColor = textColor,
                                         palette = palette,
-                                        rowHeight = keyHeight * (52f / 46f),
+                                        rowHeight = keyboardRowHeight(keyHeight, rowCount = 4, targetRowCount = keyRowCount),
                                         isFlickOnly = imeService.isFlickOnlyState.value,
                                         onCommitText = { text ->
                                             imeService.handleEnglishText(text)
@@ -582,7 +595,7 @@ fun KeyboardRootView(
                                     actionKeyBg = actionKeyBg,
                                     textColor = textColor,
                                     palette = palette,
-                                    rowHeight = keyHeight * (52f / 46f),
+                                    rowHeight = keyboardRowHeight(keyHeight, rowCount = 4, targetRowCount = keyRowCount),
                                     isFlickOnly = imeService.isFlickOnlyState.value,
                                     onCommitText = { text ->
                                         imeService.commitDirect(text)
@@ -613,7 +626,7 @@ fun KeyboardRootView(
                             },
                             onTogglePin = { entry -> imeService.toggleClipboardPin(entry) },
                             onDelete = { entry -> imeService.removeClipboardEntry(entry) },
-                            onUpdate = { entry, text -> imeService.updateClipboardEntry(entry, text) },
+                            onEdit = { entry -> imeService.beginClipboardEdit(entry) },
                             onClearAll = { imeService.clearClipboardHistory(true) },
                             retentionHours = imeService.clipboardRetentionHoursState.value,
                             onRetentionChange = { imeService.setClipboardRetentionHours(it) },
@@ -1592,6 +1605,8 @@ fun KeyButton(
     val currentOnUpFlick by rememberUpdatedState(onUpFlick)
     val currentGetRootCoords by rememberUpdatedState(getRootCoords)
     val currentOnFlickGuide by rememberUpdatedState(onFlickGuide)
+    val currentText by rememberUpdatedState(text)
+    val currentUpFlickLabel by rememberUpdatedState(upFlickLabel)
     var cellCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val density = LocalDensity.current
     val longPressTimeoutMillis = LocalViewConfiguration.current.longPressTimeoutMillis
@@ -1614,18 +1629,24 @@ fun KeyButton(
                 when {
                     // The hidden number row keeps its digits on the up-flick of q..p.
                     // The guide popup mirrors the 12-key flick so the gesture reads the same.
+                    // The labels are read when the gesture starts rather than used as
+                    // pointerInput keys: restarting the handler on a shift toggle drops the
+                    // touch that is already down, so the guide lagged one press behind.
                     currentOnUpFlick != null -> Modifier.pointerInput(Unit) {
                         val thresholdPx = with(density) { 18.dp.toPx() }
-                        val guideDef = FlickKeyDef(
-                            label = text,
-                            center = text,
-                            up = upFlickLabel.orEmpty()
-                        )
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val start = down.position
                             var direction = FlickDirection.CENTER
                             var guideShown = false
+                            // Read once per gesture: the guide and the committed character must
+                            // come from the same shift state even if it changes mid-touch.
+                            val upFlick = currentOnUpFlick
+                            val guideDef = FlickKeyDef(
+                                label = currentText,
+                                center = currentText,
+                                up = currentUpFlickLabel.orEmpty()
+                            )
 
                             val rootCoords = currentGetRootCoords()
                             val myCoords = cellCoordinates
@@ -1660,7 +1681,7 @@ fun KeyButton(
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                     if (!change.pressed) {
                                         if (direction == FlickDirection.UP) {
-                                            currentOnUpFlick?.invoke()
+                                            upFlick?.invoke()
                                         } else {
                                             currentOnClick()
                                         }
@@ -1713,6 +1734,75 @@ fun KeyButton(
     }
 }
 
+/** Clipboard header: back to keyboard, the pinned section heading, and clear-all. */
+@Composable
+private fun ClipboardToolbarActions(
+    textColor: Color,
+    actionKeyBg: Color,
+    onBackToQwerty: () -> Unit,
+    onClearAll: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxSize().padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ClipboardToolbarButton(
+            label = "すべて削除",
+            contentDescription = "クリップボードの履歴をすべて削除",
+            textColor = textColor,
+            background = actionKeyBg,
+            onClick = onClearAll,
+            modifier = Modifier.weight(1f)
+        )
+        // Marks the panel between the two buttons; the pinned entries need no list heading.
+        Icon(
+            painter = painterResource(R.drawable.ic_clipboard),
+            contentDescription = null,
+            tint = textColor.copy(alpha = 0.7f),
+            modifier = Modifier.size(18.dp)
+        )
+        ClipboardToolbarButton(
+            label = "← 戻る",
+            contentDescription = "キーボードに戻る",
+            textColor = textColor,
+            background = actionKeyBg,
+            onClick = onBackToQwerty,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun ClipboardToolbarButton(
+    label: String,
+    contentDescription: String,
+    textColor: Color,
+    background: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(6.dp))
+            .background(background)
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = textColor,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 @Composable
 fun ClipboardPanel(
     history: List<ClipboardEntry>,
@@ -1722,52 +1812,20 @@ fun ClipboardPanel(
     onSelect: (ClipboardEntry) -> Unit,
     onTogglePin: (ClipboardEntry) -> Unit = {},
     onDelete: (ClipboardEntry) -> Unit = {},
-    onUpdate: (ClipboardEntry, String) -> Unit = { _, _ -> },
+    onEdit: (ClipboardEntry) -> Unit = {},
     onClearAll: () -> Unit = {},
     retentionHours: Int = 1,
     onRetentionChange: (Int) -> Unit = {},
     onBackToQwerty: () -> Unit
 ) {
-    var editingEntry by remember { mutableStateOf<ClipboardEntry?>(null) }
-    var editingText by remember { mutableStateOf("") }
-
     Column(modifier = Modifier.fillMaxSize()) {
-        if (editingEntry != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = editingText,
-                    onValueChange = { editingText = it },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg)
-                        .clickable {
-                            editingEntry?.let { onUpdate(it, editingText) }
-                            editingEntry = null
-                        }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text("保存", color = textColor, fontSize = 13.sp)
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg)
-                        .clickable { editingEntry = null }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text("×", color = textColor, fontSize = 13.sp)
-                }
-            }
+        Box(modifier = Modifier.fillMaxWidth().height(KeyboardBarHeight).padding(horizontal = 2.dp)) {
+            ClipboardToolbarActions(
+                textColor = textColor,
+                actionKeyBg = actionKeyBg,
+                onBackToQwerty = onBackToQwerty,
+                onClearAll = onClearAll
+            )
         }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (history.isEmpty()) {
@@ -1779,14 +1837,20 @@ fun ClipboardPanel(
                 val recent = history.filter { !it.pinned }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (pinned.isNotEmpty()) {
-                        item {
-                            Text(text = "ピン留め", color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp))
-                        }
                         items(pinned, key = { it.id }) { item ->
-                            ClipboardRow(item, textColor, itemBgColor, actionKeyBg, onSelect, onTogglePin, onDelete, onUpdate, { e -> editingEntry = e; editingText = e.text ?: "" })
+                            ClipboardRow(
+                                item = item,
+                                textColor = textColor,
+                                itemBgColor = itemBgColor,
+                                actionKeyBg = actionKeyBg,
+                                onSelect = onSelect,
+                                onTogglePin = onTogglePin,
+                                onDelete = onDelete,
+                                onEdit = onEdit
+                            )
                         }
                     }
                     if (recent.isNotEmpty()) {
@@ -1794,40 +1858,19 @@ fun ClipboardPanel(
                             Text(text = "最近", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(4.dp))
                         }
                         items(recent, key = { it.id }) { item ->
-                            ClipboardRow(item, textColor, itemBgColor, actionKeyBg, onSelect, onTogglePin, onDelete, onUpdate, { e -> editingEntry = e; editingText = e.text ?: "" })
+                            ClipboardRow(
+                                item = item,
+                                textColor = textColor,
+                                itemBgColor = itemBgColor,
+                                actionKeyBg = actionKeyBg,
+                                onSelect = onSelect,
+                                onTogglePin = onTogglePin,
+                                onDelete = onDelete,
+                                onEdit = onEdit
+                            )
                         }
                     }
                 }
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .padding(2.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(96.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
-                    .clickable(onClick = onBackToQwerty),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("← キーボード", color = textColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            }
-            Box(
-                modifier = Modifier
-                    .width(96.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
-                    .clickable { onClearAll() },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("すべて削除", color = textColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -1842,7 +1885,6 @@ private fun ClipboardRow(
     onSelect: (ClipboardEntry) -> Unit,
     onTogglePin: (ClipboardEntry) -> Unit,
     onDelete: (ClipboardEntry) -> Unit,
-    onUpdate: (ClipboardEntry, String) -> Unit,
     onEdit: (ClipboardEntry) -> Unit
 ) {
     Row(
@@ -1851,7 +1893,7 @@ private fun ClipboardRow(
             .clip(RoundedCornerShape(8.dp))
             .background(itemBgColor)
             .clickable { onSelect(item) }
-            .padding(12.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (item.isImage) {
@@ -1868,7 +1910,7 @@ private fun ClipboardRow(
                 modifier = Modifier.size(18.dp)
             )
         }
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = item.preview,
             color = textColor,

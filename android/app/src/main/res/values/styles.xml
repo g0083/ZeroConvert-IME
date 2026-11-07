@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="ZeroConvertSettingsTheme" parent="android:style/Theme.DeviceDefault" />
+
+    <!-- Floating editor over the keyboard: transparent window, the card is drawn in Compose. -->
+    <style name="ZeroConvertClipboardEditTheme" parent="android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

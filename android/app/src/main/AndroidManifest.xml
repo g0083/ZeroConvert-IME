@@ -38,6 +38,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ClipboardEditActivity"
+            android:exported="false"
+            android:theme="@style/ZeroConvertClipboardEditTheme"
+            android:windowSoftInputMode="stateAlwaysVisible|adjustResize" />
+
         <service
             android:name=".ZeroConvertInputMethodService"
             android:label="@string/ime_name"

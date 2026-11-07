@@ -51,6 +51,13 @@ enum class FlickDirection {
     DOWN
 }
 
+enum class KanaModifierKind {
+    TOGGLE,
+    SMALL,
+    DAKUTEN,
+    HANDAKUTEN
+}
+
 data class FlickKeyDef(
     val label: String,
     val center: String,
@@ -75,7 +82,7 @@ object FlickKeyDefinitions {
     val keyYa = FlickKeyDef(label = "や", center = "や", left = "（", up = "ゆ", right = "）", down = "よ", subText = "（・ゆ・）・よ")
     val keyRa = FlickKeyDef(label = "ら", center = "ら", left = "り", up = "る", right = "れ", down = "ろ", subText = "り・る・れ・ろ")
 
-    val keyMod = FlickKeyDef(label = "小゛゜", center = "TOGGLE", left = "「", up = "『", right = "」", down = "』", subText = "小・濁・半濁", isActionKey = true)
+    val keyMod = FlickKeyDef(label = "小゛゜", center = "TOGGLE", left = "゛", up = "小", right = "゜", subText = "小・濁・半濁", isActionKey = true)
     val keyWa = FlickKeyDef(label = "わ", center = "わ", left = "を", up = "ん", right = "ー", down = "〜", subText = "を・ん・ー・〜")
     val keyPunc = FlickKeyDef(label = "、。", center = "、", left = "。", up = "？", right = "！", down = "・", subText = "。・？・！・・")
 
@@ -372,6 +379,58 @@ object KanaModifier {
             else -> ch
         }
     }
+
+    private val smallForms: Map<Char, Char> = mapOf(
+        'あ' to 'ぁ', 'い' to 'ぃ', 'う' to 'ぅ', 'え' to 'ぇ', 'お' to 'ぉ',
+        'つ' to 'っ', 'や' to 'ゃ', 'ゆ' to 'ゅ', 'よ' to 'ょ', 'わ' to 'ゎ',
+        'ア' to 'ァ', 'イ' to 'ィ', 'ウ' to 'ゥ', 'エ' to 'ェ', 'オ' to 'ォ',
+        'ツ' to 'ッ', 'ヤ' to 'ャ', 'ユ' to 'ュ', 'ヨ' to 'ョ', 'ワ' to 'ヮ'
+    )
+
+    private val dakutenForms: Map<Char, Char> = mapOf(
+        'う' to 'ゔ', 'ぅ' to 'ゔ', 'ゔ' to 'ゔ',
+        'か' to 'が', 'が' to 'が', 'き' to 'ぎ', 'ぎ' to 'ぎ', 'く' to 'ぐ', 'ぐ' to 'ぐ',
+        'け' to 'げ', 'げ' to 'げ', 'こ' to 'ご', 'ご' to 'ご',
+        'さ' to 'ざ', 'ざ' to 'ざ', 'し' to 'じ', 'じ' to 'じ', 'す' to 'ず', 'ず' to 'ず',
+        'せ' to 'ぜ', 'ぜ' to 'ぜ', 'そ' to 'ぞ', 'ぞ' to 'ぞ',
+        'た' to 'だ', 'だ' to 'だ', 'ち' to 'ぢ', 'ぢ' to 'ぢ', 'つ' to 'づ', 'っ' to 'づ', 'づ' to 'づ',
+        'て' to 'で', 'で' to 'で', 'と' to 'ど', 'ど' to 'ど',
+        'は' to 'ば', 'ば' to 'ば', 'ぱ' to 'ば', 'ひ' to 'び', 'び' to 'び', 'ぴ' to 'び',
+        'ふ' to 'ぶ', 'ぶ' to 'ぶ', 'ぷ' to 'ぶ', 'へ' to 'べ', 'べ' to 'べ', 'ぺ' to 'べ',
+        'ほ' to 'ぼ', 'ぼ' to 'ぼ', 'ぽ' to 'ぼ',
+        'ウ' to 'ヴ', 'ゥ' to 'ヴ', 'ヴ' to 'ヴ',
+        'カ' to 'ガ', 'ガ' to 'ガ', 'キ' to 'ギ', 'ギ' to 'ギ', 'ク' to 'グ', 'グ' to 'グ',
+        'ケ' to 'ゲ', 'ゲ' to 'ゲ', 'コ' to 'ゴ', 'ゴ' to 'ゴ',
+        'サ' to 'ザ', 'ザ' to 'ザ', 'シ' to 'ジ', 'ジ' to 'ジ', 'ス' to 'ズ', 'ズ' to 'ズ',
+        'セ' to 'ゼ', 'ゼ' to 'ゼ', 'ソ' to 'ゾ', 'ゾ' to 'ゾ',
+        'タ' to 'ダ', 'ダ' to 'ダ', 'チ' to 'ヂ', 'ヂ' to 'ヂ', 'ツ' to 'ヅ', 'ッ' to 'ヅ', 'ヅ' to 'ヅ',
+        'テ' to 'デ', 'デ' to 'デ', 'ト' to 'ド', 'ド' to 'ド',
+        'ハ' to 'バ', 'バ' to 'バ', 'パ' to 'バ', 'ヒ' to 'ビ', 'ビ' to 'ビ', 'ピ' to 'ビ',
+        'フ' to 'ブ', 'ブ' to 'ブ', 'プ' to 'ブ', 'ヘ' to 'ベ', 'ベ' to 'ベ', 'ペ' to 'ベ',
+        'ホ' to 'ボ', 'ボ' to 'ボ', 'ポ' to 'ボ'
+    )
+
+    private val handakutenForms: Map<Char, Char> = mapOf(
+        'は' to 'ぱ', 'ば' to 'ぱ', 'ぱ' to 'ぱ', 'ひ' to 'ぴ', 'び' to 'ぴ', 'ぴ' to 'ぴ',
+        'ふ' to 'ぷ', 'ぶ' to 'ぷ', 'ぷ' to 'ぷ', 'へ' to 'ぺ', 'べ' to 'ぺ', 'ぺ' to 'ぺ',
+        'ほ' to 'ぽ', 'ぼ' to 'ぽ', 'ぽ' to 'ぽ',
+        'ハ' to 'パ', 'バ' to 'パ', 'パ' to 'パ', 'ヒ' to 'ピ', 'ビ' to 'ピ', 'ピ' to 'ピ',
+        'フ' to 'プ', 'ブ' to 'プ', 'プ' to 'プ', 'ヘ' to 'ペ', 'ベ' to 'ペ', 'ペ' to 'ペ',
+        'ホ' to 'ポ', 'ボ' to 'ポ', 'ポ' to 'ポ'
+    )
+
+    fun modify(ch: Char, kind: KanaModifierKind): Char = when (kind) {
+        KanaModifierKind.TOGGLE -> toggle(ch)
+        KanaModifierKind.SMALL -> toSmall(ch)
+        KanaModifierKind.DAKUTEN -> toDakuten(ch)
+        KanaModifierKind.HANDAKUTEN -> toHandakuten(ch)
+    }
+
+    fun toSmall(ch: Char): Char = smallForms[ch] ?: ch
+
+    fun toDakuten(ch: Char): Char = dakutenForms[ch] ?: ch
+
+    fun toHandakuten(ch: Char): Char = handakutenForms[ch] ?: ch
 }
 
 fun calculateFlickDirection(dx: Float, dy: Float, thresholdPx: Float): FlickDirection {
@@ -406,6 +465,7 @@ fun Japanese12KeyFlickLayout(
     onKanaInput: (String) -> Unit,
     onReplaceLastKana: (String) -> Unit,
     onToggleDakuten: () -> Unit,
+    onKanaModifier: (KanaModifierKind) -> Unit = {},
     onDelete: () -> Unit,
     onSpace: () -> Unit,
     onLongPressSpace: () -> Unit = {},
@@ -428,10 +488,10 @@ fun Japanese12KeyFlickLayout(
         if (def == FlickKeyDefinitions.keyMod) {
             when (dir) {
                 FlickDirection.CENTER -> onToggleDakuten()
-                FlickDirection.LEFT -> onKanaInput("「")
-                FlickDirection.RIGHT -> onKanaInput("」")
-                FlickDirection.UP -> onKanaInput("『")
-                FlickDirection.DOWN -> onKanaInput("』")
+                FlickDirection.LEFT -> onKanaModifier(KanaModifierKind.DAKUTEN)
+                FlickDirection.UP -> onKanaModifier(KanaModifierKind.SMALL)
+                FlickDirection.RIGHT -> onKanaModifier(KanaModifierKind.HANDAKUTEN)
+                FlickDirection.DOWN -> {}
             }
         } else {
             val output = when (dir) {

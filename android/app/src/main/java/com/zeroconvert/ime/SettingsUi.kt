@@ -336,7 +336,7 @@ fun SettingsThemePicker(
         SettingsSwitchRow(
             title = "システム連動",
             description = if (followsSystem) {
-                "端末のダークモードに合わせて、ダークブルーまたはペーパーを使います。"
+                "端末のダークモードに合わせて、グラファイトまたはペーパーを使います。"
             } else {
                 "オフのときは下で選んだテーマを、端末設定に関係なく使います。"
             },

@@ -90,4 +90,26 @@ class ComposingTextTest {
         c.insertAtCursorPosition("u", InputStyle.ROMAN2KANA)
         assertEquals("じうゃ", c.convertTarget)
     }
+
+    @Test
+    fun digitsJoinTheCompositionLikeTheWindowsClient() {
+        // QWERTY digits now take the same path as Windows UserAction::Number ->
+        // AppendText: they stay in the reading and conversion includes them.
+        val c = ComposingText()
+        "10kai".forEach { ch ->
+            c.insertAtCursorPosition(ch.toString(), InputStyle.ROMAN2KANA)
+        }
+        assertEquals("10かい", c.convertTarget)
+        assertEquals(4, c.convertTargetCursorPosition)
+    }
+
+    @Test
+    fun digitAfterPendingNCommitsTheN() {
+        // The romaji table's n+Any1 rule fires for digits too, matching Windows.
+        val c = ComposingText()
+        "san5".forEach { ch ->
+            c.insertAtCursorPosition(ch.toString(), InputStyle.ROMAN2KANA)
+        }
+        assertEquals("さん5", c.convertTarget)
+    }
 }

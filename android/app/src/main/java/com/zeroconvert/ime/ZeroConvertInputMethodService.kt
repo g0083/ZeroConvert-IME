@@ -17,6 +17,7 @@ import android.inputmethodservice.InputMethodService
 import android.util.Log
 import android.view.View
 import android.widget.Toast
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
@@ -96,7 +97,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_JAPANESE_LAYOUT = "japanese_keyboard_layout" // "FLICK_12KEY", "QWERTY"
         const val KEY_KEY_HEIGHT_DP = "keyboard_key_height_dp" // int dp (40..64), default 46
         const val KEY_FLICK_ONLY = "flick_only" // boolean, default true
-        const val KEY_QWERTY_NUMBER_ROW = "qwerty_number_row" // boolean, default true
+        const val KEY_QWERTY_NUMBER_ROW = "qwerty_number_row" // boolean, default false
+        const val KEY_FOLLOW_INPUT_TYPE_MODE = "follow_input_type_mode" // boolean, default false
         const val KEY_VIBRATION_ENABLED = "vibration_enabled" // boolean, default true
         const val KEY_VIBRATION_DURATION = "vibration_duration" // int ms (5..50), default 15
         const val KEY_EXPERIMENTAL_AI_ASSIST = "experimental_ai_assist" // boolean, default true
@@ -139,6 +141,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
         fun isJapaneseClausePunctuation(ch: Char): Boolean {
             return ch in "、。，．！？!?,\n"
+        }
+
+        /**
+         * Chars that commit the current composition immediately (punctuation and
+         * shifted symbols). Digits are excluded: like the Windows client's
+         * UserAction::Number -> AppendText, they join the composition so the
+         * reading keeps them and conversion includes them.
+         */
+        fun isImmediateCommitChar(ch: Char): Boolean {
+            return ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
+                ch == '？' || ch == '！' || ch == '．' || ch == '，' || ch in "!@#$%^&*()"
+        }
+
+        /** Translation mode also reflects digits into the reading as literals. */
+        fun isTranslationLiteralChar(ch: Char): Boolean {
+            return isImmediateCommitChar(ch) || ch.isDigit()
         }
 
         fun isNaturalAutoCommitPrefix(candidatePrefix: String, fullPreview: String): Boolean {
@@ -227,6 +245,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val keyboardKeyHeightState = mutableStateOf(46)
     val isFlickOnlyState = mutableStateOf(true)
     val isQwertyNumberRowState = mutableStateOf(true)
+    val isFollowInputTypeModeState = mutableStateOf(false)
+    // Owned by the service so onStartInputView can seed the mode for the focused editor.
+    val keyboardModeState = mutableStateOf(KeyboardMode.JAPANESE)
+    // Bumped for every input view session so open panels do not hide the keys in a new one.
+    val inputViewEpochState = mutableIntStateOf(0)
     val isVibrationEnabledState = mutableStateOf(true)
     val vibrationDurationState = mutableStateOf(15)
     val isAiAssistEnabledState = mutableStateOf(true)
@@ -373,7 +396,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             appendTranslationLiteral(" ")
             return
         }
-        if (composingText.isEmpty) commitDirect(" ") else confirmCurrent()
+        // A space ends the phrase: the next-word prediction must not survive it.
+        if (composingText.isEmpty) commitDirect(" ") else confirmCurrent(showContinuations = false)
     }
 
     fun commitTranslationFromUi() {
@@ -923,6 +947,26 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (clipboardHistory[idx].pinned) persistPinnedClipboard()
     }
 
+    /**
+     * The IME cannot host an InputConnection of its own, so text editing happens in a small
+     * editor activity: our keyboard then types into that activity's field through the normal
+     * pipeline instead of committing to the app behind the keyboard.
+     */
+    fun beginClipboardEdit(entry: ClipboardEntry) {
+        val text = entry.text ?: return
+        ClipboardEditBridge.onSave = { newText -> updateClipboardEntry(entry, newText) }
+        val intent = Intent(this, ClipboardEditActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(ClipboardEditActivity.EXTRA_TEXT, text)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            ClipboardEditBridge.onSave = null
+            Log.e(TAG, "beginClipboardEdit failed", e)
+        }
+    }
+
     fun clearClipboardHistory(keepPinned: Boolean = true) {
         try {
             val remaining = if (keepPinned) clipboardHistory.filter { it.pinned } else emptyList()
@@ -1310,7 +1354,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             JapaneseInputLayout.FLICK_12KEY
         }
         isFlickOnlyState.value = prefs.getBoolean(KEY_FLICK_ONLY, true)
-        isQwertyNumberRowState.value = prefs.getBoolean(KEY_QWERTY_NUMBER_ROW, true)
+        isQwertyNumberRowState.value = prefs.getBoolean(KEY_QWERTY_NUMBER_ROW, false)
+        isFollowInputTypeModeState.value = prefs.getBoolean(KEY_FOLLOW_INPUT_TYPE_MODE, false)
         keyboardKeyHeightState.value = prefs.getInt(KEY_KEY_HEIGHT_DP, 46).coerceIn(40, 64)
         isVibrationEnabledState.value = prefs.getBoolean(KEY_VIBRATION_ENABLED, true)
         vibrationDurationState.value = prefs.getInt(KEY_VIBRATION_DURATION, 15)
@@ -1694,10 +1739,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         clearPostCommitCandidates()
         canRewindOnNextBackspace = false
 
-        if (isTranslationMode() && (ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
-                ch == '？' || ch == '！' || ch == '．' || ch == '，' ||
-                ch.isDigit() || ch in "!@#$%^&*()")
-        ) {
+        if (isTranslationMode() && isTranslationLiteralChar(ch)) {
             val literal = when (ch) {
                 '.' -> "。"
                 ',' -> "、"
@@ -1707,10 +1749,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return
         }
 
-        if (ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
-            ch == '？' || ch == '！' || ch == '．' || ch == '，' ||
-            ch.isDigit() || ch in "!@#$%^&*()"
-        ) {
+        if (isImmediateCommitChar(ch)) {
             val punc = when (ch) {
                 '.' -> "。"
                 ',' -> "、"
@@ -1835,6 +1874,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleDakutenToggle() {
+        handleKanaModifier(KanaModifierKind.TOGGLE)
+    }
+
+    fun handleKanaModifier(kind: KanaModifierKind) {
         vibrateOnKeyPress()
         if (isConfirming) return
         if (composingText.isEmpty) return
@@ -1845,14 +1888,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val surface = composingText.convertTargetBeforeCursor
         if (surface.isEmpty()) return
         val lastChar = surface.last()
-        val toggled = KanaModifier.toggle(lastChar)
-        if (toggled == lastChar) return
+        val modified = KanaModifier.modify(lastChar, kind)
+        if (modified == lastChar) return
 
         canRewindOnNextBackspace = false
         cancelPendingInference()
 
         composingText.deleteBackwardFromCursorPosition(1)
-        composingText.insertAtCursorPosition(toggled.toString(), InputStyle.DIRECT)
+        composingText.insertAtCursorPosition(modified.toString(), InputStyle.DIRECT)
 
         val newSurface = composingText.convertTargetBeforeCursor
         currentComposingSurface.value = newSurface
@@ -2373,8 +2416,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer(useTopCandidate = false)
         } else if (!composingText.isEmpty) {
-            confirmAsync()
+            confirmAsync(showContinuations = false)
         } else {
+            // A newline ends the phrase: drop the next-word prediction before it is inserted.
+            clearPostCommitCandidates()
             sendKeyChar('\n')
         }
     }
@@ -2425,7 +2470,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun confirmAsync(trailingText: String = "") {
+    fun confirmAsync(trailingText: String = "", showContinuations: Boolean = true) {
         if (isConfirming) return
         if (isTranslationMode()) {
             handleTranslationEnter()
@@ -2433,7 +2478,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         if (englishComposing.isNotEmpty()) {
             // A mode change accepts the spelling, not an English completion.
-            commitText(englishComposing + trailingText, committedCandidate = null, trailingText = trailingText)
+            commitText(englishComposing + trailingText, committedCandidate = null, trailingText = trailingText,
+                offerContinuations = showContinuations)
             return
         }
         if (composingText.isEmpty) {
@@ -2443,7 +2489,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val currentSurface = composingText.convertTargetBeforeCursor
         if (currentSurface == lastInferredSurface && predictedCandidate.value.isNotEmpty() && editorContextIsCurrent()) {
             val candidate = candidatesList.firstOrNull { it.text == predictedCandidate.value && it.assist == null }
-            commitText(predictedCandidate.value + trailingText, committedCandidate = candidate, trailingText = trailingText)
+            commitText(predictedCandidate.value + trailingText, committedCandidate = candidate, trailingText = trailingText,
+                offerContinuations = showContinuations)
             return
         }
         cancelPendingInference(edited = false)
@@ -2477,7 +2524,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         isConfirming = false
                         // Explicit conversion adopts the regular top candidate, not a learning-history prediction.
                         val candidate = results.firstOrNull { !it.isLearningPrediction } ?: results.firstOrNull()
-                        commitText((candidate?.text ?: currentSurface) + trailingText, committedCandidate = candidate, trailingText = trailingText)
+                        commitText((candidate?.text ?: currentSurface) + trailingText, committedCandidate = candidate,
+                            trailingText = trailingText, offerContinuations = showContinuations)
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -2486,7 +2534,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 withContext(Dispatchers.Main) {
                     if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey()) && editorContextIsCurrent()) {
                         isConfirming = false
-                        commitText(currentSurface + trailingText)
+                        commitText(currentSurface + trailingText, offerContinuations = showContinuations)
                     }
                 }
             } finally {
@@ -2497,8 +2545,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun confirmCurrent(trailingText: String = "") {
-        confirmAsync(trailingText)
+    fun confirmCurrent(trailingText: String = "", showContinuations: Boolean = true) {
+        confirmAsync(trailingText, showContinuations)
     }
 
     fun commitDirect(text: String) {
@@ -2611,6 +2659,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             appendTranslationLiteral(" ")
             return
         }
+        // A space ends the phrase: the next-word prediction must not survive it.
+        clearPostCommitCandidates()
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer(useTopCandidate = isEnglishSpaceAdoptsCandidateState.value)
         }
@@ -2659,7 +2709,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         text: String,
         isExplicitSelection: Boolean = false,
         committedCandidate: Candidate? = candidatesList.firstOrNull { it.text == text },
-        trailingText: String = ""
+        trailingText: String = "",
+        offerContinuations: Boolean = true
     ) {
         if (isConfirming) return
         if (isTranslationMode() && !committingTranslation) {
@@ -2723,7 +2774,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 } else clearCandidateList()
             } else {
                 clearInput()
-                showContinuations = true
+                showContinuations = offerContinuations
             }
         } finally { connection.endBatchEdit() }
         if (showContinuations && connection === currentInputConnection) {
@@ -2738,8 +2789,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private fun showPostCommitContinuations(connection: android.view.inputmethod.InputConnection) {
         if (isTranslationMode() || isSensitiveInput() || !isPredictiveConversionEnabled()) return
         if (!LearningPolicy.canRead) return
-        val before = connection.getTextBeforeCursor(128, 0)?.toString()?.trimEnd().orEmpty()
-        if (before.isEmpty()) return
+        // A space or newline ends the phrase, so the learned chunk no longer follows it.
+        val before = connection.getTextBeforeCursor(128, 0)?.toString().orEmpty()
+        if (before.isEmpty() || before.last().isWhitespace()) return
         val continuations = KanaKanjiConverter.postCommitContinuations(before)
         if (continuations.isEmpty()) return
         candidatesList.clear()
@@ -2805,6 +2857,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
         selectionTranslationState.value = null
     }
 
+    /**
+     * Seeds the keyboard mode from the focused editor's declared input type.
+     *
+     * Runs only when the input view starts, so a mode the user picks with the あ/A/1 key
+     * survives until the next editor. `beforeKeyboardModeChange()` is deliberately not
+     * called: the view is starting with no pending composition, and confirming here would
+     * commit text the user never asked to commit.
+     */
+    private fun applyInputTypeMode(info: android.view.inputmethod.EditorInfo?) {
+        if (!isFollowInputTypeModeState.value) return
+        if (info == null) return
+        val mode = InputTypeMode.modeFor(info.inputType, info.imeOptions) ?: return
+        if (keyboardModeState.value == mode) return
+        keyboardModeState.value = mode
+    }
+
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         exitTranslationMode(revert = false)
@@ -2812,6 +2880,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         reloadPreferences()
         clearInput()
+        applyInputTypeMode(info)
+        inputViewEpochState.value++
         hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
         selectionAvailableState.value = hasSelectionInEditor
         updateSelectionCharacterCount(info?.initialSelStart ?: -1, info?.initialSelEnd ?: -1)
