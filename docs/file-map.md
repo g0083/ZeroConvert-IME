@@ -38,7 +38,8 @@
 | `W/data/` | Windowsタイポ辞書の選択データ・規則・NOTICE・評価方針。ルートの学習用 `data/` とは別 |
 | `W/scripts/` / `installer/` | 生成器・検証・VM補助 / Inno Setup配布定義 |
 | `W/docs/` / `.github/workflows/` | 上流系の開発・検証・配布手順 / CI。ワークスペースの本 `docs/` とは別 |
-| `android/` | Androidアプリ・Gradle設定・JNI・ローカル単体テスト |
+| `android/` | Androidアプリ・Gradle設定・JNI・ローカル単体テスト。Gradleモジュールは `:rebuilt` だけで、`android/app/` は共有ソースの置き場 |
+| `engine/` | WindowsとAndroidが共有するRust/Swift/native。`Package.resolved` がAndroidのSwift pin、`shared-engine.lock.json` がAPKと突き合わせるエンジン指紋 |
 | `data/` | 学習・検証・ベンチマークJSONLと生成Python |
 | `benchmarks/research/` | モデル比較、タイポ・文脈・先読み評価、試作 |
 | `training/` | モデル学習、LoRAマージ、GGUF変換補助 |
@@ -77,7 +78,7 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | 同 `assist/TypoCorrectionEngine.kt` / `PredictiveAssistEngine.kt` | Android固有の補正 / 先読み |
 | 同 `translation/` | 翻訳プロンプト・モデルDL/検証・世代管理・遅延ロード（試験機能） |
 | 同 `model/ModelManager.kt` | 組込み・取込みモデル選択 |
-| `A/main/cpp/zenz_jni.cpp` / `assist_jni.cpp` / `azookey_louds.cpp` / `CMakeLists.txt` | 推論JNI / assist・翻訳Runtime / 辞書読取 / nativeビルド |
+| `A/main/cpp/zenz_jni.cpp` / `assist_jni.cpp` / `azookey_louds.cpp` | 推論JNI / assist・翻訳Runtime / 辞書読取。nativeのビルド定義は `engine/native/CMakeLists.txt` |
 | `data/generate_typo_dataset.py` / `generate_word_typo_30k.py` | タイポ学習データ生成 |
 | `data/build_distillation_corpus.py` / `generate_distilled_dataset.py` | 蒸留コーパス関連処理 |
 | `training/train_nano_v2.py` / `training/train_nano_v2_gentle.py` / `training/train_nano_v2_fullft.py` | 蒸留LoRA / gentle版 / 全層学習 |
@@ -100,7 +101,7 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | `W/target/`、各crateの `target/`、`W/build/`、`server-swift/.build/`、フロント `dist/` | ビルド出力・生成Protobuf・取得依存。`.proto`・実ソース・ビルド定義を変更して再生成。`W/build/` はビルド時の出力先で、調査時点では存在しない |
 | `W/target/azookey-build/`、配布 `build-info.json` | `app-version.json` と `scripts/sync-version.mjs` が生成。frontendの版フィールドも同スクリプトの同期対象 |
 | `Dictionary/Reverse/reverse-v2.bin` | `W/scripts/generate-reverse-dictionary.mjs` で生成 |
-| `node_modules/`、`.gradle/`、Android `app/build/` / `.cxx/` | 依存・ビルド生成物。Gradle/npm/CMakeの入力を変更 |
+| `node_modules/`、`.gradle/`、Android `rebuilt/build/` / `.cxx/`、`engine/build/` | 依存・ビルド生成物。Gradle/npm/CMakeの入力を変更 |
 | Android `app/src/main/cpp/llama.cpp/`、Swift取得依存・辞書サブモジュール | 外部コード・データ。変更が必要なら依存元とライセンス、更新方法を先に確認 |
 | 配布先のDLL/EXE、`.lib`/`.obj`/`.exp`、GGUF/safetensors、checkpoint | 手編集しない。ソース・学習入力から作る。`.old*` / `.bak*` / `.tmp` は現行ソースとみなさない |
 

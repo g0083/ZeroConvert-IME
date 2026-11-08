@@ -327,7 +327,7 @@ Windows と同様:
 
 ```powershell
 cd D:\angra\ZeroConvert-IME\android
-.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+.\gradlew.bat :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug
 ```
 
 JVM テストは Android API の既定値返却が有効で、JNI ロード失敗を捕捉する経路もある。成功だけで native 辞書・モデル・InputConnection・IME ライフサイクルの成功と判断しない。
@@ -335,14 +335,14 @@ JVM テストは Android API の既定値返却が有効で、JNI ロード失�
 Instrumentation テスト:
 
 ```powershell
-.\gradlew.bat :app:assembleDebugAndroidTest
+.\gradlew.bat :rebuilt:assembleDebugAndroidTest
 # 対象端末を -s で固定して am instrument で実行
 ```
 
 端末反映:
 
 ```powershell
-adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s <serial> install -r rebuilt/build/outputs/apk/debug/rebuilt-arm64-v8a-debug.apk
 ```
 
 更新後は versionCode/versionName とインストール元 APK を照合し、設定画面と別の入力アプリで IME を確認する。

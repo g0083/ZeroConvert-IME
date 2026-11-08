@@ -3,7 +3,7 @@
 Windows共通エンジン版は `:rebuilt`。構造・ビルド入口・移行・未確認点は
 [Android新構成](android-shared-engine.md) を参照。2026-11-08に `:app` モジュールを廃止し、
 `android/app/` は `:rebuilt` がコンパイルする共有ソースの置き場になった。
-以下の `:app` を含む記述と過去の実機結果は従来版の記録である。
+以下の手順と過去の実機結果は、`:app` 廃止後も `:rebuilt` にそのまま適用する。
 
 共通エンジン版の導入用APKはCPU別に出力する。ARM64実機は
 `android/rebuilt/build/outputs/apk/debug/rebuilt-arm64-v8a-debug.apk`、x86_64は
@@ -44,7 +44,7 @@ Git保存はこの流れと別の操作。コミットしただけ、APKを作�
 | JVMテスト | 入力状態、フリック、補正・定型句先読み、自動確定のテストあり |
 | 端末内テスト | `PortInstrumentationRunner`。debug専用入力欄で実InputConnection・native辞書/モデル・IME操作を検証 |
 | release署名 | GradleにsigningConfigs/release署名の設定なし |
-| CI | ルートのSource checksはAndroidビルド・テスト・実IME操作を実行しない |
+| CI | ルートのSource checksはAndroidビルド・テスト・実IME操作を実行しない。`shared-engine-inputs` ジョブだけが共有エンジンのステージング・pin・ロックを検査する |
 
 これは現状の記録であり、配布先の要件を満たす保証ではない。SDK・版・署名等を変更したらこの表も更新する。Google Play公開は別途、その時点のtarget SDK・サイズ・審査等の要件を確認する。
 
@@ -109,6 +109,27 @@ llama.cppはルートのgitlinkで固定し、独自変更は `patches/llama.cpp
 JVMテストは除外リスト方式で、新しいテストは自動的に実行される。除外はメソッド単位で、旧Kotlin補正・先読み経路（共有エンジンが代替）とJVMからロードできないJNI呼び出しの2種類だけ。除外を足すときは理由を書く。
 
 純粋なKotlinの入力・候補選択ロジックはJVMテストへ、InputConnection・IMEライフサイクル・JNI・モデル読込・実際のキーボード表示は端末確認へ割り当てる。JVMテスト設定の `isReturnDefaultValues=true` と、nativeロード失敗を捕捉する経路があるため、ホスト単体テストでnative機能を検証したつもりにならない。
+
+### 共有エンジンを触ったときの追加確認
+
+`:rebuilt` はWindowsのSwift/Rustソースとvendored converterをそのままコンパイルする。次のいずれかを変更したら、APKビルドの前にルートで共有エンジンの検査を通す。
+
+- `windows/server-swift/Sources/`、`windows/crates/shared/src/conversion_policy.rs`、`engine/` 配下
+- `windows/scripts/converter_patch.py`、`prepare-modern-llama.py` のconverter pin
+- `windows/server-swift/Package.resolved`（Android側の `engine/Package.resolved` と一致させる）
+- `android/app/src/main/cpp/` の自前nativeソース
+
+```powershell
+# ルートで実行
+python scripts/run.py windows/scripts/test_converter_patch.py
+python scripts/run.py windows/scripts/prepare-modern-llama.py --check-converter
+node scripts/prepare-shared-engine.mjs
+node scripts/check-shared-engine-pins.mjs
+node scripts/check-shared-engine-inputs.mjs
+node scripts/check-shared-engine-lock.mjs
+```
+
+`prepare-shared-engine.mjs` はステージングと同時に `engine/shared-engine.lock.json` を再生成する。ソースを変えたら再生成したロックを同じコミットに含める。`check-shared-engine-lock.mjs` は古いロックを拒否し、`check-android-apk.py` はAPK内の `assets/shared-engine/lock.json` と突き合わせる。詳細は [Android新構成](android-shared-engine.md)。
 
 端末内テストはplatform Instrumentationの専用runnerを使う。`:rebuilt:assembleDebugAndroidTest` で `rebuilt/build/outputs/apk/androidTest/debug/` のテストAPKを作り、指定端末へ本体APKとテストAPKを更新した後に `adb -s <serial> shell am instrument -w -r com.zeroconvert.ime.test/com.zeroconvert.ime.PortInstrumentationRunner` を実行する。`tests` が正の件数で `failures=0`、各項目がPASSであることを確認する。シェルの終了コード0だけで成功と判断しない。runnerは制御した入力欄を開き、IME画面を操作する。通常の利用アプリの文書は使わず、既定IMEを変更しない。`:rebuilt:connectedDebugAndroidTest` の0件/NO-SOURCEを成功の代わりにしない。
 

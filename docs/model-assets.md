@@ -17,7 +17,7 @@ Windowsの正本は `artifacts/models/zerocon/`、インストール先は `{app
 
 旧 `standard` / `standard_q4km` はQ8へ、旧 `nano` / `nano_q4km` はIQ4_emb8へ読み替える。旧重みや `zenz.gguf` を新しいNano v4として扱うフォールバックはしない。モデル未配置なら新しい配布資産を準備する。
 
-Androidは `scripts/prepare-android-conversion-models.ps1` でハッシュ検証後に `android/app/src/main/assets/models/` へコピーする。`:app` と現行の `:rebuilt` は同じ2種類を梱包し、Gradleの `verifyConversionModels` でサイズ・ハッシュを検査する。旧assetsはローカルに残してAPKの同期対象から除外する。既存の管理下Standard選択はQ8、Nano/Lite選択はIQ4_emb8へ移行する。ユーザーがインポートした別パスのモデルや補正履歴は保持する。
+Androidは `scripts/prepare-android-conversion-models.ps1` でハッシュ検証後に `android/app/src/main/assets/models/` へコピーする。`:rebuilt` が同じ2種類を梱包し、Gradleの `verifyConversionModels` でサイズ・ハッシュを検査する。旧assetsはローカルに残してAPKの同期対象から除外する。既存の管理下Standard選択はQ8、Nano/Lite選択はIQ4_emb8へ移行する。ユーザーがインポートした別パスのモデルや補正履歴は保持する。
 
 モデル重みはGit対象外。clone後はカタログと一致する重みを別途用意する。コピー・ビルド・実IMEへの適用・端末更新は別操作である。
 

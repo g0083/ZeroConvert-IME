@@ -111,7 +111,7 @@ powershell -ExecutionPolicy Bypass -File .\ZeroConvertIME-windows\Restart-ZeroCo
 
 初回登録は同ディレクトリの `Install-ZeroConvertIME.ps1`。TSF/スタートアップ登録・設定作成・起動を行うため、単なるビルド確認として実行しない。
 
-Androidは **`android/`** 内で `./gradlew.bat assembleDebug`、`./gradlew.bat testDebugUnitTest`、`./gradlew.bat lintDebug`。SDK/NDK・JDKと `local.properties` のローカル設定が必要。
+Androidは **`android/`** 内で `./gradlew.bat :rebuilt:assembleDebug`、`./gradlew.bat :rebuilt:testDebugUnitTest`、`./gradlew.bat :rebuilt:lintDebug`。モジュールは `:rebuilt` だけ。SDK/NDK・JDKと `local.properties` のローカル設定が必要。
 
 Python評価はルートから `python scripts/run.py benchmarks/research/benchmark_nano_v2.py`、`python scripts/run.py benchmarks/research/benchmark_typo_300.py` が入口候補。前者はCUDA版llama-serverと複数GGUF、後者もローカルモデルを前提にサーバーを起動する。実行前にパス・ポート・出力先を読む。仮想環境の依存充足やGPUの利用可能性は本調査では確認していない。実IMEを経由しない評価のため、Windows動作確認とは別に扱う。
 
