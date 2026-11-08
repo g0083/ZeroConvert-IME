@@ -46,6 +46,7 @@
     "experimental_ai_assist": true,
     "experimental_translation": false,
     "translation_model": "0.8b",
+    "translation_target": "auto",
     "translation_keep_alive": false,
     "experimental_ai_engine": "embedded",
     "experimental_ai_engine_port": 18090

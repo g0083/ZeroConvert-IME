@@ -708,6 +708,10 @@ pub struct GeneralConfig {
     pub experimental_translation: bool,
     #[serde(default = "default_translation_model")]
     pub translation_model: String,
+    /// Fixed direction for input-mode translations: "auto", "en" (to English)
+    /// or "ja" (to Japanese). Auto keeps the hiragana-source heuristic.
+    #[serde(default = "default_translation_target")]
+    pub translation_target: String,
     /// Keep the translation server/model loaded while translation is enabled.
     #[serde(default)]
     pub translation_keep_alive: bool,
@@ -747,6 +751,7 @@ impl Default for GeneralConfig {
             experimental_ai_assist: true,
             experimental_translation: false,
             translation_model: default_translation_model(),
+            translation_target: default_translation_target(),
             translation_keep_alive: false,
             experimental_ai_engine: default_ai_engine(),
             experimental_ai_engine_port: default_ai_engine_port(),
@@ -897,8 +902,11 @@ mod tests {
         assert!(!super::GeneralConfig::default().experimental_translation);
         assert!(!general.translation_keep_alive);
         assert!(!super::GeneralConfig::default().translation_keep_alive);
+        assert_eq!(general.translation_target, "auto");
+        assert_eq!(super::GeneralConfig::default().translation_target, "auto");
         general.translation_keep_alive = true;
         general.experimental_translation = true;
+        general.translation_target = "en".to_string();
         let saved = serde_json::to_string(&general).unwrap();
         assert!(
             serde_json::from_str::<super::GeneralConfig>(&saved)
@@ -909,6 +917,12 @@ mod tests {
             serde_json::from_str::<super::GeneralConfig>(&saved)
                 .unwrap()
                 .translation_keep_alive
+        );
+        assert_eq!(
+            serde_json::from_str::<super::GeneralConfig>(&saved)
+                .unwrap()
+                .translation_target,
+            "en"
         );
     }
 
@@ -1672,6 +1686,10 @@ fn default_ai_engine() -> String {
 
 fn default_translation_model() -> String {
     "0.8b".to_string()
+}
+
+fn default_translation_target() -> String {
+    "auto".to_string()
 }
 
 fn default_ai_engine_port() -> u16 {

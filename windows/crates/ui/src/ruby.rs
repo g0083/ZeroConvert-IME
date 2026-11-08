@@ -485,6 +485,9 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             const isLoading = !en && !hasError;
                             const modelStr = String(translationData.model || '0.8b').toLowerCase();
                             const modelTag = modelStr.includes('2b') ? '2B' : '0.8B';
+                            const targetStr = String(translationData.target || 'auto');
+                            const sourceLabel = targetStr === 'en' ? '入力:' : '日本語:';
+                            const resultLabel = targetStr === 'en' ? '英訳:' : targetStr === 'ja' ? '日本語訳:' : '英訳:';
 
                             const statusText = hasError
                                 ? '翻訳失敗・入力し直して再試行'
@@ -504,11 +507,11 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                                     '</div>' +
                                     '<div class="translation-content">' +
                                         '<div class="translation-row ja">' +
-                                            '<span class="translation-label">日本語:</span>' +
+                                            '<span class="translation-label">' + escapeHtml(sourceLabel) + '</span>' +
                                             '<span class="translation-text ja-text">' + escapeHtml(jaText) + '</span>' +
                                         '</div>' +
                                         '<div class="translation-row en">' +
-                                            '<span class="translation-label en-label">英訳:</span>' +
+                                            '<span class="translation-label en-label">' + escapeHtml(resultLabel) + '</span>' +
                                             '<span class="translation-text en-text' + loadingClass + '">' + escapeHtml(enText) + '</span>' +
                                         '</div>' +
                                     '</div>' +

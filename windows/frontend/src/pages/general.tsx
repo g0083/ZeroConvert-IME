@@ -47,6 +47,7 @@ type GeneralConfigState = {
     experimental_ai_assist: boolean;
     experimental_translation: boolean;
     translation_model: string;
+    translation_target: string;
     translation_keep_alive: boolean;
     experimental_ai_engine: string;
     auto_commit_live_conversion: boolean;
@@ -76,6 +77,7 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     experimental_ai_assist: true,
     experimental_translation: false,
     translation_model: "0.8b",
+    translation_target: "auto",
     translation_keep_alive: false,
     experimental_ai_engine: "embedded",
     auto_commit_live_conversion: true,
@@ -559,6 +561,16 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                         <>
                             <SettingsRow label="翻訳サーバーを常時起動する" description="翻訳機能がONの間、サーバーとモデルを保持して起動待ちを減らします。OFFでは使用時だけ起動し、終了後にメモリを解放します。" htmlFor="translation-keep-alive">
                                 <Switch id="translation-keep-alive" checked={generalValue.translation_keep_alive} onCheckedChange={(value) => void updateGeneralConfig("translation_keep_alive", value)} />
+                            </SettingsRow>
+                            <SettingsRow label="翻訳方向" description="「自動」では日本語入力を英語へ、それ以外を日本語へ訳します。「英語へ」「日本語へ」を選ぶと方向を固定します。" htmlFor="translation-target">
+                                <Select value={generalValue.translation_target || "auto"} onValueChange={(value) => void updateGeneralConfig("translation_target", value)}>
+                                    <SelectTrigger id="translation-target" className="w-72"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="auto">自動（入力に応じて方向を判定）</SelectItem>
+                                        <SelectItem value="en">常に英語へ</SelectItem>
+                                        <SelectItem value="ja">常に日本語へ</SelectItem>
+                                    </SelectContent>
+                                </Select>
                             </SettingsRow>
                             <SettingsRow label="翻訳モデル" description="0.8Bは軽量・高速・省メモリでCPUでも快適に動作します。2Bはより高精度な翻訳が可能です。" htmlFor="translation-model">
                                 <Select value={generalValue.translation_model || "0.8b"} onValueChange={(value) => void ensureTranslationModel(value).then((ok) => { if (ok) void updateGeneralConfig("translation_model", value); })}>

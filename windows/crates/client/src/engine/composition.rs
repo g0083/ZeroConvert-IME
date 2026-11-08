@@ -2227,6 +2227,7 @@ impl TextServiceFactory {
                     candidates.sub_texts.first().map(String::as_str).unwrap_or("")),
                 "translation": translation,
                 "model": IMEState::app_config_snapshot()?.app_config().general.translation_model,
+                "target": IMEState::app_config_snapshot()?.app_config().general.translation_target,
             }).to_string());
         }
         let candidate_list_visible = if self.borrow()?.translation_session.is_some() {

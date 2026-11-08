@@ -40,6 +40,7 @@ static ASSIST_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::co
 static JEV_CONVERSION_ENABLED: AtomicBool = AtomicBool::new(false);
 static AI_ASSIST_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRANSLATION_ENABLED: AtomicBool = AtomicBool::new(false);
+static TRANSLATION_TARGET: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 static TRANSLATION_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 // Latest translation request's cancellation token. A new kind==3 request
 // cancels the previous worker so the fresh baseline is not queued behind it.
@@ -51,6 +52,9 @@ static LAST_CONTEXT: std::sync::RwLock<String> = std::sync::RwLock::new(String::
 
 fn reload_ai_assist_from_settings(config: &AppConfig) {
     TRANSLATION_ENABLED.store(config.general.experimental_translation, Ordering::Relaxed);
+    if let Ok(mut target) = TRANSLATION_TARGET.write() {
+        *target = config.general.translation_target.clone();
+    }
     ai_assist::corrector::clear_cache();
     ai_assist::prediction::clear_cache();
     let enabled = config.general.experimental_ai_assist;
@@ -1942,10 +1946,22 @@ impl AzookeyService for MyAzookeyService {
                 .map_err(|_| Status::unavailable("translation stopped"))?;
             let response = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
+                let configured_target = TRANSLATION_TARGET
+                    .read()
+                    .map(|target| target.clone())
+                    .unwrap_or_default();
                 let text = TRANSLATION_ENABLED
                     .load(Ordering::Relaxed)
-                    .then(|| {
-                        ai_assist::translation::translate_cancellable(&request.baseline, &cancel)
+                    .then(|| match configured_target.as_str() {
+                        "en" | "ja" => ai_assist::translation::translate_to_cancellable(
+                            &request.baseline,
+                            configured_target.as_str(),
+                            &cancel,
+                        ),
+                        _ => ai_assist::translation::translate_cancellable(
+                            &request.baseline,
+                            &cancel,
+                        ),
                     })
                     .flatten();
                 shared::proto::GetAssistCandidatesResponse {
