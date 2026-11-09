@@ -1,3 +1,3 @@
 ; Generated from app-version.json by scripts/sync-version.mjs --sync-release.
-#define MyReleaseVersion "0.4.1"
+#define MyReleaseVersion "0.5.0"
 #define MyInstallerGeneration 2
