@@ -280,19 +280,24 @@ impl View {
                 .any(|c| ('ぁ'..='ヿ').contains(&c) || ('一'..='鿿').contains(&c));
             let body =
                 shared::translation_http::completion(&source, if japanese { "en" } else { "ja" });
-            let result = shared::translation_http::request(
-                shared::TRANSLATION_SERVER_PORT,
-                Some(&body),
-                Duration::from_secs(10),
-            )
-            .filter(|(status, value)| {
-                *status == 200
-                    && value["stopped_limit"] != true
-                    && value["truncated"] != true
-                    && value["stop_type"] != "limit"
-            })
-            .and_then(|(_, value)| value["content"].as_str().map(|text| text.trim().to_owned()))
-            .filter(|text| !text.is_empty() && !text.contains("<|") && text.chars().count() <= 512);
+            let response = retry_quick_failures(3, Duration::from_secs(1), || {
+                shared::translation_http::request(
+                    shared::TRANSLATION_SERVER_PORT,
+                    Some(&body),
+                    Duration::from_secs(10),
+                )
+            });
+            let result = response
+                .filter(|(status, value)| {
+                    *status == 200
+                        && value["stopped_limit"] != true
+                        && value["truncated"] != true
+                        && value["stop_type"] != "limit"
+                })
+                .and_then(|(_, value)| value["content"].as_str().map(|text| text.trim().to_owned()))
+                .filter(|text| {
+                    !text.is_empty() && !text.contains("<|") && text.chars().count() <= 512
+                });
             let (phase, text) = result.map(|text| (Phase::Done, text)).unwrap_or((
                 Phase::Error,
                 "翻訳できませんでした。閉じて再試行してください。".into(),
@@ -441,6 +446,29 @@ impl View {
         }
         let _ = CloseClipboard();
     }
+}
+
+/// Briefly retries a loopback request that failed at the connection level.
+/// A refused or reset connection fails within the 300ms connect window,
+/// while an accepted request occupies the full timeout, so only failures
+/// that return faster than `quick_fail_limit` are retried and a translation
+/// already in flight is never sent twice.
+fn retry_quick_failures<T>(
+    max_attempts: u32,
+    quick_fail_limit: Duration,
+    mut request: impl FnMut() -> Option<T>,
+) -> Option<T> {
+    for attempt in 0..max_attempts {
+        let started = Instant::now();
+        if let Some(value) = request() {
+            return Some(value);
+        }
+        if attempt + 1 == max_attempts || started.elapsed() >= quick_fail_limit {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    None
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -710,5 +738,71 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
     }
     for font in [view.font, view.small] {
         let _ = DeleteObject(font);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn transient_connection_failures_are_retried_until_success() {
+        // Reserve a loopback port, free it so the first attempt is refused,
+        // then re-bind and answer once the retry reaches the server.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let server = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 2048];
+            let _ = stream.read(&mut buffer).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}",
+                )
+                .unwrap();
+        });
+        let attempts = std::cell::Cell::new(0);
+        let response = retry_quick_failures(3, Duration::from_secs(1), || {
+            attempts.set(attempts.get() + 1);
+            shared::translation_http::request(
+                port,
+                Some(&serde_json::json!({"prompt":"x"})),
+                Duration::from_secs(1),
+            )
+        });
+        server.join().unwrap();
+        assert_eq!(attempts.get(), 2, "a refusal is retried, a success is not");
+        assert!(response.is_some());
+    }
+
+    #[test]
+    fn a_slow_failed_response_is_never_retried() {
+        let attempts = std::cell::Cell::new(0);
+        let response: Option<()> = retry_quick_failures(3, Duration::from_millis(20), || {
+            attempts.set(attempts.get() + 1);
+            std::thread::sleep(Duration::from_millis(40));
+            None
+        });
+        assert!(response.is_none());
+        assert_eq!(
+            attempts.get(),
+            1,
+            "an in-flight request must not be re-sent"
+        );
+    }
+
+    #[test]
+    fn quick_failures_stop_at_the_attempt_limit() {
+        let attempts = std::cell::Cell::new(0);
+        let response: Option<()> = retry_quick_failures(3, Duration::from_secs(1), || {
+            attempts.set(attempts.get() + 1);
+            None
+        });
+        assert!(response.is_none());
+        assert_eq!(attempts.get(), 3);
     }
 }

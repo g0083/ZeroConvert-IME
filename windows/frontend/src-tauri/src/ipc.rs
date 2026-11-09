@@ -204,6 +204,8 @@ impl IPCService {
                 text_to_append: target.to_string(),
                 input_style: shared::proto::InputStyle::Direct as i32,
                 request_id: 12,
+                conversion_continuation_reading: String::new(),
+                conversion_continuation_surface: String::new(),
             });
             append_req.set_timeout(SETTINGS_RPC_DEADLINE);
             let response = self

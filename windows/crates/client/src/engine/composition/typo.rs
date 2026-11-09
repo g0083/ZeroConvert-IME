@@ -1,5 +1,5 @@
 //! Reversible correction and cancellable snapshot assistance on the TSF thread.
-use super::super::ipc_service::InputLedgerSnapshot;
+use super::super::ipc_service::{AssistOutcome, InputLedgerSnapshot};
 use super::*;
 use std::{
     cell::{Cell, RefCell},
@@ -10,13 +10,25 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{KillTimer, SetTimer},
 };
 
+/// Why translation mode shows an error. `InvalidSource` and `Truncated` are
+/// not produced yet: an invalid source never sends a request, and a
+/// limit-stopped response is indistinguishable from a failure without a
+/// protocol extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TranslationError {
+    /// The server was ready but no result arrived within the RPC timeout.
+    Timeout,
+    /// The server never became ready within the preparation wait.
+    Unavailable,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct TypoState {
     pub applied: Option<Rc<AppliedCorrection>>,
     pub rejected_surface: Option<String>,
     pub hold_auto_commit: bool,
     pub primary_assist: Option<u64>,
-    pub translation_failed: bool,
+    pub translation_error: Option<TranslationError>,
     pub prediction_continuation: String,
     accepted: Vec<(String, String)>,
 }
@@ -34,10 +46,10 @@ struct Pending {
     generation: u64,
     timer: usize,
     started: Instant,
-    receiver: mpsc::Receiver<Option<shared::proto::GetAssistCandidatesResponse>>,
+    receiver: mpsc::Receiver<AssistOutcome>,
     task: tokio::task::JoinHandle<()>,
     correction_task: Option<tokio::task::JoinHandle<()>>,
-    correction_receiver: Option<mpsc::Receiver<Option<shared::proto::GetAssistCandidatesResponse>>>,
+    correction_receiver: Option<mpsc::Receiver<AssistOutcome>>,
     correction_result: Option<shared::proto::GetAssistCandidatesResponse>,
     prediction_result: Option<shared::proto::GetAssistCandidatesResponse>,
     prediction_done: bool,
@@ -48,6 +60,7 @@ struct Pending {
     raw_input: String,
     candidates: Candidates,
     context_key: (u64, u64, u64),
+    translation_error: Option<TranslationError>,
     model: (String, String),
 }
 
@@ -67,12 +80,10 @@ thread_local! {
     static GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
-fn receive(
-    receiver: &mpsc::Receiver<Option<shared::proto::GetAssistCandidatesResponse>>,
-) -> Option<Option<shared::proto::GetAssistCandidatesResponse>> {
+fn receive(receiver: &mpsc::Receiver<AssistOutcome>) -> Option<AssistOutcome> {
     match receiver.try_recv() {
-        Ok(result) => Some(result),
-        Err(mpsc::TryRecvError::Disconnected) => Some(None),
+        Ok(outcome) => Some(outcome),
+        Err(mpsc::TryRecvError::Disconnected) => Some(AssistOutcome::Done(None)),
         Err(mpsc::TryRecvError::Empty) => None,
     }
 }
@@ -92,19 +103,30 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
     }
     let mut results = Vec::new();
     if !pending.prediction_done {
-        if let Some(result) = receive(&pending.receiver) {
+        if let Some(outcome) = receive(&pending.receiver) {
             pending.prediction_done = true;
-            pending.prediction_result = if pending.translation {
-                Some(result.unwrap_or_default())
-            } else {
-                result
-            };
+            match outcome {
+                AssistOutcome::Done(result) => {
+                    pending.prediction_result = if pending.translation {
+                        Some(result.unwrap_or_default())
+                    } else {
+                        result
+                    };
+                }
+                AssistOutcome::TranslationUnavailable => {
+                    pending.translation_error = Some(TranslationError::Unavailable);
+                    pending.prediction_result = pending.translation.then(Default::default);
+                }
+            }
         }
     }
     if !pending.correction_done {
-        if let Some(result) = pending.correction_receiver.as_ref().and_then(receive) {
+        if let Some(outcome) = pending.correction_receiver.as_ref().and_then(receive) {
             pending.correction_done = true;
-            pending.correction_result = result;
+            pending.correction_result = match outcome {
+                AssistOutcome::Done(result) => result,
+                AssistOutcome::TranslationUnavailable => None,
+            };
         }
     }
     // Briefly coalesce first results so fast continuation does not permanently
@@ -291,6 +313,31 @@ fn translation_surface(candidates: &Candidates) -> Option<&str> {
         .map(String::as_str)
 }
 
+/// Absence of a translation surface is a timeout unless the background task
+/// reported that the server never became ready within the preparation wait.
+fn translation_error_from_outcome(
+    unavailable: bool,
+    has_surface: bool,
+) -> Option<TranslationError> {
+    if has_surface {
+        return None;
+    }
+    if unavailable {
+        Some(TranslationError::Unavailable)
+    } else {
+        Some(TranslationError::Timeout)
+    }
+}
+
+impl TranslationError {
+    pub(super) fn ui_key(self) -> &'static str {
+        match self {
+            TranslationError::Timeout => "timeout",
+            TranslationError::Unavailable => "unavailable",
+        }
+    }
+}
+
 impl TextServiceFactory {
     pub(crate) fn translation_feature_enabled(&self) -> Result<bool> {
         Ok(IMEState::app_config_snapshot()?
@@ -472,6 +519,7 @@ impl TextServiceFactory {
                 raw_input,
                 candidates,
                 context_key: ipc.assist_snapshot_key(),
+                translation_error: None,
                 model: (
                     config.general.experimental_ai_engine.clone(),
                     config.zenzai.backend.clone(),
@@ -526,10 +574,14 @@ impl TextServiceFactory {
             return self.begin_typo_assist();
         }
         if pending.translation {
+            let error = translation_error_from_outcome(
+                pending.translation_error.is_some(),
+                translation_surface(&candidates).is_some(),
+            );
             self.borrow()?
                 .borrow_mut_composition()?
                 .typo
-                .translation_failed = translation_surface(&candidates).is_none();
+                .translation_error = error;
             if let Some(text) = translation_surface(&candidates) {
                 self.set_text(text, "")?;
                 let service = self.borrow()?;
@@ -1218,5 +1270,24 @@ mod tests {
         assert!(factory
             .typo_acceptances_for_commit("通常の別候補")
             .is_empty());
+    }
+    #[test]
+    fn translation_absence_maps_to_timeout_unless_the_server_never_became_ready() {
+        assert_eq!(
+            translation_error_from_outcome(false, false),
+            Some(TranslationError::Timeout)
+        );
+        assert_eq!(
+            translation_error_from_outcome(true, false),
+            Some(TranslationError::Unavailable)
+        );
+        for unavailable in [false, true] {
+            assert_eq!(translation_error_from_outcome(unavailable, true), None);
+        }
+    }
+    #[test]
+    fn translation_errors_report_distinct_ui_keys() {
+        assert_eq!(TranslationError::Timeout.ui_key(), "timeout");
+        assert_eq!(TranslationError::Unavailable.ui_key(), "unavailable");
     }
 }

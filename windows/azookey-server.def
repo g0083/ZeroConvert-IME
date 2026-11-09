@@ -27,6 +27,7 @@ EXPORTS
     ResetLearningMemory
     SelectJevCandidate
     SetContext
+    SetConversionContinuation
     SetRequestId
     SetServerLogCallbacks
     ShrinkText

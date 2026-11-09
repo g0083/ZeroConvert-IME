@@ -67,6 +67,16 @@ fn surface_suffix<'a>(surface: &str, completed: &'a str) -> Option<&'a str> {
     (useful(suffix) && !suffix.contains(surface)).then_some(suffix)
 }
 
+// Only kana, the long vowel mark, and Japanese clause punctuation can still
+// extend a clause. Digits, symbols, and Latin letters finish a token and would
+// otherwise let a speculative continuation attach to the wrong reading.
+fn is_continuation_tail(c: char) -> bool {
+    ('ぁ'..='ゖ').contains(&c)
+        || ('ァ'..='ヶ').contains(&c)
+        || c == 'ー'
+        || shared::conversion_policy::is_japanese_clause_punctuation_char(c)
+}
+
 fn supported_by_context(context: &str, surface: &str, suffix: &str) -> bool {
     // Do not invent an antecedent just because it is common in training text.
     ["この記事", "その記事", "上記", "前述"]
@@ -88,11 +98,19 @@ pub fn suggest(
         return None;
     }
     // An unfinished romanization is not a safe point to commit an extension.
+    // is_continuation_tail also rejects Latin letters; keep this explicit guard
+    // because a pending romaji tail is a distinct input state.
     if reading
         .chars()
         .last()
         .is_some_and(|c| c.is_ascii_alphabetic())
     {
+        return None;
+    }
+    // A digit, symbol, or other non-clause tail must not start inference. Reject
+    // it before the cache lookup and the in-flight permit so no HTTP request is
+    // issued and the single prediction slot stays available.
+    if !reading.chars().last().is_some_and(is_continuation_tail) {
         return None;
     }
     let context: String = context
@@ -341,5 +359,47 @@ pub(crate) mod tests {
         };
         assert!(suggest("", "よろしくおねがいし", "よろしくお願いし", &config).is_none());
         assert!(suggest("", "しりょうを", "資料を", &config).is_none());
+    }
+    #[test]
+    fn continuation_tail_accepts_kana_and_clause_punctuation_only() {
+        for c in [
+            'ぁ', 'あ', 'ん', 'ゖ', 'ァ', 'ア', 'ヶ', 'ー', '、', '。', '，', '．', '！', '？',
+        ] {
+            assert!(is_continuation_tail(c), "expected an allowed tail: {c}");
+        }
+        for c in [
+            '1', '０', '１', '９', '＃', '#', '@', '$', '%', '^', '&', '*', 'a', 'Z', '.', ',',
+            '・', '漢',
+        ] {
+            assert!(!is_continuation_tail(c), "expected a rejected tail: {c}");
+        }
+    }
+    #[test]
+    fn suggest_rejects_digit_and_symbol_tail_without_requesting_model() {
+        use std::net::TcpListener;
+        let _guard = MODEL_TEST_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let config = AiAssistConfig {
+            enabled: true,
+            prediction_port: port,
+            corrector_port: 1,
+            ..Default::default()
+        };
+        // Digits and symbols may appear mid-clause, but not at the reading tail.
+        assert!(suggest("", "だい1", "第1", &config).is_none());
+        assert!(suggest("", "ねん3", "年3", &config).is_none());
+        assert!(suggest("", "１２", "１２", &config).is_none());
+        assert!(suggest("", "だい１", "第１", &config).is_none());
+        assert!(suggest("", "だい#", "第#", &config).is_none());
+        assert!(suggest("", "だい@", "第@", &config).is_none());
+        // An unfinished romanization and an empty reading remain rejected.
+        assert!(suggest("", "よろしくn", "よろしくn", &config).is_none());
+        assert!(suggest("", "", "資料", &config).is_none());
+        assert!(
+            listener.accept().is_err(),
+            "a rejected tail must not issue a model request"
+        );
     }
 }

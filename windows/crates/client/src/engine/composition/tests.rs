@@ -4057,10 +4057,13 @@ fn test_live_server_okseri() {
         },
         sender,
     );
-    let result = receiver
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap()
-        .unwrap();
+    let outcome = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    let result = match outcome {
+        crate::engine::ipc_service::AssistOutcome::Done(result) => result.unwrap(),
+        crate::engine::ipc_service::AssistOutcome::TranslationUnavailable => {
+            panic!("a ready conversion server must answer the assist request")
+        }
+    };
     println!(
         "assist elapsed_ms={} auto_apply={}",
         started.elapsed().as_millis(),

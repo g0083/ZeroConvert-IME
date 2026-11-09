@@ -43,6 +43,10 @@ internal object TranslationText {
         return text.none { it.isISOControl() }
     }
 
+    // Must stay byte-identical with the Rust prompt() in
+    // windows/crates/server/src/ai_assist/translation.rs. When changing the
+    // format, update the expected literals in TranslationTextTest and the
+    // Rust test at the same time so both sides fail together until synced.
     fun prompt(source: String, target: String): String {
         val sourceLanguage = sourceLanguageFor(target)
         return "<|plamo:bos|><|plamo:tag|>dataset<|plamo:msg|>translation" +

@@ -191,9 +191,10 @@ object WindowsEngine {
         return result
     }
 
-    suspend fun candidates(input: ComposingText, context: String, ai: Boolean, profile: String,
+    internal suspend fun candidates(input: ComposingText, context: String, ai: Boolean, profile: String,
                            personalize: Boolean, dictionaryCorrection: Boolean,
-                           predictiveConversion: Boolean = true): List<Candidate> {
+                           predictiveConversion: Boolean = true,
+                           continuation: ConversionContinuation? = null): List<Candidate> {
         val queued = System.nanoTime()
         val epoch = nativeConversionEpoch()
         return withContext(dispatcher) {
@@ -211,6 +212,8 @@ object WindowsEngine {
             }
             val result = checkedSwift(JSONObject().put("op", "convert").put("elements", elements)
                 .put("cursorUtf16", input.convertTargetCursorPosition).put("expectedReading", input.convertTarget)
+                .put("continuationReading", continuation?.reading.orEmpty())
+                .put("continuationSurface", continuation?.surface.orEmpty())
                 .put("context", context).put("allowAI", ai).put("requestEpoch", epoch).put("diagnostics", diagnosticsEnabled))
             if (result.optBoolean("cancelled")) throw CancellationException("Native conversion superseded")
             ensureActive()
@@ -230,9 +233,8 @@ object WindowsEngine {
                     engineConsumedReading = consumed)
             }.distinctBy { it.text to it.engineConsumedReading }
             val macros = JSONArray(assistRequest(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor)))
-            converted + (0 until macros.length()).map { macros.getString(it) }
-                .filter { text -> converted.none { it.text == text } }
-                .map { text -> Candidate(text, KanaKanjiConverter.toKatakana(input.convertTargetBeforeCursor), learningAllowed = false) }
+            val macroTexts = (0 until macros.length()).map { macros.getString(it) }
+            MacroCandidateMerge.merge(converted, macroTexts, KanaKanjiConverter.toKatakana(input.convertTargetBeforeCursor))
         }
     }
 

@@ -109,6 +109,16 @@ private let embeddedPerformance = EmbeddedPerformance()
     }
     composingText = snapshot
     config["context"] = request["context"] as? String ?? ""
+    let continuationReading = request["continuationReading"] as? String ?? ""
+    let continuationSurface = request["continuationSurface"] as? String ?? ""
+    var continuationAccepted = false
+    if request["allowAI"] as? Bool != false,
+       !continuationReading.isEmpty,
+       !continuationSurface.isEmpty {
+        continuationAccepted = setConversionContinuation(reading: continuationReading, surface: continuationSurface)
+    } else {
+        _ = setConversionContinuation(reading: "", surface: "")
+    }
     let epoch = (request["requestEpoch"] as? NSNumber)?.uint64Value ?? zerocon_conversion_epoch()
     zerocon_conversion_begin(epoch)
     embeddedPerformance.begin(request["diagnostics"] as? Bool ?? false)
@@ -148,11 +158,17 @@ private let embeddedPerformance = EmbeddedPerformance()
                        "consumedReadingUtf16": consumedUtf16,
                        "learningAllowed": learningCandidateCache.isLearningTarget(candidate.candidateId)])
     }
-    return ["reading": reading, "cursorUtf16": cursorUtf16, "candidates": result,
+    var response: [String: Any] = ["reading": reading, "cursorUtf16": cursorUtf16, "candidates": result,
             "timing": ["conversionNs": DispatchTime.now().uptimeNanoseconds - started,
                        "decodeNs": zerocon_conversion_decode_nanoseconds(),
                        "decodeCount": zerocon_conversion_decode_count(),
                        "stagesMs": embeddedPerformance.snapshot()]]
+    if !continuationReading.isEmpty, !continuationSurface.isEmpty {
+        response["continuation"] = ["readingLength": continuationReading.count,
+                                    "surfaceLength": continuationSurface.count,
+                                    "accepted": continuationAccepted]
+    }
+    return response
 }
 
 private final class EmbeddedReply: @unchecked Sendable {

@@ -49,6 +49,17 @@ static TRANSLATION_CANCEL: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 static AI_ENGINE_IS_LM_STUDIO: AtomicBool = AtomicBool::new(false);
 static LAST_CONTEXT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+const MAX_CONVERSION_CONTINUATION_READING_COUNT: usize = 64;
+const MAX_CONVERSION_CONTINUATION_SURFACE_COUNT: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConversionContinuation {
+    reading: String,
+    surface: String,
+}
+
+static CONVERSION_CONTINUATION: std::sync::RwLock<Option<ConversionContinuation>> =
+    std::sync::RwLock::new(None);
 
 fn reload_ai_assist_from_settings(config: &AppConfig) {
     TRANSLATION_ENABLED.store(config.general.experimental_translation, Ordering::Relaxed);
@@ -614,6 +625,7 @@ struct FFICandidate {
 unsafe extern "C" {
     fn Initialize(path: *const c_char, use_zenzai: bool);
     fn SetContext(context: *const c_char);
+    fn SetConversionContinuation(reading: *const c_char, surface: *const c_char) -> bool;
     fn AppendText(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
     fn AppendTextDirect(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
     fn RemoveText(cursorPtr: *mut c_int) -> *mut c_char;
@@ -1854,6 +1866,7 @@ fn promote_full_composition_top_candidate(suggestions: &mut [Suggestion], hiraga
 }
 
 fn shrink_text(offset: i32) -> Result<RawComposingText, String> {
+    clear_conversion_continuation();
     unsafe {
         let result = ShrinkText(offset);
         let text = ffi_text_result("ShrinkText", result)?;
@@ -1906,9 +1919,99 @@ pub struct MyAzookeyService {
     mutation_lock: Arc<tokio::sync::Mutex<CompositionOwner>>,
 }
 
+fn conversion_continuation_kana_like(reading: &str) -> bool {
+    !reading.is_empty()
+        && reading
+            .chars()
+            .all(|character| matches!(character as u32, 0x3041..=0x3096 | 0x309D | 0x309E | 0x30FC))
+}
+
+fn valid_conversion_continuation(reading: &str, surface: &str, context: &str) -> bool {
+    !reading.is_empty()
+        && !surface.is_empty()
+        && reading.chars().count() <= MAX_CONVERSION_CONTINUATION_READING_COUNT
+        && surface.chars().count() <= MAX_CONVERSION_CONTINUATION_SURFACE_COUNT
+        && conversion_continuation_kana_like(reading)
+        && (context.is_empty() || context.ends_with(surface))
+}
+
+fn clear_conversion_continuation() {
+    let previous = CONVERSION_CONTINUATION
+        .write()
+        .ok()
+        .and_then(|mut continuation| continuation.take());
+    unsafe { SetConversionContinuation(c"".as_ptr(), c"".as_ptr()) };
+    if let Some(previous) = previous {
+        log_event(
+            ServerLogLevel::Debug,
+            &format!(
+                "[conversion_continuation] cleared reading_len={} surface_len={}",
+                previous.reading.chars().count(),
+                previous.surface.chars().count()
+            ),
+        );
+    }
+}
+
+fn install_conversion_continuation(reading: &str, surface: &str) -> bool {
+    let context = LAST_CONTEXT
+        .read()
+        .map(|context| context.clone())
+        .unwrap_or_default();
+    if !valid_conversion_continuation(reading, surface, &context) {
+        clear_conversion_continuation();
+        log_event(
+            ServerLogLevel::Debug,
+            &format!(
+                "[conversion_continuation] rejected reading_len={} surface_len={} context_len={}",
+                reading.chars().count(),
+                surface.chars().count(),
+                context.chars().count()
+            ),
+        );
+        return false;
+    }
+    let reading_cstring = match cstring_from_input("SetConversionContinuation.reading", reading) {
+        Ok(reading) => reading,
+        Err(_) => {
+            clear_conversion_continuation();
+            return false;
+        }
+    };
+    let surface_cstring = match cstring_from_input("SetConversionContinuation.surface", surface) {
+        Ok(surface) => surface,
+        Err(_) => {
+            clear_conversion_continuation();
+            return false;
+        }
+    };
+    let installed =
+        unsafe { SetConversionContinuation(reading_cstring.as_ptr(), surface_cstring.as_ptr()) };
+    if installed {
+        if let Ok(mut continuation) = CONVERSION_CONTINUATION.write() {
+            *continuation = Some(ConversionContinuation {
+                reading: reading.to_string(),
+                surface: surface.to_string(),
+            });
+        }
+    } else if let Ok(mut continuation) = CONVERSION_CONTINUATION.write() {
+        *continuation = None;
+    }
+    log_event(
+        ServerLogLevel::Debug,
+        &format!(
+            "[conversion_continuation] installed={installed} reading_len={} surface_len={}",
+            reading.chars().count(),
+            surface.chars().count()
+        ),
+    );
+    installed
+}
+
 fn release_composition_state() {
     clear_text(); // Also clears snapshots and cached/pinned learning candidates.
     unsafe { SetContext(c"".as_ptr()) };
+    clear_conversion_continuation();
     HAS_ACTIVE_COMPOSITION.store(false, Ordering::Relaxed);
 }
 
@@ -2114,6 +2217,21 @@ impl AzookeyService for MyAzookeyService {
         let request_id = request_id_or_next(request.request_id);
         set_request_id(request_id);
         let handler_start = Instant::now();
+        let conversion_continuation_reading = request.conversion_continuation_reading;
+        let conversion_continuation_surface = request.conversion_continuation_surface;
+        match (
+            conversion_continuation_reading.is_empty(),
+            conversion_continuation_surface.is_empty(),
+        ) {
+            (false, false) => {
+                install_conversion_continuation(
+                    &conversion_continuation_reading,
+                    &conversion_continuation_surface,
+                );
+            }
+            (true, true) => {}
+            _ => clear_conversion_continuation(),
+        }
         let input_style = request.input_style;
         let input = request.text_to_append;
         let input_len = input.chars().count();
@@ -2288,6 +2406,7 @@ impl AzookeyService for MyAzookeyService {
         let request_id = request_id_or_next(request.get_ref().request_id);
         set_request_id(request_id);
         let handler_start = Instant::now();
+        clear_conversion_continuation();
         let surface = &request.get_ref().surface;
         let surface_len = validate_reconversion_surface(surface)?;
 
@@ -2422,6 +2541,9 @@ impl AzookeyService for MyAzookeyService {
         let composing_text =
             remove_text().map_err(|error| status_from_error("remove_text", error))?;
         let raw_input = get_raw_input().map_err(|error| status_from_error("remove_text", error))?;
+        if composing_text.text.is_empty() {
+            clear_conversion_continuation();
+        }
         performance_event_lazy!(
             request_id,
             "remove_text",
@@ -2474,6 +2596,7 @@ impl AzookeyService for MyAzookeyService {
         let request_id = request_id_or_next(request.request_id);
         set_request_id(request_id);
         let handler_start = Instant::now();
+        clear_conversion_continuation();
         let raw_offset = request.offset;
 
         let use_cursor_prefix = raw_offset == 0;
@@ -2536,6 +2659,7 @@ impl AzookeyService for MyAzookeyService {
         let request_id = request_id_or_next(request.request_id);
         set_request_id(request_id);
         let handler_start = Instant::now();
+        clear_conversion_continuation();
         let current_input_count = validate_shrink_offset(request.current_input_count)?;
         let expected_raw_input = request.expected_raw_input;
         let expected_input_count = expected_raw_input.chars().count();
@@ -2731,6 +2855,7 @@ impl AzookeyService for MyAzookeyService {
         let handler_start = Instant::now();
         let clear_start = Instant::now();
         release_composition_state();
+        clear_conversion_continuation();
         mutation_guard.release();
         performance_event_lazy!(
             request_id,
@@ -3015,6 +3140,18 @@ impl AzookeyService for MyAzookeyService {
 
         if let Ok(mut lock) = LAST_CONTEXT.write() {
             *lock = trimmed_context.to_string();
+        }
+        let continuation_context_matches = CONVERSION_CONTINUATION
+            .read()
+            .map(|continuation| {
+                continuation.as_ref().map_or(true, |continuation| {
+                    trimmed_context.is_empty()
+                        || trimmed_context.ends_with(continuation.surface.as_str())
+                })
+            })
+            .unwrap_or(false);
+        if !continuation_context_matches {
+            clear_conversion_continuation();
         }
         let set_context_start = Instant::now();
         unsafe { SetContext(context.as_ptr()) };
@@ -3591,6 +3728,45 @@ mod path_tests {
         assert_eq!(model.join().unwrap().len(), 2);
     }
 
+    #[test]
+    fn prediction_is_not_offered_for_digit_or_symbol_tail() {
+        use std::net::TcpListener;
+        use std::sync::atomic::Ordering;
+        let _guard = super::ai_assist::prediction::tests::MODEL_TEST_LOCK
+            .lock()
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let config = super::AiAssistConfig {
+            enabled: true,
+            prediction_port: port,
+            corrector_port: 1,
+            ..Default::default()
+        };
+
+        super::AI_ASSIST_ENABLED.store(true, Ordering::Relaxed);
+        for (reading, surface) in [("だい1", "第1"), ("ねん3", "年3"), ("だい#", "第#")] {
+            let mut suggestions = vec![shared::proto::Suggestion {
+                text: surface.to_string(),
+                subtext: String::new(),
+                corresponding_count: 2,
+                candidate_id: 0,
+            }];
+            super::append_ai_assist_candidates("", reading, reading, &config, &mut suggestions, 2);
+            assert!(
+                !suggestions
+                    .iter()
+                    .any(|s| s.candidate_id == shared::ai_candidate::PREDICTIVE),
+                "reading={reading:?} must not be predictive"
+            );
+        }
+        assert!(
+            listener.accept().is_err(),
+            "a rejected tail must not issue a model request"
+        );
+    }
+
     #[tokio::test]
     async fn jev_denied_request_never_waits_for_composition_lock() {
         use shared::proto::azookey_service_server::AzookeyService;
@@ -4000,5 +4176,64 @@ mod translation_supersede_tests {
             first.is_cancelled_for_test(),
             "the previous request's token must be cancelled by a newer request"
         );
+    }
+}
+
+#[cfg(test)]
+mod conversion_continuation_tests {
+    use super::{
+        valid_conversion_continuation, MAX_CONVERSION_CONTINUATION_READING_COUNT,
+        MAX_CONVERSION_CONTINUATION_SURFACE_COUNT,
+    };
+
+    #[test]
+    fn accepts_kana_readings_with_matching_or_empty_context() {
+        assert!(valid_conversion_continuation("きょう", "今日", ""));
+        assert!(valid_conversion_continuation("きょう", "今日", "私は今日"));
+        assert!(valid_conversion_continuation(
+            "おーい",
+            "おーい",
+            "彼はおーい"
+        ));
+        assert!(valid_conversion_continuation("いすゞ", "いすゞ", ""));
+        assert!(valid_conversion_continuation("ところゞ", "ところゞ", ""));
+    }
+
+    #[test]
+    fn rejects_context_that_does_not_end_with_the_surface() {
+        assert!(!valid_conversion_continuation("きょう", "今日", "明日は雨"));
+        assert!(!valid_conversion_continuation("きょう", "今日", "今日は"));
+    }
+
+    #[test]
+    fn rejects_empty_or_one_sided_continuations() {
+        assert!(!valid_conversion_continuation("", "", ""));
+        assert!(!valid_conversion_continuation("きょう", "", ""));
+        assert!(!valid_conversion_continuation("", "今日", ""));
+        assert!(!valid_conversion_continuation("きょう", "", "今日"));
+        assert!(!valid_conversion_continuation("", "今日", "今日"));
+    }
+
+    #[test]
+    fn rejects_readings_or_surfaces_over_the_cap() {
+        let reading_at_cap = "あ".repeat(MAX_CONVERSION_CONTINUATION_READING_COUNT);
+        let surface_at_cap = "あ".repeat(MAX_CONVERSION_CONTINUATION_SURFACE_COUNT);
+        assert!(valid_conversion_continuation(
+            &reading_at_cap,
+            &surface_at_cap,
+            ""
+        ));
+        let over_reading = "あ".repeat(MAX_CONVERSION_CONTINUATION_READING_COUNT + 1);
+        let over_surface = "あ".repeat(MAX_CONVERSION_CONTINUATION_SURFACE_COUNT + 1);
+        assert!(!valid_conversion_continuation(&over_reading, "今日", ""));
+        assert!(!valid_conversion_continuation("きょう", &over_surface, ""));
+    }
+
+    #[test]
+    fn rejects_non_hiragana_readings() {
+        assert!(!valid_conversion_continuation("kyou", "今日", ""));
+        assert!(!valid_conversion_continuation("キョウ", "今日", ""));
+        assert!(!valid_conversion_continuation("今日", "今日", ""));
+        assert!(!valid_conversion_continuation("きょう1", "今日", ""));
     }
 }

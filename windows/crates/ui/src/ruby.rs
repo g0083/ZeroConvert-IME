@@ -481,7 +481,8 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             if (main) main.classList.add('translation-mode');
                             const ja = translationData.source || '';
                             const en = translationData.translation || '';
-                            const hasError = Boolean(translationData.translationError);
+                            const errorKind = String(translationData.translationError || '');
+                            const hasError = errorKind !== '';
                             const isLoading = !en && !hasError;
                             const modelStr = String(translationData.model || '0.8b').toLowerCase();
                             const modelTag = modelStr.includes('2b') ? '2B' : '0.8B';
@@ -489,13 +490,18 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             const sourceLabel = targetStr === 'en' ? '入力:' : '日本語:';
                             const resultLabel = targetStr === 'en' ? '英訳:' : targetStr === 'ja' ? '日本語訳:' : '英訳:';
 
+                            const errorDetail = errorKind === 'timeout'
+                                ? '翻訳がタイムアウトしました。入力し直して再試行してください'
+                                : '翻訳サーバーを準備できませんでした。しばらく待ってから再試行してください';
+                            const errorStatus = errorKind === 'timeout' ? '翻訳タイムアウト' : '翻訳サーバー未準備';
+
                             const statusText = hasError
-                                ? '翻訳失敗・入力し直して再試行'
+                                ? errorStatus
                                 : (isLoading ? (ja ? '翻訳中' : '入力待ち') : 'リアルタイム英訳入力中');
 
                             const jaText = ja || '入力待ち…';
                             const enText = hasError
-                                ? '翻訳できませんでした。Escで取消'
+                                ? errorDetail
                                 : (isLoading ? '翻訳中…' : en);
                             const loadingClass = isLoading ? ' loading' : '';
 

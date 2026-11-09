@@ -525,7 +525,7 @@ class KanaKanjiConverter {
         }
     }
 
-    suspend fun requestCandidates(
+    internal suspend fun requestCandidates(
         composingText: ComposingText,
         leftContext: String,
         enableAI: Boolean = true,
@@ -533,7 +533,8 @@ class KanaKanjiConverter {
         personalize: Boolean = true,
         fixedSurfacePrefix: String = "",
         experimentalKeyboardCorrection: Boolean = false,
-        predictiveConversion: Boolean = true
+        predictiveConversion: Boolean = true,
+        continuation: ConversionContinuation? = null
     ): List<Candidate> = withContext(Dispatchers.Default) {
         val hiragana = composingText.convertTargetBeforeCursor
         if (hiragana.isEmpty()) return@withContext emptyList()
@@ -547,7 +548,8 @@ class KanaKanjiConverter {
             return@withContext requestCandidates(
                 tail, leftContext + fixedSurfacePrefix, enableAI, profile, personalize,
                 experimentalKeyboardCorrection = experimentalKeyboardCorrection,
-                predictiveConversion = predictiveConversion
+                predictiveConversion = predictiveConversion,
+                continuation = null
             ).map { it.copy(text = fixedSurfacePrefix + it.text,
                 reading = if (BuildConfig.WINDOWS_ENGINE) toKatakana(fixedSurfacePrefix + toHiragana(it.reading)) else toKatakana(hiragana),
                 segments = emptyList(), learningAllowed = it.isLearningTarget,
@@ -557,7 +559,7 @@ class KanaKanjiConverter {
         if (BuildConfig.WINDOWS_ENGINE) {
             return@withContext com.zeroconvert.ime.engine.WindowsEngine.candidates(composingText, leftContext,
                 enableAI, profile, personalize, experimentalKeyboardCorrection,
-                predictiveConversion = predictiveConversion)
+                predictiveConversion = predictiveConversion, continuation = continuation)
         }
         val katakana = toKatakana(hiragana)
         val candidates = mutableListOf<Candidate>()

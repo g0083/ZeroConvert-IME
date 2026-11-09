@@ -2222,7 +2222,9 @@ impl TextServiceFactory {
                 .and_then(|i| candidates.texts.get(i));
             augmented_reading = Some(serde_json::json!({
                 "translationMode": true,
-                "translationError": self.borrow()?.borrow_composition()?.typo.translation_failed,
+                "translationError": self.borrow()?.borrow_composition()?.typo.translation_error
+                    .map(|error| error.ui_key())
+                    .unwrap_or(""),
                 "source": format!("{}{}", candidates.texts.first().map(String::as_str).unwrap_or(""),
                     candidates.sub_texts.first().map(String::as_str).unwrap_or("")),
                 "translation": translation,
@@ -2602,6 +2604,35 @@ impl TextServiceFactory {
         snapshot_prefix.to_string()
     }
 
+    /// 変換継続のために、縮小前の読みから確定済み部分を取り出す。
+    ///
+    /// `before_reading` が `after_reading` で終わり、残る読みがかな文字列で
+    /// 上限内に収まるときだけ `(reading, surface)` を返す。
+    fn conversion_continuation_prefix(
+        before_reading: &str,
+        after_reading: &str,
+        committed_surface: &str,
+    ) -> Option<(String, String)> {
+        let reading = before_reading.strip_suffix(after_reading)?;
+        if reading.is_empty()
+            || after_reading.is_empty()
+            || committed_surface.is_empty()
+            || reading.chars().count() > 64
+            || committed_surface.chars().count() > 128
+            || !reading.chars().all(Self::is_kana_like_conversion_reading)
+        {
+            return None;
+        }
+        Some((reading.to_string(), committed_surface.to_string()))
+    }
+
+    fn is_kana_like_conversion_reading(character: char) -> bool {
+        matches!(
+            character,
+            '\u{3041}'..='\u{3096}' | '\u{309D}' | '\u{309E}' | '\u{30FC}'
+        )
+    }
+
     fn maybe_auto_commit_live_conversion_chunk(
         &self,
         app_config: &AppConfig,
@@ -2683,6 +2714,8 @@ impl TextServiceFactory {
         let _ = self.update_context(&remaining_preview_before_shrink);
         *ipc_service = IMEState::ipc_service()?.context("ipc_service is None")?;
 
+        let pre_shrink_reading = raw_hiragana.clone();
+        ipc_service.clear_pending_conversion_continuation();
         let shrunk_candidates = ipc_service.shrink_text(shrink_offset)?;
         let server_reset_recovered = ipc_service.take_server_reset_recovered();
         if server_reset_recovered || shrunk_candidates.is_empty_composition() {
@@ -2708,11 +2741,24 @@ impl TextServiceFactory {
                 &committed_prefix,
                 &remaining_selected.text,
             );
-            if let Err(error) = self.shift_start(&committed_text, &remaining_selected.text) {
-                tracing::warn!(
-                    ?error,
-                    "auto-commit shift_start failed; syncing state anyway"
-                );
+            let shift_start_succeeded =
+                if let Err(error) = self.shift_start(&committed_text, &remaining_selected.text) {
+                    tracing::warn!(
+                        ?error,
+                        "auto-commit shift_start failed; syncing state anyway"
+                    );
+                    false
+                } else {
+                    true
+                };
+            if shift_start_succeeded && !remaining_selected.hiragana.is_empty() {
+                if let Some((reading, surface)) = Self::conversion_continuation_prefix(
+                    &pre_shrink_reading,
+                    &remaining_selected.hiragana,
+                    &committed_text,
+                ) {
+                    ipc_service.set_pending_conversion_continuation(reading, surface);
+                }
             }
             *raw_input = shrunk_raw_input;
             *candidates = shrunk_candidates;
@@ -7731,10 +7777,15 @@ impl TextServiceFactory {
                 }
 
                 match action {
-                    ClientAction::ApplyTypoCorrection(_) | ClientAction::UndoTypoCorrection => {}
+                    ClientAction::ApplyTypoCorrection(_) | ClientAction::UndoTypoCorrection => {
+                        ipc_service.clear_pending_conversion_continuation();
+                    }
                     // Start only after all local state has been persisted below.
-                    ClientAction::StartJevConversion => {}
+                    ClientAction::StartJevConversion => {
+                        ipc_service.clear_pending_conversion_continuation();
+                    }
                     ClientAction::StartComposition => {
+                        ipc_service.clear_pending_conversion_continuation();
                         // start_composition closes any stale TIP handle and then starts a
                         // fresh composition. Merely seeing a handle is not sufficient: a
                         // previous terminal edit may have emptied its range before failing.
@@ -7808,6 +7859,7 @@ impl TextServiceFactory {
                         );
                     }
                     ClientAction::EndComposition => {
+                        ipc_service.clear_pending_conversion_continuation();
                         self.borrow()?.borrow_mut_composition()?.deferred_actions =
                             deferred_action_suffix(actions, action_index);
                         // EndComposition can reenter focus-loss callbacks, which
@@ -8169,6 +8221,7 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::CommitWithText(text) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         // AI アシストの誤字補正候補 (💡) が確定した場合は、サーバーが
                         // 採用した誤字読みと正解表記を自己学習できるよう通知する。
                         let typo_candidate_index = candidates
@@ -8195,6 +8248,7 @@ impl TextServiceFactory {
                         let _ = ipc_service.clear_text();
                     }
                     ClientAction::CommitTextDirect(text) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         // This action creates and ends a standalone TSF composition while the
                         // logical state is already terminal. It must therefore own the final UI
                         // reconciliation instead of relying on an earlier EndComposition.
@@ -8213,6 +8267,7 @@ impl TextServiceFactory {
                         direct_commit_result?;
                     }
                     ClientAction::RestoreReconversionOriginal => {
+                        ipc_service.clear_pending_conversion_continuation();
                         if let Some(original) = reconversion_original.as_deref() {
                             self.set_text(original, "")?;
                             preview = original.to_string();
@@ -8228,6 +8283,9 @@ impl TextServiceFactory {
                             raw_hiragana = raw_input.clone();
                             preview = raw_input.clone();
                             suffix.clear();
+                            if raw_input.is_empty() {
+                                ipc_service.clear_pending_conversion_continuation();
+                            }
                             self.set_text(&preview, "")?;
                             self.sync_candidate_window_after_text_update(
                                 &mut ipc_service,
@@ -8266,6 +8324,7 @@ impl TextServiceFactory {
                             reset_after_empty_server_composition!(
                                 "server session changed before remove_text"
                             );
+                            ipc_service.clear_pending_conversion_continuation();
                             persist_local_state!();
                             continue;
                         }
@@ -8284,6 +8343,7 @@ impl TextServiceFactory {
                             reset_after_empty_server_composition!(
                                 "remove_text detected server session change"
                             );
+                            ipc_service.clear_pending_conversion_continuation();
                             persist_local_state!();
                             continue;
                         }
@@ -8337,6 +8397,7 @@ impl TextServiceFactory {
                             suffix.clear();
                             raw_input.clear();
                             raw_hiragana.clear();
+                            ipc_service.clear_pending_conversion_continuation();
                             candidates = Candidates::default();
                             clause_snapshots.clear();
                             future_clause_snapshots.clear();
@@ -8373,6 +8434,7 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::MoveCursor(offset) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         if ipc_service.take_server_reset_recovered()
                             && Self::has_client_composition_state(
                                 &raw_input,
@@ -8441,6 +8503,7 @@ impl TextServiceFactory {
                     ClientAction::EnsureClauseNavigationReady {
                         prepare_future_clauses,
                     } => {
+                        ipc_service.clear_pending_conversion_continuation();
                         if ipc_service.take_server_reset_recovered()
                             && Self::has_client_composition_state(
                                 &raw_input,
@@ -8589,6 +8652,7 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::MoveClause(direction) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         // Ctrl+Enter rewinds before committing. Intermediate TSF writes in
                         // this callback can erase the IMM32 host's partial-result string;
                         // ShrinkText owns the final document and candidate-window update.
@@ -8765,6 +8829,7 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::AdjustBoundary(direction) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         if ipc_service.take_server_reset_recovered()
                             && Self::has_client_composition_state(
                                 &raw_input,
@@ -8894,6 +8959,7 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::SetIMEMode(mode) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         let composition_active = self
                             .borrow()?
                             .borrow_composition()?
@@ -8953,6 +9019,7 @@ impl TextServiceFactory {
                         ipc_service.clear_text()?;
                     }
                     ClientAction::SetSelection(selection) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         Self::log_clause_action_state(
                             "before",
                             action,
@@ -9052,6 +9119,8 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::ShrinkText(text) => {
+                        let pre_shrink_reading = raw_hiragana.clone();
+                        ipc_service.clear_pending_conversion_continuation();
                         fixed_prefix.clear();
                         Self::clear_clause_caches(
                             &mut clause_snapshots,
@@ -9141,8 +9210,27 @@ impl TextServiceFactory {
 
                             if fresh_append_after_server_reset {
                                 render_local_text!();
+                                ipc_service.clear_pending_conversion_continuation();
                             } else {
                                 self.shift_start(&previous_preview, &selected.text)?;
+                                let committed_surface = if text.is_empty() {
+                                    previous_preview
+                                        .strip_suffix(&selected.text)
+                                        .filter(|surface| !surface.is_empty())
+                                } else {
+                                    None
+                                };
+                                match committed_surface.and_then(|surface| {
+                                    Self::conversion_continuation_prefix(
+                                        &pre_shrink_reading,
+                                        &raw_hiragana,
+                                        surface,
+                                    )
+                                }) {
+                                    Some((reading, surface)) => ipc_service
+                                        .set_pending_conversion_continuation(reading, surface),
+                                    None => ipc_service.clear_pending_conversion_continuation(),
+                                }
                             }
                             self.sync_candidate_window_update(
                                 &mut ipc_service,
@@ -9183,6 +9271,8 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::ShrinkTextRaw(text) => {
+                        let pre_shrink_reading = raw_hiragana.clone();
+                        ipc_service.clear_pending_conversion_continuation();
                         fixed_prefix.clear();
                         Self::clear_clause_caches(
                             &mut clause_snapshots,
@@ -9256,8 +9346,27 @@ impl TextServiceFactory {
 
                             if fresh_append_after_server_reset {
                                 render_local_text!();
+                                ipc_service.clear_pending_conversion_continuation();
                             } else {
                                 self.shift_start(&previous_preview, &selected.text)?;
+                                let committed_surface = if text.is_empty() {
+                                    previous_preview
+                                        .strip_suffix(&selected.text)
+                                        .filter(|surface| !surface.is_empty())
+                                } else {
+                                    None
+                                };
+                                match committed_surface.and_then(|surface| {
+                                    Self::conversion_continuation_prefix(
+                                        &pre_shrink_reading,
+                                        &raw_hiragana,
+                                        surface,
+                                    )
+                                }) {
+                                    Some((reading, surface)) => ipc_service
+                                        .set_pending_conversion_continuation(reading, surface),
+                                    None => ipc_service.clear_pending_conversion_continuation(),
+                                }
                             }
                             self.sync_candidate_window_update(
                                 &mut ipc_service,
@@ -9298,6 +9407,8 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::ShrinkTextDirect(text) => {
+                        let pre_shrink_reading = raw_hiragana.clone();
+                        ipc_service.clear_pending_conversion_continuation();
                         fixed_prefix.clear();
                         Self::clear_clause_caches(
                             &mut clause_snapshots,
@@ -9371,8 +9482,27 @@ impl TextServiceFactory {
 
                             if fresh_append_after_server_reset {
                                 render_local_text!();
+                                ipc_service.clear_pending_conversion_continuation();
                             } else {
                                 self.shift_start(&previous_preview, &selected.text)?;
+                                let committed_surface = if text.is_empty() {
+                                    previous_preview
+                                        .strip_suffix(&selected.text)
+                                        .filter(|surface| !surface.is_empty())
+                                } else {
+                                    None
+                                };
+                                match committed_surface.and_then(|surface| {
+                                    Self::conversion_continuation_prefix(
+                                        &pre_shrink_reading,
+                                        &raw_hiragana,
+                                        surface,
+                                    )
+                                }) {
+                                    Some((reading, surface)) => ipc_service
+                                        .set_pending_conversion_continuation(reading, surface),
+                                    None => ipc_service.clear_pending_conversion_continuation(),
+                                }
                             }
                             self.sync_candidate_window_update(
                                 &mut ipc_service,
@@ -9422,6 +9552,7 @@ impl TextServiceFactory {
                         temporary_latin_shift_pending = *is_shift_pending;
                     }
                     ClientAction::SetTextWithType(set_type) => {
+                        ipc_service.clear_pending_conversion_continuation();
                         let clause_raw_input = Self::current_clause_raw_input_preview(
                             &raw_input,
                             corresponding_count,
@@ -9776,6 +9907,65 @@ mod lifecycle_tests {
             "watashiwagakkounn",
             "わたしはがっこうん"
         ));
+    }
+}
+
+#[cfg(test)]
+mod conversion_continuation_prefix_tests {
+    use super::TextServiceFactory;
+
+    #[test]
+    fn returns_committed_prefix_when_remaining_reading_is_a_suffix() {
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix("きょうはい", "い", "今日は"),
+            Some(("きょうは".to_string(), "今日は".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_mismatched_or_empty_committed_surface() {
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix("きょうは", "い", "今日は"),
+            None
+        );
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix("きょうはい", "い", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_empty_after_reading() {
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix("きょうは", "", "今日は"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_non_kana_prefix_reading() {
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix("abcかな", "かな", "abc"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_over_cap_reading_and_surface() {
+        let reading = "あ".repeat(65);
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix(
+                &format!("{reading}い"),
+                "い",
+                "確定"
+            ),
+            None
+        );
+        let surface = "あ".repeat(129);
+        assert_eq!(
+            TextServiceFactory::conversion_continuation_prefix("きょうはい", "い", &surface),
+            None
+        );
     }
 }
 

@@ -3,6 +3,8 @@ package com.zeroconvert.ime
 import com.zeroconvert.ime.azookey.input.ComposingText
 import com.zeroconvert.ime.azookey.input.InputStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ComposingTextTest {
@@ -111,5 +113,49 @@ class ComposingTextTest {
             c.insertAtCursorPosition(ch.toString(), InputStyle.ROMAN2KANA)
         }
         assertEquals("さん5", c.convertTarget)
+    }
+
+    @Test
+    fun digitsOnlyReadingsAreNotTranslationSources() {
+        // Translation mode keeps digits/symbols-only readings idle, matching
+        // the Windows kind=3 eligibility that requires kana in the reading.
+        for (source in listOf("123", "1234-5678", "?!", "、。", "")) {
+            assertFalse(
+                "digits/symbols-only source must not translate: $source",
+                ZeroConvertInputMethodService.translationSourceEligible(false, source)
+            )
+            assertFalse(ZeroConvertInputMethodService.hasJapaneseKana(source))
+        }
+        for (source in listOf("123あ", "会議", "アいう")) {
+            assertTrue(
+                "a source with kana stays translatable: $source",
+                ZeroConvertInputMethodService.translationSourceEligible(false, source)
+            )
+        }
+        // English sources keep the englishComposing path and stay eligible.
+        assertTrue(ZeroConvertInputMethodService.translationSourceEligible(true, "123"))
+        assertTrue(ZeroConvertInputMethodService.translationSourceEligible(true, "hello"))
+    }
+
+    @Test
+    fun twelveKeyLiteralDigitReflectsIntoTheReading() {
+        // The 12-key translation route appends digits as literals (DIRECT),
+        // like the QWERTY path, so the reading mixes kana and digits. Flick
+        // keys send kana directly (no pending romaji) before the digit.
+        val c = ComposingText()
+        for (kana in listOf("さ", "ん")) {
+            c.insertAtCursorPosition(kana, InputStyle.DIRECT)
+        }
+        c.insertAtCursorPosition("1", InputStyle.DIRECT)
+        assertEquals("さん1", c.convertTarget)
+        assertTrue(ZeroConvertInputMethodService.hasJapaneseKana(c.convertTarget))
+        // Digits and fullwidth punctuation route through the literal branch.
+        for (ch in "0123456789、。？！") {
+            assertTrue(ZeroConvertInputMethodService.isTranslationLiteralChar(ch))
+        }
+        assertFalse(
+            "multi-char kana stays on the normal composition path",
+            "あ".singleOrNull()?.let { ZeroConvertInputMethodService.isTranslationLiteralChar(it) } == true
+        )
     }
 }

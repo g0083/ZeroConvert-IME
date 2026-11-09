@@ -69,6 +69,12 @@ struct ReconversionDictionaryEntry: Equatable {
     let score: Float
 }
 
+struct ReconversionReadingPiece: Equatable, Sendable {
+    let surface: String
+    let reading: String
+    let score: Float
+}
+
 struct ReconversionDictionary {
     private static let magic = Array("AZR2".utf8)
     private var data = Data()
@@ -193,6 +199,106 @@ struct ReconversionDictionary {
             }
         }
         return paths[characters.count].map(\.reading)
+    }
+
+    func inferReadingPieces(
+        for surface: String,
+        limit: Int = maxReconversionReadingCount
+    ) -> (pieces: [ReconversionReadingPiece], score: Float, secondBestScore: Float?)? {
+        let characters = Array(surface)
+        guard !characters.isEmpty,
+              characters.count <= maxReconversionSurfaceCount,
+              limit > 0 else {
+            return nil
+        }
+
+        struct Path {
+            var score: Float
+            var reading: String
+            var pieces: [ReconversionReadingPiece]
+        }
+
+        var paths: [[Path]] = Array(repeating: [], count: characters.count + 1)
+        paths[0] = [Path(score: 0, reading: "", pieces: [])]
+        func insert(_ candidate: Path, at index: Int) {
+            if let existing = paths[index].firstIndex(where: { $0.reading == candidate.reading }) {
+                if candidate.score > paths[index][existing].score {
+                    paths[index][existing] = candidate
+                }
+            } else {
+                paths[index].append(candidate)
+            }
+            paths[index].sort {
+                if $0.score != $1.score {
+                    return $0.score > $1.score
+                }
+                return $0.reading < $1.reading
+            }
+            if paths[index].count > limit {
+                paths[index].removeLast(paths[index].count - limit)
+            }
+        }
+
+        for start in characters.indices {
+            guard !paths[start].isEmpty else {
+                continue
+            }
+
+            let sourcePaths = paths[start]
+            for path in sourcePaths {
+                if Self.canPassThrough(characters[start]) {
+                    let literal = Self.normalizedLiteral(characters[start])
+                    insert(
+                        Path(
+                            score: path.score - 0.05,
+                            reading: path.reading + literal,
+                            pieces: path.pieces + [
+                                ReconversionReadingPiece(
+                                    surface: String(characters[start]),
+                                    reading: literal,
+                                    score: -0.05
+                                )
+                            ]
+                        ),
+                        at: start + 1
+                    )
+                }
+
+                let upperBound = min(characters.count, start + maxReconversionDictionarySpan)
+                guard start < upperBound else {
+                    continue
+                }
+                var word = ""
+                for end in (start + 1)...upperBound {
+                    word.append(characters[end - 1])
+                    for entry in entries(for: word) {
+                        insert(
+                            Path(
+                                score: path.score + entry.score - 0.2,
+                                reading: path.reading + entry.reading,
+                                pieces: path.pieces + [
+                                    ReconversionReadingPiece(
+                                        surface: word,
+                                        reading: entry.reading,
+                                        score: entry.score
+                                    )
+                                ]
+                            ),
+                            at: end
+                        )
+                    }
+                }
+            }
+        }
+        let results = paths[characters.count]
+        guard let best = results.first else {
+            return nil
+        }
+        return (
+            pieces: best.pieces,
+            score: best.score,
+            secondBestScore: results.count > 1 ? results[1].score : nil
+        )
     }
 
     private static func canPassThrough(_ character: Character) -> Bool {
@@ -477,7 +583,7 @@ public func set_server_log_callbacks(
     )
 }
 
-private func serverLog(
+func serverLog(
     requestId: UInt64,
     _ level: String = "INFO",
     _ message: @autoclosure () -> String,
@@ -493,7 +599,7 @@ private func serverLog(
     }
 }
 
-@MainActor private func serverLog(
+@MainActor func serverLog(
     _ level: String = "INFO",
     _ message: @autoclosure () -> String,
     flush: Bool = false
@@ -2197,7 +2303,9 @@ private func sanitizeDiagnosticField(_ value: String, maxLength: Int = 80) -> St
     hiraganaLength: Int,
     previewHiraganaLength: Int? = nil,
     useZenzai: Bool,
-    syntheticEndOfText: Bool? = nil
+    syntheticEndOfText: Bool? = nil,
+    continuation: ConversionContinuation? = nil,
+    combinedHiraganaLength: Int? = nil
 ) -> String {
     var fields = [
         "configured_zenzai=\(snapshot.configuredEnabled)",
@@ -2216,6 +2324,12 @@ private func sanitizeDiagnosticField(_ value: String, maxLength: Int = 80) -> St
     }
     if let syntheticEndOfText {
         fields.append("synthetic_end_of_text=\(syntheticEndOfText)")
+    }
+    fields.append("continuation_active=\(continuation != nil)")
+    fields.append("continuation_reading_len=\(continuation?.reading.count ?? 0)")
+    fields.append("continuation_surface_len=\(continuation?.surface.count ?? 0)")
+    if let combinedHiraganaLength {
+        fields.append("combined_hiragana_len=\(combinedHiraganaLength)")
     }
     return fields.joined(separator: ";")
 }
@@ -2745,6 +2859,7 @@ func cursorPrefixBoundaryFirstClauseResults(
         converter.importDynamicUserDictionary(conversionDictionary)
         normalNBestSupplementConverter.importDynamicUserDictionary(conversionDictionary)
         reconversionDictionary.replaceUserEntries(dynamicUserDictionary)
+        invalidateAutomaticConversionContinuationCache()
     }
 
     config["enable"] = false
@@ -2904,6 +3019,7 @@ func cursorPrefixBoundaryFirstClauseResults(
         reconversionDictionary = ReconversionDictionary()
         serverLog("ERROR", "Initialize: failed to load reconversion dictionary: \(error)")
     }
+    invalidateAutomaticConversionContinuationCache()
     rebuildConverter()
     clearLearningCandidateCache()
 
@@ -3269,6 +3385,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     composingText = ComposingText()
     composingTextSnapshots.removeAll()
     clearLearningCandidateCache()
+    clearConversionContinuation()
     serverLog("DEBUG", "ClearText: completed")
 }
 
@@ -3468,26 +3585,72 @@ public func free_candidate_list(
     let functionStart = performanceNow()
     let performanceEnabled = serverLogCallbacks.isPerformanceLogEnabled()
     let originalHiragana = composingText.convertTarget
-    let contextString = (config["context"] as? String) ?? ""
+    let rawContextString = (config["context"] as? String) ?? ""
     let diagnosticSnapshot = zenzaiDiagnosticSnapshot()
     let runtimeZenzaiEnabled = diagnosticSnapshot.runtimeEnabled && allowZenzai
     let previewState = makeCandidatePreviewComposingText(from: composingText)
     let previewComposingText = previewState.composingText
     let previewHiragana = previewComposingText.convertTarget
-    let useZenzai = effectiveZenzaiEnabledForCandidates(
-        isConfigured: runtimeZenzaiEnabled,
-        inputCount: composingText.input.count,
-        hiraganaCount: originalHiragana.count
+    let explicitContinuationRequest = makeConversionContinuationRequest(
+        continuation: conversionContinuation,
+        allowZenzai: allowZenzai,
+        isCursorAtEnd: composingText.isAtEndIndex,
+        previewHiragana: previewHiragana,
+        hasTrailingUncompletedRoman: hasTrailingUncompletedRoman(
+            in: previewComposingText
+        ),
+        context: rawContextString
     )
-    let diagnosticDetails = zenzaiDiagnosticDetails(
+    let automaticContinuation = (allowZenzai && explicitContinuationRequest == nil
+        && composingText.isAtEndIndex
+        && !hasTrailingUncompletedRoman(in: previewComposingText))
+        ? makeAutomaticConversionContinuation(
+            context: rawContextString,
+            currentReading: previewHiragana,
+            isCursorAtEnd: true
+        )
+        : nil
+    let continuationRequest = explicitContinuationRequest ?? makeConversionContinuationRequest(
+        continuation: automaticContinuation,
+        allowZenzai: allowZenzai,
+        isCursorAtEnd: composingText.isAtEndIndex,
+        previewHiragana: previewHiragana,
+        hasTrailingUncompletedRoman: hasTrailingUncompletedRoman(
+            in: previewComposingText
+        ),
+        context: rawContextString
+    )
+    let requestComposingText = continuationRequest?.combinedComposingText
+        ?? previewComposingText
+    let contextString = continuationRequest?.context ?? rawContextString
+    let useZenzai: Bool
+    if let continuationRequest {
+        useZenzai = effectiveZenzaiEnabledForCandidates(
+            isConfigured: runtimeZenzaiEnabled,
+            inputCount: continuationRequest.combinedComposingText.input.count,
+            hiraganaCount: continuationRequest.combinedComposingText.convertTarget.count
+        )
+    } else {
+        useZenzai = effectiveZenzaiEnabledForCandidates(
+            isConfigured: runtimeZenzaiEnabled,
+            inputCount: composingText.input.count,
+            hiraganaCount: originalHiragana.count
+        )
+    }
+    var diagnosticDetails = zenzaiDiagnosticDetails(
         snapshot: diagnosticSnapshot,
         contextLength: contextString.count,
         inputCount: composingText.input.count,
         hiraganaLength: originalHiragana.count,
         previewHiraganaLength: previewHiragana.count,
         useZenzai: useZenzai,
-        syntheticEndOfText: previewState.syntheticEndOfText
+        syntheticEndOfText: previewState.syntheticEndOfText,
+        continuation: continuationRequest?.continuation,
+        combinedHiraganaLength: continuationRequest?.combinedComposingText.convertTarget.count
     )
+    if automaticContinuation != nil {
+        diagnosticDetails += ";continuation_auto=true"
+    }
     serverLog(
         "DEBUG",
         "GetComposedText: start \(diagnosticDetails)"
@@ -3525,7 +3688,7 @@ public func free_candidate_list(
         normalNBestConverted = nil
     }
     let requestStart = performanceNow()
-    let converted = converter.requestCandidates(previewComposingText, options: options)
+    let converted = converter.requestCandidates(requestComposingText, options: options)
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: "get_composed_text",
@@ -3541,13 +3704,66 @@ public func free_candidate_list(
         details: "candidate_count=\(converted.mainResults.count);\(diagnosticDetails)"
     )
     serverLog("DEBUG", "GetComposedText: requestCandidates returned candidateCount=\(converted.mainResults.count) \(diagnosticDetails)")
+    let rawZenzaiCandidateCount = converted.mainResults.count
+    var zenzaiMainResults = converted.mainResults
+    var continuationSlicedCount = 0
+    var continuationFallback = false
+    if let continuationRequest {
+        let sliceStart = performanceNow()
+        let slicedResults = converted.mainResults.compactMap { candidate in
+            sliceConversionContinuationCandidate(
+                candidate,
+                continuation: continuationRequest.continuation,
+                currentReading: previewHiragana
+            )
+        }
+        let sliceMs = elapsedPerformanceMilliseconds(since: sliceStart)
+        continuationSlicedCount = slicedResults.count
+        if slicedResults.isEmpty {
+            continuationFallback = true
+            if automaticContinuation != nil {
+                disableAutomaticConversionContinuation(context: rawContextString)
+            }
+            var fallbackOptions = getOptions(context: rawContextString, zenzaiEnabled: useZenzai)
+            if hasTrailingUncompletedRoman(in: previewComposingText) {
+                fallbackOptions.requireJapanesePrediction = .disabled
+            }
+            let fallbackStart = performanceNow()
+            let fallbackConverted = converter.requestCandidates(
+                previewComposingText,
+                options: fallbackOptions
+            )
+            let fallbackMs = elapsedPerformanceMilliseconds(since: fallbackStart)
+            let fallbackDetails = "\(diagnosticDetails);continuation_fallback_context=raw"
+            performanceLog(
+                operation: "get_composed_text",
+                stage: "request_continuation_fallback",
+                elapsedMs: fallbackMs,
+                details: "candidate_count=\(fallbackConverted.mainResults.count);\(fallbackDetails)"
+            )
+            serverLog(
+                "DEBUG",
+                "GetComposedText: continuation fallback returned candidateCount=\(fallbackConverted.mainResults.count) \(fallbackDetails)"
+            )
+            zenzaiMainResults = fallbackConverted.mainResults
+        } else {
+            zenzaiMainResults = slicedResults
+        }
+        performanceLog(
+            operation: "get_composed_text",
+            stage: "slice_continuation_candidates",
+            elapsedMs: sliceMs,
+            details: "zenzai_raw_candidate_count=\(rawZenzaiCandidateCount);continuation_sliced_count=\(continuationSlicedCount);continuation_fallback=\(continuationFallback);\(diagnosticDetails)"
+        )
+        diagnosticDetails += ";zenzai_raw_candidate_count=\(rawZenzaiCandidateCount);continuation_sliced_count=\(continuationSlicedCount);continuation_fallback=\(continuationFallback)"
+    }
     let mergedMainResults = normalNBestConverted.map {
         mergeZenzaiMainResultsWithNormalNBest(
-            zenzaiResults: converted.mainResults,
+            zenzaiResults: zenzaiMainResults,
             normalNBestResults: $0.mainResults,
             hiragana: previewHiragana
         )
-    } ?? converted.mainResults
+    } ?? zenzaiMainResults
     let rawMainResults = prioritizeLearningSelectionOverrides(
         mergedMainResults,
         ruby: previewHiragana,
@@ -3564,7 +3780,7 @@ public func free_candidate_list(
     if let normalNBestConverted {
         serverLog(
             "DEBUG",
-            "GetComposedText: merged Zenzai candidates candidateCount=\(mainResults.count) zenzaiCandidateCount=\(converted.mainResults.count) normalNBestCandidateCount=\(normalNBestConverted.mainResults.count) \(diagnosticDetails)"
+            "GetComposedText: merged Zenzai candidates candidateCount=\(mainResults.count) zenzaiCandidateCount=\(zenzaiMainResults.count) normalNBestCandidateCount=\(normalNBestConverted.mainResults.count) \(diagnosticDetails)"
         )
     }
     candidateCrashTrace(
@@ -3572,7 +3788,7 @@ public func free_candidate_list(
         operation: "GetComposedText",
         stage: "postprocessCandidates",
         state: "begin",
-        details: "candidate_count=\(mainResults.count);zenzai_candidate_count=\(converted.mainResults.count);\(diagnosticDetails)"
+        details: "candidate_count=\(mainResults.count);zenzai_candidate_count=\(zenzaiMainResults.count);\(diagnosticDetails)"
     )
     let buildStart = performanceEnabled ? performanceNow() : 0
     var constructCandidateStringMs = 0
@@ -3631,7 +3847,7 @@ public func free_candidate_list(
             operation: "get_composed_text",
             stage: "construct_candidate_string",
             elapsedMs: constructCandidateStringMs,
-            details: "candidate_count=\(result.count);main_candidate_count=\(mainResults.count);zenzai_candidate_count=\(converted.mainResults.count);normal_nbest_candidate_count=\(normalNBestConverted?.mainResults.count ?? 0);\(diagnosticDetails)"
+            details: "candidate_count=\(result.count);main_candidate_count=\(mainResults.count);zenzai_candidate_count=\(zenzaiMainResults.count);normal_nbest_candidate_count=\(normalNBestConverted?.mainResults.count ?? 0);\(diagnosticDetails)"
         )
         performanceLog(
             operation: "get_composed_text",
@@ -3649,7 +3865,7 @@ public func free_candidate_list(
             operation: "get_composed_text",
             stage: "build_ffi_candidates_total",
             elapsedMs: elapsedPerformanceMilliseconds(since: buildStart),
-            details: "candidate_count=\(result.count);main_candidate_count=\(mainResults.count);zenzai_candidate_count=\(converted.mainResults.count);normal_nbest_candidate_count=\(normalNBestConverted?.mainResults.count ?? 0);cache_entries=\(resolutionCache.count);string_allocations=\(stringAllocationCount);learning_cache_batches=\(learningCandidateCache.batchCount);learning_cache_slots=\(learningCandidateCache.slotCount);learning_cache_protected_slots=\(learningCandidateCache.protectedSlotCount);\(diagnosticDetails)"
+            details: "candidate_count=\(result.count);main_candidate_count=\(mainResults.count);zenzai_candidate_count=\(zenzaiMainResults.count);normal_nbest_candidate_count=\(normalNBestConverted?.mainResults.count ?? 0);cache_entries=\(resolutionCache.count);string_allocations=\(stringAllocationCount);learning_cache_batches=\(learningCandidateCache.batchCount);learning_cache_slots=\(learningCandidateCache.slotCount);learning_cache_protected_slots=\(learningCandidateCache.protectedSlotCount);\(diagnosticDetails)"
         )
     }
     candidateCrashTrace(
@@ -3657,9 +3873,9 @@ public func free_candidate_list(
         operation: "GetComposedText",
         stage: "postprocessCandidates",
         state: "completed",
-        details: "candidate_count=\(result.count);main_candidate_count=\(mainResults.count);zenzai_candidate_count=\(converted.mainResults.count);normal_nbest_candidate_count=\(normalNBestConverted?.mainResults.count ?? 0);\(diagnosticDetails)"
+        details: "candidate_count=\(result.count);main_candidate_count=\(mainResults.count);zenzai_candidate_count=\(zenzaiMainResults.count);normal_nbest_candidate_count=\(normalNBestConverted?.mainResults.count ?? 0);\(diagnosticDetails)"
     )
-    serverLog("DEBUG", "GetComposedText: postprocessCandidates completed candidateCount=\(result.count) mainCandidateCount=\(mainResults.count) zenzaiCandidateCount=\(converted.mainResults.count) normalNBestCandidateCount=\(normalNBestConverted?.mainResults.count ?? 0) \(diagnosticDetails)")
+    serverLog("DEBUG", "GetComposedText: postprocessCandidates completed candidateCount=\(result.count) mainCandidateCount=\(mainResults.count) zenzaiCandidateCount=\(zenzaiMainResults.count) normalNBestCandidateCount=\(normalNBestConverted?.mainResults.count ?? 0) \(diagnosticDetails)")
     serverLog("DEBUG", "GetComposedText: completed candidateCount=\(result.count) \(diagnosticDetails)")
 
     return listPointer

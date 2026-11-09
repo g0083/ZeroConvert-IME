@@ -159,6 +159,21 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return isImmediateCommitChar(ch) || ch.isDigit()
         }
 
+        /** Same Japanese set as the Windows client's translation.rs has_japanese. */
+        fun hasJapaneseKana(source: String): Boolean {
+            return source.any { ch -> ch in 'ぁ'..'ヿ' || ch in '一'..'鿿' }
+        }
+
+        /**
+         * Whether a translation-mode reading may start a translation request.
+         * Digits and symbols alone never translate, matching the Windows
+         * client where kind=3 requires kana in the reading; English sources
+         * take the englishComposing path and are always eligible.
+         */
+        fun translationSourceEligible(sourceIsEnglish: Boolean, source: String): Boolean {
+            return sourceIsEnglish || hasJapaneseKana(source)
+        }
+
         fun isNaturalAutoCommitPrefix(candidatePrefix: String, fullPreview: String): Boolean {
             if (!fullPreview.startsWith(candidatePrefix)) return false
             val remainder = fullPreview.substring(candidatePrefix.length)
@@ -346,6 +361,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         selectionTranslationState.value = null
         cancelPendingInference(edited = false)
         clearCandidateList()
+        pendingConversionContinuation = null
         aiAssistAdoptedState.value = false
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
@@ -585,6 +601,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
             translationState.value = translationState.value.copy(
                 request = rawSource,
                 source = rawSource,
+                output = "",
+                status = TranslationStatus.IDLE,
+                message = null
+            )
+            return
+        }
+        // Digits/symbols alone are not translation targets: keep the bar idle
+        // instead of rewriting "123" into "百二十三" like Windows.
+        if (!translationSourceEligible(sourceIsEnglish, japaneseSource)) {
+            cancelPendingTranslation()
+            translationState.value = translationState.value.copy(
+                request = "",
+                source = "",
                 output = "",
                 status = TranslationStatus.IDLE,
                 message = null
@@ -867,6 +896,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 candidatesList.add(Candidate(assist.text, savedOriginalReading))
                 inferenceHistory.clear()
                 aiAssistAdoptedState.value = true
+                pendingConversionContinuation = null
                 triggerDebouncedConversion(composingText.convertTargetBeforeCursor)
             }
             com.zeroconvert.ime.assist.AiAssistType.PREDICTION -> {
@@ -902,6 +932,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         inferenceHistory.clear()
         aiAssistAdoptedState.value = false
         aiAssistResultState.value = null
+        pendingConversionContinuation = null
     }
 
     private fun extractAndAddEntities(text: String) {
@@ -1448,6 +1479,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
     // dictionary lookups through JNI, which must never block key handling.
     private var aiAssistJob: Job? = null
     private var cachedLeftContext: String = ""
+    // Mirrors Windows `pending_conversion_continuation`: the reading and surface of the
+    // prefix committed by a live auto-commit or a partial clause commit. The next
+    // debounced/confirm conversion consumes it so the engine can rebuild the full
+    // reading instead of converting only the remaining tail.
+    private var pendingConversionContinuation: ConversionContinuation? = null
     private val composingEditor = ComposingEditorState()
     private val editorComposingPreview: String get() = composingEditor.preview
     private val managedCursorKeys = mutableSetOf<Int>()
@@ -1718,7 +1754,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     onToggleRealtimeInline = {
                         setRealtimeInlineEnabled(!isRealtimeInlineState.value)
                     },
-                    onCommitText = { text -> commitText(text, isExplicitSelection = true) },
+                    onCommitText = { text -> commitPanelText(text) },
                     onDeleteChar = { handleDelete() },
                     onEnter = { handleEnter() },
                     onClearInput = { clearInput() },
@@ -1816,7 +1852,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         clearPostCommitCandidates()
         canRewindOnNextBackspace = false
 
-        if (isTranslationMode() && (kana == "、" || kana == "。" || kana == "？" || kana == "！")) {
+        if (isTranslationMode() && kana.singleOrNull()?.let { isTranslationLiteralChar(it) } == true) {
             appendTranslationLiteral(kana)
             return
         }
@@ -2008,6 +2044,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             scheduleTranslation()
             return
         }
+        if (isSensitiveInput() || composingText.isEmpty) pendingConversionContinuation = null
         cancelPendingInference(edited = false)
         if (!isSensitiveInput()) readEditorLeftContext()?.let { cachedLeftContext = it }
         // Capture every mutable input on the UI thread, before dispatching work.
@@ -2015,6 +2052,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val ticket = requestGate.capture(requestKey())
         val connection = currentInputConnection ?: return
         val context = cachedLeftContext
+        val continuation = pendingConversionContinuation
         val profile = aiProfileState.value
         val sensitive = isSensitiveInput()
         val reconversion = reconverting
@@ -2028,7 +2066,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
                     experimentalKeyboardCorrection = dictionaryCorrection,
-                    predictiveConversion = isPredictiveConversionEnabled()).let {
+                    predictiveConversion = isPredictiveConversionEnabled(),
+                    continuation = continuation).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
                 ensureActive()
@@ -2128,6 +2167,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val committedReading = autoCommit.committedReading
         if (!composingText.isIndependentInputBoundary(readingLen)) return
         val originalInput = composingText.clone()
+        val fullReadingBeforeAutoCommit = originalInput.convertTarget
 
         val connection = currentInputConnection ?: return
         var showContinuations = false
@@ -2148,6 +2188,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             // 3. Remove the first L hiragana characters from composingText
             composingText.prefixComplete(readingLen)
             val remainingReading = composingText.convertTargetBeforeCursor
+            pendingConversionContinuation = if (remainingReading.isNotEmpty())
+                ConversionContinuation.derive(fullReadingBeforeAutoCommit, remainingReading, prefixSurface) else null
             currentComposingSurface.value = remainingReading
 
             // 4. Retain bounded confirmed left context for the remaining input.
@@ -2244,6 +2286,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             if (rewindResult != AutoCommitRewind.Result.RESTORED && rewindResult != AutoCommitRewind.Result.RESTORE_PENDING) return
             cachedLeftContext = rewindRecord.previousLeftContext
             composingText.restoreFrom(rewindRecord.originalInput ?: return)
+            pendingConversionContinuation = null
 
             val restoredSurface = composingText.convertTargetBeforeCursor
             currentComposingSurface.value = restoredSurface
@@ -2301,6 +2344,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun beginConversionRange() {
         if (isTranslationMode() || !canBeginConversionRange()) return
+        pendingConversionContinuation = null
         val connection = currentInputConnection ?: return
         val preview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
         if (!conversionRange.begin(composingText, preview)) return
@@ -2332,6 +2376,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun refreshConversionRange() {
         clearCandidateList()
+        pendingConversionContinuation = null
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
         val reading = composingText.convertTargetBeforeCursor
@@ -2392,6 +2437,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private fun updateComposingDisplayOnCursorMove() {
         cancelPendingInference()
         clearCandidateList()
+        pendingConversionContinuation = null
         val surfaceBefore = composingText.convertTargetBeforeCursor
         currentComposingSurface.value = surfaceBefore
         // Keep the current preview if its suffix matches the remaining reading suffix,
@@ -2432,6 +2478,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val connection = currentInputConnection ?: return
         val selected = connection.getSelectedText(0)?.toString() ?: return
         cancelPendingInference(edited = false)
+        pendingConversionContinuation = null
         val ticket = requestGate.capture(requestKey())
         inferenceJob = serviceScope.launch(Dispatchers.IO) {
             try {
@@ -2503,6 +2550,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val connection = currentInputConnection ?: return
         val ticket = requestGate.capture(requestKey())
         val context = cachedLeftContext
+        val continuation = pendingConversionContinuation
         val profile = aiProfileState.value
         val sensitive = isSensitiveInput()
         val reconversion = reconverting
@@ -2515,7 +2563,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
                     experimentalKeyboardCorrection = dictionaryCorrection,
-                    predictiveConversion = isPredictiveConversionEnabled()).let {
+                    predictiveConversion = isPredictiveConversionEnabled(),
+                    continuation = continuation).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
                 ensureActive()
@@ -2571,6 +2620,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return
         }
         vibrateOnKeyPress()
+        // Known issue: this confirmation is asynchronous, so the emoji can be committed
+        // ahead of the converted reading. Panel text uses the ordered commitPanelText path.
         if (!composingText.isEmpty) confirmCurrent()
         currentInputConnection?.commitText(emoji, 1)
         clearInput()
@@ -2705,6 +2756,28 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
+    /**
+     * Entry point for the symbols/number panel. A symbol that is not a conversion
+     * candidate must not discard the pending reading, so confirm the reading first
+     * and append the symbol as trailing text; learning then records only the
+     * candidate surface. Emoji keep their separate [commitEmoji] path.
+     */
+    fun commitPanelText(text: String) {
+        if (text.isEmpty()) return
+        val decision = PanelTextCommit.decide(
+            translationMode = isTranslationMode(),
+            committingTranslation = committingTranslation,
+            compositionEmpty = composingText.isEmpty,
+            englishBufferNonEmpty = englishComposing.isNotEmpty(),
+            candidateMatches = candidatesList.any { it.text == text }
+        )
+        when (decision) {
+            PanelTextCommitDecision.Direct, PanelTextCommitDecision.AdoptCandidate ->
+                commitText(text, isExplicitSelection = true)
+            PanelTextCommitDecision.ConfirmThenAppend -> confirmAsync(trailingText = text)
+        }
+    }
+
     fun commitText(
         text: String,
         isExplicitSelection: Boolean = false,
@@ -2758,6 +2831,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 return
             }
             if (surfaceAfter.isNotEmpty()) {
+                val fullReadingBeforeCommit = composingText.convertTarget
                 cachedLeftContext = EditorContext.bounded(cachedLeftContext + text)
                 composingText.prefixComplete(readingBefore.length)
                 corrections.edited()
@@ -2769,6 +2843,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 lastInferredResult = ""
                 inferenceHistory.clear()
                 canRewindOnNextBackspace = false
+                pendingConversionContinuation = if (trailingText.isEmpty())
+                    ConversionContinuation.derive(fullReadingBeforeCommit, composingText.convertTarget, text) else null
                 if (setComposingPreview(connection, remainingSurface) && remainingReading.isNotEmpty()) {
                     triggerDebouncedConversion(remainingReading)
                 } else clearCandidateList()
@@ -2836,6 +2912,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         lastInferredResult = ""
         candidatesList.clear()
         cachedLeftContext = ""
+        pendingConversionContinuation = null
         composingEditor.clear()
         inferenceHistory.clear()
         lastAutoCommitRewind = null

@@ -5,6 +5,10 @@ use std::sync::Arc;
 
 // Keep in sync with shared::TRANSLATION_SERVER_PORT. The shared conversion
 // engine compiles this module on Android without the Windows `shared` crate.
+// The Android host uses its own Kotlin prompt() in
+// android/app/src/main/java/com/zeroconvert/ime/translation/TranslationText.kt;
+// the literal-match tests on both sides must be updated together when the
+// prompt format changes.
 const TRANSLATION_SERVER_PORT: u16 = 18092;
 
 /// Cancellation token shared between the request handler and the blocking
@@ -87,6 +91,10 @@ pub fn translate_to_cancellable(
     if !valid_source(source) {
         return None;
     }
+    // The 10s deadline must stay shorter than the kind==3 RPC timeout (11s in
+    // the client's assist_candidates_background) so the server-side attempt is
+    // never cut off by the client first; a cold start beyond this window is
+    // retried by the client's 30s preparation wait instead.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         if cancel.is_cancelled() {
@@ -224,6 +232,16 @@ mod tests {
             });
         });
         let _ = cancel;
+    }
+    #[test]
+    fn prompt_literal_stays_in_sync_with_the_android_kotlin_implementation() {
+        // The same literal is expected by TranslationTextTest
+        // (android/app/src/test/java/com/zeroconvert/ime/TranslationTextTest.kt).
+        // Changing the prompt format requires updating both expectations.
+        assert_eq!(
+            prompt("会議は明日です。", "en"),
+            "<|plamo:bos|><|plamo:tag|>dataset<|plamo:msg|>translation<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>ja<|plamo:msg|>会議は明日です。<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>"
+        );
     }
     #[test]
     fn pfml3_source_and_target_are_separate() {

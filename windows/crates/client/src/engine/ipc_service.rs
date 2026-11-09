@@ -75,6 +75,7 @@ pub struct IPCService {
     performance_log_tx: tokio::sync::mpsc::Sender<PerformanceLogRequest>,
     server_session_id: Option<u64>,
     server_reset_recovered: bool,
+    pending_conversion_continuation: Option<(String, String)>,
     recovery: Arc<ServerRecoveryState>,
     transport: Arc<TransportLifecycle>,
     #[cfg(test)]
@@ -536,11 +537,20 @@ impl Drop for ClientInputTraceGuard {
     }
 }
 
+/// Result of a background assist task. `TranslationUnavailable` marks a
+/// translation request whose server never became ready within the
+/// preparation wait; a ready-server failure (timeout, connection loss)
+/// arrives as `Done(None)`.
+pub(crate) enum AssistOutcome {
+    Done(Option<shared::proto::GetAssistCandidatesResponse>),
+    TranslationUnavailable,
+}
+
 impl IPCService {
     pub(crate) fn assist_candidates_background(
         &self,
         request: shared::proto::GetAssistCandidatesRequest,
-        result: std::sync::mpsc::Sender<Option<shared::proto::GetAssistCandidatesResponse>>,
+        result: std::sync::mpsc::Sender<AssistOutcome>,
     ) -> tokio::task::JoinHandle<()> {
         let mut client = self.azookey_client.clone();
         self.runtime.spawn(async move {
@@ -558,7 +568,7 @@ impl IPCService {
                         break;
                     }
                     if tokio::time::Instant::now() >= deadline {
-                        let _ = result.send(None);
+                        let _ = result.send(AssistOutcome::TranslationUnavailable);
                         return;
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -575,7 +585,7 @@ impl IPCService {
             .ok()
             .and_then(Result::ok)
             .map(tonic::Response::into_inner);
-            let _ = result.send(response);
+            let _ = result.send(AssistOutcome::Done(response));
         })
     }
 
@@ -647,6 +657,18 @@ impl IPCService {
         })
     }
 
+    pub(crate) fn set_pending_conversion_continuation(&mut self, reading: String, surface: String) {
+        self.pending_conversion_continuation = if reading.is_empty() || surface.is_empty() {
+            None
+        } else {
+            Some((reading, surface))
+        };
+    }
+
+    pub(crate) fn clear_pending_conversion_continuation(&mut self) {
+        self.pending_conversion_continuation = None;
+    }
+
     #[cfg(test)]
     pub(crate) fn recovery_for_test(pending: bool) -> Self {
         let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
@@ -663,6 +685,7 @@ impl IPCService {
             performance_log_tx,
             server_session_id: None,
             server_reset_recovered: false,
+            pending_conversion_continuation: None,
             recovery: Arc::new(ServerRecoveryState {
                 pending: AtomicBool::new(pending),
                 generation: AtomicU64::new(u64::from(pending)),
@@ -742,6 +765,7 @@ impl IPCService {
             performance_log_tx,
             server_session_id: None,
             server_reset_recovered: false,
+            pending_conversion_continuation: None,
             recovery: Arc::new(ServerRecoveryState::default()),
             transport,
             #[cfg(test)]
@@ -1246,10 +1270,16 @@ impl IPCService {
         input_style: i32,
         request_id: u64,
     ) -> anyhow::Result<shared::proto::AppendTextResponse> {
+        let (conversion_continuation_reading, conversion_continuation_surface) = self
+            .pending_conversion_continuation
+            .clone()
+            .unwrap_or_default();
         let mut request = tonic::Request::new(shared::proto::AppendTextRequest {
             text_to_append: text.to_string(),
             input_style,
             request_id,
+            conversion_continuation_reading,
+            conversion_continuation_surface,
         });
         request.set_timeout(INPUT_RPC_DEADLINE);
 
@@ -1264,6 +1294,7 @@ impl IPCService {
         let response = response.into_inner();
         self.observe_server_session("append_text", response.server_session_id);
         self.record_successful_append(text, input_style);
+        self.clear_pending_conversion_continuation();
         Ok(response)
     }
 
@@ -2881,6 +2912,29 @@ mod tests {
     }
 
     #[test]
+    fn pending_conversion_continuation_requires_reading_and_surface() {
+        let mut service = IPCService::recovery_for_test(false);
+        service.set_pending_conversion_continuation("よみ".into(), "表面".into());
+        assert_eq!(
+            service
+                .pending_conversion_continuation
+                .as_ref()
+                .map(|(reading, surface)| (reading.as_str(), surface.as_str())),
+            Some(("よみ", "表面"))
+        );
+
+        service.set_pending_conversion_continuation(String::new(), "表面".into());
+        assert!(service.pending_conversion_continuation.is_none());
+
+        service.set_pending_conversion_continuation("よみ".into(), String::new());
+        assert!(service.pending_conversion_continuation.is_none());
+
+        service.set_pending_conversion_continuation("よみ".into(), "表面".into());
+        service.clear_pending_conversion_continuation();
+        assert!(service.pending_conversion_continuation.is_none());
+    }
+
+    #[test]
     fn empty_contextual_append_preserves_partial_commit_candidates_without_rpc() {
         // The dummy transport cannot serve RPCs. Both input styles must keep the
         // ShrinkText response rather than replace it with an empty handshake response.
@@ -2961,6 +3015,7 @@ mod tests {
         unavailable: Arc<AtomicBool>,
         missing_raw_input: Arc<AtomicBool>,
         append_requests: Arc<AtomicUsize>,
+        append_text_requests: Arc<std::sync::Mutex<Vec<shared::proto::AppendTextRequest>>>,
     }
     impl tonic::server::NamedService for Probe {
         const NAME: &'static str = "azookey.AzookeyService";
@@ -3085,7 +3140,12 @@ mod tests {
             request: tonic::Request<shared::proto::AppendTextRequest>,
         ) -> Self::Future {
             self.append_requests.fetch_add(1, Ordering::Relaxed);
-            let empty = request.into_inner().text_to_append.is_empty();
+            let request = request.into_inner();
+            self.append_text_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            let empty = request.text_to_append.is_empty();
             let status = if empty {
                 if self.unavailable.swap(false, Ordering::AcqRel) {
                     Err(tonic::Status::unavailable("handshake response lost"))
@@ -3207,6 +3267,7 @@ mod tests {
             unavailable: Arc::new(AtomicBool::new(false)),
             missing_raw_input: Arc::new(AtomicBool::new(false)),
             append_requests: Arc::default(),
+            append_text_requests: Arc::default(),
         };
         let listener = service
             .runtime
@@ -3254,6 +3315,44 @@ mod tests {
             assert!(!service.recovery_pending());
             server.abort();
         }
+    }
+
+    #[test]
+    fn conversion_continuation_is_attached_and_retained_until_a_successful_append() {
+        let (mut service, probe, server) = recovery_rpc_service();
+        service.set_pending_conversion_continuation("よみ".into(), "表面".into());
+        probe.deny.store(true, Ordering::Release);
+
+        assert!(service.append_text("k".into()).is_err());
+        assert_eq!(
+            service
+                .pending_conversion_continuation
+                .as_ref()
+                .map(|(reading, surface)| (reading.as_str(), surface.as_str())),
+            Some(("よみ", "表面"))
+        );
+        let requests = probe.append_text_requests.lock().unwrap();
+        let failed = requests.last().expect("failed append must be sent");
+        assert_eq!(failed.conversion_continuation_reading, "よみ");
+        assert_eq!(failed.conversion_continuation_surface, "表面");
+        drop(requests);
+
+        probe.deny.store(false, Ordering::Release);
+        service.append_text("k".into()).unwrap();
+        assert!(service.pending_conversion_continuation.is_none());
+        let requests = probe.append_text_requests.lock().unwrap();
+        let completed = requests.last().expect("successful append must be sent");
+        assert_eq!(completed.conversion_continuation_reading, "よみ");
+        assert_eq!(completed.conversion_continuation_surface, "表面");
+        drop(requests);
+
+        service.append_text("k".into()).unwrap();
+        let requests = probe.append_text_requests.lock().unwrap();
+        let next = requests.last().expect("next append must be sent");
+        assert_eq!(next.conversion_continuation_reading, "");
+        assert_eq!(next.conversion_continuation_surface, "");
+        drop(requests);
+        server.abort();
     }
 
     #[test]
