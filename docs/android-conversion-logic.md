@@ -126,6 +126,8 @@ Android にも Windows と同様の自動確定がある。`MIN_READING_LEN_FOR_
 
 `AutoCommitRewind.kt` / `AutoCommitRewindRecord` で、自動確定後に Backspace で巻き戻しできる。`auto_commit_rewind_on_backspace` 設定で制御。巻き戻し時は `originalInput` (ComposingText スナップショット) を復元。
 
+自動確定後の残り読みを確定済みの読み・表記と合成して変換する継続の設計、共有層の再利用、端末未検証の範囲は [境界文脈を保持する再変換](investigations/boundary-context-reconversion.md) を参照。
+
 ---
 
 ## 6. タイポ補正 (Android)
@@ -272,9 +274,9 @@ Windows と同様:
 - スペースと改行は文の区切りなので、その確定では続き候補を出さない。`commitText(offerContinuations = false)` を `confirmAsync` / `confirmCurrent` から渡し、`handleSpace` と `handleEnter` が指定する。`handleEnglishSpace` と改行送信前の `handleEnter` は `clearPostCommitCandidates` で既存の候補も消す。
 - `showPostCommitContinuations` はカーソル直前が空白・改行なら何も出さない。確定済み文脈の末尾が区切り文字のときに古い続き候補が復活しないための二重の防御。
 
-### 8.5 動的マクロ (`DynamicMacro`)
+### 8.5 動的マクロ
 
-日時・計算などの決定的展開。Windows の `dynamic_macro.rs` に対応。
+日時・計算などの決定的展開は、共有Rustエンジンの `ai_assist::current_expansions` が供給する（`engine/rust/src/bridge.rs` の `op=macros`）。Android の `WindowsEngine` はその結果を `MacroCandidateMerge` で先頭候補の直後（index 1）に挿入し、`learningAllowed=false` を保つ。Kotlin 側に第二のマクロ実装は置かない。
 
 ---
 

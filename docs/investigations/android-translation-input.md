@@ -48,7 +48,7 @@ APKには同梱しない。設定画面で同意した場合だけ、HTTPSで`fi
 5. Enterは訳文を`commitText`し、翻訳状態を学習なしで破棄する。
 6. 取消は日本語の未確定文を`setComposingText`で戻す。
 
-翻訳モード中はカーソル左右移動・範囲変換・再変換を無効化する（試験範囲）。削除・追加入力・句読点・数字は読みへ反映して再翻訳する。
+翻訳モード中はカーソル左右移動・範囲変換・再変換を無効化する（試験範囲）。削除・追加入力・句読点・数字は読みへ反映して再翻訳する。翻訳モード中の数字はQWERTY・12キーともliteral注入（`appendTranslationLiteral`）で読みへ反映し、変換候補を経由しない。かな・カタカナ・漢字を1文字も含まない読み（数字・記号のみ）は翻訳要求を出さず、翻訳バーをIDLEのままにする（Windowsのkind=3 eligibilityに揃えた。`translationSourceEligible` / `hasJapaneseKana`）。
 
 ## 設定
 

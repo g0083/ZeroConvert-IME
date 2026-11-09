@@ -138,6 +138,8 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 
 補正適用直後は自動確定の安定性履歴を作り直す（`typo.hold_auto_commit` で一時停止）。
 
+自動確定を挟まない続き入力でも、左文脈から確定済みの読み・表記を逆変換して同じ境界考慮の再変換を行う自動継続があり、詳細は [境界文脈を保持する再変換](investigations/boundary-context-reconversion.md) に記載している。
+
 ---
 
 ## 6. タイポ補正 (Rust AI アシスト)
