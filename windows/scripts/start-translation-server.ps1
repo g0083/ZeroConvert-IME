@@ -24,8 +24,8 @@ if (-not (Test-Path -LiteralPath $ModelPath -PathType Leaf)) {
     $modelDirectory = Split-Path $ModelPath -Parent
     New-Item -ItemType Directory -Force -Path $modelDirectory | Out-Null
     $partial = "$ModelPath.downloading"
-    Invoke-WebRequest -Uri 'https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/f2b4599dff9b3e45c62567eac15e83186b4cb64e/plamo-3-translate-2b-Q4_K_M.gguf' -OutFile $partial
-    if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ne '2c288ecc7ebfe60c3561726580da3583767f3c41ca3ef5c6825bf6c4cc060787') {
+    Invoke-WebRequest -Uri 'https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/4f672106b847200bfdc0f6af6c321cd94eba1aed/plamo-3-translate-2b-Q4_K_M.gguf' -OutFile $partial
+    if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ne '1ffd9073afcc70e35ccc942428aa2b73d7aa2b9ea779bf504b775369e0276c13') {
         throw "Official model checksum mismatch: $partial"
     }
     Move-Item -LiteralPath $partial -Destination $ModelPath

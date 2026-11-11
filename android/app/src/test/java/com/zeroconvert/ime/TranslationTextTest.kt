@@ -61,9 +61,9 @@ class TranslationTextTest {
     fun modelContractStaysPinnedAndVerified() {
         assertTrue(TranslationModelManager.DOWNLOAD_URL.contains(TranslationModelManager.REVISION))
         assertTrue(TranslationModelManager.DOWNLOAD_URL.endsWith(TranslationModelManager.FILENAME))
-        assertEquals(573116288L, TranslationModelManager.EXPECTED_BYTES)
+        assertEquals(573123200L, TranslationModelManager.EXPECTED_BYTES)
         assertEquals(
-            "3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c",
+            "923b2f28a9856de1b8b3b610a7e59ded0b14d007466fd5dd526e6a9ecaadafdd",
             TranslationModelManager.SHA256
         )
     }

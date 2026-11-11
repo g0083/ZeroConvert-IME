@@ -19,13 +19,15 @@
 ## モデル
 
 - 配布元: `pfnet/plamo-3-translate-0.8b-GGUF`（Hugging Face）
-- 固定リビジョン: `03891e907db8a43c97d3a7c75add125cc6d1f96a`
+- 固定リビジョン: `dbeb0856cb0b004b484f190bb71dd65876297013`
 - ファイル: `plamo-3-translate-0.8b-Q4_K_M.gguf`
-- サイズ: 573,116,288 bytes（約547MiB）
-- SHA-256: `3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c`
+- サイズ: 573,123,200 bytes（約547MiB）
+- SHA-256: `923b2f28a9856de1b8b3b610a7e59ded0b14d007466fd5dd526e6a9ecaadafdd`
 - ライセンス: PLaMo Community License（`LICENSE/ja`）
 
 APKには同梱しない。設定画面で同意した場合だけ、HTTPSで`files/translation/`へダウンロードする。途中ファイル（`.part`）を残してRange再開できる。完了時にサイズとSHA-256を検証し、検証済みマーカーを保存する。Hugging Faceのリビジョンを固定しているため、上流の更新で無断に内容が変わることはない。ダウンロードはMutexで排他し、成功時に以前のエラー表示を消す。
+
+2026-11-11: 当初ピン留めしていた `03891e90…` リビジョンは、上流でLFS実体が削除され `resolve` がCDNの `403 Forbidden` を返すようになり、ダウンロードが必ず失敗した（実機で「ダウンロードに失敗しました (HTTP 403)」を再現）。Windows版が既に使っている `dbeb0856…` リビジョンへ固定し直した。ファイルサイズとSHA-256が変わるため、旧リビジョンで作られた `.part` はサイズ不一致として破棄され、新規に取得し直す。
 
 翻訳推論は端末内のllama.cppで行う。入力文・選択文・訳文を外部サーバーへ送信しない。ネットワークを使うのはモデルのダウンロードだけである。翻訳モデルと途中ファイルはAuto Backup・端末間転送の対象外にする（`res/xml/backup_rules.xml` / `res/xml/data_extraction_rules.xml`）。
 
@@ -89,6 +91,14 @@ APKには同梱しない。設定画面で同意した場合だけ、HTTPSで`fi
 - リリース用 `rebuilt` APKは versionCode 14 / versionName 2.0.12-dev、arm64-v8a。`libzenz_jni.so` に `nativeInitTranslation` / `nativeTranslate` / `nativeTranslationEpoch` / `nativeAbortTranslation` / `nativeCloseTranslation` のシンボルを確認した。
 - 端末切断のため、最終リリースAPKの再インストールと実IME再確認は未実施。
 - 未確認: 2Bモデル、長文・高速連続打鍵、複数アプリ、複数DPI、翻訳品質の定量評価、端末別の遅延・発熱・メモリ。x86_64エミュレータの結果をarm64実機の性能保証にしない。
+
+2026-11-11（モデル固定リビジョンの修正）:
+
+- 症状: 実機（iQOO Neo11 V2520A、Android 16）で「ダウンロードに失敗しました (HTTP 403)」。`files/translation/` は空のまま。
+- 原因: 固定していた `03891e907db8a43c97d3a7c75add125cc6d1f96a` のLFSオブジェクトが上流で削除済み。`resolve` は302でCDNへ転送するが、CDNが `403 Forbidden` を返す。端末・回線・UA・Range指定に依存せず再現した。同じリポジトリの `main`（`1cf96ae0…`）と `dbeb0856…` は 206 で取得でき、`README.md` などの小さいファイルも取得できるため、リポジトリ全体のgated化やネットワーク遮断ではない。
+- 対応: Androidの固定先をWindows版と同じ `dbeb0856cb0b004b484f190bb71dd65876297013` に変更。`EXPECTED_BYTES` を 573,123,200、`SHA256` を `923b2f28…adafdd` に更新し、`TranslationTextTest.modelContractStaysPinnedAndVerified` と `android/THIRD_PARTY_LICENSES.md` も同期した。
+- 検証: `.\gradlew.bat :rebuilt:testDebugUnitTest` 成功（280件、failures 0）。`:rebuilt:assembleDebug` 成功。`adb install -r` で更新後、設定画面からダウンロードが進行し「モデル: ダウンロード済み」になった。端末上の `files/translation/plamo-3-translate-0.8b-Q4_K_M.gguf` は 573,123,200 bytes、`sha256sum` が `923b2f28…adafdd` と一致。翻訳テストは「会議は明日です。」→「The meeting is tomorrow.」、翻訳モードはキーボードの翻訳アイコンでモデルを読み込み「翻訳モード: 入力を開始」へ遷移することを確認した。
+- 注意: 旧リビジョンの `.part` が残っている場合はサイズ不一致で破棄され、再取得になる。配布済みAPKは旧リビジョンのままなので、リビルドと再配布が必要。
 
 ### 配布前の再確認手順（最終APK）
 

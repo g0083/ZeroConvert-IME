@@ -49,3 +49,14 @@
 今回の修正と実IME検証は [2026-11-05の記録](../../reports/typo-assist/windows-translation-realtime-fix-20261105.md) を参照。修正前の検証記録は [過去の記録](../../reports/typo-assist/windows-translation-before-realtime-fix-20261105.md) に保存した。過去の「リアルタイム反映済み」「300ms未満」等の記述を、今回の実IME全体の品質保証とは扱わない。
 
 選択翻訳のフリーズ、DLL混在、読み込み状態と表示改善の検証は [追加修正記録](../../reports/typo-assist/windows-selection-translation-fix-20261105.md) を参照。
+
+## モデル固定リビジョン（2026-11-11 更新）
+
+| モデル | リビジョン | サイズ | SHA-256 |
+| --- | --- | --- | --- |
+| 0.8B（既定） | `dbeb0856cb0b004b484f190bb71dd65876297013` | 573,123,200 | `923b2f28…adafdd` |
+| 2B（任意） | `4f672106b847200bfdc0f6af6c321cd94eba1aed` | 1,807,203,040 | `1ffd9073…276c13` |
+
+2026-11-11: 2Bの固定先 `f2b4599d…` は上流でLFS実体が削除され、`resolve` がCDNの `403 Forbidden` を返していた（0.8Bの `03891e90…` と同じ症状。Android側は [Android翻訳入力](android-translation-input.md) で修正済み）。2Bは `4f672106…` へ再固定し、`TRANSLATION_2B_SHA256`・`TRANSLATION_2B_SIZE_BYTES`・`build-trial.ps1`・`start-translation-server.ps1` を同期した。あわせて `artifacts/models/` の同梱物を両モデルとも新版へ差し替えた（旧版は `.old-<hash>` として同ディレクトリに退避）。
+
+検証: `cargo test -p shared` 成功（48 passed）。2Bの新版をローカルllama-serverで読み込み、PFML3プロンプト「会議は明日です。」→ `The meeting is tomorrow.` を確認。0.8BはAndroid実機でダウンロード・翻訳テスト済み。

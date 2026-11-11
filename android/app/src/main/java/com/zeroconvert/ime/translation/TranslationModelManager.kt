@@ -23,10 +23,10 @@ object TranslationModelManager {
     private const val TAG = "TranslationModel"
 
     const val REPOSITORY = "pfnet/plamo-3-translate-0.8b-GGUF"
-    const val REVISION = "03891e907db8a43c97d3a7c75add125cc6d1f96a"
+    const val REVISION = "dbeb0856cb0b004b484f190bb71dd65876297013"
     const val FILENAME = "plamo-3-translate-0.8b-Q4_K_M.gguf"
-    const val EXPECTED_BYTES = 573116288L
-    const val SHA256 = "3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c"
+    const val EXPECTED_BYTES = 573123200L
+    const val SHA256 = "923b2f28a9856de1b8b3b610a7e59ded0b14d007466fd5dd526e6a9ecaadafdd"
     const val DOWNLOAD_URL = "https://huggingface.co/$REPOSITORY/resolve/$REVISION/$FILENAME"
     const val LICENSE_URL = "https://huggingface.co/$REPOSITORY/blob/main/LICENSE/ja"
     const val MODEL_LABEL = "PLaMo 3 Translate 0.8B Q4_K_M"

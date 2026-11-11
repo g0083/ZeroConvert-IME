@@ -143,8 +143,8 @@ while ($true) {
     }
     if ('translation-model' -in $plan) {
         $models = @(
-            @{ Path = 'artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf'; Hash = '3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c'; Target = 'models/plamo-3-translate-0.8b-Q4_K_M.gguf' },
-            @{ Path = 'artifacts/models/plamo-3-translate-2b/plamo-3-translate-2b-Q4_K_M.gguf'; Hash = '2c288ecc7ebfe60c3561726580da3583767f3c41ca3ef5c6825bf6c4cc060787'; Target = 'models/plamo-3-translate-2b-Q4_K_M.gguf' }
+            @{ Path = 'artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf'; Hash = '923b2f28a9856de1b8b3b610a7e59ded0b14d007466fd5dd526e6a9ecaadafdd'; Target = 'models/plamo-3-translate-0.8b-Q4_K_M.gguf' },
+            @{ Path = 'artifacts/models/plamo-3-translate-2b/plamo-3-translate-2b-Q4_K_M.gguf'; Hash = '1ffd9073afcc70e35ccc942428aa2b73d7aa2b9ea779bf504b775369e0276c13'; Target = 'models/plamo-3-translate-2b-Q4_K_M.gguf' }
         )
         foreach ($m in $models) {
             $src = Join-Path $repoRoot $m.Path

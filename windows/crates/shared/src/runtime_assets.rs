@@ -12,15 +12,15 @@ pub const CUDA_VERSION: &str = "cuda-b12125-cu12.4";
 pub const TRANSLATION_0_8B_SHA256: &str =
     "923b2f28a9856de1b8b3b610a7e59ded0b14d007466fd5dd526e6a9ecaadafdd";
 pub const TRANSLATION_2B_SHA256: &str =
-    "2c288ecc7ebfe60c3561726580da3583767f3c41ca3ef5c6825bf6c4cc060787";
+    "1ffd9073afcc70e35ccc942428aa2b73d7aa2b9ea779bf504b775369e0276c13";
 
 ///同梱しない翻訳モデルのHugging Face配布URL（ピン留め版）。
 pub const TRANSLATION_0_8B_URL: &str = "https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/resolve/dbeb0856cb0b004b484f190bb71dd65876297013/plamo-3-translate-0.8b-Q4_K_M.gguf";
-pub const TRANSLATION_2B_URL: &str = "https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/f2b4599dff9b3e45c62567eac15e83186b4cb64e/plamo-3-translate-2b-Q4_K_M.gguf";
+pub const TRANSLATION_2B_URL: &str = "https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/4f672106b847200bfdc0f6af6c321cd94eba1aed/plamo-3-translate-2b-Q4_K_M.gguf";
 
 /// 概算サイズ（Bytes）。UIの表示にのみ使用し、検証はSHA-256で行う。
 pub const TRANSLATION_0_8B_SIZE_BYTES: u64 = 573_123_200;
-pub const TRANSLATION_2B_SIZE_BYTES: u64 = 1_940_000_000;
+pub const TRANSLATION_2B_SIZE_BYTES: u64 = 1_807_203_040;
 
 pub fn translation_model_download_root() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")

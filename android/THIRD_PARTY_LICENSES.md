@@ -43,6 +43,6 @@ The above copyright notice and this permission notice shall be included in all c
 - Author: Preferred Networks, Inc. (PFN), built on PLaMo 3 NICT
 - License: PLaMo Community License
 - Notice: Free for personal/academic/non-commercial use. Commercial use free for individuals/organizations with annual revenue <= JPY 1 billion (advance registration required). Commercial use above threshold requires separate license agreement with PFN.
-- Android download: The Android app does not bundle this model. After the user confirms in the settings screen, it downloads `pfnet/plamo-3-translate-0.8b-GGUF` revision `03891e907db8a43c97d3a7c75add125cc6d1f96a` (`plamo-3-translate-0.8b-Q4_K_M.gguf`, SHA-256 `3dbb09295bfd3350231ba0dba92bc72cb14111ef1b034e37dad39d581bd86b9c`).
+- Android download: The Android app does not bundle this model. After the user confirms in the settings screen, it downloads `pfnet/plamo-3-translate-0.8b-GGUF` revision `dbeb0856cb0b004b484f190bb71dd65876297013` (`plamo-3-translate-0.8b-Q4_K_M.gguf`, SHA-256 `923b2f28a9856de1b8b3b610a7e59ded0b14d007466fd5dd526e6a9ecaadafdd`).
 - Repository: https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF
 - License Terms: https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/blob/main/LICENSE/ja
