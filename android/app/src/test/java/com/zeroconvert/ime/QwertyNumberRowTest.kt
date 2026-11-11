@@ -40,18 +40,36 @@ class QwertyNumberRowTest {
         assertNull(QwertyNumberRow.shiftedSymbolFor('a'))
     }
 
-    @Test fun digitsComposeWhilePunctuationStillCommits() {
+    @Test fun digitsAndPunctuationComposeWhileShiftedSymbolsStillCommit() {
         // Digits join the composition (Windows UserAction::Number parity)...
         for (digit in '0'..'9') {
             assertFalse(ZeroConvertInputMethodService.isImmediateCommitChar(digit))
             assertTrue(ZeroConvertInputMethodService.isTranslationLiteralChar(digit))
         }
-        // ...while punctuation and shifted symbols keep committing immediately.
-        for (punct in listOf('、', '。', '.', ',', '?', '!', '？', '！', '．', '，')) {
-            assertTrue(ZeroConvertInputMethodService.isImmediateCommitChar(punct))
+        // ...and Japanese punctuation joins it too, matching the Windows default
+        // punctuation_commit = false. ASCII marks normalize to the Japanese ones.
+        for (punct in listOf('、', '。', '，', '．', '？', '！')) {
+            assertFalse(ZeroConvertInputMethodService.isImmediateCommitChar(punct))
+            assertEquals(punct, PanelTextCommit.punctuationForReading(punct))
         }
+        assertEquals('、', PanelTextCommit.punctuationForReading(','))
+        assertEquals('。', PanelTextCommit.punctuationForReading('.'))
+        assertEquals('？', PanelTextCommit.punctuationForReading('?'))
+        assertEquals('！', PanelTextCommit.punctuationForReading('!'))
+        for (punct in "、。，．？！") {
+            assertTrue(ZeroConvertInputMethodService.isTranslationLiteralChar(punct))
+        }
+        // Shifted symbols keep committing immediately.
         for (symbol in "!@#$%^&*()") {
             assertTrue(ZeroConvertInputMethodService.isImmediateCommitChar(symbol))
         }
+    }
+
+    @Test fun punctuationComposesUnlessTheReadingEndsInPendingRomaji() {
+        assertTrue(PanelTextCommit.shouldComposePunctuation('、', pendingRomaji = false))
+        assertTrue(PanelTextCommit.shouldComposePunctuation('.', pendingRomaji = false))
+        // `n` before punctuation is ん, so the punctuation must finalize the reading instead.
+        assertFalse(PanelTextCommit.shouldComposePunctuation('、', pendingRomaji = true))
+        assertFalse(PanelTextCommit.shouldComposePunctuation('.', pendingRomaji = true))
     }
 }

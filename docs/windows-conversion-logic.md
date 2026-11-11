@@ -60,6 +60,17 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 
 `CompositionState`（Composing / など）と、`raw_input` / `raw_hiragana` / `preview`（変換結果表記）/ `suffix`（未変換尾部）/ `corresponding_count` / `selection_index`（文節選択）/ `candidates` を一組で管理する。clause スナップショット（文節確定履歴）も保持する。
 
+### 2.4 入力ポリシーの正本
+
+句読点の組成/正規化、数字の組成、翻訳モードの literal 扱い、記号の幅既定値は `windows/crates/shared/src/conversion_policy.rs` が正本である（`CHARACTER_WIDTH_SYMBOL_DEFAULTS` もこのファイルに移し、`shared` から再公開している）。
+
+- 句読点は既定設定 `punctuation_commit = false` で composition に加わる。`,` `.` `?` `!` を `、` `。` `？` `！` として読みに載せる判断は `punctuation_for_reading` が持つ。
+- 数字は `UserAction::Number` → `AppendText` として読みに加わる。
+- 記号の幅既定値は `symbol_default_fullwidth` と `CHARACTER_WIDTH_SYMBOL_DEFAULTS` の組で決まり、`full_width.rs` はその定数から表を組む。
+- 設定ON時の `punctuation_commit` 分岐は Windows 固有で、共有仕様の対象外。
+
+仕様は [tests/input-policy/cases.tsv](../../tests/input-policy/cases.tsv) にあり、Android と共有している。変更時はこの TSV を先に更新し、`cargo test -p shared --offline` と `scripts/check-input-policy-parity.ps1` を通す。
+
 ---
 
 ## 3. 通常変換 (かな漢字変換)

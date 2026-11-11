@@ -154,6 +154,33 @@ impl TypoLearningStore {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// 1 件の学習を削除し、ファイルへ保存する。
+    ///
+    /// 読みだけでなく表記も照合する。同じ誤字読みから複数の表記を学んだ場合に、
+    /// 選ばなかった表記の履歴まで巻き添えで消さないため。
+    pub fn remove(&mut self, reading: &str, surface: &str) -> bool {
+        let removed = match self.entries.get(reading) {
+            Some(entry) if entry.surface == surface => self.entries.remove(reading).is_some(),
+            _ => false,
+        };
+        if removed {
+            let _ = self.save();
+        }
+        removed
+    }
+
+    /// 学習をすべて削除し、ファイルへ保存する。
+    pub fn remove_all(&mut self) -> bool {
+        if self.entries.is_empty() {
+            return false;
+        }
+        self.entries.clear();
+        match self.save() {
+            Ok(()) => true,
+            Err(_) => false,
+        }
+    }
 }
 
 /// グローバルな学習ストア。
@@ -260,6 +287,36 @@ pub fn record_learned_typo(reading: &str, surface: &str) -> bool {
     guard.save().is_ok()
 }
 
+/// 学習済みの誤字 1 件を削除する。
+pub fn forget_learned_typo(reading: &str, surface: &str) -> bool {
+    let mut guard = match store().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.load();
+    guard.remove(reading, surface)
+}
+
+/// 補正学習をすべて削除する。
+pub fn clear_learned_typos() -> bool {
+    let mut guard = match store().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.load();
+    guard.remove_all()
+}
+
+/// 補正学習の現在のエントリ数。
+pub fn learned_typo_count() -> usize {
+    let mut guard = match store().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.load();
+    guard.len()
+}
+
 /// 学習ストアを読み込む (テスト用)。
 #[cfg(test)]
 pub(crate) fn store_for_test(path: Option<PathBuf>) -> &'static Mutex<TypoLearningStore> {
@@ -340,5 +397,61 @@ mod tests {
         let json = serde_json::to_string(&entry).expect("should serialize");
         let parsed: LearnedTypo = serde_json::from_str(&json).expect("should parse");
         assert_eq!(parsed, entry);
+    }
+
+    #[test]
+    fn removing_one_typo_keeps_the_other_readings() {
+        let path = temp_path("remove-one");
+        let _ = std::fs::remove_file(&path);
+        let mut store = TypoLearningStore::new(Some(path.clone()));
+        store.load();
+        store.record("きんにちは", "こんにちは");
+        store.record("しんずく", "新宿");
+
+        assert!(store.remove("きんにちは", "こんにちは"));
+        assert!(store.lookup("きんにちは").is_none());
+        assert_eq!(
+            store.lookup("しんずく").map(|entry| entry.surface.as_str()),
+            Some("新宿")
+        );
+        // The remaining entry is what was persisted, not just mutated in memory.
+        let mut reloaded = TypoLearningStore::new(Some(path.clone()));
+        reloaded.load();
+        assert_eq!(reloaded.len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn removing_a_typo_requires_the_exact_surface() {
+        let mut store = TypoLearningStore::new(None);
+        store.record("きんにちは", "こんにちは");
+
+        assert!(!store.remove("きんにちは", "今日は"));
+        assert!(!store.remove("ちがう", "こんにちは"));
+        assert_eq!(
+            store
+                .lookup("きんにちは")
+                .map(|entry| entry.surface.as_str()),
+            Some("こんにちは")
+        );
+    }
+
+    #[test]
+    fn remove_all_clears_the_file() {
+        let path = temp_path("remove-all");
+        let _ = std::fs::remove_file(&path);
+        let mut store = TypoLearningStore::new(Some(path.clone()));
+        store.load();
+        store.record("きんにちは", "こんにちは");
+        store.record("しんずく", "新宿");
+
+        assert!(store.remove_all());
+        assert!(store.is_empty());
+        let mut reloaded = TypoLearningStore::new(Some(path.clone()));
+        reloaded.load();
+        assert!(reloaded.is_empty());
+        // Nothing to clear twice.
+        assert!(!store.remove_all());
+        let _ = std::fs::remove_file(&path);
     }
 }

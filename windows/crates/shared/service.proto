@@ -266,13 +266,56 @@ message CommitLearningCandidatesResponse {
   uint32 committed_count = 2;
 }
 
+// Deletes the learning behind one candidate the client is currently showing.
+// Deletion is addressed by the id the server issued, so the client never has to
+// reimplement how a reading maps to a dictionary entry.
+message ForgetLearningCandidateRequest {
+  uint64 candidate_id = 1;
+  uint64 request_id = 2;
+  // Reserved AI assist typo candidate: deletes the stored typo instead of a
+  // conversion candidate. Empty for conversion engine candidates.
+  string surface = 3;
+  string typo_reading = 4;
+}
+
+message ForgetLearningCandidateResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+  bool forgot = 2;
+}
+
+// What the server holds right now. Settings shows these so a reset can be
+// confirmed by numbers instead of trusting one boolean.
+message LearningStatsRequest {
+  uint64 request_id = 1;
+}
+
+message LearningStatsResponse {
+  uint64 server_session_id = 1; // Identifies the current server process session.
+  uint32 selection_count = 2;
+  bool history_present = 3;
+  bool history_paused = 4;
+  string learning_mode = 5;
+  uint32 typo_count = 6;
+}
+
 message ResetLearningMemoryRequest {
   uint64 request_id = 1;
+  // Empty means every scope, which is what older clients send.
+  repeated LearningMemoryScope scopes = 2;
 }
 
 message ResetLearningMemoryResponse {
   uint64 server_session_id = 1; // Identifies the current server process session.
   bool reset = 2;
+  repeated LearningMemoryScope applied = 3;
+  repeated LearningMemoryScope failed = 4;
+  LearningStatsResponse stats = 5;
+}
+
+enum LearningMemoryScope {
+  LEARNING_MEMORY_SCOPE_UNSPECIFIED = 0;
+  LEARNING_MEMORY_SCOPE_CONVERSION = 1;
+  LEARNING_MEMORY_SCOPE_TYPO = 2;
 }
 
 message PerformanceLogRequest {
@@ -338,6 +381,8 @@ service AzookeyService {
   rpc UpdateConfig (UpdateConfigRequest) returns (UpdateConfigResponse);
   rpc CommitLearningCandidate (CommitLearningCandidateRequest) returns (CommitLearningCandidateResponse);
   rpc CommitLearningCandidates (CommitLearningCandidatesRequest) returns (CommitLearningCandidatesResponse);
+  rpc ForgetLearningCandidate (ForgetLearningCandidateRequest) returns (ForgetLearningCandidateResponse);
+  rpc GetLearningStats (LearningStatsRequest) returns (LearningStatsResponse);
   rpc ResetLearningMemory (ResetLearningMemoryRequest) returns (ResetLearningMemoryResponse);
   rpc LogPerformance (PerformanceLogRequest) returns (PerformanceLogResponse);
 }

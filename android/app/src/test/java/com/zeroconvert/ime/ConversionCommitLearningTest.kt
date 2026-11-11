@@ -37,13 +37,10 @@ class ConversionCommitLearningTest {
         assertNull(ConversionCommitLearning.capture("かんじ", "漢字", corrected, canWrite = true))
     }
 
-    @Test fun onlyAlignedMorphologyIsCapturedAndItsListIsCopiedBeforeCommit() {
-        val spans = mutableListOf(DictionarySegment("カンジ", "漢字", 1288, 1288, 501, -5f))
-        val selected = normal.copy(segments = spans)
-        val captured = ConversionCommitLearning.capture("かんじ", "漢字", selected, canWrite = true)!!
-        spans.clear()
-        assertEquals("漢字", captured.segments.single().surface)
-        val mismatched = normal.copy(segments = listOf(DictionarySegment("ベツ", "別", 1288, 1288, 501, -5f)))
-        assertTrue(ConversionCommitLearning.capture("かんじ", "漢字", mismatched, canWrite = true)!!.segments.isEmpty())
+    @Test fun theEngineCandidateIdentityIsKeptSoTheCommitCanReachTheSharedLearning() {
+        val captured = ConversionCommitLearning.capture("かんじ", "漢字",
+            normal.copy(engineCandidateId = "4242"), canWrite = true)
+        assertEquals("4242", captured?.engineCandidateId)
+        assertEquals("", ConversionCommitLearning.capture("かんじ", "漢字", normal, canWrite = true)?.engineCandidateId)
     }
 }

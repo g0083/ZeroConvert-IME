@@ -432,6 +432,23 @@ fn candidate_html() -> String {
                                     index,
                                 }));
                             });
+                            // The candidate window has no OS context menu of its own; the
+                            // engine decides whether the item has deletable learning.
+                            candidateList.addEventListener('contextmenu', (event) => {
+                                event.preventDefault();
+                                const item = event.target.closest('li.candidate-item');
+                                if (!item) {
+                                    return;
+                                }
+                                const index = Number(item.dataset.index);
+                                if (!Number.isInteger(index) || index < 0) {
+                                    return;
+                                }
+                                window.ipc.postMessage(JSON.stringify({
+                                    type: 'forget',
+                                    index,
+                                }));
+                            });
                         }
                         adjustWindowSize();
                         window.ipc.postMessage(JSON.stringify({type: 'candidate-ready'}));
@@ -516,5 +533,23 @@ mod tests {
         }
 
         assert!(style.contains("margin: 0 10px 0 0;"));
+    }
+
+    #[test]
+    fn candidate_html_reports_context_menu_requests_to_the_engine() {
+        // The window has no OS menu of its own, so the deletion request must be
+        // forwarded with the display index the engine resolves to a candidate id.
+        let html = candidate_html();
+        assert!(html.contains("type: 'forget'"));
+        assert!(html.contains("'contextmenu'"));
+        assert!(html.contains("event.preventDefault()"));
+    }
+
+    #[test]
+    fn candidate_html_keeps_a_left_click_selecting() {
+        // A right-click handler must not swallow the left-click adoption path.
+        let html = candidate_html();
+        assert!(html.contains("type: 'select'"));
+        assert!(html.contains("candidateList.addEventListener('click'"));
     }
 }

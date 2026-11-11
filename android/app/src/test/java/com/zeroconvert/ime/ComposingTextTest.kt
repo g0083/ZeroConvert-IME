@@ -106,6 +106,18 @@ class ComposingTextTest {
     }
 
     @Test
+    fun punctuationJoinsTheReadingLikeTheWindowsDefault() {
+        // Windows keeps punctuation in the composition unless punctuation_commit is on.
+        val c = ComposingText()
+        "kaigi".forEach { ch ->
+            c.insertAtCursorPosition(ch.toString(), InputStyle.ROMAN2KANA)
+        }
+        c.insertAtCursorPosition("、", InputStyle.ROMAN2KANA)
+        assertEquals("かいぎ、", c.convertTarget)
+        assertEquals(4, c.convertTargetCursorPosition)
+    }
+
+    @Test
     fun digitAfterPendingNCommitsTheN() {
         // The romaji table's n+Any1 rule fires for digits too, matching Windows.
         val c = ComposingText()

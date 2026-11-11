@@ -2111,6 +2111,39 @@ impl IPCService {
         }
     }
 
+    /// Deletes one candidate's learning by the id the server issued.
+    ///
+    /// The client never reimplements the reading-to-dictionary mapping; it only
+    /// forwards the identity it was given. Failures are reported instead of
+    /// retried: the server has no deletion ledger, so a replay could delete a
+    /// candidate that a later conversion re-created with the same id.
+    #[tracing::instrument]
+    pub fn forget_learning_candidate(
+        &mut self,
+        candidate_id: u64,
+        surface: &str,
+        typo_reading: &str,
+    ) -> anyhow::Result<bool> {
+        let request_id = current_or_next_request_id();
+        let mut request = tonic::Request::new(shared::proto::ForgetLearningCandidateRequest {
+            candidate_id,
+            request_id,
+            surface: surface.to_string(),
+            typo_reading: typo_reading.to_string(),
+        });
+        request.set_timeout(LEARNING_RPC_DEADLINE);
+        let response = Self::block_on_server_rpc(
+            self.runtime.as_ref(),
+            &self.recovery,
+            "forget_learning_candidate",
+            LEARNING_RPC_DEADLINE,
+            self.azookey_client.forget_learning_candidate(request),
+        )?;
+        let response = response.into_inner();
+        self.observe_server_session("forget_learning_candidate", response.server_session_id);
+        Ok(response.forgot)
+    }
+
     #[tracing::instrument]
     pub fn shrink_text(&mut self, offset: i32) -> anyhow::Result<Candidates> {
         let request_id = current_or_next_request_id();

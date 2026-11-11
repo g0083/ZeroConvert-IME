@@ -31,7 +31,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
+import android.widget.Toast
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -298,12 +300,22 @@ fun MainScreen(
     var newDictReading by remember { mutableStateOf("") }
     var newDictWord by remember { mutableStateOf("") }
     var learningCount by remember { mutableStateOf(0) }
+    var typoLearningCount by remember { mutableStateOf(0) }
+    var showLearningResetDialog by remember { mutableStateOf(false) }
     LaunchedEffect(context) {
         val loaded = withContext(Dispatchers.IO) {
-            KanaKanjiConverter.getUserDictionary(context) to KanaKanjiConverter.getLearningCount(context)
+            // The learned counts live in the shared engine, so settings must wait for
+            // the same initialization the IME performs instead of showing a stale zero.
+            ZenzNative.init(context)
+            Triple(
+                KanaKanjiConverter.getUserDictionary(context),
+                KanaKanjiConverter.getLearningCount(context),
+                KanaKanjiConverter.getTypoLearningCount(context)
+            )
         }
         userDictList = loaded.first
         learningCount = loaded.second
+        typoLearningCount = loaded.third
     }
 
     var benchmarkProgress by remember {
@@ -1009,19 +1021,38 @@ fun MainScreen(
             }
             SettingsDivider(palette)
             SettingsRow(
-                title = "変換学習メモリ",
-                description = "${learningCount}件 学習済み。候補バーから選択した変換結果を記憶し、次回同じ読みを入力した際に第1候補へ優先表示します。",
+                title = "学習データ",
+                description = "変換学習 ${learningCount}件 / 補正学習 ${typoLearningCount}件。候補バーで選択した結果を記憶し、次回同じ読みで優先表示します。",
                 palette = palette
             ) {
                 SettingsSecondaryButton(
-                    text = "履歴をリセット",
+                    text = "学習を削除",
                     palette = palette,
-                    onClick = {
+                    onClick = { showLearningResetDialog = true }
+                )
+            }
+            if (showLearningResetDialog) {
+                LearningResetDialog(
+                    palette = palette,
+                    onDismiss = { showLearningResetDialog = false },
+                    onConfirm = { conversion, typo ->
+                        showLearningResetDialog = false
                         coroutineScope.launch {
-                            learningCount = withContext(Dispatchers.IO) {
-                                KanaKanjiConverter.clearLearningMemory(context)
-                                KanaKanjiConverter.getLearningCount(context)
+                            val result = withContext(Dispatchers.IO) {
+                                val ok = KanaKanjiConverter.clearAllLearning(context, conversion, typo)
+                                Triple(
+                                    ok,
+                                    KanaKanjiConverter.getLearningCount(context),
+                                    KanaKanjiConverter.getTypoLearningCount(context)
+                                )
                             }
+                            learningCount = result.second
+                            typoLearningCount = result.third
+                            Toast.makeText(
+                                context,
+                                if (result.first) "学習を削除しました" else "一部の学習を削除できませんでした",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                 )
@@ -2016,6 +2047,61 @@ fun MainScreen(
                     }
                 }
             )
+        }
+    }
+}
+
+@Composable
+private fun LearningResetDialog(
+    palette: ZeroConPalette,
+    onDismiss: () -> Unit,
+    onConfirm: (conversion: Boolean, typo: Boolean) -> Unit
+) {
+    var conversion by remember { mutableStateOf(true) }
+    var typo by remember { mutableStateOf(true) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("学習データを削除") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "削除する学習を選んでください。ユーザー辞書と設定は削除されません。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                LearningScopeRow("変換学習", "選んだ変換結果と読みの対応", conversion, palette) { conversion = it }
+                LearningScopeRow("補正学習", "誤入力の学習履歴", typo, palette) { typo = it }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = conversion || typo,
+                onClick = { onConfirm(conversion, typo) }
+            ) { Text("削除") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("キャンセル") }
+        }
+    )
+}
+
+@Composable
+private fun LearningScopeRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    palette: ZeroConPalette,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Column(Modifier.weight(1f)) {
+            Text(title, color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(description, color = palette.textMuted, fontSize = 11.sp)
         }
     }
 }

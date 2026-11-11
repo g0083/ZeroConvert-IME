@@ -1,0 +1,140 @@
+# Shared input-policy scenarios. Read by:
+#   windows/crates/shared/src/conversion_policy.rs        (cargo test -p shared)
+#   android/app/src/test/java/com/zeroconvert/ime/InputPolicyScenarioTest.kt
+#   scripts/check-input-policy-parity.ps1                 (parity check)
+# Format: id<TAB>operation<TAB>input<TAB>expect  (# starts a comment line)
+# `input` must be exactly one character.
+#
+# Vocabulary:
+#   immediate             commit|compose   is_immediate_commit_char
+#   punctuation           normalized char|none  punctuation_for_reading
+#   compose_punctuation   compose|commit   should_compose_punctuation(pending=false)
+#   compose_punctuation_pending  compose|commit  should_compose_punctuation(pending=true)
+#   digit                 compose|commit   is_composition_digit
+#   translation_literal   literal|plain    is_translation_literal_char
+#   width                 full|half|none   symbol_default_fullwidth
+#
+# The table describes the default Windows configuration
+# (`punctuation_commit = false`). The setting-on branch of the Windows client is
+# Windows-specific and deliberately not modelled here.
+#
+# Windows evidence for the default composition path:
+#   windows/crates/shared/src/lib.rs:698                    (punctuation_commit default false)
+#   windows/crates/client/src/engine/composition.rs:5017    (punctuation commit target set)
+#   windows/crates/client/src/engine/composition.rs:5032    (commit only when config enables it)
+#   windows/crates/client/src/engine/composition.rs:5484    (input appended while composing)
+#   windows/crates/client/src/engine/full_width.rs:129      (width defaults map)
+# Android evidence before the shared source:
+#   android/app/src/main/java/com/zeroconvert/ime/PanelTextCommit.kt:20
+#   android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt:155
+
+# ---- Punctuation normalization -------------------------------------------------
+punct_ideographic_comma	punctuation	、	、
+punct_ideographic_period	punctuation	。	。
+punct_fullwidth_comma	punctuation	，	，
+punct_fullwidth_period	punctuation	．	．
+punct_fullwidth_question	punctuation	？	？
+punct_fullwidth_exclaim	punctuation	！	！
+punct_ascii_comma	punctuation	,	、
+punct_ascii_period	punctuation	.	。
+punct_ascii_question	punctuation	?	？
+punct_ascii_exclaim	punctuation	!	！
+punct_letter	punctuation	a	none
+
+# ---- Punctuation joins the composition (Windows default) -----------------------
+punct_compose	compose_punctuation	、	compose
+punct_ascii_period_compose	compose_punctuation	.	compose
+punct_ascii_comma_compose	compose_punctuation	,	compose
+punct_ascii_question_compose	compose_punctuation	?	compose
+# A pending romaji tail must be finalized first (`n` + punctuation is ん + mark).
+punct_pending_n	compose_punctuation_pending	、	commit
+punct_pending_n_period	compose_punctuation_pending	。	commit
+punct_pending_n_ascii_comma	compose_punctuation_pending	,	commit
+
+# ---- Shifted symbols that commit the composition on Android -------------------
+# Windows has no immediate-commit key path: these append to the composition and
+# follow the width settings. Recorded here so the drift stays visible.
+immediate_exclaim	immediate	!	commit
+immediate_at	immediate	@	commit
+immediate_hash	immediate	#	commit
+immediate_dollar	immediate	$	commit
+immediate_percent	immediate	%	commit
+immediate_caret	immediate	^	commit
+immediate_ampersand	immediate	&	commit
+immediate_asterisk	immediate	*	commit
+immediate_lparen	immediate	(	commit
+immediate_rparen	immediate	)	commit
+# Punctuation and digits join the reading instead (2026-11-10 fix).
+immediate_ascii_question	immediate	?	compose
+immediate_fullwidth_exclaim	immediate	！	compose
+immediate_ideographic_comma	immediate	、	compose
+immediate_digit	immediate	5	compose
+
+# ---- Digits join the composition (Windows UserAction::Number -> AppendText) ----
+digit_0	digit	0	compose
+digit_1	digit	1	compose
+digit_2	digit	2	compose
+digit_3	digit	3	compose
+digit_4	digit	4	compose
+digit_5	digit	5	compose
+digit_6	digit	6	compose
+digit_7	digit	7	compose
+digit_8	digit	8	compose
+digit_9	digit	9	compose
+# Fullwidth digits never come from the number key path.
+digit_fullwidth_5	digit	５	commit
+
+# ---- Translation mode literals ------------------------------------------------
+translation_symbol	translation_literal	@	literal
+translation_digit	translation_literal	5	literal
+translation_fullwidth_digit	translation_literal	５	literal
+translation_ascii_comma	translation_literal	,	literal
+translation_fullwidth_period	translation_literal	．	literal
+translation_fullwidth_exclaim	translation_literal	！	literal
+translation_ideographic_comma	translation_literal	、	literal
+translation_letter	translation_literal	a	plain
+
+# ---- Symbol width defaults (single source: CHARACTER_WIDTH_SYMBOL_DEFAULTS) ----
+width_0	width	0	half
+width_1	width	1	half
+width_2	width	2	half
+width_3	width	3	half
+width_4	width	4	half
+width_5	width	5	half
+width_6	width	6	half
+width_7	width	7	half
+width_8	width	8	half
+width_9	width	9	half
+width_exclaim	width	!	full
+width_dquote	width	"	full
+width_hash	width	#	half
+width_dollar	width	$	half
+width_percent	width	%	half
+width_ampersand	width	&	half
+width_squote	width	'	full
+width_lparen	width	(	full
+width_rparen	width	)	full
+width_asterisk	width	*	full
+width_plus	width	+	full
+width_comma	width	,	full
+width_hyphen	width	-	full
+width_period	width	.	full
+width_slash	width	/	full
+width_colon	width	:	full
+width_semicolon	width	;	full
+width_lt	width	<	full
+width_equals	width	=	full
+width_gt	width	>	full
+width_question	width	?	full
+width_at	width	@	half
+width_lbracket	width	[	full
+width_backslash	width	\	half
+width_rbracket	width	]	full
+width_caret	width	^	half
+width_underscore	width	_	half
+width_backtick	width	`	half
+width_lbrace	width	{	full
+width_pipe	width	|	half
+width_rbrace	width	}	full
+width_tilde	width	~	full
+width_letter	width	a	none

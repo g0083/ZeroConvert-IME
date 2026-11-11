@@ -121,6 +121,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         private const val MIN_TAIL_UNCOMMITTED_READING_LEN = 7
         private const val STABLE_INFERENCE_COUNT = 5
         private const val MAX_LEFT_CONTEXT_LEN = EditorContext.MAX_CODE_POINTS
+        // Autorepeat moves every 50 ms and editor callbacks can trail the write,
+        // so a self-issued caret is trusted for a little longer than one tick.
+        private const val SELF_CURSOR_MOVE_WINDOW_MS = 400L
 
         fun isKanjiOrKatakana(ch: Char): Boolean {
             val code = ch.code
@@ -144,20 +147,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
 
         /**
-         * Chars that commit the current composition immediately (punctuation and
-         * shifted symbols). Digits are excluded: like the Windows client's
-         * UserAction::Number -> AppendText, they join the composition so the
-         * reading keeps them and conversion includes them.
+         * Chars that commit the current composition immediately (shifted symbols).
+         * Punctuation and digits are excluded: punctuation joins the reading like the
+         * Windows client's default `punctuation_commit = false`, and digits follow the
+         * Windows `UserAction::Number -> AppendText` path, so conversion includes them.
          */
-        fun isImmediateCommitChar(ch: Char): Boolean {
-            return ch == '、' || ch == '。' || ch == '.' || ch == ',' || ch == '?' || ch == '!' ||
-                ch == '？' || ch == '！' || ch == '．' || ch == '，' || ch in "!@#$%^&*()"
-        }
+        fun isImmediateCommitChar(ch: Char): Boolean = InputPolicy.isImmediateCommitChar(ch)
 
-        /** Translation mode also reflects digits into the reading as literals. */
-        fun isTranslationLiteralChar(ch: Char): Boolean {
-            return isImmediateCommitChar(ch) || ch.isDigit()
-        }
+        /** Translation mode also reflects digits and punctuation into the reading as literals. */
+        fun isTranslationLiteralChar(ch: Char): Boolean = InputPolicy.isTranslationLiteralChar(ch)
 
         /** Same Japanese set as the Windows client's translation.rs has_japanese. */
         fun hasJapaneseKana(source: String): Boolean {
@@ -412,8 +410,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             appendTranslationLiteral(" ")
             return
         }
-        // A space ends the phrase: the next-word prediction must not survive it.
-        if (composingText.isEmpty) commitDirect(" ") else confirmCurrent(showContinuations = false)
+        if (composingText.isEmpty) commitDirect(" ") else confirmCurrent()
     }
 
     fun commitTranslationFromUi() {
@@ -663,7 +660,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         personalize = true,
                         predictiveConversion = false
                     )
-                    (results.firstOrNull { it.assist == null } ?: results.firstOrNull())
+                    (results.firstOrNull { it.assist == null && it.coversReading(japaneseSource) }
+                        ?: results.firstOrNull { it.assist == null }
+                        ?: results.firstOrNull())
                         ?.previewForReading(japaneseSource)
                         .orEmpty()
                         .ifEmpty { japaneseSource }
@@ -791,7 +790,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
         inferenceHistory.clear()
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
-        previousLearningSegment = null
         corrections.clear()
         reconverting = false
         savedOriginalCandidates = emptyList()
@@ -914,6 +912,36 @@ class ZeroConvertInputMethodService : InputMethodService(),
         } else commitText(candidate.text, isExplicitSelection = true, committedCandidate = candidate)
     }
 
+    /**
+     * Deletes the learning behind one candidate bar item.
+     *
+     * The engine owns both the dictionary entry and the selection override, so the
+     * candidate id is all this needs. After deletion the reading is reconverted:
+     * the ranking changed, and leaving the old list would offer the stale order.
+     */
+    fun forgetCandidateLearning(candidate: Candidate) {
+        val id = candidate.engineCandidateId.takeIf { it.isNotEmpty() } ?: return
+        val reading = composingText.convertTargetBeforeCursor
+        val context = applicationContext
+        serviceScope.launch(Dispatchers.IO) {
+            val forgot = com.zeroconvert.ime.engine.WindowsEngine.forgetCandidate(id)
+            if (candidate.assist?.type == com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION) {
+                com.zeroconvert.ime.assist.TypoLearning.forget(context, candidate.reading, candidate.text)
+            }
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    context,
+                    if (forgot) "学習を削除しました" else "この候補の学習は削除できませんでした",
+                    Toast.LENGTH_SHORT
+                ).show()
+                if (forgot && reading.isNotEmpty()) {
+                    candidatesList.removeAll { it.itemKey == candidate.itemKey }
+                    triggerDebouncedConversion(reading)
+                }
+            }
+        }
+    }
+
     fun revertAiAssist() {
         if (!corrections.isApplied) return
         val ic = currentInputConnection ?: return
@@ -923,8 +951,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (!setComposingPreview(ic, savedOriginalSurface)) return
         corrections.revert(composingText)
         currentComposingSurface.value = composingText.convertTargetBeforeCursor
-        predictedCandidate.value = (savedOriginalCandidates.firstOrNull { !it.isLearningPrediction }
-            ?: savedOriginalCandidates.firstOrNull())?.text.orEmpty()
+        predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
         lastInferredSurface = savedOriginalInferredReading
         lastInferredResult = savedOriginalResult
         candidatesList.clear()
@@ -1419,9 +1446,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private data class PendingLearning(val reading: String, val surface: String, val english: Boolean,
                                       val selection: ConversionCommitLearning? = null,
-                                      val previous: DictionarySegment? = null,
                                       val historyRevision: Long = KanaKanjiConverter.learningHistoryRevision)
-    private var previousLearningSegment: DictionarySegment? = null
     private val learningQueue = Channel<PendingLearning>(128)
     private val learningWorker = serviceScope.launch(Dispatchers.IO) {
         for (selection in learningQueue) {
@@ -1430,8 +1455,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 if (selection.english) {
                     EnglishWordDictionary.recordSelection(applicationContext, selection.reading, selection.surface)
                 } else {
-                    selection.selection?.let { KanaKanjiConverter.recordCommittedSelection(applicationContext, it,
-                        selection.previous, selection.historyRevision) }
+                    // Conversion learning belongs to the shared engine: a queued commit
+                    // is applied only when it has a live candidate identity and no
+                    // history reset happened after the selection.
+                    selection.selection?.engineCandidateId?.takeIf { it.isNotEmpty() }?.let { id ->
+                        com.zeroconvert.ime.engine.WindowsEngine.commit(id, selection.historyRevision)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1486,14 +1515,20 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private var pendingConversionContinuation: ConversionContinuation? = null
     private val composingEditor = ComposingEditorState()
     private val editorComposingPreview: String get() = composingEditor.preview
+    // Hardware arrow keys held down: a repeat must not be treated as an external
+    // move. On-screen arrows take the same path, so they register too.
     private val managedCursorKeys = mutableSetOf<Int>()
+    // Set while this IME is moving the caret itself. Autorepeat fires every 50 ms
+    // while the editor's selection callbacks can arrive later, so a short window
+    // is more reliable than a per-write queue that overflows.
+    private var selfIssuedCursorMoveAt = 0L
     private val requestGate = AssistRequestGate()
     private var displayedAssistTicket: AssistRequestGate.Ticket? = null
     private var assistInputConnection: android.view.inputmethod.InputConnection? = null
 
     private fun setManagedComposingText(connection: android.view.inputmethod.InputConnection?, text: CharSequence, cursor: Int): Boolean {
         if (connection == null || !connection.setComposingText(text, cursor)) return false
-        composingEditor.recordPreview(text.toString())
+        composingEditor.recordPreview(text.toString(), expectTailCursor = true)
         return true
     }
 
@@ -1592,8 +1627,55 @@ class ZeroConvertInputMethodService : InputMethodService(),
         selectedCharacterCountState.value = null
     }
 
-    private fun updateSelectionCharacterCount(start: Int, end: Int) {
-        selectionCountJob?.cancel()
+    /**
+     * Moves the internal reading cursor to match a caret the editor reported.
+     * Returns false when the offset cannot be mapped, in which case the caller
+     * may end the composition.
+     *
+     * The mapping uses the preview length: a caret at preview offset N
+     * corresponds to the reading offset whose converted prefix has preview
+     * length N, which is where this IME itself last placed the caret.
+     */
+    private fun resyncReadingCursorToEditor(absoluteCaret: Int): Boolean {
+        val preview = composingEditor.preview
+        if (preview.isEmpty()) return false
+        val range = currentInputConnection?.getExtractedText(
+            android.view.inputmethod.ExtractedTextRequest().apply {
+                hintMaxChars = MAX_LEFT_CONTEXT_LEN * 2 + preview.length
+                hintMaxLines = 1
+            }, 0
+        ) ?: return false
+        if (range.startOffset < 0 || absoluteCaret < range.startOffset) return false
+        val previewOffset = absoluteCaret - range.startOffset
+        if (previewOffset !in 0..preview.length) return false
+        val target = readingOffsetForPreviewOffset(previewOffset)
+        if (target == composingText.convertTargetCursorPosition) {
+            composingEditor.adoptCursor(previewOffset)
+            return true
+        }
+        composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
+        composingEditor.adoptCursor(previewOffset)
+        return true
+    }
+
+    /** Maps a caret offset inside the preview to the reading cursor it represents. */
+    private fun readingOffsetForPreviewOffset(previewOffset: Int): Int {
+        val reading = composingText.convertTarget
+        if (previewOffset <= 0) return 0
+        if (previewOffset >= composingEditor.preview.length) return reading.length
+        // The tail of the composition is still raw reading, so its length maps
+        // one to one. Anything before it belongs to the converted prefix.
+        val suffix = reading.drop(composingText.convertTargetCursorPosition)
+        val convertedLength = composingEditor.preview.length - suffix.length
+        if (convertedLength >= 0 && previewOffset >= convertedLength) {
+            return composingText.convertTargetCursorPosition + (previewOffset - convertedLength)
+        }
+        // Inside the converted region: fall back to proportional mapping, which
+        // is exact for kana-only previews and conservative otherwise.
+        return (previewOffset.toLong() * reading.length / composingEditor.preview.length).toInt()
+    }
+
+    private fun updateSelectionCharacterCount(start: Int, end: Int) {        selectionCountJob?.cancel()
         selectionCountJob = null
         val ticket = selectionCountGate.capture(start, end)
         selectedCharacterCountState.value = ticket?.count
@@ -1636,16 +1718,27 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         composingEditor.observeRange(candidatesStart, candidatesEnd)
         val ownedSelection = composingEditor.ownsSelection(newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // A caret we moved ourselves is not an external move, even when the
+        // editor reports it after the write has been consumed. Autorepeat can
+        // outrun the callbacks, so consult a short window as well as the queue.
+        val selfMoveRecent = managedCursorKeys.isNotEmpty() ||
+            System.currentTimeMillis() - selfIssuedCursorMoveAt <= SELF_CURSOR_MOVE_WINDOW_MS
         // An external cursor/selection move ends the managed composition. Never
         // apply an automatic correction at a cursor that no longer owns this input.
         val isInsideComposing = candidatesStart >= 0 && candidatesEnd >= candidatesStart &&
             newSelStart >= candidatesStart && newSelEnd <= candidatesEnd
-        val isExternalMove = !ownedSelection && managedCursorKeys.isEmpty() && !isInsideComposing &&
+        val isExternalMove = !ownedSelection && !selfMoveRecent && !isInsideComposing &&
             (candidatesStart == -1 || newSelStart < candidatesStart || newSelEnd > candidatesEnd)
         if (!composingText.isEmpty && isExternalMove && !committingTranslation) {
+            // A composition must not be finished as raw kana just because a
+            // selection callback could not be attributed to this IME. Resync the
+            // reading cursor into the reported caret and keep the composition
+            // alive; only a move out of the range is treated as external.
             if (isTranslationMode()) exitTranslationMode(revert = false)
-            clearInput()
-            currentInputConnection?.finishComposingText()
+            if (!resyncReadingCursorToEditor(newSelStart)) {
+                clearInput()
+                currentInputConnection?.finishComposingText()
+            }
         } else if (selected) {
             cancelPendingInference(edited = false)
         }
@@ -1772,7 +1865,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleChar(ch: Char) {
         vibrateOnKeyPress()
         if (isConfirming) return
-        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
 
         if (isTranslationMode() && isTranslationLiteralChar(ch)) {
@@ -1786,11 +1878,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
 
         if (isImmediateCommitChar(ch)) {
-            val punc = when (ch) {
-                '.' -> "。"
-                ',' -> "、"
-                else -> ch.toString()
+            if (!composingText.isEmpty) {
+                confirmAsync(trailingText = ch.toString())
+            } else {
+                commitDirect(ch.toString())
             }
+            return
+        }
+
+        val readingPunctuation = PanelTextCommit.punctuationForReading(ch)
+        if (readingPunctuation != null &&
+            !PanelTextCommit.shouldComposePunctuation(ch, composingText.convertTargetBeforeCursor.hasPendingRomaji())
+        ) {
+            val punc = readingPunctuation.toString()
             if (!composingText.isEmpty) {
                 confirmAsync(trailingText = punc)
             } else {
@@ -1810,8 +1910,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         // Abort ongoing inference
         cancelPendingInference()
 
-        // Insert into azooKey ComposingText state machine
-        composingText.insertAtCursorPosition(ch.toString(), InputStyle.ROMAN2KANA)
+        // Insert into azooKey ComposingText state machine. ASCII punctuation is
+        // normalized to the Japanese mark so the reading matches the key label.
+        composingText.insertAtCursorPosition(
+            (PanelTextCommit.punctuationForReading(ch) ?: ch).toString(),
+            InputStyle.ROMAN2KANA
+        )
         val surface = composingText.convertTargetBeforeCursor
         currentComposingSurface.value = surface
 
@@ -1849,7 +1953,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleKana(kana: String) {
         vibrateOnKeyPress()
         if (isConfirming) return
-        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
 
         if (isTranslationMode() && kana.singleOrNull()?.let { isTranslationLiteralChar(it) } == true) {
@@ -1857,11 +1960,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return
         }
 
-        if (kana == "、" || kana == "。" || kana == "？" || kana == "！") {
+        val kanaPunctuation = kana.singleOrNull()?.let { PanelTextCommit.punctuationForReading(it) }
+        if (kanaPunctuation != null &&
+            !PanelTextCommit.shouldComposePunctuation(kanaPunctuation, composingText.convertTargetBeforeCursor.hasPendingRomaji())
+        ) {
             if (!composingText.isEmpty) {
-                confirmAsync(trailingText = kana)
+                confirmAsync(trailingText = kanaPunctuation.toString())
             } else {
-                commitDirect(kana)
+                commitDirect(kanaPunctuation.toString())
             }
             return
         }
@@ -2076,8 +2182,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         return@withContext
                     }
                     // Learning-history prefix predictions are candidate-bar only: never inline.
-                    val inlineBase = { results.firstOrNull { !it.isLearningPrediction } ?: results.firstOrNull() }
-                    val aiCand = (results.firstOrNull { it.isAI } ?: inlineBase())?.previewForReading(surface).orEmpty()
+                    // A candidate that consumes only part of the reading is padded with the
+                    // leftover kana (安間 + り), so inline text prefers one that explains the
+                    // whole reading and only falls back to a partial candidate when none does.
+                    val inlineBase = { InlinePreviewPolicy.select(results, surface) }
+                    val aiCand = (results.firstOrNull { it.isAI && it.coversReading(surface) } ?: inlineBase())
+                        ?.previewForReading(surface).orEmpty()
                     if (composingText.isAtEndIndex && surface.isNotEmpty() && aiCand.isNotEmpty() &&
                         !hasTrailingIncompleteRomaji(surface) && !corrections.holdsAutoCommit
                     ) {
@@ -2097,6 +2207,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         }
                     }
                     val previousResult = lastInferredResult
+                    val previousSurface = lastInferredSurface
                     val best = inlineBase()?.previewForReading(surface).orEmpty()
                     candidatesList.clear()
                     candidatesList.addAll(results)
@@ -2138,9 +2249,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         }
                     }
                     if ((isRealtimeInlineEnabled() || rangeConversion) && best.isNotEmpty()) {
-                        val hasKanjiInPrevious = previousResult.any { it in '\u3400'..'\u9FFF' }
-                        val downgrade = best == surface && hasKanjiInPrevious &&
-                            best.none { it in '\u3400'..'\u9FFF' }
+                        // Only a same-reading reversion to kana is suppressed. A longer reading is
+                        // a new inference, so the tentative text from the shorter reading
+                        // (按摩 + り, 祖 + う) must not stay on screen.
+                        val downgrade = InlinePreviewPolicy.isSameReadingKanaDowngrade(
+                            previousReading = previousSurface,
+                            reading = surface,
+                            previousPreview = previousResult,
+                            preview = best
+                        )
                         if (!downgrade) {
                             val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
                             if (!setComposingPreview(connection, best + suffix)) {
@@ -2170,7 +2287,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val fullReadingBeforeAutoCommit = originalInput.convertTarget
 
         val connection = currentInputConnection ?: return
-        var showContinuations = false
         connection.beginBatchEdit()
         try {
             if (!connection.commitText(prefixSurface, 1)) return
@@ -2227,18 +2343,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 triggerDebouncedConversion(remainingReading)
             } else {
                 clearInput()
-                showContinuations = true
             }
         } finally { connection.endBatchEdit() }
-        if (showContinuations && connection === currentInputConnection) {
-            showPostCommitContinuations(connection)
-        }
     }
 
     fun handleDelete() {
         vibrateOnKeyPress()
         if (isConfirming) return
-        clearPostCommitCandidates()
         if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
             revertAiAssist()
             return
@@ -2389,12 +2500,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isTranslationMode()) return
         if (conversionRange.active) { adjustConversionRange(-1); return }
         vibrateOnKeyPress()
-        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
             val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
             val moved = composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
             if (moved != 0) {
+                selfIssuedCursorMoveAt = System.currentTimeMillis()
                 updateComposingDisplayOnCursorMove()
             }
         } else {
@@ -2406,12 +2517,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isTranslationMode()) return
         if (conversionRange.active) { adjustConversionRange(1); return }
         vibrateOnKeyPress()
-        clearPostCommitCandidates()
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
             val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, 1)
             val moved = composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
             if (moved != 0) {
+                selfIssuedCursorMoveAt = System.currentTimeMillis()
                 updateComposingDisplayOnCursorMove()
             }
         } else {
@@ -2440,16 +2551,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
         pendingConversionContinuation = null
         val surfaceBefore = composingText.convertTargetBeforeCursor
         currentComposingSurface.value = surfaceBefore
-        // Keep the current preview if its suffix matches the remaining reading suffix,
-        // rather than reverting the entire text to raw hiragana.
+        // Reuse the converted preview while its tail still matches the remaining
+        // reading. When the caret has moved into a region the engine already
+        // converted to kanji there is no such tail, and rewriting the editor with
+        // the raw reading would destroy the conversion and invite a kana commit.
+        // Leave the editor text alone in that case and let the debounced
+        // conversion below publish a preview for the new prefix.
         val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
         val currentPreview = composingEditor.preview
-        val previewToSet = if (currentPreview.isNotEmpty() && currentPreview.endsWith(suffix)) {
-            currentPreview
-        } else {
-            composingText.convertTarget
+        if (currentPreview.isNotEmpty() && currentPreview.endsWith(suffix)) {
+            if (!setComposingPreview(currentInputConnection, currentPreview)) return
         }
-        if (!setComposingPreview(currentInputConnection, previewToSet)) return
         if (surfaceBefore.isNotEmpty()) triggerDebouncedConversion(surfaceBefore)
     }
 
@@ -2462,10 +2574,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer(useTopCandidate = false)
         } else if (!composingText.isEmpty) {
-            confirmAsync(showContinuations = false)
+            confirmAsync()
         } else {
-            // A newline ends the phrase: drop the next-word prediction before it is inserted.
-            clearPostCommitCandidates()
             sendKeyChar('\n')
         }
     }
@@ -2517,7 +2627,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun confirmAsync(trailingText: String = "", showContinuations: Boolean = true) {
+    fun confirmAsync(trailingText: String = "") {
         if (isConfirming) return
         if (isTranslationMode()) {
             handleTranslationEnter()
@@ -2525,8 +2635,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         if (englishComposing.isNotEmpty()) {
             // A mode change accepts the spelling, not an English completion.
-            commitText(englishComposing + trailingText, committedCandidate = null, trailingText = trailingText,
-                offerContinuations = showContinuations)
+            commitText(englishComposing + trailingText, committedCandidate = null, trailingText = trailingText)
             return
         }
         if (composingText.isEmpty) {
@@ -2536,8 +2645,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val currentSurface = composingText.convertTargetBeforeCursor
         if (currentSurface == lastInferredSurface && predictedCandidate.value.isNotEmpty() && editorContextIsCurrent()) {
             val candidate = candidatesList.firstOrNull { it.text == predictedCandidate.value && it.assist == null }
-            commitText(predictedCandidate.value + trailingText, committedCandidate = candidate, trailingText = trailingText,
-                offerContinuations = showContinuations)
+            commitText(predictedCandidate.value + trailingText, committedCandidate = candidate, trailingText = trailingText)
             return
         }
         cancelPendingInference(edited = false)
@@ -2571,10 +2679,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 withContext(Dispatchers.Main) {
                     if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey()) && editorContextIsCurrent()) {
                         isConfirming = false
-                        // Explicit conversion adopts the regular top candidate, not a learning-history prediction.
-                        val candidate = results.firstOrNull { !it.isLearningPrediction } ?: results.firstOrNull()
-                        commitText((candidate?.text ?: currentSurface) + trailingText, committedCandidate = candidate,
-                            trailingText = trailingText, offerContinuations = showContinuations)
+                        val candidate = results.firstOrNull()
+                        // Without a candidate the reading is only the fallback surface:
+                        // commit it as the chosen text, never as a silent kana pass-through
+                        // of a composition the engine may have failed to convert.
+                        val surface = candidate?.text ?: currentSurface
+                        commitText(surface + trailingText, committedCandidate = candidate, trailingText = trailingText)
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -2583,7 +2693,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 withContext(Dispatchers.Main) {
                     if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey()) && editorContextIsCurrent()) {
                         isConfirming = false
-                        commitText(currentSurface + trailingText, offerContinuations = showContinuations)
+                        // Keep the composition instead of committing a surface the
+                        // engine never produced; a retry can still convert it.
+                        Log.e(TAG, "Confirmation failed; keeping the composition", error)
                     }
                 }
             } finally {
@@ -2594,8 +2706,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun confirmCurrent(trailingText: String = "", showContinuations: Boolean = true) {
-        confirmAsync(trailingText, showContinuations)
+    fun confirmCurrent(trailingText: String = "") {
+        confirmAsync(trailingText)
     }
 
     fun commitDirect(text: String) {
@@ -2631,7 +2743,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleEnglishChar(ch: Char) {
         vibrateOnKeyPress()
         if (isConfirming) return
-        clearPostCommitCandidates()
         if (isTranslationMode()) {
             if (ch == ' ') {
                 handleEnglishSpace()
@@ -2710,8 +2821,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
             appendTranslationLiteral(" ")
             return
         }
-        // A space ends the phrase: the next-word prediction must not survive it.
-        clearPostCommitCandidates()
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer(useTopCandidate = isEnglishSpaceAdoptsCandidateState.value)
         }
@@ -2782,8 +2891,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         text: String,
         isExplicitSelection: Boolean = false,
         committedCandidate: Candidate? = candidatesList.firstOrNull { it.text == text },
-        trailingText: String = "",
-        offerContinuations: Boolean = true
+        trailingText: String = ""
     ) {
         if (isConfirming) return
         if (isTranslationMode() && !committingTranslation) {
@@ -2804,10 +2912,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             sensitive = isSensitiveInput(), correctionApplied = corrections.isApplied
         ) else null
         val learnEnglish = wasEnglish && isExplicitSelection && !isSensitiveInput() && LearningPolicy.canWrite
-        val previousLearningBefore = previousLearningSegment
         val learningRevisionBefore = KanaKanjiConverter.learningHistoryRevision
         cancelPendingInference(edited = false)
-        var showContinuations = false
         connection.beginBatchEdit()
         try {
             if (!connection.commitText(text, 1)) return
@@ -2819,13 +2925,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
             if (selection != null || learnEnglish) {
                 val event = if (learnEnglish) PendingLearning(englishReading, text, true)
                     else PendingLearning(checkNotNull(selection).reading, selection.surface, false, selection,
-                        previousLearningBefore, learningRevisionBefore)
+                        learningRevisionBefore)
                 if (learningQueue.trySend(event).isFailure) {
                     Log.w(TAG, "Selection learning queue is full or closed")
                 }
             }
-            // Swift retains only the final lexical item until this composition ends.
-            previousLearningSegment = selection?.segments?.lastOrNull()
             if (wasEnglish) {
                 clearEnglishInput()
                 return
@@ -2850,37 +2954,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 } else clearCandidateList()
             } else {
                 clearInput()
-                showContinuations = offerContinuations
             }
         } finally { connection.endBatchEdit() }
-        if (showContinuations && connection === currentInputConnection) {
-            showPostCommitContinuations(connection)
-        }
-    }
-
-    /**
-     * Gboard-style next-word prediction: after a full commit, offer the learned chunk that
-     * follows the committed text. Tapping one inserts it directly (no reading needed).
-     */
-    private fun showPostCommitContinuations(connection: android.view.inputmethod.InputConnection) {
-        if (isTranslationMode() || isSensitiveInput() || !isPredictiveConversionEnabled()) return
-        if (!LearningPolicy.canRead) return
-        // A space or newline ends the phrase, so the learned chunk no longer follows it.
-        val before = connection.getTextBeforeCursor(128, 0)?.toString().orEmpty()
-        if (before.isEmpty() || before.last().isWhitespace()) return
-        val continuations = KanaKanjiConverter.postCommitContinuations(before)
-        if (continuations.isEmpty()) return
-        candidatesList.clear()
-        candidatesList.addAll(continuations)
-        predictedCandidate.value = ""
-        lastInferredSurface = ""
-        lastInferredResult = ""
-    }
-
-    private fun clearPostCommitCandidates() {
-        if (composingText.isEmpty && englishComposing.isEmpty() && candidatesList.isNotEmpty()) {
-            candidatesList.clear()
-        }
     }
 
     private fun clearCandidateList() {
@@ -2893,7 +2968,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun clearInput() {
-        previousLearningSegment = null
         cancelPendingInference()
         corrections.clear()
         reconverting = false

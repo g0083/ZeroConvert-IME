@@ -66,7 +66,8 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | `W/crates/shared/service.proto` / `window.proto` | 変換・管理RPC / 表示メッセージ |
 | `W/crates/server/src/ai_assist/romaji_decoder.rs` | ローマ字子音混入の復元 |
 | 同 `typo_variant.rs` / `builtin_vocab.tsv` | QWERTY変種・軽量辞書 / 埋込み語彙 |
-| 同 `learning.rs` / `collocation.rs` / `dynamic_macro.rs` | 補正採用学習 / 共起語予測 / 日時・計算等の展開 |
+| 同 `learning.rs` / `collocation.rs` / `dynamic_macro.rs` | 補正採用学習（削除・全消去を含む） / 共起語予測 / 日時・計算等の展開 |
+| `W/server-swift/Sources/azookey-server/azookey_server.swift` の `forget_learning_candidate` / `get_learning_stats` | 候補ID単位の学習削除と削除結果の件数。単語削除はここだけが辞書を引く |
 | `W/server-swift/Sources/ffi/include/ffi.h` / `ffi.c` | C ABIの宣言と橋渡し |
 | `W/server-swift/Sources/azookey-server/romaji_table_compiler.swift` | カスタムローマ字規則のコンパイル |
 | `W/frontend/src/lib/config.ts` | TypeScript側の設定型・既定値 |
@@ -74,10 +75,14 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | `W/Makefile.toml` / `.github/workflows/actions.yml` | 全体ビルド・配布コピー / 正式なチェック定義 |
 | `W/app-version.json` / `scripts/sync-version.mjs` | 版の入力 / メタデータ同期・生成 |
 | `A/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt` | Android IMEライフサイクルと入力連携 |
-| 同 `KanaKanjiConverter.kt` / `ZenzNative.kt` | Kotlin変換処理 / native呼び出し |
+| 同 `KanaKanjiConverter.kt` / `ZenzNative.kt` | 共有エンジンへの変換要求・ユーザー辞書・native辞書検索。変換学習は持たない |
+| 同 `KeyboardCandidateArea.kt` / `MainActivity.kt` | 候補バーの長押し削除・学習削除ダイアログ。削除の判断はエンジンへ委ねる |
 | 同 `assist/TypoCorrectionEngine.kt` / `PredictiveAssistEngine.kt` | Android固有の補正 / 先読み |
 | 同 `translation/` | 翻訳プロンプト・モデルDL/検証・世代管理・遅延ロード（試験機能） |
 | 同 `model/ModelManager.kt` | 組込み・取込みモデル選択 |
+| 同 `InputPolicy.kt` / `PanelTextCommit.kt` | 入力ポリシー（即確定記号・句読点正規化・数字組成・幅既定値）のAndroid側参照とフォールバック表。正本は `W/crates/shared/src/conversion_policy.rs` |
+| `tests/input-policy/cases.tsv` | 両OS共通の入力ポリシー仕様。`cargo test -p shared` と Android JVMテストが同じ行を検証する |
+| `scripts/check-input-policy-parity.ps1` | 仕様表・Rust正本・Kotlinフォールバックの一致と両OSテストをまとめて検査する |
 | `A/main/cpp/zenz_jni.cpp` / `assist_jni.cpp` / `azookey_louds.cpp` | 推論JNI / assist・翻訳Runtime / 辞書読取。nativeのビルド定義は `engine/native/CMakeLists.txt` |
 | `data/generate_typo_dataset.py` / `generate_word_typo_30k.py` | タイポ学習データ生成 |
 | `data/build_distillation_corpus.py` / `generate_distilled_dataset.py` | 蒸留コーパス関連処理 |

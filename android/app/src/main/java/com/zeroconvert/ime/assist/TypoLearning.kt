@@ -20,6 +20,15 @@ internal class TypoLearningHistory(private val capacity: Int = 500, private val 
         return null
     }
     fun snapshot(): List<LearnedMatch> = entries.values.toList()
+    fun clear() {
+        entries.clear()
+    }
+    fun remove(reading: String, surface: String): Boolean {
+        val entry = entries[reading] ?: return false
+        if (entry.surface != surface) return false
+        entries.remove(reading)
+        return true
+    }
     fun restore(entry: LearnedMatch) {
         if (entry.reading.isBlank() || entry.surface.isBlank() || entry.count < 1) return
         entries.remove(entry.reading)
@@ -88,6 +97,35 @@ object TypoLearning {
     @Synchronized
     fun shouldAutoApply(reading: String): Boolean {
         return com.zeroconvert.ime.LearningPolicy.canRead && (history.lookup(reading)?.confirmedCount ?: 0) >= 3
+    }
+
+    /**
+     * Deletes one learned correction from both stores.
+     *
+     * The Kotlin list backs in-process lookups and the shared engine backs the
+     * server-side one, so removing only one would let the correction return after
+     * a restart.
+     */
+    @Synchronized
+    fun forget(context: Context, reading: String, surface: String): Boolean {
+        ensureLoaded(context)
+        val removed = history.remove(reading, surface)
+        if (removed) save(context)
+        if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
+            com.zeroconvert.ime.engine.WindowsEngine.forgetCorrection(reading, surface)
+        }
+        return removed
+    }
+
+    /** Deletes every learned correction from both stores. */
+    @Synchronized
+    fun clear(context: Context) {
+        ensureLoaded(context)
+        history.clear()
+        save(context)
+        if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
+            com.zeroconvert.ime.engine.WindowsEngine.clearCorrections()
+        }
     }
 
     private fun save(context: Context) {

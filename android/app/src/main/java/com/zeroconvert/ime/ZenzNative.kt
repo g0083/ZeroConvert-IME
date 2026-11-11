@@ -15,11 +15,19 @@ data class Candidate(
     val segments: List<DictionarySegment> = emptyList(),
     val learningAllowed: Boolean = true,
     val engineCandidateId: String = "",
-    val engineConsumedReading: Int? = null,
-    val isLearningPrediction: Boolean = false
+    val engineConsumedReading: Int? = null
 ) {
     fun previewForReading(reading: String): String = text + engineConsumedReading
         ?.takeIf { it in 1..reading.length }?.let { reading.substring(it) }.orEmpty()
+
+    /**
+     * True when [text] already covers the whole [reading], so an inline preview needs no padding.
+     * Local dictionary candidates carry no consumed count and always cover their reading.
+     */
+    fun coversReading(reading: String): Boolean {
+        val consumed = engineConsumedReading ?: return true
+        return consumed >= reading.length
+    }
     val isLearningTarget: Boolean get() = learningAllowed && segments.none { it.correctionKind != 0 }
     data class Key(val text: String, val reading: String, val assistType: com.zeroconvert.ime.assist.AiAssistType?)
     val key: Key get() = Key(text, reading, assist?.type)
@@ -68,8 +76,7 @@ object ZenzNative {
     // Memoized dictionary lookups. Bounded to keep memory usage flat.
     private data class DictionaryCacheKey(
         val reading: String, val prefix: Boolean, val count: Int,
-        val keyboardEnds: List<Int>, val userEntries: List<UserDictEntry>,
-        val learnedEntries: List<MorphologyLearningMemory.Entry>
+        val keyboardEnds: List<Int>, val userEntries: List<UserDictEntry>
     )
     private val dictCache = LruCache<DictionaryCacheKey, List<Candidate>>(256)
 
@@ -361,24 +368,21 @@ object ZenzNative {
     }
 
     internal fun lookupDict(readingKatakana: String, prefixSearch: Boolean = true, maxCount: Int = 20,
-                   keyboardEnds: IntArray? = null, userEntries: List<UserDictEntry> = emptyList(),
-                   learnedEntries: List<MorphologyLearningMemory.Entry> = emptyList()): List<Candidate> {
+                   keyboardEnds: IntArray? = null, userEntries: List<UserDictEntry> = emptyList()): List<Candidate> {
         if (!isDictInitialized || readingKatakana.isEmpty()) return emptyList()
         val users = userEntries.filter {
             it.reading.codePointCount(0, it.reading.length) in 1..128 &&
                 it.word.codePointCount(0, it.word.length) in 1..512 &&
                 (it.reading + it.word).none { ch -> ch.isISOControl() || ch in '\uEE00'..'\uEE0F' }
         }.take(50).toList()
-        val learned = learnedEntries.take(65536).toList()
-        val cacheKey = DictionaryCacheKey(readingKatakana, prefixSearch, maxCount, keyboardEnds?.toList().orEmpty(), users, learned)
-        val cacheable = learned.size <= 4096
-        if (cacheable) dictCache.get(cacheKey)?.let { return it }
+        val cacheKey = DictionaryCacheKey(readingKatakana, prefixSearch, maxCount, keyboardEnds?.toList().orEmpty(), users)
+        dictCache.get(cacheKey)?.let { return it }
         return try {
+            // Learned entries come from the shared engine's own LOUDS memory, so this
+            // local dictionary path takes no Kotlin-side learning list.
             val raw = nativeLookupDict(readingKatakana, prefixSearch, maxCount, keyboardEnds,
                 users.map { KanaKanjiConverter.toKatakana(it.reading) }.toTypedArray(), users.map { it.word }.toTypedArray(),
-                learned.map { it.reading }.toTypedArray(), learned.map { it.surface }.toTypedArray(),
-                IntArray(learned.size * 3) { index -> learned[index / 3].let { when (index % 3) { 0 -> it.lcid; 1 -> it.rcid; else -> it.mid } } },
-                FloatArray(learned.size) { learned[it].score })
+                emptyArray(), emptyArray(), IntArray(0), FloatArray(0))
             // "\x01" marks a lookup that was aborted by a newer keystroke.
             // Its result set is incomplete, so it must not be memoized.
             if (raw == ABORTED_MARKER) return emptyList()
@@ -397,7 +401,7 @@ object ZenzNative {
                     candidates.add(Candidate(word, ruby, cost, isAI = false, segments = segments))
                 }
             }
-            if (cacheable) dictCache.put(cacheKey, candidates)
+            dictCache.put(cacheKey, candidates)
             candidates
         } catch (e: Exception) {
             Log.e(TAG, "nativeLookupDict error", e)

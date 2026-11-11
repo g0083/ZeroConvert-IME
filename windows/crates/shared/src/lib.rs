@@ -53,6 +53,11 @@ pub mod runtime_assets;
 /// when the user clicks a candidate. wParam carries the zero-based index.
 pub const ENGINE_CANDIDATE_SELECT_MESSAGE: u32 = 0x8000 + 0x4B1;
 
+/// WM_APP range message the candidate UI posts to the engine message window
+/// when the user asks to delete a candidate's learning. wParam carries the
+/// zero-based index, which the client resolves to the engine's candidate id.
+pub const ENGINE_CANDIDATE_FORGET_MESSAGE: u32 = 0x8000 + 0x4B2;
+
 #[cfg(windows)]
 pub mod model_update;
 pub mod translation_http;
@@ -459,50 +464,7 @@ pub struct AppConfigLoadResult {
     pub rewrite_error: Option<ConfigError>,
 }
 
-pub const CHARACTER_WIDTH_SYMBOL_DEFAULTS: [(&str, bool); 42] = [
-    ("0", false),
-    ("1", false),
-    ("2", false),
-    ("3", false),
-    ("4", false),
-    ("5", false),
-    ("6", false),
-    ("7", false),
-    ("8", false),
-    ("9", false),
-    ("!", true),
-    ("\"", true),
-    ("#", false),
-    ("$", false),
-    ("%", false),
-    ("&", false),
-    ("'", true),
-    ("(", true),
-    (")", true),
-    ("*", true),
-    ("+", true),
-    (",", true),
-    ("-", true),
-    (".", true),
-    ("/", true),
-    (":", true),
-    (";", true),
-    ("<", true),
-    ("=", true),
-    (">", true),
-    ("?", true),
-    ("@", false),
-    ("[", true),
-    ("\\", false),
-    ("]", true),
-    ("^", false),
-    ("_", false),
-    ("`", false),
-    ("{", true),
-    ("|", false),
-    ("}", true),
-    ("~", true),
-];
+pub use conversion_policy::CHARACTER_WIDTH_SYMBOL_DEFAULTS;
 
 pub fn default_symbol_fullwidth_map() -> HashMap<String, bool> {
     CHARACTER_WIDTH_SYMBOL_DEFAULTS

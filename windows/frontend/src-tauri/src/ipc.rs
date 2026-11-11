@@ -154,8 +154,19 @@ impl IPCService {
     }
 
     pub fn reset_learning_memory(&mut self) -> anyhow::Result<bool> {
-        let mut request =
-            tonic::Request::new(shared::proto::ResetLearningMemoryRequest { request_id: 0 });
+        Ok(self.reset_learning_scopes(&[])?.reset)
+    }
+
+    /// Deletes the requested learning stores and returns what the engine applied.
+    /// An empty scope list means every store, which is what older callers expect.
+    pub fn reset_learning_scopes(
+        &mut self,
+        scopes: &[shared::proto::LearningMemoryScope],
+    ) -> anyhow::Result<shared::proto::ResetLearningMemoryResponse> {
+        let mut request = tonic::Request::new(shared::proto::ResetLearningMemoryRequest {
+            request_id: 0,
+            scopes: scopes.iter().map(|scope| *scope as i32).collect(),
+        });
         request.set_timeout(SETTINGS_RPC_DEADLINE);
         let response = self
             .runtime
@@ -175,7 +186,64 @@ impl IPCService {
             })?
             .into_inner();
 
-        Ok(response.reset)
+        Ok(response)
+    }
+
+    pub fn learning_stats(&mut self) -> anyhow::Result<shared::proto::LearningStatsResponse> {
+        let mut request =
+            tonic::Request::new(shared::proto::LearningStatsRequest { request_id: 0 });
+        request.set_timeout(SETTINGS_RPC_DEADLINE);
+        let response = self
+            .runtime
+            .clone()
+            .block_on(async {
+                match time::timeout(
+                    SETTINGS_RPC_DEADLINE,
+                    self.azookey_client.get_learning_stats(request),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(anyhow::Error::from),
+                    Err(_) => Err(anyhow::anyhow!("get_learning_stats IPC deadline exceeded")),
+                }
+            })?
+            .into_inner();
+
+        Ok(response)
+    }
+
+    pub fn forget_learning_candidate(
+        &mut self,
+        candidate_id: u64,
+        surface: &str,
+        typo_reading: &str,
+    ) -> anyhow::Result<bool> {
+        let mut request = tonic::Request::new(shared::proto::ForgetLearningCandidateRequest {
+            candidate_id,
+            request_id: 0,
+            surface: surface.to_string(),
+            typo_reading: typo_reading.to_string(),
+        });
+        request.set_timeout(SETTINGS_RPC_DEADLINE);
+        let response = self
+            .runtime
+            .clone()
+            .block_on(async {
+                match time::timeout(
+                    SETTINGS_RPC_DEADLINE,
+                    self.azookey_client.forget_learning_candidate(request),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(anyhow::Error::from),
+                    Err(_) => Err(anyhow::anyhow!(
+                        "forget_learning_candidate IPC deadline exceeded"
+                    )),
+                }
+            })?
+            .into_inner();
+
+        Ok(response.forgot)
     }
 
     pub fn convert_text(

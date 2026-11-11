@@ -25,8 +25,17 @@ class PendingRomajiRegression(private val instrumentation: Instrumentation) {
 
     private fun node(label: String): AccessibilityNodeInfo? {
         if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+        // Row 1 QWERTY keys append an up-flick digit to the accessibility label when the
+        // number row is hidden, e.g. "iを入力、上フリックで8を入力". Accept only that exact
+        // suffix so "aを入力" never matches an unrelated label.
+        fun matches(node: AccessibilityNodeInfo): Boolean {
+            val text = node.text?.toString()
+            val description = node.contentDescription?.toString()
+            return text == label || description == label ||
+                text?.startsWith("$label、") == true || description?.startsWith("$label、") == true
+        }
         fun visit(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-            if (node.text?.toString() == label || node.contentDescription?.toString() == label) return node
+            if (matches(node)) return node
             for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it)?.let { found -> return found } }
             return null
         }

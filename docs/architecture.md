@@ -58,6 +58,7 @@ WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。�
 
 - 実設定は `%APPDATA%\Azookey\settings.json`。配布フォルダの `settings.json` は初期コピー元であり、既存設定があればStartスクリプトは上書きしない。
 - 補正学習は同ディレクトリの `ai-assist-learning.json`（最大500件）、追加補正語彙は `ai-assist-vocabulary.json`。先読みの確定履歴キャッシュはRustプロセス内に最大300件保持する。
+- 学習の削除は共有エンジンに集約する。`ForgetLearningCandidate` は候補IDだけで1件を消し、`GetLearningStats` は削除結果の確認用の件数を返し、`ResetLearningMemory` は `scopes` で変換学習と補正学習を選んで消す。UIは候補IDと確認ダイアログだけを持ち、辞書の引き方を持たない。
 - `shared/src/lib.rs` のPipe名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`。古い固定名やセッション番号をハードコードしない。
 - 配布設定の確認値はZenzai有効、Vulkan、タイポ補正・AIアシスト・自動確定有効、予測モデル `230m_q4km`、engine `embedded`。これは実行中のAppData設定の値を保証しない。
 

@@ -344,6 +344,8 @@ pub enum UserEvent {
     UpdateCandidates(String),
     UpdateSelection(i32),
     CandidateClicked(i32),
+    /// The user asked to delete one candidate's learning (context menu).
+    CandidateForgetRequested(i32),
     UpdateInputMethod(String),
     WindowAction(WindowAction),
     ClipboardUpdated,
@@ -436,6 +438,15 @@ async fn main() -> anyhow::Result<()> {
                         if let Some(index) = message.get("index").and_then(|value| value.as_i64()) {
                             if let Ok(index) = i32::try_from(index) {
                                 send_user_event(&proxy_clone, UserEvent::CandidateClicked(index));
+                            }
+                        }
+                    } else if type_value == "forget" {
+                        if let Some(index) = message.get("index").and_then(|value| value.as_i64()) {
+                            if let Ok(index) = i32::try_from(index) {
+                                send_user_event(
+                                    &proxy_clone,
+                                    UserEvent::CandidateForgetRequested(index),
+                                );
                             }
                         }
                     }
@@ -593,6 +604,25 @@ async fn main() -> anyhow::Result<()> {
                         let _ = PostMessageW(
                             HWND(current_engine_hwnd as *mut std::ffi::c_void),
                             shared::ENGINE_CANDIDATE_SELECT_MESSAGE,
+                            WPARAM(index as usize),
+                            LPARAM(0),
+                        );
+                    }
+                }
+                UserEvent::CandidateForgetRequested(index) => {
+                    // Same routing as a click: the engine message window owns the
+                    // candidate id mapping, and only the owning thread may use it.
+                    if !current_window_visible
+                        || current_engine_hwnd == 0
+                        || index < 0
+                        || (index as usize) >= latest_candidates.len()
+                    {
+                        return;
+                    }
+                    unsafe {
+                        let _ = PostMessageW(
+                            HWND(current_engine_hwnd as *mut std::ffi::c_void),
+                            shared::ENGINE_CANDIDATE_FORGET_MESSAGE,
                             WPARAM(index as usize),
                             LPARAM(0),
                         );

@@ -27,13 +27,13 @@
 入力先アプリ (InputConnection)
   → ZeroConvertInputMethodService (キーイベント)
   → ComposingText (原打鍵 → 読み)
-  → KanaKanjiConverter.requestCandidates (候補生成)
-      → ZenzNative.convert (ZeroCon AI 変換)
-      → ZenzNative.lookupDict (LOUDS 辞書)
-      → 学習記憶 / ユーザー辞書 / 絵文字
+  → KanaKanjiConverter.requestCandidates (共有エンジンへ要求)
+      → WindowsEngine.candidates → Swift (変換・辞書・学習)
+      → ZenzNative.lookupDict (旧LOUDS辞書、補正用)
+      → ユーザー辞書
   → 候補表示 / InputConnection.setComposingText
   → AiAssistManager (補正・先読み、非同期)
-  → 確定 → KanaKanjiConverter.recordSelection (学習)
+  → 確定 → WindowsEngine.commit (共有エンジンの学習)
 ```
 
 Android には Windows のような別プロセス RPC はない。モデル推論は JNI 経由で同一プロセス内 (別スレッド) で実行する。
@@ -54,7 +54,9 @@ Android には Windows のような別プロセス RPC はない。モデル推�
 
 主な設定キー: `realtime_inline_conversion`, `auto_commit_enabled`, `auto_commit_rewind_on_backspace`, `experimental_ai_assist`, `auto_typo_correction`, `experimental_predictive_model`（廃止・互換）、`ai_profile` など。
 
-QWERTY の句読点・シフト記号 (`isImmediateCommitChar`) は composition を即時確定する。数字は Windows の `UserAction::Number` → `AppendText` と同じく composition に加わり、読みと変換に含まれる（`n` 直後の数字は「ん」を確定させる）。翻訳モードでは数字も `isTranslationLiteralChar` で読みへ反映して再翻訳する。
+QWERTY のシフト記号 (`isImmediateCommitChar`) は composition を即時確定する。数字は Windows の `UserAction::Number` → `AppendText` と同じく composition に加わり、読みと変換に含まれる（`n` 直後の数字は「ん」を確定させる）。句読点（`、。，．？！`）も Windows 既定の `punctuation_commit = false` に合わせて composition に加わり、`,` `.` `?` `!` は入力時に `、` `。` `？` `！` へ正規化する（`InputPolicy.punctuationForReading`）。ただし読み末尾が未確定ローマ字（`n` など）のときは句読点がその読みを確定させてから追記する。翻訳モードでは数字と句読点も `isTranslationLiteralChar` で読みへ反映して再翻訳する。
+
+これらの文字集合・正規化表・幅既定値の正本は `windows/crates/shared/src/conversion_policy.rs` にあり、Android は初期化時に共有エンジンの `op=inputPolicy` から同じ表を受け取って `InputPolicy.kt` に保持する（入力経路に JNI 呼び出しは入れない）。起動時の取得に失敗した場合だけ `InputPolicy.kt` のフォールバック表を使う。両者の仕様は [tests/input-policy/cases.tsv](../../tests/input-policy/cases.tsv) を共有し、`cargo test -p shared`、`:rebuilt:testDebugUnitTest`、`scripts/check-input-policy-parity.ps1` が検証する。
 
 ### 2.2 ローマ字→かな
 
@@ -93,7 +95,7 @@ QWERTY の句読点・シフト記号 (`isImmediateCommitChar`) は composition 
 
 ### 3.4 学習
 
-`recordSelection(context, readingHiragana, surface)` が `learningMemory` (LinkedHashMap, 最大 500 件) に記録し、SharedPreferences に永続化。`LearningPolicy` (mode) で読み書き制御。`getLearnedSurface` で読み取り。
+変換学習は共有エンジン（Swift）が保持する。確定時は候補の `engineCandidateId` を `WindowsEngine.commit` に渡し、Swiftの学習候補キャッシュ経由でLOUDS学習と `selection-overrides.json` を更新する。Kotlin側に学習ストアは無い。`LearningPolicy` (mode) が読み書きを制御し、候補IDが無い（辞書補正・AI候補など）場合は記録しない。
 
 ---
 
@@ -262,17 +264,27 @@ Windows と同様:
 
 ### 8.3 確定と学習
 
-- 候補選択 (`selectCandidate`) で `KanaKanjiConverter.recordSelection` を呼び、学習記憶に記録。
+- 候補選択は共有エンジンの候補IDを `WindowsEngine.commit` へ渡し、Swiftの学習（LOUDS・選択上書き）を更新する。Kotlin側に第二の学習ストアは持たない。
 - AI アシスト採用 (`adoptAiAssist`) は `corrections.apply` で内部状態を更新し、`triggerDebouncedConversion` で再変換。
 - `TypoLearning` で補正の採用履歴を管理 (3 回以上で自動反映)。
 
-### 8.4 確定後の続き候補 (post-commit continuation)
+### 8.4 学習履歴の削除
 
-`commitText` は composition をすべて確定したとき `showPostCommitContinuations` を呼び、`KanaKanjiConverter.postCommitContinuations` が学習済み文節列から「次に続く語」を候補バーに出す。タップすると読み入力なしでその語を挿入する。
+設定「学習とデータ」の「学習を削除」は削除するストアを選ばせ、`KanaKanjiConverter.clearAllLearning` が共有エンジンへ渡す。
 
-- 文の途中で続けられるよう、候補は確定後も表示したままにする。
-- スペースと改行は文の区切りなので、その確定では続き候補を出さない。`commitText(offerContinuations = false)` を `confirmAsync` / `confirmCurrent` から渡し、`handleSpace` と `handleEnter` が指定する。`handleEnglishSpace` と改行送信前の `handleEnter` は `clearPostCommitCandidates` で既存の候補も消す。
-- `showPostCommitContinuations` はカーソル直前が空白・改行なら何も出さない。確定済み文脈の末尾が区切り文字のときに古い続き候補が復活しないための二重の防御。
+- 変換学習: `WindowsEngine.resetLearningBlocking()` が `reset_learning_memory` を1回呼び、LOUDS学習・選択上書き・学習候補キャッシュをまとめて削除する。世代カウンタ `learningHistoryRevision` を進めるため、削除前に確定した未処理の学習通知は適用されない。
+- 補正学習: `TypoLearning.clear()` が Kotlin の `ai_assist_learning` と共有エンジンの `ai-assist-learning.json` を同時に消す。片方だけ消すと再起動後に復活する。
+- 削除後に件数を取り直し、0件を確認してから完了を伝える。
+
+### 8.5 候補単位の学習削除
+
+候補バーの候補を長押しすると、その候補1件の学習を削除できる。
+
+- 対象はエンジンが発行した `engineCandidateId` を持つ候補だけ。辞書補正・AI候補は対象外。
+- `WindowsEngine.forgetCandidate(id)` が `op=forget` を送り、Swift側の `forget_learning_candidate` が `converter.forgetMemory` と選択上書きの該当表記を消す。Kotlinは「どの候補か」を渡すだけで、辞書の引き方は持たない。
+- 上流の忘却は表記単位で照合するため、同じ表記を別の読みで学習していた場合も消える。文言は「この候補の学習を削除」とし、読み単位の削除だと説明しない。
+- 学習モードが読み取り専用でも削除だけは許可する（`converter_patch.py` が `needUpdateMemory` を `needUsingMemory` に緩める）。削除は明示操作であり、新しい学習の許可とは別。
+- 削除後は同じ読みで再変換し、順位の変わった候補一覧を出し直す。候補IDが既に無効なら「削除できませんでした」と伝える。
 
 ### 8.5 動的マクロ
 

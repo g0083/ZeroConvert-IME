@@ -19,6 +19,18 @@ func _strdup(_ value: String) -> UnsafeMutablePointer<CChar>? { value.withCStrin
 
 @MainActor private var embeddedInitialized = false
 
+/// Reads the server's learning counters through its C entry point, so the bridge
+/// never grows a second copy of what counts as learned.
+@MainActor private func embeddedLearningStats() -> [String: Any] {
+    guard let json = get_learning_stats() else { return [:] }
+    defer { free_c_string(json) }
+    guard let data = String(cString: json).data(using: .utf8),
+          let stats = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return [:]
+    }
+    return stats
+}
+
 // Use the existing Windows performance callback; retain durations only, never
 // callback details (which can contain editor text). Disabled outside diagnostics.
 private final class EmbeddedPerformance: @unchecked Sendable {
@@ -70,6 +82,12 @@ private let embeddedPerformance = EmbeddedPerformance()
         }
         return ["learned": commit_learning_candidate(candidateId: candidateId, commitKind: 0)]
     }
+    if op == "forget" {
+        guard let id = request["candidateId"] as? String, let candidateId = UInt64(id) else {
+            return ["error": "invalid candidate identity"]
+        }
+        return ["forgot": forget_learning_candidate(candidateId: candidateId)]
+    }
     if op == "clear" { clear_text(); return [:] }
     if op == "close" {
         clear_text()
@@ -77,7 +95,11 @@ private let embeddedPerformance = EmbeddedPerformance()
         normalNBestSupplementConverter = KanaKanjiConverter(dictionaryURL: converterDictionaryURL, preloadDictionary: false)
         return [:]
     }
-    if op == "resetLearning" { return ["reset": reset_learning_memory()] }
+    if op == "resetLearning" {
+        let reset = reset_learning_memory()
+        return ["reset": reset, "stats": embeddedLearningStats()]
+    }
+    if op == "learningStats" { return embeddedLearningStats() }
     guard op == "convert", let elements = request["elements"] as? [[String: Any]],
           elements.count <= 4096 else { return ["error": "invalid conversion request"] }
     var input: [ComposingText.InputElement] = []

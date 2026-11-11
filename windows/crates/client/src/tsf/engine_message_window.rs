@@ -82,6 +82,12 @@ pub(crate) fn ensure_engine_message_window(instance: ITfTextInputProcessor) -> R
         // requests still reach elevated application windows.
         let _ =
             ChangeWindowMessageFilterEx(hwnd, ENGINE_CANDIDATE_SELECT_MESSAGE, MSGFLT_ALLOW, None);
+        let _ = ChangeWindowMessageFilterEx(
+            hwnd,
+            shared::ENGINE_CANDIDATE_FORGET_MESSAGE,
+            MSGFLT_ALLOW,
+            None,
+        );
 
         hwnd
     };
@@ -123,6 +129,25 @@ fn dispatch_candidate_selection(index: i32) {
     });
 }
 
+fn dispatch_candidate_learning_deletion(index: i32) {
+    ENGINE_TARGET.with(|cell| {
+        let target = cell.borrow();
+        let Some(target) = target.as_ref() else {
+            return;
+        };
+        let factory: &TextServiceFactory = unsafe { target.instance.as_impl() };
+        match factory.forget_external_candidate_learning(index) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::info!(index, "Candidate has no deletable learning");
+            }
+            Err(error) => {
+                tracing::warn!(?error, index, "Candidate learning deletion failed");
+            }
+        }
+    });
+}
+
 unsafe extern "system" fn engine_message_window_proc(
     hwnd: HWND,
     msg: u32,
@@ -133,6 +158,14 @@ unsafe extern "system" fn engine_message_window_proc(
         let index = i32::try_from(wparam.0).unwrap_or(-1);
         if index >= 0 {
             dispatch_candidate_selection(index);
+        }
+        return LRESULT(0);
+    }
+
+    if msg == shared::ENGINE_CANDIDATE_FORGET_MESSAGE {
+        let index = i32::try_from(wparam.0).unwrap_or(-1);
+        if index >= 0 {
+            dispatch_candidate_learning_deletion(index);
         }
         return LRESULT(0);
     }

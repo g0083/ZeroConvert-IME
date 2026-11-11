@@ -5,6 +5,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LearningParityTest {
+    @Test fun removingOneTypoKeepsTheOtherReadings() {
+        val history = TypoLearningHistory()
+        history.record("きんにちは", "こんにちは")
+        history.record("しんずく", "新宿")
+
+        assertTrue(history.remove("きんにちは", "こんにちは"))
+        assertNull(history.lookup("きんにちは"))
+        assertEquals("新宿", history.lookup("しんずく")!!.surface)
+    }
+
+    @Test fun removingATypoRequiresTheStoredSurface() {
+        val history = TypoLearningHistory()
+        history.record("きんにちは", "こんにちは")
+
+        assertFalse(history.remove("きんにちは", "今日は"))
+        assertFalse(history.remove("ちがう", "こんにちは"))
+        assertEquals("こんにちは", history.lookup("きんにちは")!!.surface)
+    }
+
+    @Test fun clearDropsEveryEntry() {
+        val history = TypoLearningHistory()
+        history.record("きんにちは", "こんにちは")
+        history.record("しんずく", "新宿")
+
+        history.clear()
+
+        assertTrue(history.snapshot().isEmpty())
+        assertNull(history.lookup("しんずく"))
+    }
+
     @Test fun exactMatchWinsAndSuffixSearchChoosesTheLongestToken() {
         val history = TypoLearningHistory()
         history.record("しんずく", "新宿")

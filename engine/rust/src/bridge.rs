@@ -86,6 +86,21 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             .map_err(|_| "vocabulary lock poisoned")? = vocabulary;
         return Ok(Value::Null);
     }
+    if envelope["op"] == "inputPolicy" {
+        use crate::conversion_policy as policy;
+        return Ok(json!({
+            "version": policy::INPUT_POLICY_VERSION,
+            "immediateCommit": policy::IMMEDIATE_COMMIT_CHARS,
+            "punctuation": policy::PUNCTUATION_FOR_READING
+                .iter()
+                .map(|(from, to)| json!({"from": from.to_string(), "to": to.to_string()}))
+                .collect::<Vec<_>>(),
+            "symbolFullwidth": policy::CHARACTER_WIDTH_SYMBOL_DEFAULTS
+                .iter()
+                .map(|(symbol, fullwidth)| json!({"symbol": symbol, "fullwidth": fullwidth}))
+                .collect::<Vec<_>>(),
+        }));
+    }
     if envelope["op"] == "autoCommit" {
         use crate::conversion_policy as policy;
         use std::collections::VecDeque;
@@ -152,6 +167,9 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "learn" => Ok(json!({"saved": ai_assist::record_learned_typo(&request.input, &request.baseline)})),
+        "forget" => Ok(json!({"forgot": ai_assist::learning::forget_learned_typo(&request.input, &request.baseline)})),
+        "forgetAll" => Ok(json!({"forgot": ai_assist::learning::clear_learned_typos()})),
+        "learningStats" => Ok(json!({"typoCount": ai_assist::learning::learned_typo_count()})),
         _ => Err("unknown engine operation".into()),
     }
 }
@@ -252,10 +270,107 @@ mod tests {
     }
 
     #[test]
+    fn native_bridge_publishes_the_shared_input_policy() {
+        let policy = dispatch(r#"{"op":"inputPolicy"}"#).unwrap();
+        assert_eq!(
+            policy["version"],
+            crate::conversion_policy::INPUT_POLICY_VERSION
+        );
+        assert_eq!(
+            policy["immediateCommit"],
+            crate::conversion_policy::IMMEDIATE_COMMIT_CHARS
+        );
+        assert_eq!(
+            policy["punctuation"].as_array().unwrap().len(),
+            crate::conversion_policy::PUNCTUATION_FOR_READING.len()
+        );
+        assert_eq!(
+            policy["symbolFullwidth"].as_array().unwrap().len(),
+            crate::conversion_policy::CHARACTER_WIDTH_SYMBOL_DEFAULTS.len()
+        );
+        let at = policy["symbolFullwidth"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["symbol"] == "@")
+            .unwrap();
+        assert_eq!(at["fullwidth"], false);
+    }
+
+    #[test]
     fn native_bridge_rejects_oversized_and_unknown_requests() {
         assert!(
             dispatch(&json!({"op":"correction","input":"あ".repeat(513)}).to_string()).is_err()
         );
         assert!(dispatch(r#"{"op":"unknown"}"#).is_err());
+    }
+
+    // Learning dispatch reads and writes one process-wide store, so tests that
+    // touch it must not interleave with each other.
+    fn learning_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn native_bridge_forgets_only_the_requested_typo() {
+        let _guard = learning_test_lock();
+        // The learning file is shared process state, so this test drives the
+        // dispatch contract rather than assuming an empty store.
+        let learn = json!({
+            "op": "learn",
+            "input": "ぶりっじけんしょう",
+            "baseline": "ブリッジ検証"
+        });
+        assert_eq!(dispatch(&learn.to_string()).unwrap()["saved"], true);
+
+        let forget = json!({
+            "op": "forget",
+            "input": "ぶりっじけんしょう",
+            "baseline": "ブリッジ検証"
+        });
+        assert_eq!(dispatch(&forget.to_string()).unwrap()["forgot"], true);
+        // A second removal has nothing left to delete.
+        assert_eq!(dispatch(&forget.to_string()).unwrap()["forgot"], false);
+
+        let stats = dispatch(r#"{"op":"learningStats"}"#).unwrap();
+        assert!(stats["typoCount"].is_u64());
+    }
+
+    #[test]
+    fn native_bridge_requires_the_exact_surface_to_forget() {
+        let _guard = learning_test_lock();
+        let learn = json!({
+            "op": "learn",
+            "input": "ぶりっじけんしょう",
+            "baseline": "ブリッジ検証"
+        });
+        assert_eq!(dispatch(&learn.to_string()).unwrap()["saved"], true);
+        let wrong = json!({
+            "op": "forget",
+            "input": "ぶりっじけんしょう",
+            "baseline": "別の表記"
+        });
+        assert_eq!(dispatch(&wrong.to_string()).unwrap()["forgot"], false);
+        let correct = json!({
+            "op": "forget",
+            "input": "ぶりっじけんしょう",
+            "baseline": "ブリッジ検証"
+        });
+        assert_eq!(dispatch(&correct.to_string()).unwrap()["forgot"], true);
+    }
+
+    #[test]
+    fn native_bridge_forgets_all_typos() {
+        let _guard = learning_test_lock();
+        dispatch(&json!({"op":"learn","input":"ぜんぶけす","baseline":"全部消す"}).to_string())
+            .unwrap();
+        assert_eq!(dispatch(r#"{"op":"forgetAll"}"#).unwrap()["forgot"], true);
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["typoCount"],
+            0
+        );
+        // Nothing left to clear.
+        assert_eq!(dispatch(r#"{"op":"forgetAll"}"#).unwrap()["forgot"], false);
     }
 }

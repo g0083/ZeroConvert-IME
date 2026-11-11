@@ -21,6 +21,14 @@ import { downloadTranslationModel, getTranslationModelStatus } from "@/lib/trans
 
 type WidthMode = "half" | "full";
 type LearningMode = "enabled" | "read_only" | "disabled";
+type LearningScope = "conversion" | "typo";
+type LearningStats = {
+    selection_count: number;
+    typo_count: number;
+    history_present: boolean;
+    history_paused: boolean;
+    learning_mode: string;
+};
 type ReconversionKey = "convert" | "shift_convert" | "space" | "win_slash" | "disabled";
 type ClipboardConfigState = {
     trigger_key: string;
@@ -185,6 +193,9 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
     const [generalValue, setGeneralValue] = useState(DEFAULT_GENERAL_CONFIG);
     const [widthGroups, setWidthGroups] = useState(DEFAULT_WIDTH_GROUPS);
     const [learningMode, setLearningMode] = useState<LearningMode>("enabled");
+    const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
+    const [deleteConversionLearning, setDeleteConversionLearning] = useState(true);
+    const [deleteTypoLearning, setDeleteTypoLearning] = useState(true);
     const [romajiRows, setRomajiRows] = useState<RomajiRow[]>([]);
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -217,6 +228,9 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             setWidthGroups(normalizeWidthGroups(data.character_width?.groups));
             setRomajiRows(normalizeRomajiRows(data.romaji_table?.rows));
             setLoadState("ready");
+            // Counts come from the engine, not the config file, so they load after
+            // the settings are ready and never block the page.
+            void loadLearningStats();
         }).catch(() => { if (!cancelled) setLoadState("error"); });
         return () => { cancelled = true; };
     }, [page, loadAttempt]);
@@ -269,13 +283,37 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
         });
         if (data) setLearningMode(normalizeLearningMode(data.learning?.mode));
     };
-    const resetLearningHistory = async () => {
+    const resetLearningHistory = async (scopes: LearningScope[] = ["conversion"]) => {
         try {
-            const result = await invoke<{ reset: boolean; server_applied: boolean; message?: string | null }>("reset_learning_history");
-            if (result.reset && result.server_applied) toast("学習履歴を削除しました");
-            else toast("学習履歴を削除できませんでした", { description: result.message ?? undefined });
+            const result = await invoke<{
+                reset: boolean; server_applied: boolean; message?: string | null;
+                applied?: string[] | null; failed?: string[] | null;
+                stats?: Partial<LearningStats> | null;
+            }>("reset_learning_history", { scopes });
+            // The engine reports which stores it cleared; a partial reset must not
+            // be reported as success just because the call itself succeeded.
+            const failed = result.failed ?? [];
+            if (result.reset && result.server_applied && failed.length === 0) {
+                setLearningStats((previous) => previous && result.stats
+                    ? { ...previous, ...result.stats }
+                    : previous);
+                toast("学習を削除しました");
+            } else {
+                toast("学習を削除できませんでした", {
+                    description: result.message ?? (failed.length > 0 ? `未削除: ${failed.join(", ")}` : undefined),
+                });
+            }
         } catch (error) {
-            toast("学習履歴を削除できませんでした", { description: String(error) });
+            toast("学習を削除できませんでした", { description: String(error) });
+        }
+    };
+
+    const loadLearningStats = async () => {
+        try {
+            const stats = await invoke<LearningStats>("get_learning_stats");
+            setLearningStats(stats);
+        } catch {
+            // Settings still work without counts; the delete action reports its own errors.
         }
     };
 
@@ -473,17 +511,56 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                             <SelectContent>{LEARNING_MODE_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
                         </Select>
                     </SettingsRow>
-                    <SettingsRow label="学習履歴">
+                    <SettingsRow
+                        label="学習データ"
+                        description={learningStats
+                            ? `変換学習 ${learningStats.selection_count}件 / 補正学習 ${learningStats.typo_count}件${learningStats.history_paused ? "（学習は一時停止中）" : ""}。候補ウィンドウの右クリックからも1件ずつ削除できます。`
+                            : "変換学習と補正学習の履歴です。候補ウィンドウの右クリックからも1件ずつ削除できます。"}
+                    >
                         <AlertDialog>
-                            <AlertDialogTrigger asChild><Button variant="outline">履歴を削除</Button></AlertDialogTrigger>
+                            <AlertDialogTrigger asChild><Button variant="outline">学習を削除</Button></AlertDialogTrigger>
                             <AlertDialogContent>
                                 <AlertDialogHeader>
-                                    <AlertDialogTitle>学習履歴を削除しますか？</AlertDialogTitle>
-                                    <AlertDialogDescription>これまでの変換学習データを削除します。この操作は取り消せません。</AlertDialogDescription>
+                                    <AlertDialogTitle>学習データを削除しますか？</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        選んだ学習を削除します。ユーザー辞書と設定は削除されません。この操作は取り消せません。
+                                    </AlertDialogDescription>
                                 </AlertDialogHeader>
+                                <div className="space-y-3 py-2">
+                                    <label className="flex items-start gap-3 text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-1 size-4"
+                                            checked={deleteConversionLearning}
+                                            onChange={(event) => setDeleteConversionLearning(event.target.checked)}
+                                        />
+                                        <span>
+                                            <span className="font-medium">変換学習</span>
+                                            <span className="block text-muted-foreground">選んだ変換結果と読みの対応（{learningStats?.selection_count ?? 0}件）</span>
+                                        </span>
+                                    </label>
+                                    <label className="flex items-start gap-3 text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-1 size-4"
+                                            checked={deleteTypoLearning}
+                                            onChange={(event) => setDeleteTypoLearning(event.target.checked)}
+                                        />
+                                        <span>
+                                            <span className="font-medium">補正学習</span>
+                                            <span className="block text-muted-foreground">誤入力の学習履歴（{learningStats?.typo_count ?? 0}件）</span>
+                                        </span>
+                                    </label>
+                                </div>
                                 <AlertDialogFooter>
                                     <AlertDialogCancel>キャンセル</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => void resetLearningHistory()}>削除</AlertDialogAction>
+                                    <AlertDialogAction
+                                        disabled={!deleteConversionLearning && !deleteTypoLearning}
+                                        onClick={() => void resetLearningHistory([
+                                            ...(deleteConversionLearning ? ["conversion" as LearningScope] : []),
+                                            ...(deleteTypoLearning ? ["typo" as LearningScope] : []),
+                                        ])}
+                                    >削除</AlertDialogAction>
                                 </AlertDialogFooter>
                             </AlertDialogContent>
                         </AlertDialog>

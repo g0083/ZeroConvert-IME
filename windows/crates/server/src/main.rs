@@ -665,6 +665,8 @@ unsafe extern "C" {
         count: c_int,
     ) -> c_int;
     fn ResetLearningMemory() -> bool;
+    fn ForgetLearningCandidate(candidateId: u64) -> bool;
+    fn GetLearningStats() -> *mut c_char;
     fn LoadConfig();
     fn SetRequestId(request_id: u64);
     fn SetServerLogCallbacks(
@@ -1625,6 +1627,35 @@ fn swift_commit_learning_candidates(commits: &[shared::proto::LearningCandidateC
 
 fn swift_reset_learning_memory() -> bool {
     unsafe { ResetLearningMemory() }
+}
+
+fn swift_forget_learning_candidate(candidate_id: u64) -> bool {
+    unsafe { ForgetLearningCandidate(candidate_id) }
+}
+
+/// Reads the engine's learning counters. The JSON is owned by the engine and
+/// must be released with `FreeCString`.
+fn swift_get_learning_stats() -> Option<shared::proto::LearningStatsResponse> {
+    let pointer = unsafe { GetLearningStats() };
+    if pointer.is_null() {
+        return None;
+    }
+    let json = unsafe { std::ffi::CStr::from_ptr(pointer) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { FreeCString(pointer) };
+    let value: serde_json::Value = serde_json::from_str(&json).ok()?;
+    Some(shared::proto::LearningStatsResponse {
+        server_session_id: server_session_id(),
+        selection_count: value["selectionCount"].as_u64().unwrap_or(0) as u32,
+        history_present: value["historyPresent"].as_bool().unwrap_or(false),
+        history_paused: value["historyPaused"].as_bool().unwrap_or(false),
+        learning_mode: value["learningMode"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        typo_count: ai_assist::learning::learned_typo_count() as u32,
+    })
 }
 
 /// AI アシスト候補の確定通知を処理する。
@@ -3384,33 +3415,170 @@ impl AzookeyService for MyAzookeyService {
         set_request_id(request_id);
         let handler_start = Instant::now();
 
-        let reset_start = Instant::now();
-        let reset = swift_reset_learning_memory();
-        if !reset {
-            log_event(
-                ServerLogLevel::Warn,
-                "[reset_learning_memory] Swift reset returned false",
+        // An unspecified scope keeps the historical behaviour: everything.
+        let scopes = if request.scopes.is_empty() {
+            vec![
+                shared::proto::LearningMemoryScope::Conversion as i32,
+                shared::proto::LearningMemoryScope::Typo as i32,
+            ]
+        } else {
+            request.scopes.clone()
+        };
+        let wants_conversion =
+            scopes.contains(&(shared::proto::LearningMemoryScope::Conversion as i32));
+        let wants_typo = scopes.contains(&(shared::proto::LearningMemoryScope::Typo as i32));
+
+        let mut applied = Vec::new();
+        let mut failed = Vec::new();
+        let mut reset = true;
+
+        if wants_conversion {
+            let reset_start = Instant::now();
+            let reset_conversion = swift_reset_learning_memory();
+            performance_event_lazy!(
+                request_id,
+                "reset_learning_memory",
+                "swift_reset_learning_memory",
+                elapsed_ms(reset_start),
+                "reset={reset_conversion}"
             );
+            if reset_conversion {
+                applied.push(shared::proto::LearningMemoryScope::Conversion as i32);
+            } else {
+                // The engine can legitimately have nothing to reset; report the
+                // failure only when the caller asked for scopes it could not serve.
+                failed.push(shared::proto::LearningMemoryScope::Conversion as i32);
+                reset = false;
+                log_event(
+                    ServerLogLevel::Warn,
+                    "[reset_learning_memory] Swift reset returned false",
+                );
+            }
         }
-        performance_event_lazy!(
-            request_id,
-            "reset_learning_memory",
-            "swift_reset_learning_memory",
-            elapsed_ms(reset_start),
-            "reset={reset}"
-        );
+
+        if wants_typo {
+            let cleared = tokio::task::spawn_blocking(ai_assist::learning::clear_learned_typos)
+                .await
+                .map_err(|_| Status::internal("typo reset failed"))?;
+            if cleared {
+                applied.push(shared::proto::LearningMemoryScope::Typo as i32);
+            } else {
+                // Clearing an empty store is not a failure.
+                applied.push(shared::proto::LearningMemoryScope::Typo as i32);
+            }
+        }
+
+        let stats = swift_get_learning_stats();
         performance_event_lazy!(
             request_id,
             "reset_learning_memory",
             "total",
             elapsed_ms(handler_start),
-            "status=success;reset={reset}"
+            "status=success;reset={reset};applied={applied:?};failed={failed:?}"
         );
 
         Ok(Response::new(shared::proto::ResetLearningMemoryResponse {
             server_session_id: server_session_id(),
             reset,
+            applied,
+            failed,
+            stats,
         }))
+    }
+
+    async fn forget_learning_candidate(
+        &self,
+        request: Request<shared::proto::ForgetLearningCandidateRequest>,
+    ) -> Result<Response<shared::proto::ForgetLearningCandidateResponse>, Status> {
+        PipeClient::authorize_connection(&request)?;
+        let _mutation_guard = self.mutation_lock.lock().await;
+        let request = request.into_inner();
+        let _request_guard = ServerRequestGuard::begin(false);
+        let request_id = request_id_or_next(request.request_id);
+        set_request_id(request_id);
+        let handler_start = Instant::now();
+
+        // Deleting an AI assist typo is a separate store with its own key.
+        if request.candidate_id == shared::ai_candidate::TYPO_CORRECTION
+            && !request.typo_reading.is_empty()
+        {
+            if request.typo_reading.chars().count() > 128 || request.surface.chars().count() > 384 {
+                return Err(Status::invalid_argument("invalid typo feedback"));
+            }
+            let reading = request.typo_reading;
+            let surface = request.surface;
+            let forgot = tokio::task::spawn_blocking(move || {
+                ai_assist::learning::forget_learned_typo(&reading, &surface)
+            })
+            .await
+            .map_err(|_| Status::internal("typo deletion failed"))?;
+            performance_event_lazy!(
+                request_id,
+                "forget_learning_candidate",
+                "typo_learning",
+                elapsed_ms(handler_start),
+                "candidate_id={};forgot={forgot}",
+                request.candidate_id
+            );
+            return Ok(Response::new(
+                shared::proto::ForgetLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                    forgot,
+                },
+            ));
+        }
+
+        if shared::ai_candidate::is_ai_assist_candidate(request.candidate_id) {
+            return Ok(Response::new(
+                shared::proto::ForgetLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                    forgot: false,
+                },
+            ));
+        }
+
+        let candidate_id = request.candidate_id;
+        let forgot = swift_forget_learning_candidate(candidate_id);
+        if !forgot {
+            log_event(
+                ServerLogLevel::Warn,
+                &format!("[forget_learning_candidate] not forgotten candidate_id={candidate_id}"),
+            );
+        }
+        performance_event_lazy!(
+            request_id,
+            "forget_learning_candidate",
+            "swift_forget_learning_candidate",
+            elapsed_ms(handler_start),
+            "candidate_id={candidate_id};forgot={forgot}"
+        );
+        Ok(Response::new(
+            shared::proto::ForgetLearningCandidateResponse {
+                server_session_id: server_session_id(),
+                forgot,
+            },
+        ))
+    }
+
+    async fn get_learning_stats(
+        &self,
+        request: Request<shared::proto::LearningStatsRequest>,
+    ) -> Result<Response<shared::proto::LearningStatsResponse>, Status> {
+        PipeClient::authorize_connection(&request)?;
+        let _request_guard = ServerRequestGuard::begin(false);
+        let request = request.into_inner();
+        let request_id = request_id_or_next(request.request_id);
+        set_request_id(request_id);
+        let stats =
+            swift_get_learning_stats().unwrap_or_else(|| shared::proto::LearningStatsResponse {
+                server_session_id: server_session_id(),
+                selection_count: 0,
+                history_present: false,
+                history_paused: false,
+                learning_mode: String::new(),
+                typo_count: ai_assist::learning::learned_typo_count() as u32,
+            });
+        Ok(Response::new(stats))
     }
 
     async fn log_performance(

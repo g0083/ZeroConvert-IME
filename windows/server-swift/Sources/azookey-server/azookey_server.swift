@@ -863,10 +863,14 @@ private func learningType(for mode: String?) -> LearningType {
         if FileManager.default.fileExists(atPath: currentLearningMemoryDirectoryURL.path) {
             try FileManager.default.removeItem(at: currentLearningMemoryDirectoryURL)
         }
-        try FileManager.default.createDirectory(
-            at: currentLearningMemoryDirectoryURL,
-            withIntermediateDirectories: true
-        )
+        // Disabled learning never writes, so recreating the directory would leave
+        // an empty store behind and make the next run look as if history exists.
+        if currentLearningType != .nothing {
+            try FileManager.default.createDirectory(
+                at: currentLearningMemoryDirectoryURL,
+                withIntermediateDirectories: true
+            )
+        }
         return true
     } catch {
         serverLog(
@@ -983,6 +987,15 @@ struct LearningCandidateCache {
     func isLearningTarget(_ candidateId: UInt64) -> Bool {
         guard let location = candidateLocation(for: candidateId) else { return false }
         return batches[location.batchIndex]!.candidates[location.candidateIndex].isLearningTarget
+    }
+
+    /// Non-destructive lookup. Deletion needs the candidate's contents without
+    /// marking it consumed, so a later commit of the same id still works.
+    func candidate(for candidateId: UInt64) -> Candidate? {
+        guard candidateId > 0, let location = candidateLocation(for: candidateId) else {
+            return nil
+        }
+        return batches[location.batchIndex]!.candidates[location.candidateIndex]
     }
 
     mutating func consume(_ candidateId: UInt64) -> Candidate? {
@@ -1207,6 +1220,26 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
     @discardableResult
     mutating func removeValue(forKey key: String) -> [String]? {
         entries.removeValue(forKey: key)
+    }
+
+    /// Drops one learned output while keeping the other outputs of the same reading,
+    /// so deleting a single candidate does not erase its siblings.
+    @discardableResult
+    mutating func remove(output: String, for ruby: String) -> Bool {
+        guard var list = entries[ruby] else {
+            return false
+        }
+        let originalCount = list.count
+        list.removeAll { $0 == output }
+        guard list.count != originalCount else {
+            return false
+        }
+        if list.isEmpty {
+            entries.removeValue(forKey: ruby)
+        } else {
+            entries[ruby] = list
+        }
+        return true
     }
 
     func prefixMatches(for prefixRuby: String, maxCount: Int = 3) -> [(ruby: String, output: String)] {
@@ -3489,6 +3522,69 @@ func cursorPrefixBoundaryFirstClauseResults(
     learningSelectionOverrides.removeAll(keepingCapacity: false)
     serverLog("INFO", "ResetLearningMemory: completed resetDirectory=\(resetDirectory)")
     return resetDirectory
+}
+
+/// Deletes one candidate's conversion learning.
+///
+/// Both stores are addressed by the id the engine issued for that candidate, so
+/// a host never has to reimplement how a reading maps to a dictionary entry.
+/// Returns false when the id is unknown, was not a learning target, or the word
+/// was absent from both stores.
+@_silgen_name("ForgetLearningCandidate")
+@MainActor public func forget_learning_candidate(candidateId: UInt64) -> Bool {
+    guard let candidate = learningCandidateCache.candidate(for: candidateId) else {
+        serverLog("WARN", "ForgetLearningCandidate: unknown candidateId=\(candidateId)")
+        return false
+    }
+    guard candidate.isLearningTarget else {
+        serverLog("WARN", "ForgetLearningCandidate: not a learning target candidateId=\(candidateId)")
+        return false
+    }
+
+    let ruby = learningCandidateRuby(candidate)
+    let output = learningCandidateOutput(candidate)
+    // The guard above admits read-only mode; forgetting is still a user action.
+    if currentLearningType == .nothing {
+        return false
+    }
+
+    converter.forgetMemory(candidate)
+    normalNBestSupplementConverter.forgetMemory(candidate)
+    let removedOverride = !ruby.isEmpty &&
+        learningSelectionOverrides.remove(output: output, for: ruby)
+    if removedOverride {
+        saveLearningSelectionOverrides()
+    }
+    serverLog(
+        "INFO",
+        "ForgetLearningCandidate: candidateId=\(candidateId) rubyCount=\(ruby.count) outputCount=\(output.count) removedOverride=\(removedOverride)"
+    )
+    return true
+}
+
+/// Per-store learning counts so a host can confirm a reset instead of trusting a bool.
+@_silgen_name("GetLearningStats")
+@MainActor public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
+    let memoryURL = currentLearningMemoryDirectoryURL
+    // A `.pause` marker means the long-term trie failed its atomic update and the
+    // engine fell back to the `.2` copy; learning stays off until it is cleared.
+    let pauseURL = memoryURL?.appendingPathComponent(".pause", isDirectory: false)
+    let paused = pauseURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+    let payload: [String: Any] = [
+        "selectionCount": learningSelectionOverrides.count,
+        "historyPresent": memoryURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
+        "historyPaused": paused,
+        "learningMode": currentLearningType == .nothing
+            ? "disabled"
+            : (currentLearningType == .onlyOutput ? "read_only" : "enabled"),
+        "candidateCacheSlots": learningCandidateCache.slotCount,
+        "candidateCacheBatches": learningCandidateCache.batchCount,
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+          let json = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    return _strdup(json)
 }
 
 func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {

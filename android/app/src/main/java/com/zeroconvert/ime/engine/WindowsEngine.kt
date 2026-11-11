@@ -14,6 +14,18 @@ import java.util.concurrent.Executors
 
 /** Android supplies editor snapshots and model I/O; Windows owns conversion policy. */
 object WindowsEngine {
+    private const val TAG = "WindowsEngine"
+    private const val ERROR_ENVELOPE_PREFIX = "{\"error\""
+
+    /**
+     * Above this reading length the neural pass is skipped and conversion falls
+     * back to the dictionary path. One batch must hold the whole prompt, so an
+     * unbounded reading would otherwise exhaust the batch and KV capacity.
+     * Measured on the pinned model: 480 katakana were under 512 tokens and 600
+     * reached 543, so 400 characters keeps a margin for context and candidates.
+     */
+    private const val MAX_NEURAL_READING_CHARS = 400
+
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "ZeroCon-shared-engine") }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private data class BackgroundTask(val revision: Long?, val action: () -> Unit)
@@ -87,6 +99,7 @@ object WindowsEngine {
         assistRequest(JSONObject().put("op", "configurePaths")
             .put("settings", File(dataRoot, "Azookey/settings.json").absolutePath)
             .put("reverse", File(root, "Dictionary/Reverse/reverse-v2.bin").absolutePath))
+        loadInputPolicy()
         lastSettings = ""
         configure(true, "", true, false)
         ready = true
@@ -117,8 +130,10 @@ object WindowsEngine {
         val input = ComposingText().apply {
             insertAtCursorPosition(KanaKanjiConverter.toHiragana(reading), com.zeroconvert.ime.azookey.input.InputStyle.DIRECT)
         }
+        // Long readings fall back to the dictionary inside candidates(), so the
+        // surface still resolves instead of being returned as raw katakana.
         candidates(input, context, true, profile, LearningPolicy.canRead, false)
-            .firstOrNull()?.previewForReading(input.convertTarget) ?: reading
+            .firstOrNull { it.coversReading(input.convertTarget) }?.previewForReading(input.convertTarget) ?: reading
     }
 
     private fun copyAssets(asset: String, destination: File) {
@@ -136,12 +151,32 @@ object WindowsEngine {
         directory.mkdirs()
         val destination = File(directory, "selection-overrides.json")
         if (destination.exists()) return
-        val legacy = application.getSharedPreferences("zerocon_user_data", Context.MODE_PRIVATE)
-            .getString("learning_memory_json", null) ?: "{}"
-        val original = JSONObject(legacy)
+        val prefs = application.getSharedPreferences("zerocon_user_data", Context.MODE_PRIVATE)
         val normalized = JSONObject()
-        original.keys().forEach { normalized.put(KanaKanjiConverter.toKatakana(it), original.getString(it)) }
+        // V2 entries keep a reading-to-outputs list; the engine stores the same shape
+        // with katakana rubies, so the newest surface of each reading carries over.
+        prefs.getString("learning_memory_v2_json", null)?.let { json ->
+            runCatching { JSONObject(json) }.getOrNull()?.let { source ->
+                source.keys().forEach { ruby ->
+                    val outputs = source.optJSONArray(ruby) ?: return@forEach
+                    val surfaces = JSONArray()
+                    for (index in 0 until outputs.length()) {
+                        val surface = outputs.optJSONObject(index)?.optString("s")?.trim().orEmpty()
+                        if (surface.isNotEmpty()) surfaces.put(surface)
+                    }
+                    if (surfaces.length() > 0) normalized.put(KanaKanjiConverter.toKatakana(ruby), surfaces)
+                }
+            }
+        }
+        if (normalized.length() == 0) {
+            val legacy = runCatching { JSONObject(prefs.getString("learning_memory_json", null) ?: "{}") }.getOrNull()
+            legacy?.keys()?.forEach { ruby ->
+                val surface = legacy.optString(ruby, "").trim()
+                if (surface.isNotEmpty()) normalized.put(KanaKanjiConverter.toKatakana(ruby), surface)
+            }
+        }
         atomicWrite(destination, normalized.toString())
+        prefs.edit().remove("learning_memory_json").remove("learning_memory_v2_json").apply()
     }
 
     private fun migrateCorrections(destination: File) {
@@ -185,11 +220,64 @@ object WindowsEngine {
         lastSettings = settings
     }
 
+    /**
+     * Fetches the shared input policy once per process.
+     *
+     * Losing the payload is not fatal: `InputPolicy` keeps its compiled fallback
+     * tables, and the parity tests compare those with the same specification the
+     * Rust source is tested against.
+     */
+    private fun loadInputPolicy() {
+        val payload = runCatching { assistReply(JSONObject().put("op", "inputPolicy")) }
+            .onFailure { android.util.Log.w(TAG, "Shared input policy unavailable", it) }
+            .getOrNull() ?: return
+        val parsed = runCatching { JSONObject(payload) }
+            .onFailure { android.util.Log.w(TAG, "Shared input policy is not valid JSON", it) }
+            .getOrNull() ?: return
+        val marks = parsed.optJSONArray("punctuation") ?: return
+        val widths = parsed.optJSONArray("symbolFullwidth") ?: return
+        val readingPunctuation = (0 until marks.length()).mapNotNull { index ->
+            marks.optJSONObject(index)?.let { entry ->
+                val from = entry.optString("from").singleOrNull() ?: return@let null
+                val to = entry.optString("to").singleOrNull() ?: return@let null
+                from to to
+            }
+        }
+        val defaultFullwidth = (0 until widths.length()).mapNotNull { index ->
+            widths.optJSONObject(index)?.let { entry ->
+                val symbol = entry.optString("symbol").takeIf(String::isNotEmpty) ?: return@let null
+                if (!entry.has("fullwidth")) return@let null
+                symbol to entry.getBoolean("fullwidth")
+            }
+        }
+        val applied = InputPolicy.apply(
+            version = parsed.optInt("version", -1),
+            immediateCommit = parsed.optString("immediateCommit").takeIf(String::isNotEmpty),
+            readingPunctuation = readingPunctuation,
+            defaultFullwidth = defaultFullwidth
+        )
+        if (!applied) android.util.Log.w(TAG, "Shared input policy rejected; using fallback tables")
+    }
+
     private fun checkedSwift(request: JSONObject): JSONObject {
         val result = JSONObject(nativeSwift(request.toString()))
         check(!result.has("error")) { "Shared conversion engine: ${result.optString("error")}" }
         return result
     }
+
+    /**
+     * Raw assist reply, or null when the engine declined the request. The Rust
+     * bridge answers oversized requests with an error envelope, so refusal must
+     * stay recoverable instead of surfacing as a parse exception.
+     */
+    private fun assistReply(raw: String): String? {
+        if (raw.isEmpty() || raw == "null") return null
+        if (!raw.startsWith(ERROR_ENVELOPE_PREFIX)) return raw
+        android.util.Log.w(TAG, "Assist request declined: " + runCatching { JSONObject(raw).optString("error") }.getOrNull())
+        return null
+    }
+
+    private fun assistReply(request: JSONObject): String? = assistReply(assistRequest(request))
 
     internal suspend fun candidates(input: ComposingText, context: String, ai: Boolean, profile: String,
                            personalize: Boolean, dictionaryCorrection: Boolean,
@@ -202,7 +290,13 @@ object WindowsEngine {
             if (epoch != nativeConversionEpoch()) throw CancellationException("Superseded conversion")
             val dequeued = System.nanoTime()
             check(ready) { "Shared conversion engine is not ready" }
-            configure(ai, profile, personalize, dictionaryCorrection, predictiveConversion)
+            // A reading this long cannot fit one decode batch. Ask for the same
+            // conversion without the neural pass so the dictionary still answers.
+            val neuralAllowed = ai && input.convertTarget.count() <= MAX_NEURAL_READING_CHARS
+            if (ai && !neuralAllowed) {
+                android.util.Log.i(TAG, "Skipping neural conversion for a long reading")
+            }
+            configure(neuralAllowed, profile, personalize, dictionaryCorrection, predictiveConversion)
             ensureActive()
             val configured = System.nanoTime()
             val elements = JSONArray()
@@ -214,7 +308,8 @@ object WindowsEngine {
                 .put("cursorUtf16", input.convertTargetCursorPosition).put("expectedReading", input.convertTarget)
                 .put("continuationReading", continuation?.reading.orEmpty())
                 .put("continuationSurface", continuation?.surface.orEmpty())
-                .put("context", context).put("allowAI", ai).put("requestEpoch", epoch).put("diagnostics", diagnosticsEnabled))
+                .put("context", context).put("allowAI", neuralAllowed)
+                .put("requestEpoch", epoch).put("diagnostics", diagnosticsEnabled))
             if (result.optBoolean("cancelled")) throw CancellationException("Native conversion superseded")
             ensureActive()
             val timing = result.getJSONObject("timing")
@@ -228,28 +323,33 @@ object WindowsEngine {
                 val consumed = candidate.getInt("consumedReadingUtf16")
                 check(consumed in 1..input.convertTargetCursorPosition)
                 Candidate(candidate.getString("text"), KanaKanjiConverter.toKatakana(input.convertTarget.take(consumed)),
-                    isAI = ai, learningAllowed = candidate.getBoolean("learningAllowed"),
+                    isAI = neuralAllowed, learningAllowed = candidate.getBoolean("learningAllowed"),
                     engineCandidateId = candidate.getString("candidateId").takeUnless { it == "0" }.orEmpty(),
                     engineConsumedReading = consumed)
             }.distinctBy { it.text to it.engineConsumedReading }
-            val macros = JSONArray(assistRequest(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor)))
-            val macroTexts = (0 until macros.length()).map { macros.getString(it) }
+            val macrosRaw = assistReply(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor))
+            val macroTexts = macrosRaw?.let { raw ->
+                val array = runCatching { JSONArray(raw) }.getOrNull()
+                if (array == null) emptyList()
+                else (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotEmpty) }
+            }.orEmpty()
             MacroCandidateMerge.merge(converted, macroTexts, KanaKanjiConverter.toKatakana(input.convertTargetBeforeCursor))
         }
     }
 
     fun assist(op: String, context: String, input: String, baseline: String, inference: AssistInference): AiAssistResult? {
         if (!ready) return null
-        val raw = nativeAssist(JSONObject().put("op", op).put("revision", (inference.revision shl 32) xor AssistVocabulary.revision)
+        val raw = assistReply(nativeAssist(JSONObject().put("op", op)
+            .put("revision", (inference.revision shl 32) xor AssistVocabulary.revision)
             .put("readLearning", LearningPolicy.canRead)
-            .put("context", context).put("input", input).put("baseline", baseline).toString(), CompletionHost(inference))
-        if (raw == "null") return null
+            .put("context", context).put("input", input).put("baseline", baseline).toString(),
+            CompletionHost(inference))) ?: return null
         val result = JSONObject(raw)
-        check(!result.has("error")) { result.optString("error") }
         val correction = op == "correction"
-        val text = result.getString("text")
+        val text = result.optString("text")
+        if (text.isEmpty()) return null
         return AiAssistResult(if (correction) AiAssistType.TYPO_CORRECTION else AiAssistType.PREDICTION,
-            text, "${if (correction) "💡" else "🔮"} $text", result.getInt("relevance"),
+            text, "${if (correction) "💡" else "🔮"} $text", result.optInt("relevance"),
             sourceReading = input, continuation = result.optString("continuation"), autoApply = result.optBoolean("autoApply"))
     }
 
@@ -264,6 +364,27 @@ object WindowsEngine {
         })
     }
 
+    /** Deletes one learned typo correction from the shared store. */
+    fun forgetCorrection(reading: String, surface: String) {
+        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
+            assistRequest(JSONObject().put("op", "forget").put("input", reading).put("baseline", surface))
+        })
+    }
+
+    /** Deletes every learned typo correction from the shared store. */
+    fun clearCorrections() {
+        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
+            assistRequest(JSONObject().put("op", "forgetAll"))
+        })
+    }
+
+    /** Number of learned typo corrections the shared store holds. */
+    fun learningTypoCount(): Int = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking 0
+        runCatching { assistReply(assistRequest(JSONObject().put("op", "learningStats"))) }
+            .getOrNull()?.let { JSONObject(it).optInt("typoCount", 0) } ?: 0
+    }
+
     fun autoCommit(raw: String, reading: String, history: List<InferenceSnapshot>, safeBoundary: (Int) -> Boolean): AutoCommitCandidate? {
         val entries = JSONArray()
         history.forEach { snapshot ->
@@ -271,25 +392,70 @@ object WindowsEngine {
                 .put("readingCount", snapshot.readingHiragana.codePointCount(0, snapshot.readingHiragana.length))
                 .put("surface", snapshot.aiSurface))
         }
-        val result = assistRequest(JSONObject().put("op", "autoCommit").put("raw", raw).put("input", reading)
-            .put("baseline", history.lastOrNull()?.aiSurface.orEmpty()).put("history", entries))
-        if (result == "null") return null
-        val candidate = JSONObject(result)
-        val length = reading.offsetByCodePoints(0, candidate.getInt("readingLength"))
-        if (!safeBoundary(length)) return null
-        return AutoCommitCandidate(length, reading.take(length), candidate.getString("surface"))
+        val result = assistReply(JSONObject().put("op", "autoCommit").put("raw", raw).put("input", reading)
+            .put("baseline", history.lastOrNull()?.aiSurface.orEmpty()).put("history", entries)) ?: return null
+        val candidate = runCatching { JSONObject(result) }.getOrNull() ?: return null
+        val length = reading.offsetByCodePoints(0, candidate.optInt("readingLength", -1).coerceAtLeast(0))
+        if (length <= 0 || !safeBoundary(length)) return null
+        return AutoCommitCandidate(length, reading.take(length), candidate.optString("surface"))
     }
 
-    fun commit(candidateId: String) {
+    /**
+     * Queues a learning commit. [expectedRevision] is the history generation seen
+     * when the selection was committed, so a reset in between drops it.
+     */
+    fun commit(candidateId: String, expectedRevision: Long = KanaKanjiConverter.learningHistoryRevision) {
         if (candidateId.isEmpty()) return
-        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
+        backgroundTasks.trySend(BackgroundTask(expectedRevision) {
             check(checkedSwift(JSONObject().put("op", "commit").put("candidateId", candidateId)).optBoolean("learned")) {
                 "Shared engine candidate is no longer available for learning"
             }
         })
     }
 
-    fun resetLearning() {
-        backgroundTasks.trySend(BackgroundTask(null) { checkedSwift(JSONObject().put("op", "resetLearning")) })
+    /**
+     * Deletes one published candidate's conversion learning.
+     *
+     * Addressed by the engine's own candidate id, so the deletion uses the same
+     * dictionary path the engine learned through. Returns true only when the
+     * engine confirmed the removal.
+     */
+    fun forgetCandidate(candidateId: String): Boolean = runBlocking(dispatcher) {
+        if (!ready || candidateId.isEmpty()) return@runBlocking false
+        runCatching {
+            checkedSwift(JSONObject().put("op", "forget").put("candidateId", candidateId))
+                .optBoolean("forgot", false)
+        }.getOrElse {
+            android.util.Log.e(TAG, "Shared engine learning deletion failed", it)
+            false
+        }
+    }
+
+    /** Learning counters for the settings screen. Null when the engine is not ready. */
+    fun learningStats(): JSONObject? = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking null
+        runCatching {
+            checkedSwift(JSONObject().put("op", "learningStats"))
+        }.getOrNull()
+    }
+
+    /** Learned readings in the shared selection store, for the settings summary. */
+    fun learningSelectionCount(): Int = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking 0
+        runCatching { checkedSwift(JSONObject().put("op", "learningStats")).optInt("selectionCount", 0) }.getOrDefault(0)
+    }
+
+    /**
+     * Resets conversion learning and waits for the shared engine to answer, so the
+     * settings screen reports the real outcome instead of an optimistic one.
+     */
+    fun resetLearningBlocking(): Boolean = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking false
+        runCatching {
+            checkedSwift(JSONObject().put("op", "resetLearning")).optBoolean("reset", false)
+        }.getOrElse {
+            android.util.Log.e(TAG, "Shared engine learning reset failed", it)
+            false
+        }
     }
 }

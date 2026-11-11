@@ -202,13 +202,6 @@ tasks.withType<Test>().configureEach {
         excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.directSurfaceRestoresReadingForPrediction")
         excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.multilineContextIsBoundedAndNormalizedWithoutSuppressingPrediction")
         excludeTestsMatching("com.zeroconvert.ime.WindowsTypoPortTest.modelUnavailableUsesNewRulesWithoutAutomaticallyApplyingThem")
-        // These call the shared engine's JNI entry points, which a JVM test
-        // cannot load. They need the instrumentation runner on a device.
-        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.prefixMatchesAreSuggestedForTwoOrMoreChars")
-        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.committedSegmentsDriveGboardStyleContinuation")
-        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.longLearnedSurfacesWithoutSegmentsAreNotPredicted")
-        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.prefixPredictionsComeFromTheMostRecentLearningsFirst")
-        excludeTestsMatching("com.zeroconvert.ime.KanaKanjiConverterLearningTest.prefixPredictionUsesLearnedPredictionSurfaceOnly")
     }
 }
 

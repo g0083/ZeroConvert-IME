@@ -84,8 +84,10 @@ def check_converter():
     with zipfile.ZipFile(archive) as package:
         modulemap = package.read(prefix + converter_patch.MODULEMAP_PATH).decode('utf-8')
         context = package.read(prefix + converter_patch.ZENZ_CONTEXT_PATH).decode('utf-8')
+        learning_memory = package.read(prefix + converter_patch.LEARNING_MEMORY_PATH).decode('utf-8')
     converter_patch.patch_modulemap(modulemap)
     converter_patch.patch_zenz_context(context)
+    converter_patch.patch_learning_memory(learning_memory)
     print(json.dumps({'converter': CONVERTER, 'anchors': 'ok'}))
 
 
@@ -117,6 +119,11 @@ def prepare_converter(converter_root):
     context = converter / converter_patch.ZENZ_CONTEXT_PATH
     context.write_text(
         converter_patch.patch_zenz_context(context.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
+    learning_memory = converter / converter_patch.LEARNING_MEMORY_PATH
+    learning_memory.write_text(
+        converter_patch.patch_learning_memory(learning_memory.read_text(encoding='utf-8')),
         encoding='utf-8',
     )
     marker.write_text(json.dumps({'stamp': stamp, 'converter': CONVERTER}))

@@ -88,5 +88,54 @@ class ZenzContextTests(unittest.TestCase):
             self.assertIn(anchor, str(raised.exception))
 
 
+LEARNING_MEMORY = '''    func forgetMemory(data: [DicdataElement]) {
+        guard self.config.learningType.needUpdateMemory else {
+            return
+        }
+        // 1. temporary memoryを削除する
+    }
+
+    func resetMemory() {
+        self.temporaryMemory = TemporalLearningMemoryTrie()
+        guard let memoryURL = config.memoryURL else {
+            debug(#function, "memoryURL is nil")
+            return
+        }
+        do {
+            try LongTermLearningMemory.reset(directoryURL: memoryURL)
+        } catch {
+            debug("LearningManager reset failed", error)
+        }
+    }
+'''
+
+
+class LearningMemoryTests(unittest.TestCase):
+    def test_explicit_deletion_is_allowed_when_learning_is_read_only(self):
+        # Read-only users must still be able to remove a word they taught the IME
+        # before switching the mode; deletion is not a new learning write.
+        patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
+        self.assertIn('learningType.needUsingMemory', patched)
+        self.assertNotIn('learningType.needUpdateMemory', patched)
+
+    def test_reset_recomputes_the_collapsed_state(self):
+        # Without this the paused flag survives a reset and keeps learning off.
+        patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
+        reset_body = patched[patched.index('func resetMemory'):]
+        self.assertIn('self.memoryCollapsed = LongTermLearningMemory.memoryCollapsed', reset_body)
+
+    def test_learning_memory_anchors_report_the_offending_text(self):
+        for anchor, _ in converter_patch.LEARNING_MEMORY_REPLACEMENTS:
+            broken = LEARNING_MEMORY.replace(anchor, 'removed_by_upstream')
+            with self.assertRaises(ValueError) as raised:
+                converter_patch.patch_learning_memory(broken)
+            self.assertIn('Converter patch no longer applies', str(raised.exception))
+
+    def test_learning_memory_patching_is_not_repeatable(self):
+        patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
+        with self.assertRaises(ValueError):
+            converter_patch.patch_learning_memory(patched)
+
+
 if __name__ == '__main__':
     unittest.main()

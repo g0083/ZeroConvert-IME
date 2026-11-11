@@ -74,7 +74,7 @@ Windowsから移植するときは、読み・表記・原打鍵・先読み追�
 
 通常辞書側の補正・探索・ユーザー辞書・学習モードは [第8段階](../reports/port-history/android-windows-port-stage8.md) を参照。`node scripts/generate-android-keyboard-typos.mjs` がWindowsの選択データと生成関数からnative用の104エントリ、端末検査用データ、APK同梱NOTICEを生成する。`--check` で同期を検査し、生成された `keyboard_typo_dictionary.inc` を手編集しない。`experimental_typo_correction` は既定falseで、AIアシストと独立したローマ字入力用設定。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。
 
-通常確定の学習は [第9段階](../reports/port-history/android-windows-port-stage9.md)、形態素の頻度・減衰・保存・native探索は [第10段階](../reports/port-history/android-windows-port-stage10.md) を参照。既存の選択表記履歴に加え、`files/conversion-learning-v1.bin` をAtomicFileで保存する。破損した形態素履歴は自動で置換せず、利用者の履歴消去でのみ解除する。実機テストは専用cacheファイルで保存/再読込/破損保護を検査し、ユーザーの実履歴には合成語を保存しない。
+通常確定の学習は共有エンジン（Swift）の1系統に統合した。選択表記は初回に `LearningMemory/selection-overrides.json` へ移行し、Android独自の `learning_memory_v2_json` と形態素頻度バイナリ `files/conversion-learning-v1.bin` は廃止した。第9段階・第10段階の記録は当時の実装であり現在の構成ではない。学習の削除は2経路ある。設定画面は `KanaKanjiConverter.clearAllLearning` で変換学習と補正学習をスコープ別に消し、候補バーの長押しは `WindowsEngine.forgetCandidate` で候補IDをエンジンへ渡す。どちらも削除の判断と辞書操作はSwift/Rust側にあり、Kotlinは候補IDと確認UIだけを持つ。変換学習のリセットは世代カウンタで削除前の未処理通知を捨てる。過去の検証内容は [第9段階](../reports/port-history/android-windows-port-stage9.md) と [第10段階](../reports/port-history/android-windows-port-stage10.md) を参照。
 
 最新の実装・APK・検証範囲は [第3段階の移植記録](../reports/port-history/android-windows-port-stage3.md) を参照。資産準備はWindows補正語彙から `assets/assist-vocabulary.tsv` も生成する。このTSVはGit対象であり、Windows語彙更新後は `node scripts/generate-android-assist-vocabulary.mjs` で再生成し、`--check` で一致を検査する。重みと逆引き辞書は引き続きGit対象外。
 

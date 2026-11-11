@@ -16,7 +16,10 @@ internal class ComposingEditorState {
             // Editor callbacks can combine our new caret with a previous
             // composing end, or omit the range altogether. The requested caret
             // and, when present, the composing origin identify our operation.
+            // UNKNOWN_ORIGIN accepts any origin because the absolute start was
+            // not known when the write happened.
             return (reportedStart == -1 && reportedEnd == -1) ||
+                (start == UNKNOWN_ORIGIN && reportedEnd >= reportedStart) ||
                 (reportedStart == start && reportedEnd >= reportedStart)
         }
     }
@@ -28,15 +31,45 @@ internal class ComposingEditorState {
     var cursor: Int = 0
         private set
 
-    fun recordPreview(text: String) {
+    fun recordPreview(text: String, expectTailCursor: Boolean = false) {
         preview = text
         cursor = text.length
         currentSelection = null
-        if (text.isEmpty()) startHint = null
+        if (text.isEmpty()) {
+            startHint = null
+            return
+        }
+        if (!expectTailCursor) return
+        // A write that leaves the caret at the end still makes the editor report
+        // a selection change for the caret this IME just placed. Record it as an
+        // expectation; otherwise the callback looks external and the caller
+        // finishes the composition, committing whatever kana the editor holds.
+        // Only accepted writes may claim this: a refused write must leave the
+        // caret unowned so the caller can recover.
+        expectTailCursor(text.length)
+    }
+
+    private fun expectTailCursor(offset: Int) {
+        val start = startHint
+        val selection = Selection(
+            position = start?.plus(offset) ?: offset,
+            start = start ?: UNKNOWN_ORIGIN,
+            end = start?.plus(preview.length) ?: UNKNOWN_ORIGIN
+        )
+        currentSelection = selection
+        pendingSelections.addLast(selection)
+        while (pendingSelections.size > MAX_PENDING_SELECTIONS) pendingSelections.removeFirst()
     }
 
     fun observeRange(start: Int, end: Int) {
         if (preview.isNotEmpty() && start >= 0 && end >= start && end - start == preview.length) startHint = start
+    }
+
+    /** Adopts a caret the editor reported inside the current preview. */
+    fun adoptCursor(offset: Int): Boolean {
+        if (offset !in 0..preview.length) return false
+        cursor = offset
+        return true
     }
 
     private fun expect(position: Int, start: Int, end: Int) {
@@ -60,7 +93,7 @@ internal class ComposingEditorState {
         if (!isBoundary(text, cursorOffset)) return false
         if (cursorOffset == text.length) {
             if (!editor.composing(text)) return false
-            recordPreview(text)
+            recordPreview(text, expectTailCursor = true)
             return true
         }
         editor.beginBatch()
@@ -104,5 +137,11 @@ internal class ComposingEditorState {
             return if ((direction < 0 && cursor == 0) || (direction > 0 && cursor == text.length)) cursor
                 else text.offsetByCodePoints(cursor, direction)
         }
+
+        /** Marks an expectation whose absolute composing origin is not known yet. */
+        private const val UNKNOWN_ORIGIN = Int.MIN_VALUE
+
+        /** Autorepeat moves every 50 ms; keep more than one tick of history. */
+        private const val MAX_PENDING_SELECTIONS = 64
     }
 }

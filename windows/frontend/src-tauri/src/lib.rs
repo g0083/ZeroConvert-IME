@@ -82,6 +82,32 @@ struct ResetLearningHistoryResponse {
     reset: bool,
     server_applied: bool,
     message: Option<String>,
+    /// Stores the server confirmed it cleared, as scope names for the UI.
+    applied: Vec<String>,
+    /// Stores the server could not clear.
+    failed: Vec<String>,
+    stats: Option<LearningStatsView>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct LearningStatsView {
+    selection_count: u32,
+    typo_count: u32,
+    history_present: bool,
+    history_paused: bool,
+    learning_mode: String,
+}
+
+impl From<shared::proto::LearningStatsResponse> for LearningStatsView {
+    fn from(stats: shared::proto::LearningStatsResponse) -> Self {
+        Self {
+            selection_count: stats.selection_count,
+            typo_count: stats.typo_count,
+            history_present: stats.history_present,
+            history_paused: stats.history_paused,
+            learning_mode: stats.learning_mode,
+        }
+    }
 }
 
 fn notice_from_recovery(recovery: &ConfigRecovery) -> ConfigStartupNotice {
@@ -346,37 +372,116 @@ fn update_config_impl_with(
 #[tauri::command]
 fn reset_learning_history(
     state: tauri::State<AppState>,
+    scopes: Option<Vec<String>>,
 ) -> Result<ResetLearningHistoryResponse, String> {
-    Ok(reset_learning_history_impl(&state))
+    Ok(reset_learning_history_scoped(&state, scopes.as_deref()))
 }
 
+#[cfg(test)]
 fn reset_learning_history_impl(state: &AppState) -> ResetLearningHistoryResponse {
-    let reset = ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
-        .and_then(|ipc| ipc.reset_learning_memory());
-    match reset {
+    reset_learning_history_scoped(state, None)
+}
+
+fn learning_scopes_from_names(names: Option<&[String]>) -> Vec<shared::proto::LearningMemoryScope> {
+    let Some(names) = names else {
+        return Vec::new();
+    };
+    let mut scopes = Vec::new();
+    for name in names {
+        let scope = match name.as_str() {
+            "conversion" => shared::proto::LearningMemoryScope::Conversion,
+            "typo" => shared::proto::LearningMemoryScope::Typo,
+            // An unknown name must not silently widen the reset to every store.
+            other => {
+                eprintln!("Ignoring unknown learning scope: {other}");
+                continue;
+            }
+        };
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    scopes
+}
+
+fn scope_name(scope: i32) -> &'static str {
+    match shared::proto::LearningMemoryScope::try_from(scope) {
+        Ok(shared::proto::LearningMemoryScope::Conversion) => "conversion",
+        Ok(shared::proto::LearningMemoryScope::Typo) => "typo",
+        _ => "unknown",
+    }
+}
+
+fn reset_learning_history_scoped(
+    state: &AppState,
+    scope_names: Option<&[String]>,
+) -> ResetLearningHistoryResponse {
+    let scopes = learning_scopes_from_names(scope_names);
+    let response = ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
+        .and_then(|ipc| ipc.reset_learning_scopes(&scopes));
+    match response {
         Err(error) => {
             eprintln!("Failed to reset learning memory: {}", error);
-            return ResetLearningHistoryResponse {
+            ResetLearningHistoryResponse {
                 reset: false,
                 server_applied: false,
                 message: Some(error.to_string()),
-            };
-        }
-        Ok(false) => {
-            return ResetLearningHistoryResponse {
-                reset: false,
-                server_applied: true,
-                message: Some("サーバー側で学習履歴の削除に失敗しました。".to_string()),
+                applied: Vec::new(),
+                failed: Vec::new(),
+                stats: None,
             }
         }
-        Ok(true) => {}
+        Ok(response) => {
+            let applied: Vec<String> = response
+                .applied
+                .iter()
+                .map(|s| scope_name(*s).to_string())
+                .collect();
+            let failed: Vec<String> = response
+                .failed
+                .iter()
+                .map(|s| scope_name(*s).to_string())
+                .collect();
+            ResetLearningHistoryResponse {
+                reset: response.reset,
+                server_applied: true,
+                message: if response.reset {
+                    None
+                } else {
+                    Some("サーバー側で学習履歴の削除に失敗しました。".to_string())
+                },
+                applied,
+                failed,
+                stats: response.stats.map(LearningStatsView::from),
+            }
+        }
     }
+}
 
-    ResetLearningHistoryResponse {
-        reset: true,
-        server_applied: true,
-        message: None,
-    }
+#[tauri::command]
+fn get_learning_stats(state: tauri::State<AppState>) -> Result<LearningStatsView, String> {
+    ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
+        .and_then(|ipc| ipc.learning_stats())
+        .map(LearningStatsView::from)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn forget_learning_candidate(
+    state: tauri::State<AppState>,
+    candidate_id: u64,
+    surface: Option<String>,
+    typo_reading: Option<String>,
+) -> Result<bool, String> {
+    ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
+        .and_then(|ipc| {
+            ipc.forget_learning_candidate(
+                candidate_id,
+                surface.as_deref().unwrap_or_default(),
+                typo_reading.as_deref().unwrap_or_default(),
+            )
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1216,6 +1321,8 @@ pub fn run() {
             take_update_install_result,
             restart_server,
             reset_learning_history,
+            get_learning_stats,
+            forget_learning_candidate,
             run_benchmark_item,
             run_quick_benchmark,
             translation_model_status,
@@ -1516,6 +1623,40 @@ mod tests {
         assert!(!result.reset);
         assert!(!result.server_applied);
         assert!(result.message.is_some());
+    }
+
+    #[test]
+    fn learning_scope_names_map_to_known_scopes_only() {
+        let names = vec!["conversion".to_string(), "typo".to_string()];
+        let scopes = learning_scopes_from_names(Some(&names));
+        assert_eq!(
+            scopes,
+            vec![
+                shared::proto::LearningMemoryScope::Conversion,
+                shared::proto::LearningMemoryScope::Typo
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_learning_scope_does_not_widen_the_reset() {
+        // A typo in the UI must not silently become "delete everything".
+        let names = vec!["conversion".to_string(), "typoo".to_string()];
+        let scopes = learning_scopes_from_names(Some(&names));
+        assert_eq!(scopes, vec![shared::proto::LearningMemoryScope::Conversion]);
+    }
+
+    #[test]
+    fn duplicate_learning_scopes_are_collapsed() {
+        let names = vec!["typo".to_string(), "typo".to_string()];
+        let scopes = learning_scopes_from_names(Some(&names));
+        assert_eq!(scopes, vec![shared::proto::LearningMemoryScope::Typo]);
+    }
+
+    #[test]
+    fn missing_scope_list_means_every_store() {
+        // Older frontends call the command with no arguments.
+        assert!(learning_scopes_from_names(None).is_empty());
     }
 
     #[test]

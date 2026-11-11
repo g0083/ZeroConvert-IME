@@ -186,6 +186,7 @@ fun KeyboardRootView(
                                 candidates = candidates,
                                 palette = palette,
                                 onSelect = { imeService.selectCandidate(it) },
+                                onForget = { imeService.forgetCandidateLearning(it) },
                                 modifier = Modifier.weight(1f).fillMaxHeight()
                             )
                         } else {

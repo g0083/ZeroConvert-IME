@@ -1,6 +1,123 @@
 //! Input and stability policy shared by the Windows client and Android host.
 use std::collections::VecDeque;
 
+/// Default fullwidth state of the symbols the Windows client can convert.
+///
+/// This table is the single source of truth: `shared` re-exports it and the
+/// Android host receives it through the shared engine's `inputPolicy`
+/// operation. Do not repeat these values in another language.
+pub const CHARACTER_WIDTH_SYMBOL_DEFAULTS: [(&str, bool); 42] = [
+    ("0", false),
+    ("1", false),
+    ("2", false),
+    ("3", false),
+    ("4", false),
+    ("5", false),
+    ("6", false),
+    ("7", false),
+    ("8", false),
+    ("9", false),
+    ("!", true),
+    ("\"", true),
+    ("#", false),
+    ("$", false),
+    ("%", false),
+    ("&", false),
+    ("'", true),
+    ("(", true),
+    (")", true),
+    ("*", true),
+    ("+", true),
+    (",", true),
+    ("-", true),
+    (".", true),
+    ("/", true),
+    (":", true),
+    (";", true),
+    ("<", true),
+    ("=", true),
+    (">", true),
+    ("?", true),
+    ("@", false),
+    ("[", true),
+    ("\\", false),
+    ("]", true),
+    ("^", false),
+    ("_", false),
+    ("`", false),
+    ("{", true),
+    ("|", false),
+    ("}", true),
+    ("~", true),
+];
+
+/// Shifted symbols that end an Android composition immediately.
+///
+/// The Windows client has no such key path: the same characters append to the
+/// composition and follow [CHARACTER_WIDTH_SYMBOL_DEFAULTS]. The list stays
+/// here so both hosts can be checked against `tests/input-policy/cases.tsv`.
+pub const IMMEDIATE_COMMIT_CHARS: &str = "!@#$%^&*()";
+
+/// Punctuation normalized to the character the Japanese reading stores.
+pub const PUNCTUATION_FOR_READING: [(char, char); 10] = [
+    ('、', '、'),
+    ('。', '。'),
+    ('，', '，'),
+    ('．', '．'),
+    ('？', '？'),
+    ('！', '！'),
+    (',', '、'),
+    ('.', '。'),
+    ('?', '？'),
+    ('!', '！'),
+];
+
+/// Input policy published to the Android host on initialization.
+///
+/// Bump when a field is removed or its meaning changes; the Kotlin reader
+/// rejects versions it does not understand instead of guessing.
+pub const INPUT_POLICY_VERSION: u32 = 1;
+
+#[inline]
+pub fn is_immediate_commit_char(ch: char) -> bool {
+    IMMEDIATE_COMMIT_CHARS.contains(ch)
+}
+
+pub fn punctuation_for_reading(ch: char) -> Option<char> {
+    PUNCTUATION_FOR_READING
+        .iter()
+        .find_map(|(from, to)| (*from == ch).then_some(*to))
+}
+
+/// Punctuation joins the composition unless a pending romaji tail must be
+/// finalized first (`n` before punctuation is ん, not part of it).
+#[inline]
+pub fn should_compose_punctuation(ch: char, pending_romaji: bool) -> bool {
+    !pending_romaji && punctuation_for_reading(ch).is_some()
+}
+
+/// Digits take the Windows `UserAction::Number -> AppendText` path, so they
+/// belong to the reading and take part in conversion.
+#[inline]
+pub fn is_composition_digit(ch: char) -> bool {
+    ch.is_ascii_digit()
+}
+
+/// Translation mode reflects digits and punctuation into the reading literally.
+#[inline]
+pub fn is_translation_literal_char(ch: char) -> bool {
+    is_immediate_commit_char(ch)
+        || ch.is_ascii_digit()
+        || matches!(ch, '０'..='９')
+        || punctuation_for_reading(ch).is_some()
+}
+
+pub fn symbol_default_fullwidth(symbol: &str) -> Option<bool> {
+    CHARACTER_WIDTH_SYMBOL_DEFAULTS
+        .iter()
+        .find_map(|(key, value)| (*key == symbol).then_some(*value))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveConversionPrefixSnapshot {
     pub raw_input_len: usize,
@@ -180,6 +297,160 @@ pub fn find_auto_commit_live_conversion_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SCENARIO_TSV: &str = include_str!("../../../../tests/input-policy/cases.tsv");
+
+    struct Scenario {
+        id: String,
+        operation: String,
+        input: char,
+        expect: String,
+        line: usize,
+    }
+
+    fn scenarios() -> Vec<Scenario> {
+        SCENARIO_TSV
+            .lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let line = line.trim_end_matches('\r');
+                if line.trim().is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let columns: Vec<&str> = line.split('\t').collect();
+                assert_eq!(
+                    columns.len(),
+                    4,
+                    "cases.tsv:{}: expected 4 tab-separated columns",
+                    index + 1
+                );
+                let input: Vec<char> = columns[2].chars().collect();
+                assert_eq!(
+                    input.len(),
+                    1,
+                    "cases.tsv:{}: input must be exactly one character",
+                    index + 1
+                );
+                Some(Scenario {
+                    id: columns[0].to_string(),
+                    operation: columns[1].to_string(),
+                    input: input[0],
+                    expect: columns[3].to_string(),
+                    line: index + 1,
+                })
+            })
+            .collect()
+    }
+
+    fn outcome(scenario: &Scenario) -> String {
+        let outcome = match scenario.operation.as_str() {
+            "immediate" => {
+                if is_immediate_commit_char(scenario.input) {
+                    "commit"
+                } else {
+                    "compose"
+                }
+            }
+            "punctuation" => {
+                return match punctuation_for_reading(scenario.input) {
+                    Some(ch) => ch.to_string(),
+                    None => "none".to_string(),
+                }
+            }
+            "compose_punctuation" => {
+                if should_compose_punctuation(scenario.input, false) {
+                    "compose"
+                } else {
+                    "commit"
+                }
+            }
+            "compose_punctuation_pending" => {
+                if should_compose_punctuation(scenario.input, true) {
+                    "compose"
+                } else {
+                    "commit"
+                }
+            }
+            "digit" => {
+                if is_composition_digit(scenario.input) {
+                    "compose"
+                } else {
+                    "commit"
+                }
+            }
+            "translation_literal" => {
+                if is_translation_literal_char(scenario.input) {
+                    "literal"
+                } else {
+                    "plain"
+                }
+            }
+            "width" => match symbol_default_fullwidth(&scenario.input.to_string()) {
+                Some(true) => "full",
+                Some(false) => "half",
+                None => "none",
+            },
+            other => panic!("cases.tsv:{}: unknown operation {other}", scenario.line),
+        };
+        outcome.to_string()
+    }
+
+    #[test]
+    fn shared_input_policy_matches_every_scenario() {
+        let scenarios = scenarios();
+        assert!(
+            scenarios.len() >= 40,
+            "cases.tsv should cover the whole policy surface"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for scenario in &scenarios {
+            assert!(
+                seen.insert(scenario.id.clone()),
+                "cases.tsv:{}: duplicate id {}",
+                scenario.line,
+                scenario.id
+            );
+            assert_eq!(
+                outcome(scenario),
+                scenario.expect,
+                "cases.tsv:{}: {} ({:?})",
+                scenario.line,
+                scenario.id,
+                scenario.input
+            );
+        }
+    }
+
+    #[test]
+    fn every_operation_in_the_table_is_exercised() {
+        let operations: std::collections::HashSet<String> = scenarios()
+            .iter()
+            .map(|scenario| scenario.operation.clone())
+            .collect();
+        for expected in [
+            "immediate",
+            "punctuation",
+            "compose_punctuation",
+            "compose_punctuation_pending",
+            "digit",
+            "translation_literal",
+            "width",
+        ] {
+            assert!(operations.contains(expected), "no cases for {expected}");
+        }
+    }
+
+    #[test]
+    fn width_defaults_have_no_duplicate_symbols() {
+        let mut symbols: Vec<&str> = CHARACTER_WIDTH_SYMBOL_DEFAULTS
+            .iter()
+            .map(|(symbol, _)| *symbol)
+            .collect();
+        symbols.sort_unstable();
+        let count = symbols.len();
+        symbols.dedup();
+        assert_eq!(symbols.len(), count);
+    }
 
     #[test]
     fn repeated_identical_inference_does_not_manufacture_stability() {

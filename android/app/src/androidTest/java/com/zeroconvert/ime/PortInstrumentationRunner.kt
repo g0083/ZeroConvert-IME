@@ -32,7 +32,6 @@ class PortInstrumentationRunner : Instrumentation() {
     private var keyboardUiOnly = false
     private var clipboardUiOnly = false
     private var pendingRomajiOnly = false
-    private var learningChainOnly = false
     private var performanceArguments: Bundle? = null
     private fun findNode(matches: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
@@ -45,7 +44,13 @@ class PortInstrumentationRunner : Instrumentation() {
         for (window in uiAutomation.windows) window.root?.let { visit(it, 0)?.let { found -> return found } }
         return null
     }
-    private fun findText(text: String) = findNode { it.text?.toString() == text || it.contentDescription?.toString() == text }
+    // Row 1 QWERTY keys append an up-flick digit to the accessibility label when the number row is hidden, e.g. "tを入力、上フリックで4を入力".
+    // Accept only that exact suffix so "tを入力" never matches an unrelated label such as "ttを入力".
+    private fun findText(text: String) = findNode {
+        val label = it.text?.toString()
+        val description = it.contentDescription?.toString()
+        label == text || description == text || label?.startsWith("$text、") == true || description?.startsWith("$text、") == true
+    }
     private fun clickText(text: String, timeoutMs: Long = 3000): Boolean {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
         do {
@@ -121,18 +126,13 @@ class PortInstrumentationRunner : Instrumentation() {
         keyboardUiOnly = arguments?.getString("keyboardUiOnly") == "true"
         clipboardUiOnly = arguments?.getString("clipboardUiOnly") == "true"
         pendingRomajiOnly = arguments?.getString("pendingRomajiOnly") == "true"
-        learningChainOnly = arguments?.getString("learningChainOnly") == "true"
         performanceArguments = arguments?.takeIf { it.getString("enginePerformance") == "true" }
         start()
     }
     override fun onStart() {
+
         if (pendingRomajiOnly) {
             val result = LearningPolicy.withoutWrites { PendingRomajiRegression(this).run() }
-            finish(result.first, result.second)
-            return
-        }
-        if (learningChainOnly) {
-            val result = LearningPolicy.withoutWrites { LearningChainRegression(this).run() }
             finish(result.first, result.second)
             return
         }
@@ -331,6 +331,72 @@ class PortInstrumentationRunner : Instrumentation() {
                 if (reading.contains("😀")) check(candidates.all { it.text.contains("😀") })
             }
         }
+        // The pinned Zenzai converter reserves a fixed 512-entry llama batch, so a long
+        // reading must return a degraded result instead of aborting the process. The
+        // dictionary test above only walks the LOUDS path and never builds that batch.
+        test("native_zenzai_long_reading_does_not_abort") {
+            KanaKanjiConverter.ensureInitialized(targetContext)
+            val converter = KanaKanjiConverter()
+            // requestCandidates(enableAI = true) is the neural request the IME issues for a live
+            // preview; it reaches Zenzai through the shared engine instead of lookupDict.
+            fun neural(reading: String): List<Candidate> = runBlocking {
+                val input = ComposingText().apply { insertAtCursorPosition(reading, InputStyle.DIRECT) }
+                converter.requestCandidates(input, "", enableAI = true, personalize = false)
+            }
+            lateinit var warm: List<Candidate>
+            waitUntil("Zenzai neural conversion stayed busy or cancelled during warm-up") {
+                warm = neural("トウキョウニイク")
+                warm.isNotEmpty()
+            }
+            // The shared Rust bridge rejects a reading above 512 characters with
+            // {"error":"request exceeds engine limits"}. That limit is a separate defect from
+            // the native abort under test, so it is logged and the ladder keeps walking.
+            fun limitError(failure: Throwable): Boolean {
+                var current: Throwable? = failure
+                while (current != null) {
+                    if (current.message?.contains("engine limits") == true) return true
+                    current = current.cause
+                }
+                return false
+            }
+            // A native abort cannot be caught, so each family walks an ascending ladder and
+            // logs a breadcrumb before every call: the last breadcrumb without its matching
+            // return line is the threshold. Candidate content is never asserted because
+            // degraded long input may legitimately come back empty.
+            fun probe(family: String, base: String, repeats: List<Int>) {
+                for (count in repeats) {
+                    val reading = base.repeat(count)
+                    android.util.Log.i("ZeroConRepro", "zenzai $family chars=${reading.length}")
+                    var thrown: Throwable? = null
+                    var results = emptyList<Candidate>()
+                    val started = SystemClock.elapsedRealtime()
+                    try { results = neural(reading) } catch (failure: Throwable) { thrown = failure }
+                    val elapsed = SystemClock.elapsedRealtime() - started
+                    // A call that never returns is the failure under test, so it fails even
+                    // when the thrown error would otherwise be treated as a limit.
+                    check(elapsed < 6000) {
+                        "Zenzai $family did not return within the probe budget: chars=${reading.length} repeats=$count elapsed=${elapsed}ms"
+                    }
+                    if (thrown != null && limitError(thrown)) {
+                        android.util.Log.i("ZeroConRepro",
+                            "zenzai $family LIMIT (not a crash) chars=${reading.length} repeats=$count elapsed=${elapsed}ms error=$thrown")
+                        continue
+                    }
+                    check(thrown == null) {
+                        "Zenzai $family threw for chars=${reading.length} repeats=$count after ${elapsed}ms: $thrown"
+                    }
+                    android.util.Log.i("ZeroConRepro", "zenzai $family returned chars=${reading.length} candidates=${results.size} elapsed=${elapsed}ms")
+                }
+            }
+            // VARIED text tokenizes least efficiently, so it may cross the fixed batch at the
+            // shortest reading. Dense small steps locate that threshold precisely.
+            probe("varied", "キョウハイイテンキデスネ", listOf(3, 6, 9, 12, 16, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 100))
+            // Longer prose with mixed word boundaries sits closer to real sentences.
+            probe("prose", "ワタシハキノウトウキョウデトモダチトアッテラーメントスシトキョウカイニイキマシタ", listOf(2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 22))
+            // Identical kana repeats tokenize efficiently and stayed alive through 480
+            // characters, so they run last as the control family.
+            probe("repeat", "トウキョウニイク", listOf(4, 8, 12, 16, 20, 24, 40, 50, 60, 70))
+        }
         test("all_windows_keyboard_dictionary_entries") {
             val cases = context.assets.open("keyboard-typo-cases.tsv").bufferedReader().useLines { lines ->
                 lines.filter { it.isNotBlank() && !it.startsWith('#') }.map { it.split('\t') }.toList()
@@ -392,50 +458,6 @@ class PortInstrumentationRunner : Instrumentation() {
             check(withoutUsers.none { it.text.contains("登録専用◇A") }) { "Personal dictionary result leaked through the cache" }
             val replaced = ZenzNative.lookupDict(reading, false, 20, userEntries = listOf(UserDictEntry("ぜろこん", "登録専用◇B")))
             check(replaced.any { it.text.startsWith("登録専用◇B") } && replaced.none { it.text.contains("登録専用◇A") })
-        }
-        test("morphology_learning_save_reload_native_score_and_cache") {
-            val alphabet = targetContext.assets.open("dictionary/louds/charID.chid").bufferedReader(Charsets.UTF_8)
-                .use { it.readText() }.codePoints().toArray().toSet()
-            val file = File(targetContext.cacheDir, "port-morphology-${System.nanoTime()}.bin")
-            try {
-                val store = MorphologyLearningStore(file, alphabet)
-                val segment = DictionarySegment("ネコ", "学習専用◇A", 1288, 1289, 12, -10f)
-                store.memory.record(listOf(segment))
-                check(store.save())
-                val restored = MorphologyLearningStore(file, alphabet)
-                check(restored.available && restored.memory.all() == store.memory.all())
-                val reading = "ネコヲミル"
-                fun learnedSpan(memory: MorphologyLearningMemory): DictionarySegment {
-                    var result = emptyList<Candidate>()
-                    waitUntil("Learned noun did not enter the native lattice") {
-                        result = ZenzNative.lookupDict(reading, false, 64, learnedEntries = memory.matching(reading))
-                        result.isNotEmpty()
-                    }
-                    return checkNotNull(result.firstOrNull { it.text.startsWith(segment.surface) }
-                        ?.segments?.firstOrNull { it.surface == segment.surface })
-                }
-                val first = learnedSpan(restored.memory)
-                check(first.lcid == 1288 && first.rcid == 1289 && first.mid == 12)
-                check(kotlin.math.abs(first.cost - restored.memory.all().single().score) < 0.00001f)
-                repeat(20) { restored.memory.record(listOf(segment)) }
-                val frequent = learnedSpan(restored.memory)
-                check(frequent.cost > first.cost) { "Updated learned score was hidden by the dictionary cache" }
-                check(ZenzNative.lookupDict(reading, false, 64).none { it.text.contains(segment.surface) })
-                restored.clear()
-                check(!file.exists() && restored.memory.size == 0)
-            } finally { android.util.AtomicFile(file).delete() }
-        }
-        test("corrupt_morphology_history_is_preserved_until_explicit_clear") {
-            val file = File(targetContext.cacheDir, "port-corrupt-morphology-${System.nanoTime()}.bin")
-            val bytes = byteArrayOf(1, 2, 3, 4)
-            try {
-                file.writeBytes(bytes)
-                val store = MorphologyLearningStore(file, (0x30A1..0x30F6).toSet())
-                check(!store.available && !store.save())
-                check(file.readBytes().contentEquals(bytes))
-                store.clear()
-                check(store.available && store.memory.size == 0 && !file.exists())
-            } finally { android.util.AtomicFile(file).delete() }
         }
         test("reverse_dictionary_and_privacy") {
             check(com.zeroconvert.ime.assist.ReadingCheck.readingForSurface("東京") != null)
@@ -527,6 +549,102 @@ class PortInstrumentationRunner : Instrumentation() {
             } }
             check(onUi { checkNotNull(activity).field.text.isNotEmpty() })
 
+            // Input policy checks run inside this already-working real-key flow: the
+            // accessibility window flag above is what makes the IME keys visible, and a
+            // second UiAutomation setup aborts on this OEM build.
+            val policyPrefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
+            val numberRowKey = ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW
+            val policyLiveKey = ZeroConvertInputMethodService.KEY_REALTIME_INLINE
+            val policyAiKey = ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST
+            val policyLayoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
+            val policyAutoCommitKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED
+            val savedNumberRow = policyPrefs.getBoolean(numberRowKey, false)
+            val savedPolicyLive = policyPrefs.getBoolean(policyLiveKey, true)
+            val savedPolicyAi = policyPrefs.getBoolean(policyAiKey, true)
+            val savedPolicyLayout = policyPrefs.getString(policyLayoutKey, JapaneseInputLayout.FLICK_12KEY.name)
+            val savedPolicyAutoCommit = policyPrefs.getBoolean(policyAutoCommitKey, true)
+            try {
+                onUi {
+                    // Live conversion would turn the reading ん into 安, auto-commit would
+                    // settle a stable prefix, and the punctuation keys above the bottom row
+                    // are QWERTY-only. The policy check needs a plain composition.
+                    policyPrefs.edit()
+                        .putBoolean(numberRowKey, false)
+                        .putBoolean(policyLiveKey, false)
+                        .putBoolean(policyAiKey, false)
+                        .putBoolean(policyAutoCommitKey, false)
+                        .putString(policyLayoutKey, JapaneseInputLayout.QWERTY.name)
+                        .apply()
+                    checkNotNull(activity).field.setText("")
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .restartInput(checkNotNull(activity).field)
+                }
+                waitUntil("Japanese QWERTY unavailable for policy checks") { findText("aを入力") != null }
+                fun policyText() = onUi { checkNotNull(activity).field.text.toString() }
+                fun policyComposingSpan() = onUi {
+                    val text = checkNotNull(activity).field.text
+                    BaseInputConnection.getComposingSpanStart(text) to
+                        BaseInputConnection.getComposingSpanEnd(text)
+                }
+
+                // These assertions check the policy, not conversion output: the reading may be
+                // shown converted (ん can preview as 安) and a stable prefix such as ん may be
+                // auto-committed. What matters is that the mark stayed inside the composition
+                // instead of ending it, and a pending romaji tail was finalized first.
+                fun checkPunctuationJoined(mark: Char) {
+                    val text = policyText()
+                    check(text.isNotEmpty() && text.last() == mark) {
+                        "$mark did not join the reading: '$text'"
+                    }
+                    val (start, end) = policyComposingSpan()
+                    check(start >= 0) { "$mark committed the composition: '$text'" }
+                    check(end == text.length) {
+                        "$mark was committed outside the composition: '$text' (span $start..$end)"
+                    }
+                }
+
+                onUi { checkNotNull(activity).field.setText("") }
+                check(clickText("aを入力")); SystemClock.sleep(300)
+                check(touchKey("、を入力")); SystemClock.sleep(500)
+                checkPunctuationJoined('、')
+
+                onUi { checkNotNull(activity).field.setText("") }
+                check(clickText("aを入力")); SystemClock.sleep(300)
+                check(touchKey("。を入力")); SystemClock.sleep(500)
+                checkPunctuationJoined('。')
+
+                onUi { checkNotNull(activity).field.setText("") }
+                check(clickText("aを入力")); SystemClock.sleep(300)
+                val question = if (findText("？を入力") != null) "？を入力" else null
+                check(question != null) { "？ key missing while composing" }
+                check(touchKey(checkNotNull(question))); SystemClock.sleep(500)
+                checkPunctuationJoined('？')
+
+                onUi { checkNotNull(activity).field.setText("") }
+                check(clickText("nを入力")); SystemClock.sleep(300)
+                check(touchKey("、を入力")); SystemClock.sleep(600)
+                // With a pending romaji the mark must finalize it (ん) and never extend it,
+                // so ending the composition here is the correct outcome for this case.
+                val afterPending = policyText()
+                check(afterPending.endsWith("、")) { "、 did not follow the finalized reading: '$afterPending'" }
+                check(!afterPending.startsWith("n")) {
+                    "Pending n was left as a letter instead of ん: '$afterPending'"
+                }
+                check(afterPending.length == 2) {
+                    "n + 、 produced more than the finalized reading and mark: '$afterPending'"
+                }
+            } finally {
+                onUi {
+                    policyPrefs.edit()
+                        .putBoolean(numberRowKey, savedNumberRow)
+                        .putBoolean(policyLiveKey, savedPolicyLive)
+                        .putBoolean(policyAiKey, savedPolicyAi)
+                        .putBoolean(policyAutoCommitKey, savedPolicyAutoCommit)
+                        .putString(policyLayoutKey, savedPolicyLayout)
+                        .apply()
+                    checkNotNull(activity).field.setText("")
+                }
+            }
         }
         if (BuildConfig.WINDOWS_ENGINE) test("real_ime_cursor_prefix_commit_and_selection_count") {
             val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
@@ -589,6 +707,103 @@ class PortInstrumentationRunner : Instrumentation() {
                     checkNotNull(activity).field.apply { setText("東京に行く"); setSelection(0, 2) }
                 }
                 waitUntil("Selection counter missing after prefix conversion") { findText("2文字選択") != null }
+            } finally {
+                onUi {
+                    prefs.edit().apply {
+                        if (hadLayout) putString(layoutKey, savedLayout) else remove(layoutKey)
+                        if (hadAuto) putBoolean(autoKey, savedAuto) else remove(autoKey)
+                        if (hadLive) putBoolean(liveKey, savedLive) else remove(liveKey)
+                    }.apply()
+                    val field = checkNotNull(activity).field
+                    field.setText("")
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
+                }
+            }
+        }
+        if (BuildConfig.WINDOWS_ENGINE) test("real_ime_cursor_into_converted_region_keeps_composition") {
+            val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
+            val layoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
+            val autoKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED
+            val liveKey = ZeroConvertInputMethodService.KEY_REALTIME_INLINE
+            val hadLayout = prefs.contains(layoutKey)
+            val savedLayout = prefs.getString(layoutKey, JapaneseInputLayout.FLICK_12KEY.name)
+            val hadAuto = prefs.contains(autoKey)
+            val savedAuto = prefs.getBoolean(autoKey, true)
+            val hadLive = prefs.contains(liveKey)
+            val savedLive = prefs.getBoolean(liveKey, true)
+            try {
+                onUi {
+                    prefs.edit().putBoolean(autoKey, false).putBoolean(liveKey, true).apply()
+                    val field = checkNotNull(activity).field
+                    field.setText("")
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
+                }
+                waitUntil("Japanese mode unavailable") { findText("入力モード:日本語") != null }
+                if (findText("QWERTY") != null) check(clickText("QWERTY"))
+                waitUntil("Japanese QWERTY unavailable") { findText("tを入力") != null }
+                fun restartEditor() = onUi {
+                    val field = checkNotNull(activity).field
+                    field.setText("")
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
+                }
+                fun typeReading(raw: String) {
+                    restartEditor()
+                    waitUntil("Japanese mode unavailable before typing $raw") { findText("入力モード:日本語") != null }
+                    waitUntil("Japanese QWERTY unavailable before typing $raw") { findText("tを入力") != null }
+                    for (key in raw) check(clickText("${key}を入力")) { "QWERTY key missing: $key" }
+                }
+                fun convertedPreview(raw: String, reading: String): String {
+                    typeReading(raw)
+                    val deadline = SystemClock.uptimeMillis() + 4000
+                    while (SystemClock.uptimeMillis() < deadline) {
+                        val preview = onUi { checkNotNull(activity).field.text.toString() }
+                        if (preview != reading) return preview
+                        SystemClock.sleep(50)
+                    }
+                    return onUi { checkNotNull(activity).field.text.toString() }
+                }
+                // The preview and the reading diverge once the caret passes into a kanji-converted
+                // tail; the IME must not revert the whole composition to raw kana from there.
+                var rawReading = "きょうはいいてんきですね"
+                var preview = convertedPreview("kyouhaiitenkidesune", rawReading)
+                if (preview == rawReading) {
+                    rawReading = "とうきょうにいく"
+                    preview = convertedPreview("toukyouniiku", rawReading)
+                }
+                check(preview != rawReading) { "Live conversion never left raw kana: reading=$rawReading preview=$preview" }
+                // Stop before the reading cursor reaches 0, where reverting to the raw reading is expected.
+                val compositionLength = minOf(preview.length, rawReading.length)
+                check(compositionLength > 1) { "Composition too short to move: $preview" }
+                fun state(): Triple<String, Int, Int> = onUi {
+                    val text = checkNotNull(activity).field.text
+                    Triple(text.toString(), checkNotNull(activity).field.selectionStart,
+                        BaseInputConnection.getComposingSpanStart(text))
+                }
+                // A raw preview may be a pending re-conversion: require a stable settled state first.
+                fun settledState(): Triple<String, Int, Int> {
+                    val deadline = SystemClock.uptimeMillis() + 2000
+                    var previous: Triple<String, Int, Int>? = null
+                    while (true) {
+                        val current = state()
+                        val converted = current.first.any { it !in '぀'..'ヿ' }
+                        val hasCandidate = findNode { it.contentDescription?.startsWith("変換候補 ") == true } != null
+                        if (current == previous && current.third >= 0 && current.first != rawReading &&
+                            (converted || hasCandidate)) return current
+                        previous = current
+                        if (SystemClock.uptimeMillis() >= deadline) return current
+                        SystemClock.sleep(150)
+                    }
+                }
+                for (step in 1 until compositionLength) {
+                    check(touchKey("◀")) { "Cursor left key missing at step $step" }
+                    val (text, caret, composingStart) = settledState()
+                    check(composingStart >= 0) { "Step $step committed the composition: caret=$caret text=$text" }
+                    check(text != rawReading) { "Step $step reverted the composition to raw kana: caret=$caret text=$text" }
+                    check(text.any { it !in '぀'..'ヿ' } ||
+                        findNode { it.contentDescription?.startsWith("変換候補 ") == true } != null) {
+                        "Step $step lost both the converted preview and every candidate: caret=$caret text=$text"
+                    }
+                }
             } finally {
                 onUi {
                     prefs.edit().apply {
@@ -747,3 +962,7 @@ class PortInstrumentationRunner : Instrumentation() {
         }
     }
 }
+
+
+
+

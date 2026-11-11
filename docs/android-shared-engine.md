@@ -18,6 +18,7 @@ Gradleモジュールではなく、`:rebuilt` がコンパイルする共有ソ
 | Swift依存のpin | `engine/Package.resolved`（コミット済み）。Windowsの `windows/server-swift/Package.resolved` と一致することを `check-shared-engine-pins.mjs` が検査する |
 | タイポ補正・先読み・動的マクロ | `engine/rust` がWindowsの `crates/server/src/ai_assist` を直接コンパイル |
 | 自動確定の境界・安定性判定 | `windows/crates/shared/src/conversion_policy.rs` を両ホストから利用 |
+| 入力ポリシー（即確定記号・句読点正規化・数字組成・幅既定値） | 正本は `windows/crates/shared/src/conversion_policy.rs`。Androidは初期化時に `op=inputPolicy` で同じ表を取得して `InputPolicy.kt` に保持し、仕様は `tests/input-policy/cases.tsv` を両OSのテストが読む |
 | 推論・JNI・ファイル配置の差 | `engine/native`、`engine/swift`、Androidの `engine/WindowsEngine.kt` |
 | キーボード・設定・編集操作 | 既存Compose/Flick/設定画面/InputMethodServiceの同じソース |
 
@@ -44,7 +45,9 @@ Windowsから削除されたソースもステージングから除き、古い�
 選択表記履歴は初回のみSwiftの `LearningMemory/selection-overrides.json` へ
 読みを正規化して移行する。補正学習は確定成功回数をRustへ移行し、旧来の未確認の
 採用回数だけを自動補正の根拠にしない。元の設定と履歴ファイルは保持する。
-Android独自の形態素頻度バイナリをSwift形式へ変換する処理はまだない。
+変換学習のストアはSwiftの1系統だけにする。Android独自の形態素頻度バイナリ
+(`files/conversion-learning-v1.bin`) と読み→表記のKotlinストアは廃止し、移行時に
+V2の表記を `selection-overrides.json` へ取り込んで旧キーを削除する。
 新しい変換学習はSwiftの候補IDで通知する。機密欄と学習無効時の参照/保存を抑止する。
 
 ## Windows更新の反映
@@ -140,7 +143,7 @@ Swift開発用/未使用runtimeの除外を行う。圧縮ライブラリはAndr
 [Android Gradle Pluginの梱包設定](https://developer.android.com/reference/tools/gradle-api/8.3/com/android/build/api/dsl/JniLibsPackaging)。
 モデルは従来と同じ4ファイルを保持し、APK内のSHA-256も検査する。
 逆引き辞書はWindows正本から生成した1つをSwift/Rust/Kotlinで利用し、旧資産の重複梱包を除く。
-通常の旧Android辞書は既存native操作・形態素履歴の互換性のため保持する。
+通常の旧Android辞書は、補正の辞書照合とユーザー辞書の検査に使うため保持する。
 
 llama.cppのpinは変更せず、公式のARM CPU variantsとCPU feature scoreで実装を選ぶ。
 基本ARM実装も保持し、DOTPROD/i8mm等を非対応CPUで強制しない。JNIはAndroidの

@@ -7426,6 +7426,85 @@ impl TextServiceFactory {
         composition.state != CompositionState::None && !composition.candidates.texts.is_empty()
     }
 
+    /// Deletes the learning behind the candidate the user right-clicked in the
+    /// candidate UI window.
+    ///
+    /// The candidate id is resolved here because only the client holds the
+    /// mapping from display index to engine identity. The engine then deletes by
+    /// id, so the client never needs to know how a reading maps to a dictionary
+    /// entry. Returns false when the index is stale or the candidate was never a
+    /// learning target.
+    #[tracing::instrument]
+    pub fn forget_external_candidate_learning(&self, index: i32) -> Result<bool> {
+        if index < 0 {
+            return Ok(false);
+        }
+        let candidate_id = {
+            let text_service = self.borrow()?;
+            let composition = text_service.borrow_composition()?.clone();
+            if composition.state == CompositionState::None {
+                return Ok(false);
+            }
+            composition
+                .candidates
+                .candidate_ids
+                .get(index as usize)
+                .copied()
+                .unwrap_or(0)
+        };
+        if candidate_id == 0 {
+            // Dictionary correction and AI assist candidates carry no engine id.
+            return Ok(false);
+        }
+        if !Self::ensure_ipc_service_for_key_event("forget_candidate_learning") {
+            return Ok(false);
+        }
+        let forgot = match IMEState::ipc_service() {
+            Ok(Some(mut ipc_service)) => {
+                let forgot = ipc_service
+                    .forget_learning_candidate(candidate_id, "", "")
+                    .unwrap_or(false);
+                let _ = IMEState::set_ipc_service(ipc_service);
+                forgot
+            }
+            _ => false,
+        };
+        if forgot {
+            // The ranking changed, so the visible list is now stale.
+            self.reconvert_after_learning_deletion()?;
+        }
+        Ok(forgot)
+    }
+
+    /// Re-runs conversion for the current reading so the candidate list reflects
+    /// the deletion instead of showing the previous order.
+    fn reconvert_after_learning_deletion(&self) -> Result<()> {
+        let composition = {
+            let text_service = self.borrow()?;
+            let composition = text_service.borrow_composition()?.clone();
+            composition
+        };
+        if composition.state == CompositionState::None {
+            return Ok(());
+        }
+        let config_snapshot = self.input_config_snapshot()?;
+        let mode = IMEState::input_mode()?;
+        // Space in a composing state re-converts the current reading without
+        // committing it, which is exactly what a ranking change needs.
+        let Some((transition, actions)) = Self::plan_actions_for_user_action_with_lookup(
+            &composition,
+            &UserAction::Space,
+            &mode,
+            false,
+            config_snapshot.app_config(),
+            config_snapshot.romaji_lookup(),
+            false,
+        ) else {
+            return Ok(());
+        };
+        self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)
+    }
+
     #[tracing::instrument]
     pub fn handle_action(
         &self,
