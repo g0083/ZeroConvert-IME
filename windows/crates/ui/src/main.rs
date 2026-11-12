@@ -8,7 +8,7 @@ use shared::{
     proto::window_service_server::WindowServiceServer, ui_pipe_path,
     LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT,
 };
-use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::platform::windows::{EventLoopBuilderExtWindows, WindowExtWindows};
 use tao::{
     event::{Event, StartCause, WindowEvent},
@@ -187,10 +187,12 @@ fn logical_width_for_physical_width(physical_width: u32, scale_factor: f64) -> f
 }
 
 fn set_candidate_window_width(candidate_window: &tao::window::Window, candidates: &[String]) {
-    let height = candidate_window.inner_size().height;
-    candidate_window.set_inner_size(PhysicalSize::new(
-        candidate_window_width(candidates),
-        height,
+    let size = candidate_window.inner_size();
+    let scale_factor = candidate_window.scale_factor();
+    let logical_height = logical_width_for_physical_width(size.height, scale_factor);
+    candidate_window.set_inner_size(LogicalSize::new(
+        candidate_window_width(candidates) as f64,
+        logical_height,
     ));
 }
 
@@ -752,19 +754,35 @@ async fn main() -> anyhow::Result<()> {
                         }
                         clipboard_window_visible = false;
                     } else {
-                        let pos = if let Some(rect) = last_candidate_rect {
-                            PhysicalPosition::new(rect.left as f64, (rect.bottom + 10) as f64)
+                        let preferred = if let Some(rect) = last_candidate_rect {
+                            (rect.left, rect.bottom + 10)
                         } else {
                             let mut pt = windows::Win32::Foundation::POINT::default();
                             unsafe {
                                 let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
                             }
-                            PhysicalPosition::new(pt.x as f64, pt.y as f64)
+                            (pt.x, pt.y)
                         };
-                        clipboard_window.set_outer_position(pos);
+                        let size = clipboard_window.inner_size();
+                        let pos = utils::clipboard_window_position(
+                            preferred,
+                            (size.width as i32, size.height as i32),
+                            utils::work_area_for_point(preferred),
+                        );
+                        clipboard_window.set_outer_position(PhysicalPosition::new(
+                            pos.0 as f64,
+                            pos.1 as f64,
+                        ));
 
                         let items = {
-                            let s = clipboard_state.lock().unwrap();
+                            let mut s = clipboard_state.lock().unwrap();
+                            // Retention is time-based, so entries can expire while the
+                            // IME keeps running; prune before every reveal.
+                            s.cleanup_expired(
+                                shared::AppConfig::read()
+                                    .map(|config| config.clipboard.retention_hours)
+                                    .unwrap_or(0),
+                            );
                             s.items.clone()
                         };
                         if let Ok(json) = serde_json::to_string(&items) {

@@ -439,6 +439,24 @@ object WindowsEngine {
         }
     }
 
+    /**
+     * Applies the deletion guards and single-shot consume without writing any store.
+     *
+     * Device checks need the id contract of [forgetCandidate] but must not rewrite
+     * the user's learning memory, so they use this instead. The id is consumed in
+     * the in-memory cache exactly as a real deletion would consume it.
+     */
+    fun validateCandidateDeletion(candidateId: String): Boolean = runBlocking(dispatcher) {
+        if (!ready || candidateId.isEmpty()) return@runBlocking false
+        runCatching {
+            checkedSwift(JSONObject().put("op", "validateForget").put("candidateId", candidateId))
+                .optBoolean("valid", false)
+        }.getOrElse {
+            android.util.Log.e(TAG, "Shared engine learning deletion validation failed", it)
+            false
+        }
+    }
+
     /** Learning counters for the settings screen. Null when the engine is not ready. */
     fun learningStats(): JSONObject? = runBlocking(dispatcher) {
         if (!ready) return@runBlocking null

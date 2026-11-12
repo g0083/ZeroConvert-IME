@@ -1,8 +1,13 @@
 import { ShieldCheck, Zap } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { SettingsRow, SettingsSection } from "@/components/settings-section";
+import { useUpdates } from "@/components/update-provider";
 import { ZeroConvertLogo } from "@/components/zeroconvert-logo";
 
 export const About = () => {
+    const { version, result, status, error, check, start } = useUpdates();
+    const busy = status === "checking" || status === "starting";
+    const currentVersion = version ?? result?.current_version ?? null;
     return (
         <div className="settings-content space-y-6 max-w-4xl pb-8">
             <div className="flex items-center gap-4 p-5 rounded-2xl border border-border/80 bg-card/60 shadow-xs">
@@ -11,7 +16,7 @@ export const About = () => {
                     <h2 className="text-lg font-semibold tracking-tight text-foreground flex items-center gap-2">
                         ZeroCon IME (Windows)
                         <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/60">
-                            v0.2.2
+                            {currentVersion ? `v${currentVersion}` : "バージョン不明"}
                         </span>
                     </h2>
                     <p className="text-xs text-muted-foreground">
@@ -20,6 +25,32 @@ export const About = () => {
                 </div>
             </div>
 
+            <SettingsSection title="アップデート">
+                <SettingsRow
+                    label="バージョンと更新"
+                    description="起動時に新しいバージョンを確認します。アップデートの完了後、アプリを再起動すると適用されます。"
+                >
+                    <div className="settings-actions justify-end">
+                        <Button variant="outline" onClick={() => void check()} disabled={busy || status === "launched"}>
+                            {status === "checking" ? "確認中…" : "更新を確認"}
+                        </Button>
+                        {result?.update_available && (
+                            <Button onClick={() => void start()} disabled={busy || status === "launched"}>
+                                {status === "starting" ? "アップデートを開始中…" : status === "launched" ? "開始済み" : "アップデート"}
+                            </Button>
+                        )}
+                    </div>
+                </SettingsRow>
+                {(error || status === "launched" || result) && (
+                    <p className={`px-4 pb-3 text-xs ${error ? "text-destructive" : "settings-description"}`} role={error ? "alert" : "status"}>
+                        {error ? error
+                            : status === "launched" ? "アップデートを開始しました。完了までお待ちください。"
+                            : result?.update_available ? `新しいバージョン v${result.latest_version} を利用できます。`
+                            : "最新版を利用中です。"}
+                    </p>
+                )}
+            </SettingsSection>
+
             <SettingsSection title="搭載モデルと動作環境">
                 <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4：省メモリのIQ4_NL_emb8（18.7 MiB）と高精度のQ8_0（27.7 MiB）。タイポ補正・先読みも1モデルで統合処理">
                     <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-md border border-border/50">
@@ -27,7 +58,7 @@ export const About = () => {
                     </span>
                 </SettingsRow>
                 <SettingsRow label="タイポ補正アーキテクチャ" description="独立Corrector常駐を撤廃し、Nano v4 内部で読み尤度判定・表層リランキング・漢字変換を一気通貫処理（正解率78.0% / 実質86.7%、CPU p50: 2.3ms）">
-                    <span className="text-sm font-medium text-foreground">メインモデル統合タイポ補正 (v0.2.2)</span>
+                    <span className="text-sm font-medium text-foreground">メインモデル統合タイポ補正</span>
                 </SettingsRow>
                 <SettingsRow label="推論バックエンド" description="設定とPCの対応状況に応じて選択">
                     <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">

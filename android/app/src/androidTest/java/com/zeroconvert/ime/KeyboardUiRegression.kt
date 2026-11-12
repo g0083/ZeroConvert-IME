@@ -50,6 +50,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
     private var density = 1f
     private var adopted = 0
     private var undone = 0
+    private var forgotten: String? = null
     private var typed = ""
     private var emojiTyped = ""
     private var symbolTyped = ""
@@ -220,7 +221,8 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                         onUndo = { undone++; state.value = state.value.copy(applied = false, assist = null) })
                     Row(Modifier.fillMaxWidth().height(KeyboardBarHeight)) {
                         HorizontalCandidateStrip(sample.reading, sample.candidates, ZeroConDarkPalette, {},
-                            Modifier.weight(1f).fillMaxHeight())
+                            Modifier.weight(1f).fillMaxHeight(),
+                            onForget = { forgotten = it.text; state.value = state.value.copy(candidates = sample.candidates.filter { c -> c != it }) })
                         Spacer(Modifier.width(48.dp))
                     }
                 }
@@ -457,6 +459,59 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                 check(visiblePositions() == before) { "Equivalent results reset manual browsing" }
                 update(candidateCase.copy(candidates = choices + Candidate("追加候補", "かんじ")))
                 check(visiblePositions() == before) { "Appending lower candidates reset manual browsing" }
+            }
+            test("candidate_long_press_confirms_inline_and_deletes") {
+                // Deletion is only offered for candidates that carry an engine id.
+                val deletable = listOf(
+                    Candidate("東京", "とうきょう").copy(engineCandidateId = "101"),
+                    Candidate("東京都", "とうきょうと").copy(engineCandidateId = "102"),
+                )
+                forgotten = null
+                update(Case(reading = "とうきょう", candidates = deletable))
+                val target = bounds("変換候補 東京")
+                val downTime = SystemClock.uptimeMillis()
+                touch(target, MotionEvent.ACTION_DOWN, downTime)
+                // Compose's long-press threshold is 400ms; a tap would select instead.
+                SystemClock.sleep(800)
+                touch(target, MotionEvent.ACTION_UP, downTime)
+                // The confirmation must render inside the keyboard, not as a Dialog:
+                // the IME has no activity window token, so a Dialog crashes.
+                checkNotNull(node("学習削除の確認")) { "Long press did not open the inline confirmation: " + texts() }
+                check(node("変換候補 東京") == null) { "The confirmation should replace the candidate row" }
+                // Cancelling must restore the list and delete nothing.
+                val cancel = nodeBounds("キャンセル").first()
+                touch(cancel, MotionEvent.ACTION_DOWN, SystemClock.uptimeMillis())
+                touch(cancel, MotionEvent.ACTION_UP, SystemClock.uptimeMillis())
+                check(forgotten == null) { "Cancel deleted learning: $forgotten" }
+                checkNotNull(node("変換候補 東京")) { "Cancel did not restore the candidate row" }
+
+                // Confirming must report the selection and drop the entry.
+                update(Case(reading = "とうきょう", candidates = deletable))
+                val again = bounds("変換候補 東京")
+                val down2 = SystemClock.uptimeMillis()
+                touch(again, MotionEvent.ACTION_DOWN, down2)
+                SystemClock.sleep(800)
+                touch(again, MotionEvent.ACTION_UP, down2)
+                checkNotNull(node("学習削除の確認")) { "Second long press did not confirm" }
+                val delete = nodeBounds("削除").first()
+                touch(delete, MotionEvent.ACTION_DOWN, SystemClock.uptimeMillis())
+                touch(delete, MotionEvent.ACTION_UP, SystemClock.uptimeMillis())
+                check(forgotten == "東京") { "Delete did not report the chosen candidate: $forgotten" }
+                check(node("変換候補 東京") == null) { "Deleted candidate stayed in the row" }
+                checkNotNull(node("変換候補 東京都")) { "Delete removed an unrelated candidate" }
+            }
+            test("candidate_without_engine_id_cannot_be_long_pressed_for_deletion") {
+                // Dictionary correction and AI candidates carry no engine id, so the
+                // row must stay a plain tap target with no deletion affordance.
+                forgotten = null
+                update(Case(reading = "とうきょう", candidates = listOf(Candidate("東京", "とうきょう"))))
+                val target = bounds("変換候補 東京")
+                val downTime = SystemClock.uptimeMillis()
+                touch(target, MotionEvent.ACTION_DOWN, downTime)
+                SystemClock.sleep(800)
+                touch(target, MotionEvent.ACTION_UP, downTime)
+                check(node("学習削除の確認") == null) { "A candidate without an engine id offered deletion" }
+                check(forgotten == null) { "A candidate without an engine id was deleted" }
             }
             test("assist_reading_keeps_newest_characters") {
                 // The reading grows to the right, so an overflowing row must drop its oldest characters.

@@ -77,3 +77,6 @@ node_modules/
 
 # Versioned runtime scripts live in windows/deployment; metadata is generated.
 /windows/deployment/build-info.json
+
+# Rust tests that use a relative path for the clipboard state file.
+/windows/crates/ui/dummy_pinned.json

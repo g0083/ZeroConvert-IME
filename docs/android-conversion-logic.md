@@ -14,7 +14,7 @@
 |---|---|---|
 | InputMethodService | Android IME ライフサイクル、InputConnection 操作、キー処理、候補表示連携 | `android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt` |
 | ComposingText | 原打鍵・読み・カーソル位置・独立境界の管理 | `android/app/src/main/java/com/zeroconvert/ime/azookey/input/ComposingText.kt` |
-| KanaKanjiConverter | かな漢字変換・候補統合（学習記憶、ユーザー辞書、ZeroCon AI、LOUDS 辞書、絵文字） | `android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt` |
+| KanaKanjiConverter | 共有エンジンへの変換要求・ユーザー辞書・native辞書検索。変換学習は持たない | `android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt` |
 | ZenzNative | JNI ブリッジ。モデルロード・変換・辞書検索・アシスト推論 | `android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt` |
 | ネイティブ層 | llama.cpp 推論 + LOUDS 辞書 | `android/app/src/main/cpp/zenz_jni.cpp`, `azookey_louds.cpp` |
 | アシスト | タイポ補正・先読み・採用学習 | `android/app/src/main/java/com/zeroconvert/ime/assist/` |
@@ -74,24 +74,21 @@ QWERTY のシフト記号 (`isImmediateCommitChar`) は composition を即時確
 
 ### 3.1 候補生成 (`KanaKanjiConverter.requestCandidates`)
 
-`withContext(Dispatchers.Default)` で非同期実行。優先順:
+`withContext(Dispatchers.Default)` で共有エンジンへ委譲する。候補の生成順・コスト・学習の適用はSwift側が決める。
 
-1. **学習記憶** (LearningMemory): 同じ読みに対する過去の選択結果を最優先 (cost 2000)
-2. **ユーザー辞書**: 完全一致 (cost 1500)
-3. **ZeroCon AI**: `ZenzNative.convert(leftContext, katakana, effectiveProfile)` (cost 1000)。`ConversionCandidateMerge.validSurface` で有効性検査
-4. **LOUDS 辞書**: `ZenzNative.lookupDict(katakana, prefixSearch=true)`。完全一致 → 絵文字 → 前方一致
-5. **絵文字辞書**: `lookupEmojis`
-6. **フォールバック**: ひらがな・カタカナ
+1. **共有エンジン**: `WindowsEngine.candidates()` が読み・文脈・カーソル位置を渡し、候補テキスト・読み・`engineCandidateId`・消費読み長を受け取る
+2. **AI補正候補**: `AiAssistManager` が別経路で補正・先読みを出し、`assist != null` の候補として候補バーへ合流する
+3. **マクロ候補**: 共有Rustの `op=macros` の結果を `MacroCandidateMerge` が先頭候補の直後に挿入する
 
-`fixedSurfacePrefix` がある場合 (補正適用後) は接頭部を保持して tail のみ変換。
+`fixedSurfacePrefix` がある場合 (補正適用後) は接頭部を保持して tail のみ変換する。
 
 ### 3.2 プロファイル
 
-`buildEffectiveProfile` が左文脈 + ユーザー辞書ヒント (最大 2 件) を組み合わせて ZeroCon の profile 文字列を生成 (最大 40 文字)。
+`buildEffectiveProfile` が左文脈 + ユーザー辞書ヒント (最大 2 件) を組み合わせて profile 文字列を生成 (最大 40 文字)。共有エンジンへは `personalize` と併せて渡す。
 
 ### 3.3 候補の識別
 
-`Candidate` は `text`, `reading`, `cost`, `isAI`, `assist`, `segments` を持つ。`key` / `itemKey` で識別。
+`Candidate` は `text`, `reading`, `learningAllowed`, `engineCandidateId`, `engineConsumedReading`, `assist` を持つ。`key` / `itemKey` で識別する。`engineCandidateId` は学習の確定と削除に使うエンジン発行の識別子で、辞書補正・AI候補・マクロ候補では空になる。
 
 ### 3.4 学習
 
@@ -286,7 +283,7 @@ Windows と同様:
 - 学習モードが読み取り専用でも削除だけは許可する（`converter_patch.py` が `needUpdateMemory` を `needUsingMemory` に緩める）。削除は明示操作であり、新しい学習の許可とは別。
 - 削除後は同じ読みで再変換し、順位の変わった候補一覧を出し直す。候補IDが既に無効なら「削除できませんでした」と伝える。
 
-### 8.5 動的マクロ
+### 8.6 動的マクロ
 
 日時・計算などの決定的展開は、共有Rustエンジンの `ai_assist::current_expansions` が供給する（`engine/rust/src/bridge.rs` の `op=macros`）。Android の `WindowsEngine` はその結果を `MacroCandidateMerge` で先頭候補の直後（index 1）に挿入し、`learningAllowed=false` を保つ。Kotlin 側に第二のマクロ実装は置かない。
 

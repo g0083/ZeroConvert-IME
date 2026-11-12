@@ -32,6 +32,7 @@ class PortInstrumentationRunner : Instrumentation() {
     private var keyboardUiOnly = false
     private var clipboardUiOnly = false
     private var pendingRomajiOnly = false
+    private var learningDeletionOnly = false
     private var performanceArguments: Bundle? = null
     private fun findNode(matches: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
@@ -85,6 +86,44 @@ class PortInstrumentationRunner : Instrumentation() {
         waitForIdleSync()
         return accepted
     }
+        private fun longPressText(text: String, timeoutMs: Long = 3000): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        do {
+            if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
+            val label = findNode { it.contentDescription?.toString() == text }
+            if (label != null) {
+                // Semantics long-click needs no gesture timing and works on the IME's
+                // overlay window, where injected swipe timing proved unreliable.
+                var node: android.view.accessibility.AccessibilityNodeInfo? = label
+                repeat(8) {
+                    val current = node ?: return@repeat
+                    if (current.isLongClickable &&
+                        current.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK)
+                    ) {
+                        waitForIdleSync()
+                        return true
+                    }
+                    node = current.parent
+                }
+                val bounds = android.graphics.Rect().also { label.getBoundsInScreen(it) }
+                val downTime = SystemClock.uptimeMillis()
+                fun inject(action: Int): Boolean {
+                    val event = android.view.MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action,
+                        bounds.exactCenterX(), bounds.exactCenterY(), 0)
+                    return try { uiAutomation.injectInputEvent(event, true) } finally { event.recycle() }
+                }
+                if (!inject(android.view.MotionEvent.ACTION_DOWN)) return false
+                // Compose's long-press threshold is 400ms.
+                SystemClock.sleep(700)
+                val accepted = inject(android.view.MotionEvent.ACTION_UP)
+                waitForIdleSync()
+                return accepted
+            }
+            SystemClock.sleep(50)
+        } while (SystemClock.uptimeMillis() < deadline)
+        return false
+    }
+
     private fun waitUntil(message: String, condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 4000
         while (!condition()) {
@@ -126,6 +165,7 @@ class PortInstrumentationRunner : Instrumentation() {
         keyboardUiOnly = arguments?.getString("keyboardUiOnly") == "true"
         clipboardUiOnly = arguments?.getString("clipboardUiOnly") == "true"
         pendingRomajiOnly = arguments?.getString("pendingRomajiOnly") == "true"
+        learningDeletionOnly = arguments?.getString("learningDeletionOnly") == "true"
         performanceArguments = arguments?.takeIf { it.getString("enginePerformance") == "true" }
         start()
     }
@@ -159,6 +199,12 @@ class PortInstrumentationRunner : Instrumentation() {
         var failures = 0
         var tests = 0
         fun test(name: String, action: () -> Unit) {
+            // A focused run skips everything else so an unrelated native test
+            // cannot take the whole process down before this one executes.
+            if (learningDeletionOnly && name != "editor_setup" &&
+                !name.contains("learning") && !name.contains("long_press") &&
+                !name.contains("real_ime_keys")
+            ) return
             tests++
             val started = SystemClock.elapsedRealtime()
             sendStatus(1, Bundle().apply { putString("stream", "START $name\n") })
@@ -951,6 +997,127 @@ class PortInstrumentationRunner : Instrumentation() {
                         if (hadLayout) prefs.edit().putString(key, savedLayout).apply()
                         else prefs.edit().remove(key).apply()
                     }
+                }
+            }
+        }
+        if (BuildConfig.WINDOWS_ENGINE) test("learning_round_trip_deletes_only_the_taught_word") {
+            ZenzNative.init(targetContext)
+            // These checks run inside LearningPolicy.withoutWrites, so they must not
+            // rewrite the user's learning memory. validateCandidateDeletion applies
+            // the same guards and single-shot consume but skips the store writes;
+            // the write path itself is covered by the Rust and Swift unit tests.
+            //
+            // Before any id is issued, an id that was never issued must be refused.
+            check(!com.zeroconvert.ime.engine.WindowsEngine.validateCandidateDeletion("0")) {
+                "Zero candidate id was treated as a deletable candidate"
+            }
+            check(!com.zeroconvert.ime.engine.WindowsEngine.validateCandidateDeletion("18446744073709551615")) {
+                "Unknown candidate id was treated as deletable"
+            }
+
+            // Ask for one synthetic reading outside the user's history and take the
+            // identity the engine issues for it, then confirm the same id is refused
+            // the second time because the first validation consumed it.
+            val reading = "ぜろこんけんしょう"
+            val input = ComposingText().apply { insertAtCursorPosition(reading, InputStyle.DIRECT) }
+            val issued = runBlocking {
+                com.zeroconvert.ime.engine.WindowsEngine.candidates(input, "", false, "", true, false)
+            }
+            val deletable = issued.firstOrNull { it.engineCandidateId.isNotEmpty() }
+            if (deletable == null) {
+                // A device without read-write learning has no deletable identity, so
+                // there is nothing to check and the guard above still covers refusal.
+                android.util.Log.i(
+                    "ZeroConLearning",
+                    "No engine candidate identity issued (learning mode ${LearningPolicy.mode}); " +
+                        "skipping the accept-then-refuse path"
+                )
+            } else {
+                check(
+                    com.zeroconvert.ime.engine.WindowsEngine.validateCandidateDeletion(deletable.engineCandidateId)
+                ) { "Deletion validation was refused for a candidate the engine issued" }
+                check(
+                    !com.zeroconvert.ime.engine.WindowsEngine.validateCandidateDeletion(deletable.engineCandidateId)
+                ) { "A consumed candidate id was accepted twice" }
+            }
+        }
+        if (BuildConfig.WINDOWS_ENGINE) test("candidate_without_engine_identity_cannot_be_deleted") {
+            ZenzNative.init(targetContext)
+            // Dictionary-correction and AI candidates carry no engine id, and the
+            // candidate bar only offers deletion for entries that have one. The
+            // popup itself renders inside the IME window, which uiautomator cannot
+            // inspect, so this asserts the guard the UI relies on.
+            check(!com.zeroconvert.ime.engine.WindowsEngine.validateCandidateDeletion("")) {
+                "An empty candidate id was accepted for deletion"
+            }
+        }
+        if (BuildConfig.WINDOWS_ENGINE) test("long_press_offers_inline_learning_deletion_confirmation") {
+            ZenzNative.init(targetContext)
+            KanaKanjiConverter.ensureInitialized(targetContext)
+            val layoutPrefs = targetContext.getSharedPreferences(
+                ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE
+            )
+            val layoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
+            val hadLayout = layoutPrefs.contains(layoutKey)
+            val savedLayout = layoutPrefs.getString(layoutKey, JapaneseInputLayout.FLICK_12KEY.name)
+            try {
+                val info = uiAutomation.serviceInfo
+                info.flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                uiAutomation.serviceInfo = info
+                waitUntil("Test editor has no window focus") {
+                    onUi { checkNotNull(activity).field.hasWindowFocus() }
+                }
+                onUi {
+                    val field = checkNotNull(activity).field
+                    field.setText("")
+                    field.showSoftInputOnFocus = true
+                    field.requestFocus()
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+                }
+                // OEM IMEs and our own mode switch can still be settling right after
+                // the field gains focus, so drive the mode the same way the other
+                // real-IME checks do instead of assuming the first frame is final.
+                val modeDeadline = SystemClock.uptimeMillis() + 5000
+                while (findText("入力モード:日本語") == null && SystemClock.uptimeMillis() < modeDeadline) {
+                    if (findText("入力モード:英語") != null) clickText("入力モード:英語", 200)
+                    else if (findText("入力モード:数字") != null) clickText("入力モード:数字", 200)
+                    SystemClock.sleep(100)
+                }
+                check(findText("入力モード:日本語") != null) { "Japanese mode unavailable" }
+                if (findText("QWERTY") != null) check(clickText("QWERTY"))
+                waitUntil("Japanese QWERTY unavailable") { findText("tを入力") != null }
+                for (letter in listOf('t', 'o', 'u', 'k', 'y', 'o', 'u')) {
+                    check(touchKey("${letter}を入力")) { "QWERTY key not found: $letter" }
+                }
+                var candidate: String? = null
+                waitUntil("No candidate with an engine identity appeared") {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
+                    val label = findNode {
+                        it.contentDescription?.toString()?.startsWith("変換候補 ") == true
+                    }?.contentDescription?.toString()
+                    candidate = label?.takeIf { it != "変換候補 候補" }
+                    candidate != null
+                }
+                check(longPressText(checkNotNull(candidate))) {
+                    "Long press did not reach the candidate: $candidate"
+                }
+                // The confirmation must stay inside the IME window. A Dialog here
+                // crashed with BadTokenException because the IME has no activity token.
+                waitUntil("Inline deletion confirmation did not appear") {
+                    findNode { it.contentDescription?.toString() == "学習削除の確認" } != null
+                }
+                check(findText("削除") != null) { "Delete action missing from the inline confirmation" }
+                check(clickText("キャンセル")) { "Cancel action missing from the inline confirmation" }
+                waitUntil("Inline confirmation did not close after cancel") {
+                    findNode { it.contentDescription?.toString() == "学習削除の確認" } == null
+                }
+            } finally {
+                onUi {
+                    if (hadLayout) layoutPrefs.edit().putString(layoutKey, savedLayout).apply()
+                    else layoutPrefs.edit().remove(layoutKey).apply()
+                    (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .restartInput(checkNotNull(activity).field)
                 }
             }
         }

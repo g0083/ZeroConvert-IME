@@ -989,8 +989,11 @@ struct LearningCandidateCache {
         return batches[location.batchIndex]!.candidates[location.candidateIndex].isLearningTarget
     }
 
-    /// Non-destructive lookup. Deletion needs the candidate's contents without
-    /// marking it consumed, so a later commit of the same id still works.
+    /// Non-destructive lookup for callers that must validate before consuming.
+    ///
+    /// A refused operation has to leave the id usable: consuming first would
+    /// silently break the later commit and pin of a candidate that was only
+    /// rejected because of its flags or the current learning mode.
     func candidate(for candidateId: UInt64) -> Candidate? {
         guard candidateId > 0, let location = candidateLocation(for: candidateId) else {
             return nil
@@ -1127,6 +1130,10 @@ struct LearningCandidateCache {
 
 @MainActor func consumeLearningCandidate(_ candidateId: UInt64) -> Candidate? {
     learningCandidateCache.consume(candidateId)
+}
+
+@MainActor func learningCandidate(_ candidateId: UInt64) -> Candidate? {
+    learningCandidateCache.candidate(for: candidateId)
 }
 
 @_silgen_name("PinLearningCandidate")
@@ -3532,7 +3539,10 @@ func cursorPrefixBoundaryFirstClauseResults(
 /// was absent from both stores.
 @_silgen_name("ForgetLearningCandidate")
 @MainActor public func forget_learning_candidate(candidateId: UInt64) -> Bool {
-    guard let candidate = learningCandidateCache.candidate(for: candidateId) else {
+    // Validate before consuming. Consuming marks the id used for both commit and
+    // pin, so a refusal must not happen after it: a candidate that is skipped
+    // because of its flags or the current learning mode has to stay selectable.
+    guard let candidate = learningCandidate(candidateId) else {
         serverLog("WARN", "ForgetLearningCandidate: unknown candidateId=\(candidateId)")
         return false
     }
@@ -3540,13 +3550,20 @@ func cursorPrefixBoundaryFirstClauseResults(
         serverLog("WARN", "ForgetLearningCandidate: not a learning target candidateId=\(candidateId)")
         return false
     }
+    guard currentLearningType != .nothing else {
+        serverLog("WARN", "ForgetLearningCandidate: learning disabled candidateId=\(candidateId)")
+        return false
+    }
+    // Consuming here, after the guards, still makes deletion single-shot: a stale
+    // click or a retried request cannot delete a different candidate that reuses
+    // the slot.
+    guard consumeLearningCandidate(candidateId) != nil else {
+        serverLog("WARN", "ForgetLearningCandidate: already consumed candidateId=\(candidateId)")
+        return false
+    }
 
     let ruby = learningCandidateRuby(candidate)
     let output = learningCandidateOutput(candidate)
-    // The guard above admits read-only mode; forgetting is still a user action.
-    if currentLearningType == .nothing {
-        return false
-    }
 
     converter.forgetMemory(candidate)
     normalNBestSupplementConverter.forgetMemory(candidate)
@@ -3559,6 +3576,35 @@ func cursorPrefixBoundaryFirstClauseResults(
         "INFO",
         "ForgetLearningCandidate: candidateId=\(candidateId) rubyCount=\(ruby.count) outputCount=\(output.count) removedOverride=\(removedOverride)"
     )
+    return true
+}
+
+/// Checks that a deletion would be accepted, without touching persisted learning.
+///
+/// Device checks need the id and single-shot contract of
+/// `forget_learning_candidate` but must not rewrite the user's learning memory.
+/// This applies the same guards and consumes the id in the in-memory cache, then
+/// returns before any store is written.
+@_silgen_name("ValidateLearningCandidateDeletion")
+@MainActor public func validate_learning_candidate_deletion(candidateId: UInt64) -> Bool {
+    guard let candidate = learningCandidate(candidateId) else {
+        serverLog("DEBUG", "ValidateLearningCandidateDeletion: unknown candidateId=\(candidateId)")
+        return false
+    }
+    guard candidate.isLearningTarget else {
+        serverLog("DEBUG", "ValidateLearningCandidateDeletion: not a learning target candidateId=\(candidateId)")
+        return false
+    }
+    guard currentLearningType != .nothing else {
+        serverLog("DEBUG", "ValidateLearningCandidateDeletion: learning disabled candidateId=\(candidateId)")
+        return false
+    }
+    // Consuming keeps the single-shot contract observable, and skipping the store
+    // writes keeps the user's learning memory untouched.
+    guard consumeLearningCandidate(candidateId) != nil else {
+        serverLog("DEBUG", "ValidateLearningCandidateDeletion: already consumed candidateId=\(candidateId)")
+        return false
+    }
     return true
 }
 

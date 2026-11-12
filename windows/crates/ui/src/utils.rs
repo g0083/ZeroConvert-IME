@@ -410,6 +410,36 @@ pub fn ruby_window_position(
     (x, y)
 }
 
+pub fn clipboard_window_position(
+    preferred: (i32, i32),
+    window_size: (i32, i32),
+    work_area: RECT,
+) -> (i32, i32) {
+    let x = clamp_start(preferred.0, window_size.0, work_area.left, work_area.right);
+    let y = clamp_start(preferred.1, window_size.1, work_area.top, work_area.bottom);
+    (x, y)
+}
+
+pub fn work_area_for_point(point: (i32, i32)) -> RECT {
+    let monitor = unsafe {
+        MonitorFromPoint(
+            POINT {
+                x: point.0,
+                y: point.1,
+            },
+            MONITOR_DEFAULTTONEAREST,
+        )
+    };
+    let mut monitor_info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..MONITORINFO::default()
+    };
+    unsafe {
+        let _ = GetMonitorInfoW(monitor, &mut monitor_info);
+    }
+    monitor_info.rcWork
+}
+
 fn clamp_start(preferred: i32, length: i32, min: i32, max: i32) -> i32 {
     if max <= min || length >= max - min {
         return min;
@@ -422,8 +452,8 @@ fn clamp_start(preferred: i32, length: i32, min: i32, max: i32) -> i32 {
 mod tests {
     use super::{
         candidate_window_position, candidate_window_position_with_ruby_clearance,
-        ruby_reading_left_inset, ruby_window_position, ruby_window_size_for_work_area,
-        CandidateRect, CandidateWindowSize, RubyWindowSize,
+        clipboard_window_position, ruby_reading_left_inset, ruby_window_position,
+        ruby_window_size_for_work_area, CandidateRect, CandidateWindowSize, RubyWindowSize,
     };
     use windows::Win32::Foundation::RECT;
 
@@ -660,5 +690,33 @@ mod tests {
         let size = ruby_window_size_for_work_area(1000.0, 39.0, work_area(), 2.0);
 
         assert_eq!(size, RubyWindowSize::new(400.0, 39.0));
+    }
+
+    #[test]
+    fn keeps_clipboard_window_inside_work_area_below_input() {
+        let pos = clipboard_window_position((140, 180), (440, 380), work_area());
+
+        assert_eq!(pos, (140, 180));
+    }
+
+    #[test]
+    fn moves_clipboard_window_left_when_it_overflows_the_right_edge() {
+        let pos = clipboard_window_position((700, 180), (440, 380), work_area());
+
+        assert_eq!(pos, (360, 180));
+    }
+
+    #[test]
+    fn moves_clipboard_window_above_when_it_overflows_the_bottom_edge() {
+        let pos = clipboard_window_position((140, 500), (440, 380), work_area());
+
+        assert_eq!(pos, (140, 220));
+    }
+
+    #[test]
+    fn pins_clipboard_window_to_work_area_origin_when_it_is_larger() {
+        let pos = clipboard_window_position((-50, -80), (900, 700), work_area());
+
+        assert_eq!(pos, (0, 0));
     }
 }

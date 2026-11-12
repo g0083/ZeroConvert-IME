@@ -16,7 +16,7 @@ export function SettingsRow({ label, description, htmlFor, children }: {
     children: ReactNode;
 }) {
     return (
-        <div className="settings-row">
+        <div className="settings-row" data-settings-label={label}>
             <div className="min-w-0 space-y-1">
                 {htmlFor ? <label htmlFor={htmlFor} className="text-sm font-medium">{label}</label>
                     : <p className="text-sm font-medium">{label}</p>}

@@ -179,6 +179,13 @@
   align-items: center;
   gap: 0.5rem;
 }
+.settings-row-highlight {
+  animation: settings-row-highlight 1.6s ease-out;
+}
+@keyframes settings-row-highlight {
+  from { background: color-mix(in oklab, var(--primary) 18%, transparent); }
+  to { background: transparent; }
+}
 @container (max-width: 440px) {
   .settings-row {
     grid-template-columns: minmax(0, 1fr);

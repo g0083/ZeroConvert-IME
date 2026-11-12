@@ -6,13 +6,13 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Undo
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Surface
@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -99,21 +100,30 @@ fun HorizontalCandidateStrip(
 ) {
     var pendingForget by remember { mutableStateOf<Candidate?>(null) }
     val candidate = pendingForget
+    // The IME owns no activity window token, so a Dialog (and any Popup) fails with
+    // BadTokenException. Confirmation is drawn inline in the candidate row instead.
     if (candidate != null) {
-        AlertDialog(
-            onDismissRequest = { pendingForget = null },
-            title = { Text("学習を削除") },
-            text = { Text("「${candidate.text}」の変換学習を削除します。よろしいですか？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingForget = null
-                    onForget?.invoke(candidate)
-                }) { Text("削除") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingForget = null }) { Text("キャンセル") }
-            }
-        )
+        Row(
+            modifier = modifier.semantics { contentDescription = "学習削除の確認" }
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "「${candidate.text}」の学習を削除",
+                color = palette.textPrimary,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            TextButton(onClick = {
+                pendingForget = null
+                onForget?.invoke(candidate)
+            }) { Text("削除", fontSize = 13.sp) }
+            TextButton(onClick = { pendingForget = null }) { Text("キャンセル", fontSize = 13.sp) }
+        }
+        return
     }
     // LazyRow otherwise retains its visible item by itemKey when conversion reranks the list.
     // Recreate only this viewport; ordinary updates with the same top result preserve browsing.
@@ -122,14 +132,27 @@ fun HorizontalCandidateStrip(
             modifier = modifier.semantics { contentDescription = "変換候補一覧" },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            items(candidates.size, key = { "${it}_${candidates[it].itemKey}" }) { index ->
-                val item = candidates[index]
+            // Index into the snapshot the composition was built from. Deletion
+            // removes an entry asynchronously, so a stale index would throw.
+            items(candidates) { item ->
+                val index = candidates.indexOf(item)
                 Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+                    val canForget = onForget != null && item.engineCandidateId.isNotEmpty()
                     Box(
                         modifier = Modifier.fillMaxHeight()
-                            .semantics { contentDescription = "変換候補 ${item.text}" }
+                            .semantics {
+                                contentDescription = "変換候補 ${item.text}"
+                                // combinedClickable does not publish a long-click action,
+                                // so assistive tech and device tests could not reach it.
+                                if (canForget) {
+                                    onLongClick(label = "学習を削除") {
+                                        pendingForget = item
+                                        true
+                                    }
+                                }
+                            }
                             .then(
-                                if (onForget != null && item.engineCandidateId.isNotEmpty()) {
+                                if (canForget) {
                                     Modifier.combinedClickable(
                                         onClick = { onSelect(item) },
                                         onLongClick = { pendingForget = item }

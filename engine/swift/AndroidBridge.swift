@@ -88,6 +88,14 @@ private let embeddedPerformance = EmbeddedPerformance()
         }
         return ["forgot": forget_learning_candidate(candidateId: candidateId)]
     }
+    // Applies the same guards and single-shot consume as "forget" but writes no
+    // store. Device checks use it so they never rewrite the user's learning memory.
+    if op == "validateForget" {
+        guard let id = request["candidateId"] as? String, let candidateId = UInt64(id) else {
+            return ["error": "invalid candidate identity"]
+        }
+        return ["valid": validate_learning_candidate_deletion(candidateId: candidateId)]
+    }
     if op == "clear" { clear_text(); return [:] }
     if op == "close" {
         clear_text()

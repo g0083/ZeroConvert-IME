@@ -40,18 +40,33 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 ## 単語削除の経路
 
 ```
-候補バー長押し
+候補バー長押し / 候補ウィンドウ右クリック
   → WindowsEngine.forgetCandidate(candidateId)     (Android)
-  → op=forget / ForgetLearningCandidate RPC        (Windows)
+  → ENGINE_CANDIDATE_FORGET_MESSAGE → クライアントで index → candidate_id
+  → ForgetLearningCandidate RPC                    (Windows)
   → forget_learning_candidate(candidateId)         (Swift)
-       ├─ LearningCandidateCache.candidate(for:)   … 消費せずに候補を引く
+       ├─ learningCandidate(candidateId)              … 非破壊の検証用参照
+       ├─ 学習対象・学習モードの検査                    … 拒否時はIDを消費しない
+       ├─ LearningCandidateCache.consume(candidateId) … 検査通過後に単発削除のため消費
        ├─ converter.forgetMemory(candidate)        … LOUDS長期・一時記憶
        └─ LearningSelectionStore.remove(output:for:) … 選択上書きは表記単位
 ```
 
 `LearningSelectionStore.remove(output:for:)` を新設した。既存の `removeValue(forKey:)` は読みごと全消しで、同じ読みの別表記まで巻き添えになるため使わない。
 
-`LearningCandidateCache.candidate(for:)` は非破壊の peek。既存の `consume` は学習確定用に温存する。
+候補IDは `consume` で消費する。非破壊の peek だと同じIDを2回削除でき、後から別の候補が同じスロットを再利用したときに誤削除につながるため。実機テストで2回目が拒否されることを固定した。
+
+**検証は consume の前に行う。** 学習対象外の候補（辞書補正・AI候補）や `currentLearningType == .nothing` の候補は削除を拒否するが、先に consume するとそのIDが恒久的に使用済みになり、以後の学習確定（`CommitLearningCandidate`）も `PinLearningCandidate` も失敗する。`LearningCandidateCache.candidate(for:)` で内容を読み、ガードを通ってから consume する。
+
+### 実機テスト用の非破壊検証
+
+実機テストは `LearningPolicy.withoutWrites` の内側で動くため、実ストアを書き換えてはいけない。`ValidateLearningCandidateDeletion`（`validate_learning_candidate_deletion`）は同じガードと consume を適用し、ストア書き込みの手前で戻る。これによりIDの発行・単発消費の契約を実データに触れずに検証できる。`AndroidBridge.swift` の `op=validateForget` がこの経路。
+
+### Windows候補ウィンドウ
+
+候補ウィンドウは `Vec<String>` しか持たないため、右クリックは表示indexだけを `ENGINE_CANDIDATE_FORGET_MESSAGE` でTSFへ送り、クライアントが `Composition.candidates.candidate_ids` でIDを解決する。IDが0（辞書補正・AI候補）なら何もしない。削除成功後は `UserAction::Space` 相当の再変換で候補順位を出し直す。
+
+`ChangeWindowMessageFilterEx` で新メッセージも許可する。UIAccess を失った候補UIから昇格ウィンドウへ届かせるため。
 
 ## 依存入力の変更（Phase 0）
 
@@ -77,13 +92,16 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 ## UI
 
 **Android**
-- `HorizontalCandidateStrip` に `onForget` を追加。候補長押しで確認ダイアログを出し、削除後は同じ読みで再変換する。
-- 設定画面は「学習データ」に変更し、変換学習・補正学習の件数を表示。「学習を削除」でスコープ選択ダイアログを開く。
-- 削除結果はToastで通知し、件数を取り直す。
+- `HorizontalCandidateStrip` に `onForget` を追加。候補長押しで確認ダイアログを出す。
+- **確認 UI はダイアログではなく候補バー内のインライン表示にする。** IME は Activity のウィンドウトークンを持たないため、`AlertDialog` は `WindowManager$BadTokenException` でクラッシュする。`Dialog` / `Popup` 系を IME ウィンドウ内で使わない。
+- 候補の長押しは `combinedClickable` だけではアクセシビリティに公開されないため、`semantics { onLongClick(...) }` も併記する。
+- 候補リストの描画は `items(list) { }` を使う。`items(size) { candidates[index] }` は削除でリストが縮んだ瞬間に範囲外参照になる。
+- 削除後は同じ読みで再変換する。設定画面は「学習データ」に変換学習・補正学習の件数を表示し、削除スコープを選ばせる。
 
 **Windows**
-- `reset_learning_history` が `scopes: Option<Vec<String>>` を受け取る。未知の名前は無視し、全消去へ拡張しない。
+- 設定画面の「変換学習」に件数表示とスコープのチェックボックスを追加。`reset_learning_history` の `applied` / `failed` / `stats` を反映し、部分失敗を成功として表示しない。
 - `get_learning_stats` / `forget_learning_candidate` コマンドを追加。
+- 候補ウィンドウは右クリック（`contextmenu`）で削除要求を送る。左クリックの採用経路は維持する。
 
 ## 制約
 
@@ -100,15 +118,56 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 | 依存パッチ単体 | `python windows/scripts/test_converter_patch.py` | 追加4件PASS（既存5件は別セッションの `n_batch` アンカー未追随で失敗） |
 | Rust補正学習 | `cargo test -p azookey-server ai_assist::learning` | 7 passed |
 | 共有Rust | `cargo test -p zerocon-engine` | 79 passed / 1 ignored |
-| Windows全体 | `cargo test --workspace` | 全suite成功 |
+| Windows全体 | `cargo test --workspace` | 全suite成功（16 suites） |
+| Windows UI | `cargo test -p ui` | 52 passed |
+| Windowsビルド | `cargo build --workspace` | 成功（Swift静的ライブラリ再ビルド後） |
+| フロント型 | `npm run typecheck` | エラーなし |
+| フロントテスト | `npm test` | 18 passed |
 | Android JVM | `:rebuilt:testDebugUnitTest` | 36クラス 失敗0 |
 | Android lint | `:rebuilt:lintDebug` | エラー0 |
-| APK | `scripts/check-android-apk.py` | 両ABIでclosure・CPU backend・モデルハッシュ検証OK |
+| Android UI (エミュレータ) | `am instrument -e keyboardUiOnly true` | **22 passed / 0 failed** |
+| Android APK | `scripts/check-android-apk.py` | 両ABIでclosure・CPU backend・逆引き辞書・モデルハッシュ検証OK |
+| 実機（V2520A / Android） | `am instrument` 26 tests | **26 passed / 0 failed** |
 
-未実施: 実機での長押し削除・リセット動作確認。候補IDの寿命と実IMEの再変換挙動は端末で確認する必要がある。
+### 追加修正（2026-11-12）
+
+レビューで見つかった2点を修正した。
+
+1. **consume の順序**: 検証を consume の前に移した。拒否された削除が有効なIDを消費して、以後の学習確定・pin を壊す経路を塞いだ。回帰は Swift テスト `refusedDeletionLeavesTheCandidateUsable` と `refusedDeletionWhileLearningIsDisabledKeepsTheCandidate`。
+2. **実機テストの非破壊化**: `validateCandidateDeletion`（`ValidateLearningCandidateDeletion`）を追加し、ガードと consume だけを適用してストアには書かない。`PortInstrumentationRunner` の学習系2テストはこの経路を使う。学習モードが読み書き以外の端末ではIDが発行されないため、その場合はスキップ理由をログに残して受け入れ側の確認だけ省略する。回帰は Swift テスト `deletionValidationConsumesWithoutWritingStores`。
+
+| 追加検証 | 結果 |
+|---|---|
+| `swift test --filter refusedDeletion` | 2 passed |
+| `swift test --filter deletionValidation` | 1 passed |
+| `swift test --filter learningCandidate` | 7 passed |
+| `:rebuilt:testDebugUnitTest` | 284 tests, 0 failures |
+| エミュレータ `am instrument`（学習系2件） | PASS（他は環境要因で失敗） |
+
+`swift test` 全体では `latestLearningSelectionIsPrioritizedOnlyForItsReading` が失敗するが、これは変更前の HEAD でも同じく失敗する既存問題（`prioritizeLearningSelectionOverrides` の並び順期待）で、今回の変更とは無関係。
+
+### 実機で確認したこと
+
+1. **APK照合**: 端末の `base.apk` の SHA256 がビルドと一致（`34DAEBCD...` → 再ビルド後 `67ecc8a8...`）。
+2. **設定画面の件数**: 「変換学習 67件 / 補正学習 1件」が表示された。
+3. **スコープ指定**: 補正学習のチェックを外して削除 → 「変換学習 0件 / 補正学習 1件」となり、変換学習だけが消えた。
+4. **往復削除**: 合成読み `ぜろこんけしょう` の候補IDを削除 → 成功。同じIDの2回目は拒否。
+5. **無効ID**: `0` と `UInt64.max` は削除拒否。
+6. **回帰**: 既存25件（変換・カーソル・英語・辞書・Zenzai長文）は全てPASS。
+
+### 実機で確認できなかったこと
+
+- 候補バーの長押しから開く確認 UI の**実機目視**。修正前は `AlertDialog` による `BadTokenException` でクラッシュしていた。修正後、エミュレータの UI フィクスチャ（`KeyboardUiRegression`）で長押し → インライン確認 → キャンセル／削除の一連が通ることを確認したが、実機の候補バー上での目視は未実施。
+- Windows実IMEでの右クリック削除。ビルドとテストは通ったが、TSFとして常駐させた状態での操作は未確認。
+
+### エミュレータで判明した環境制約
+
+- `zerocon-verify` (x86_64 / API 36) では `adb shell input tap` が IME ウィンドウに届かない。
+- instrumentation でも、実 IME のウィンドウを使うテスト（`real_ime_keys_and_commit`、`english_*`）は `Japanese IME key did not appear` で失敗する。`ImeTracker` が `PHASE_WM_GET_CONTROL_WITH_LEASH` でタイムアウトしており、エミュレータのウィンドウ制御の問題。アニメーション無効化・GPU 切り替え・エミュレータ再起動では解消しなかった。
+- そのため長押し削除の検証は、IME ウィンドウを使わない `KeyboardUiRegression` のフィクスチャに移した。ここでは 22 件すべて PASS し、クラッシュも発生しない。
 
 ## 未対応
 
-- Windows候補ウィンドウの右クリック削除UI。RPCとコマンドは用意済みで、UIの配線が残っている。
 - 英語学習（`zerocon_english_data`）と絵文字履歴は削除スコープに含めていない。
-- 削除後の再ランキングを検証する自動テスト。現状は手動確認のみ。
+- 削除後の再ランキングを検証する自動テスト（Windows）。`UserAction::Space` 相当の再変換を呼ぶ実装だが、順位変化そのものは未検証。
+- 上流 `forgetMemory` の表記単位照合により、同じ表記を別読みで学習していた場合も消える。仕様として許容。

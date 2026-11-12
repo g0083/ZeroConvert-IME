@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useBlocker } from "react-router";
 import { toast } from "sonner";
 import rawBenchmarkData from "@/data/benchmark480.json";
 import rawTypoData from "@/data/typo_benchmark300.json";
@@ -21,6 +22,43 @@ import {
     Filter
 } from "lucide-react";
 import { ZeroConvertLogo } from "@/components/zeroconvert-logo";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+function BenchmarkDepartureGuard({ running }: { running: boolean }) {
+    const blocker = useBlocker(running);
+    return (
+        <AlertDialog open={blocker.state === "blocked"}>
+            <AlertDialogContent
+                onEscapeKeyDown={(event) => {
+                    event.preventDefault();
+                    if (blocker.state === "blocked") blocker.reset();
+                }}
+            >
+                <AlertDialogHeader>
+                    <AlertDialogTitle>ベンチマークを中断しますか？</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        実行中の進捗と結果は破棄されます。続行するにはキャンセルしてください。
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel onClick={() => {
+                        if (blocker.state === "blocked") blocker.reset();
+                    }}>
+                        実行を続ける
+                    </AlertDialogCancel>
+                    <AlertDialogAction onClick={() => {
+                        if (blocker.state === "blocked") blocker.proceed();
+                    }}>
+                        中断して移動
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    );
+}
 
 export type BenchmarkItem = {
     id: number;
@@ -373,6 +411,7 @@ export function Benchmark() {
 
     return (
         <div className="space-y-6 max-w-5xl mx-auto pb-12">
+            <BenchmarkDepartureGuard running={isRunning || isTypoRunning} />
             {/* Tab Selector */}
             <div className="flex items-center gap-2 border-b pb-3">
                 <button
@@ -799,7 +838,7 @@ export function Benchmark() {
 
                         {/* Filter Pill */}
                         <div className="flex items-center gap-1 bg-muted p-1 rounded-lg border border-border/70 text-xs overflow-x-auto max-w-full">
-                            {TYPO_FILTER_TYPES.slice(0, 5).map((ft) => (
+                            {TYPO_FILTER_TYPES.slice(0, 3).map((ft) => (
                                 <button
                                     key={ft.id}
                                     type="button"

@@ -129,6 +129,24 @@ fn candidate_html() -> String {
                                 color: #FFFFFF;
                             }
                         }
+
+                        &:not([data-selected]):hover {
+                            background-color: #F8FAFC;
+                        }
+
+                        &[data-confirm-forget] {
+                            background-color: #FEF2F2;
+                            box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.35);
+                        }
+                    }
+                    .forget-confirm {
+                        margin-left: auto;
+                        padding-left: 8px;
+                        flex-shrink: 0;
+                        font-size: 10.5px;
+                        font-weight: 600;
+                        color: #B91C1C;
+                        white-space: nowrap;
                     }
                     .virtual-spacer {
                         display: block;
@@ -176,6 +194,18 @@ fn candidate_html() -> String {
                                     color: #F8FAFC;
                                 }
                             }
+
+                            &:not([data-selected]):hover {
+                                background-color: rgba(255, 255, 255, 0.06);
+                            }
+
+                            &[data-confirm-forget] {
+                                background-color: rgba(220, 38, 38, 0.18);
+                                box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.5);
+                            }
+                        }
+                        .forget-confirm {
+                            color: #FCA5A5;
                         }
                             
                     }
@@ -196,6 +226,8 @@ fn candidate_html() -> String {
                     let currentItemHeight = 0;
                     let renderedRangeStart = -1;
                     let renderedRangeEnd = -1;
+                    let pendingForgetIndex = -1;
+                    let pendingForgetTimer = null;
                     let adjustWindowSizeFrame = null;
                     let renderCandidateRangeFrame = null;
 
@@ -233,7 +265,41 @@ fn candidate_html() -> String {
                         if (index === currentSelectionIndex) {
                             li.setAttribute('data-selected', '');
                         }
+                        if (index === pendingForgetIndex) {
+                            // 誤操作で学習が消えないよう、右クリックは2段階で確定する。
+                            li.setAttribute('data-confirm-forget', '');
+                            const hint = document.createElement('span');
+                            hint.className = 'forget-confirm';
+                            hint.textContent = 'もう一度右クリックで削除';
+                            li.appendChild(hint);
+                        }
                         return li;
+                    }
+
+                    function clearForgetConfirmation() {
+                        if (pendingForgetTimer !== null) {
+                            clearTimeout(pendingForgetTimer);
+                            pendingForgetTimer = null;
+                        }
+                        if (pendingForgetIndex === -1) {
+                            return;
+                        }
+                        pendingForgetIndex = -1;
+                        renderCandidateRange(true);
+                        scheduleAdjustWindowSize();
+                    }
+
+                    function requestForget(index) {
+                        if (pendingForgetIndex !== index) {
+                            clearForgetConfirmation();
+                            pendingForgetIndex = index;
+                            pendingForgetTimer = setTimeout(clearForgetConfirmation, 4000);
+                            renderCandidateRange(true);
+                            scheduleAdjustWindowSize();
+                            return;
+                        }
+                        clearForgetConfirmation();
+                        window.ipc.postMessage(JSON.stringify({type: 'forget', index}));
                     }
 
                     function createVirtualSpacer(height) {
@@ -438,16 +504,18 @@ fn candidate_html() -> String {
                                 event.preventDefault();
                                 const item = event.target.closest('li.candidate-item');
                                 if (!item) {
+                                    clearForgetConfirmation();
                                     return;
                                 }
                                 const index = Number(item.dataset.index);
                                 if (!Number.isInteger(index) || index < 0) {
                                     return;
                                 }
-                                window.ipc.postMessage(JSON.stringify({
-                                    type: 'forget',
-                                    index,
-                                }));
+                                requestForget(index);
+                            });
+                            candidateList.addEventListener('click', clearForgetConfirmation);
+                            candidateList.addEventListener('scroll', clearForgetConfirmation, {
+                                passive: true,
                             });
                         }
                         adjustWindowSize();
@@ -487,7 +555,12 @@ mod tests {
     }
 
     fn assert_nonzero_lengths_have_units(value: &str) {
+        // CSS長さのキーワードは単位不要（数値だけが単位必須）。
+        const KEYWORDS: [&str; 5] = ["auto", "inherit", "initial", "unset", "revert"];
         for component in value.split_ascii_whitespace() {
+            if KEYWORDS.contains(&component) {
+                continue;
+            }
             if let Ok(number) = component.parse::<f64>() {
                 if number == 0.0 {
                     continue;
@@ -543,6 +616,17 @@ mod tests {
         assert!(html.contains("type: 'forget'"));
         assert!(html.contains("'contextmenu'"));
         assert!(html.contains("event.preventDefault()"));
+    }
+
+    #[test]
+    fn candidate_html_confirms_learning_deletion_before_forgetting() {
+        // 右クリック1回で学習が消えないよう、2回目の右クリックで送信する。
+        let html = candidate_html();
+        assert!(html.contains("function requestForget(index)"));
+        assert!(html.contains("pendingForgetIndex !== index"));
+        assert!(html.contains("もう一度右クリックで削除"));
+        assert!(html.contains("clearForgetConfirmation"));
+        assert!(html.contains("setTimeout(clearForgetConfirmation, 4000)"));
     }
 
     #[test]

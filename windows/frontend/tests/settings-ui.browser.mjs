@@ -17,7 +17,7 @@ function installMock() {
         romaji_table: { rows: [{ input: "ka", output: "か", next_input: "" }] },
         user_dictionary: { entries: Array.from({ length: 25 }, (_, i) => ({ reading: `よみ${i}`, word: `単語${i}` })) },
     };
-    window.settingsTest = { config, checks: 0, writes: 0, updateStarts: 0, failStart: false, holdStart: false, failCheck: false, failSave: false, failLoad: sessionStorage.getItem("failSettingsLoad") === "true", available: true, holdSave: false, jevApiKeySaved: false, keyChecks: 0, keyCheckArgs: [], holdKeyCheck: false, keyCheckError: null, links: [], callbacks: {}, listeners: {}, nextCallback: 0, destroys: 0 };
+    window.settingsTest = { config, checks: 0, writes: 0, updateStarts: 0, failStart: false, holdStart: false, failCheck: false, failSave: false, failLoad: sessionStorage.getItem("failSettingsLoad") === "true", available: true, holdSave: false, callbacks: {}, listeners: {}, nextCallback: 0, destroys: 0 };
     window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: "main" } },
@@ -55,20 +55,26 @@ function installMock() {
                     return { launched: true };
                 case "check_capability": return { cpu: true, cuda: false, vulkan: true };
                 case "get_active_model": return { active_id: "standard", models: [] };
-                case "has_jev_api_key": return state.jevApiKeySaved;
-                case "check_jev_api_key":
-                    state.keyChecks++;
-                    state.keyCheckArgs.push(args ?? null);
-                    while (state.holdKeyCheck) await new Promise((resolve) => setTimeout(resolve, 20));
-                    if (state.keyCheckError) throw state.keyCheckError;
-                    return null;
+                case "run_quick_benchmark": return { results: [], recommended: null };
                 case "get_default_romaji_rows": return [{ input: "ka", output: "か", next_input: "" }, { input: "kk", output: "っ", next_input: "k" }];
-                case "plugin:opener|open_url": state.links.push(args.url); return null;
                 case "restart_server":
                     state.restarts = (state.restarts ?? 0) + 1;
                     if (state.failRestart) throw new Error("mock restart failure");
                     return null;
-                case "reset_learning_history": return { reset: true, server_applied: true };
+                case "get_learning_stats": return {
+                    selection_count: 3, typo_count: 1,
+                    history_present: true, history_paused: false, learning_mode: "enabled",
+                };
+                case "reset_learning_history":
+                    state.learningResetScopes = state.learningResetScopes ?? [];
+                    return {
+                        reset: true, server_applied: true,
+                        applied: ["conversion", "typo"], failed: [],
+                        stats: {
+                            selection_count: 0, typo_count: 0,
+                            history_present: false, history_paused: false, learning_mode: "enabled",
+                        },
+                    };
                 default: throw new Error(`Unmocked command: ${command}`);
             }
         },
@@ -115,7 +121,7 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await page.getByRole("button", { name: "設定メニューを開閉", exact: true }).click();
         const rail = page.locator('[data-slot="sidebar"][data-state="collapsed"]');
         await rail.waitFor();
-        for (const name of ["入力と文字", "変換と候補", "キーとローマ字", "ユーザ辞書", "詳細設定", /Azookeyについて/]) {
+        for (const name of ["入力と文字", "変換と候補", "キーとローマ字", "ユーザ辞書", "詳細設定", /ZeroConについて/]) {
             const link = page.getByRole("link", { name, exact: typeof name === "string" });
             await assertInViewport(link, page);
             assert.ok(await link.locator("svg").isVisible(), "collapsed sidebar retains each navigation icon");
@@ -127,8 +133,8 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await page.getByRole("link", { name: "変換と候補", exact: true }).hover();
         await page.getByRole("tooltip", { name: "変換と候補", exact: true }).waitFor();
         await page.getByRole("link", { name: "変換と候補", exact: true }).click();
-        await page.getByRole("heading", { name: "Zenzai", exact: true }).waitFor();
-        assert.equal(await page.locator(".settings-content > section").first().getByRole("heading").innerText(), "Zenzai");
+        await page.getByRole("heading", { name: "ZeroCon AI", exact: true }).waitFor();
+        assert.equal(await page.locator(".settings-content > section").first().getByRole("heading").innerText(), "ZeroCon AI");
         assert.ok((await page.locator('[data-slot="sidebar-container"]').boundingBox()).width <= 64, "collapsed sidebar is a narrow icon rail");
         await screenshot("sidebar-icons");
         await page.getByRole("link", { name: "入力と文字", exact: true }).click();
@@ -227,15 +233,9 @@ test("settings layout, editing safety, navigation and update badge", async () =>
 
         await page.getByRole("link", { name: "変換と候補", exact: true }).click();
         await page.getByLabel("変換プロファイル", { exact: true }).fill("latest profile");
-        await page.getByRole("link", { name: /Azookeyについて/ }).click();
+        await page.getByRole("link", { name: /ZeroConについて/ }).click();
         await page.waitForFunction(() => window.settingsTest.config.zenzai.profile === "latest profile");
-        await page.getByText("不具合報告・要望", { exact: true }).waitFor();
-        assert.equal(await page.getByText(/Discord/).count(), 0);
-        const github = page.locator('a[href="https://github.com/batao9/azooKey-Windows"]');
-        const issues = page.locator('a[href="https://github.com/batao9/azooKey-Windows/issues"]');
-        await github.click();
-        await issues.click();
-        assert.deepEqual(await page.evaluate(() => window.settingsTest.links), ["https://github.com/batao9/azooKey-Windows", "https://github.com/batao9/azooKey-Windows/issues"]);
+        await page.getByText("オープンソースライセンスと謝辞", { exact: true }).waitFor();
         await page.evaluate(() => { window.settingsTest.failCheck = true; });
         await page.getByRole("button", { name: "更新を確認", exact: true }).click();
         await page.getByText("Error: mock update failure", { exact: true }).waitFor();
@@ -245,6 +245,21 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await page.getByRole("button", { name: "更新を確認", exact: true }).click();
         await page.getByText("最新版を利用中です。", { exact: true }).waitFor();
         assert.equal(await page.getByLabel("更新があります", { exact: true }).count(), 0);
+
+        await page.keyboard.press("Control+k");
+        const search = page.getByRole("dialog", { name: "設定を検索", exact: true });
+        await search.waitFor();
+        await search.getByRole("textbox", { name: "設定を検索", exact: true }).fill("ばっくえんど");
+        await search.getByRole("option").first().click();
+        await page.getByRole("heading", { name: "ZeroCon AI", exact: true }).waitFor();
+        const highlighted = page.locator('[data-settings-label="バックエンド"].settings-row-highlight');
+        await highlighted.waitFor();
+        await screenshot("settings-search");
+        await page.keyboard.press("Control+k");
+        await page.getByRole("dialog", { name: "設定を検索", exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        await page.getByRole("dialog", { name: "設定を検索", exact: true }).waitFor({ state: "hidden" });
+        await page.getByRole("link", { name: /ZeroConについて/ }).click();
 
         await page.evaluate(() => { window.settingsTest.available = true; window.settingsTest.failStart = true; });
         await page.getByRole("button", { name: "更新を確認", exact: true }).click();
@@ -256,18 +271,20 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await page.evaluate(() => { window.settingsTest.failStart = false; window.settingsTest.holdStart = true; });
         await updateButton.click();
         await page.getByText("アップデートを開始中…", { exact: true }).waitFor();
-        assert.ok(await updateButton.isDisabled());
+        assert.ok(await page.getByRole("button", { name: "アップデートを開始中…", exact: true }).isDisabled());
         assert.ok(await recheckButton.isDisabled());
         await page.evaluate(() => { window.settingsTest.holdStart = false; });
         await page.getByText("アップデートを開始しました。完了までお待ちください。", { exact: true }).waitFor();
-        assert.ok(await updateButton.isDisabled(), "successful helper launch must stay disabled until restart");
+        const launchedButton = page.getByRole("button", { name: "開始済み", exact: true });
+        await launchedButton.waitFor();
+        assert.ok(await launchedButton.isDisabled(), "successful helper launch must stay disabled until restart");
         assert.ok(await recheckButton.isDisabled(), "rechecking must not reset the launched state");
         await page.getByRole("link", { name: "入力と文字", exact: true }).click();
         await page.getByLabel("句読点", { exact: true }).waitFor();
-        await page.getByRole("link", { name: /Azookeyについて/ }).click();
+        await page.getByRole("link", { name: /ZeroConについて/ }).click();
         await page.getByText("アップデートを開始しました。完了までお待ちください。", { exact: true }).waitFor();
-        assert.ok(await updateButton.isDisabled(), "launch protection must survive navigation");
-        await updateButton.evaluate((button) => button.click());
+        assert.ok(await launchedButton.isDisabled(), "launch protection must survive navigation");
+        await launchedButton.evaluate((button) => button.click());
         await recheckButton.evaluate((button) => button.click());
         assert.equal(await page.evaluate(() => window.settingsTest.updateStarts), 2, "only the failed launch and its successful retry may invoke the backend");
         assert.equal(await page.getByLabel("更新があります", { exact: true }).count(), 1, "launching must not silently clear the update notification");
@@ -278,33 +295,9 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await page.getByRole("link", { name: "変換と候補", exact: true }).click();
         await page.getByLabel("ライブ変換中の読みを表示", { exact: true }).waitFor();
         await screenshot("conversion");
-        await page.evaluate(() => { window.settingsTest.jevApiKeySaved = true; });
         await page.getByRole("link", { name: "詳細設定", exact: true }).click();
-        await page.getByLabel("誤入力の補正", { exact: true }).waitFor();
-        const keyInput = page.getByLabel("TypeSafe APIキー", { exact: true });
-        const keyCheck = page.getByRole("button", { name: "保存済みキーを確認", exact: true });
-        await keyCheck.waitFor();
-        assert.equal(await keyInput.inputValue(), "", "saved secret must not enter the renderer, even with Jev off");
-        await keyInput.fill("unsaved-draft-for-test");
-        const writesBeforeKeyCheck = await page.evaluate(() => window.settingsTest.writes);
-        await page.evaluate(() => { window.settingsTest.holdKeyCheck = true; });
-        await keyCheck.click();
-        await page.getByRole("button", { name: "確認中…", exact: true }).waitFor();
-        assert.ok(await keyInput.isDisabled());
-        assert.ok(await page.getByRole("button", { name: "キーを保存", exact: true }).isDisabled());
-        assert.ok(await page.getByRole("button", { name: "削除", exact: true }).isDisabled());
-        await page.evaluate(() => { window.settingsTest.holdKeyCheck = false; });
-        await page.getByText("保存済みAPIキーは有効です", { exact: true }).waitFor();
-        await keyCheck.waitFor();
-        assert.equal(await keyInput.inputValue(), "unsaved-draft-for-test");
-        for (const error of ["APIキーが無効です。", "APIキーの確認がタイムアウトしました。", "APIキーの確認中にネットワークエラーが発生しました。"]) {
-            await page.evaluate((error) => { window.settingsTest.keyCheckError = error; }, error);
-            await keyCheck.click();
-            await page.getByText(error, { exact: true }).waitFor();
-            assert.ok(await keyCheck.isEnabled(), "failed checks must unlock retry");
-        }
-        assert.deepEqual(await page.evaluate(() => window.settingsTest.keyCheckArgs), [{}, {}, {}, {}], "check must use stored key, never pass unsaved key or context");
-        assert.equal(await page.evaluate(() => window.settingsTest.writes), writesBeforeKeyCheck, "checking must not modify settings");
+        await page.getByLabel("翻訳機能を有効にする", { exact: true }).waitFor();
+        await page.getByRole("heading", { name: "ログ", exact: true }).waitFor();
         await screenshot("advanced");
 
         await page.getByRole("link", { name: "ユーザ辞書", exact: true }).click();
@@ -371,7 +364,7 @@ test("runtime settings use RAM presets and retry failed application without a PC
         const backend = page.getByLabel("バックエンド", { exact: true });
         const layers = page.getByLabel("GPUに載せる層数", { exact: true });
         await backend.click();
-        await page.getByRole("option", { name: "CPU (非推奨)", exact: true }).click();
+        await page.getByRole("option", { name: "CPU", exact: true }).click();
         await page.waitForFunction(() => window.settingsTest.config.zenzai.backend === "cpu");
         assert.ok(await layers.isDisabled());
         assert.equal(await page.getByText(/PCを再起動してください/).count(), 0);

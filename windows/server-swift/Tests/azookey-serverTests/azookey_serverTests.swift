@@ -418,6 +418,90 @@ private func testCandidate(
     }
 }
 
+@Test func refusedDeletionLeavesTheCandidateUsable() async throws {
+    var notATarget = testCandidate(
+        word: "今日",
+        ruby: "きょう",
+        composingCount: .inputCount(3)
+    )
+    notATarget.isLearningTarget = false
+
+    await MainActor.run {
+        let previousLearningType = currentLearningType
+        currentLearningType = .inputAndOutput
+        learningCandidateCache.removeAll()
+        let batchFirstId = cacheLearningCandidates([notATarget])
+        let candidateId = learningCandidateId(at: 0, batchFirstId: batchFirstId)
+        #expect(candidateId != 0)
+
+        // A refused deletion must not consume the id, otherwise the candidate can
+        // no longer be committed or pinned by the id the client already holds.
+        #expect(!forget_learning_candidate(candidateId: candidateId))
+        #expect(learningCandidate(candidateId) != nil)
+        #expect(consumeLearningCandidate(candidateId) != nil)
+
+        learningCandidateCache.removeAll()
+        currentLearningType = previousLearningType
+    }
+}
+
+@Test func refusedDeletionWhileLearningIsDisabledKeepsTheCandidate() async throws {
+    let candidate = testCandidate(
+        word: "今日",
+        ruby: "きょう",
+        composingCount: .inputCount(3)
+    )
+
+    await MainActor.run {
+        let previousLearningType = currentLearningType
+        learningCandidateCache.removeAll()
+
+        // Ids are only issued while learning is enabled, so cache the batch first
+        // and then turn learning off: this is the state a client can still be in
+        // when the user changes the setting while a candidate bar is visible.
+        currentLearningType = .inputAndOutput
+        let batchFirstId = cacheLearningCandidates([candidate])
+        let candidateId = learningCandidateId(at: 0, batchFirstId: batchFirstId)
+        #expect(candidateId != 0)
+        currentLearningType = .nothing
+
+        // The guard runs before the consume, so the id stays usable.
+        #expect(!forget_learning_candidate(candidateId: candidateId))
+        #expect(learningCandidate(candidateId) != nil)
+        #expect(!validate_learning_candidate_deletion(candidateId: candidateId))
+        #expect(learningCandidate(candidateId) != nil)
+
+        learningCandidateCache.removeAll()
+        currentLearningType = previousLearningType
+    }
+}
+
+@Test func deletionValidationConsumesWithoutWritingStores() async throws {
+    let candidate = testCandidate(
+        word: "今日",
+        ruby: "きょう",
+        composingCount: .inputCount(3)
+    )
+
+    await MainActor.run {
+        let previousLearningType = currentLearningType
+        currentLearningType = .inputAndOutput
+        learningCandidateCache.removeAll()
+        let batchFirstId = cacheLearningCandidates([candidate])
+        let candidateId = learningCandidateId(at: 0, batchFirstId: batchFirstId)
+        #expect(candidateId != 0)
+
+        // The device check path: accepted once, refused the second time, and it
+        // never reaches the stores, so a user's learning memory is untouched.
+        #expect(validate_learning_candidate_deletion(candidateId: candidateId))
+        #expect(!validate_learning_candidate_deletion(candidateId: candidateId))
+        #expect(learningCandidate(candidateId) != nil)
+
+        learningCandidateCache.removeAll()
+        currentLearningType = previousLearningType
+    }
+}
+
 @Test func learningCandidateIdsUseDenseSequentialSlots() async throws {
     let first = testCandidate(
         word: "今日",
