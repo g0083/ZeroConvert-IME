@@ -1,0 +1,54 @@
+# Automatic live-conversion commit scenarios.
+# Read by:
+#   windows/crates/shared/src/conversion_policy.rs   (parity test around
+#                                                     find_auto_commit_live_conversion_snapshot)
+#   scripts/check-input-policy-parity.ps1
+#
+# This rule has exactly one implementation: `conversion_policy.rs`, reached on
+# Android through the shared engine (`op=autoCommit`). Android keeps no second
+# copy, so a scenario only has to describe the shared behaviour.
+#
+# Format: id<TAB>reading<TAB>preview<TAB>history<TAB>expect
+#   reading  current hiragana composition (kana only)
+#   preview  live-conversion baseline for the whole reading
+#   history  `readingCount:surface` entries separated by `;`
+#            readingCount = kana characters of that snapshot's reading,
+#            surface = the preview shown at that point (a prefix of `preview`)
+#   expect   `none` or `<readingLength>:<surfacePrefix>`
+#
+# A snapshot's reading is the current reading's prefix of `readingCount` kana and
+# the last surface equals `preview`, so the data has the shape a real inference
+# sequence produces.
+#
+# The romaji-split rule is exercised by unit tests instead of here; it depends on
+# the raw romaji index, which these kana-only readings do not carry.
+
+# ---- A stable clause prefix is committed --------------------------------------
+# わたしはがっこうにいって = 12 kana, so 10 stay uncommitted. 私は学校に行って
+# ends in the particle て and the next clause starts with 勉, a natural boundary
+# that every later preview keeps as a prefix.
+auto_commit_stable_clause	わたしはがっこうにいってべんきょうしています	私は学校に行って勉強しています	4:私は;8:私は学校;9:私は学校に;12:私は学校に行って;14:私は学校に行って勉;17:私は学校に行って勉強;18:私は学校に行って勉強し;19:私は学校に行って勉強して;22:私は学校に行って勉強しています	12:私は学校に行って
+
+# A clause ending in Japanese punctuation is a natural boundary even when the next
+# character is not a content word.
+auto_commit_punctuation_clause	きょうはいいてんきですね。あしたはあめです	今日はいい天気ですね。明日は雨です	13:今日はいい天気ですね。;14:今日はいい天気ですね。明;16:今日はいい天気ですね。明日;17:今日はいい天気ですね。明日は;19:今日はいい天気ですね。明日は雨;21:今日はいい天気ですね。明日は雨です	13:今日はいい天気ですね。
+
+# ---- Nothing may be committed ------------------------------------------------
+# Below the 16-kana minimum nothing is committed even with a stable history.
+auto_commit_short_reading	きょうはいいてんき	今日はいい天気	3:今日は;5:今日はいい;6:今日はいい天;7:今日はいい天気;8:今日はいい天気	none
+
+# One preview repeated is one inference step, not five.
+auto_commit_repeated_preview	わたしはがっこうにいってべんきょうしています	私は学校に行って	12:私は学校に行って;12:私は学校に行って;12:私は学校に行って;12:私は学校に行って;12:私は学校に行って	none
+
+# A katakana-only preview never ends in hiragana, so no prefix is a clause boundary.
+auto_commit_katakana_preview	わたしはがっこうにいってべんきょうしています	ワタシハガッコウニイッテベンキョウシテイマス	4:ワタシハ;8:ワタシハガッコウ;9:ワタシハガッコウニ;12:ワタシハガッコウニイッテ;14:ワタシハガッコウニイッテベン;17:ワタシハガッコウニイッテベンキョウ;19:ワタシハガッコウニイッテベンキョウシテ;22:ワタシハガッコウニイッテベンキョウシテイマス	none
+
+# ---- Character classes ------------------------------------------------------
+# U+FA11 (﨑) is a compatibility ideograph and is in the shared class list. The only
+# natural boundary here ends in て, and its prefix contains 﨑 as the only kanji.
+# Later snapshots end in a kanji, so this one is the longest match.
+auto_commit_compat_ideograph	さきのいえにいってべんきょうしています	﨑のいえにいって勉強しています	9:﨑のいえにいって;10:﨑のいえにいって勉;11:﨑のいえにいって勉強;13:﨑のいえにいって勉強し;15:﨑のいえにいって勉強して;17:﨑のいえにいって勉強してい;19:﨑のいえにいって勉強しています	9:﨑のいえにいって
+
+# The clause set is 、。，．！？!? only, so an ASCII comma in the preview is not a
+# boundary. (The typed comma becomes 、 in the reading; the preview keeps ",".)
+auto_commit_ascii_comma	きょうはいいてんきですね、あしたはあめです	今日はいい天気ですね,明日は雨です	13:今日はいい天気ですね,;14:今日はいい天気ですね,明;16:今日はいい天気ですね,明日;17:今日はいい天気ですね,明日は;19:今日はいい天気ですね,明日は雨;21:今日はいい天気ですね,明日は雨です	none

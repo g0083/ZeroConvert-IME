@@ -221,6 +221,20 @@ pub fn is_natural_auto_commit_prefix(candidate_prefix: &str, full_preview: &str)
         && is_kanji_or_katakana_char(next_char)
 }
 
+/// Pushes one inference surface into the stable-preview window.
+///
+/// The bridge and the parity test both build the window through here, so the
+/// deduplication and window size have a single definition. A repeated surface is
+/// one inference step, not extra evidence.
+pub fn push_live_conversion_history(history: &mut VecDeque<String>, preview: &str) {
+    if history.back().is_none_or(|last| last != preview) {
+        history.push_back(preview.to_string());
+    }
+    while history.len() > LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS {
+        history.pop_front();
+    }
+}
+
 pub fn record_live_conversion_prefix_snapshot(
     raw_input: &str,
     raw_hiragana: &str,
@@ -240,12 +254,7 @@ pub fn record_live_conversion_prefix_snapshot(
     if raw_input_len == 0 || hiragana_len == 0 {
         return;
     }
-    if history.back().is_none_or(|last| last != preview) {
-        history.push_back(preview.to_string());
-        while history.len() > LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS {
-            history.pop_front();
-        }
-    }
+    push_live_conversion_history(history, preview);
     if let Some(existing) = snapshots
         .iter_mut()
         .find(|snap| snap.raw_input_len == raw_input_len || snap.hiragana_len == hiragana_len)
@@ -498,5 +507,155 @@ mod tests {
             "私は学校に行って勉強する"
         ));
         assert!(is_kanji_or_katakana_char('𠮷'));
+    }
+
+    const AUTO_COMMIT_TSV: &str =
+        include_str!("../../../../tests/input-policy/auto-commit-cases.tsv");
+
+    struct AutoCommitScenario {
+        id: String,
+        reading: String,
+        preview: String,
+        history: Vec<LiveConversionPrefixSnapshot>,
+        expect: String,
+        line: usize,
+    }
+
+    fn auto_commit_scenarios() -> Vec<AutoCommitScenario> {
+        AUTO_COMMIT_TSV
+            .lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let line = line.trim_end_matches('\r');
+                if line.trim().is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let columns: Vec<&str> = line.split('\t').collect();
+                assert_eq!(
+                    columns.len(),
+                    5,
+                    "auto-commit-cases.tsv:{}: expected 5 tab-separated columns",
+                    index + 1
+                );
+                let reading = columns[1];
+                let preview = columns[2];
+                let history = columns[3]
+                    .split(';')
+                    .map(|entry| {
+                        let (count, surface) = entry.split_once(':').unwrap_or_else(|| {
+                            panic!("auto-commit-cases.tsv:{}: bad history entry '{entry}'", index + 1)
+                        });
+                        let count: usize = count.trim().parse().unwrap_or_else(|_| {
+                            panic!("auto-commit-cases.tsv:{}: bad reading count in '{entry}'", index + 1)
+                        });
+                        assert!(
+                            count <= reading.chars().count(),
+                            "auto-commit-cases.tsv:{}: reading count {count} exceeds '{reading}'",
+                            index + 1
+                        );
+                        assert!(
+                            preview.starts_with(surface),
+                            "auto-commit-cases.tsv:{}: surface '{surface}' is not a prefix of the preview",
+                            index + 1
+                        );
+                        LiveConversionPrefixSnapshot {
+                            raw_input_len: count,
+                            hiragana_len: count,
+                            preview: surface.to_string(),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    history.last().map(|snapshot| snapshot.preview.as_str()),
+                    Some(preview),
+                    "auto-commit-cases.tsv:{}: the last history surface must equal the preview",
+                    index + 1
+                );
+                Some(AutoCommitScenario {
+                    id: columns[0].to_string(),
+                    reading: reading.to_string(),
+                    preview: preview.to_string(),
+                    history,
+                    expect: columns[4].to_string(),
+                    line: index + 1,
+                })
+            })
+            .collect()
+    }
+
+    /// Runs the shared rule the way the bridge does: history entries are appended
+    /// in order, deduplicated by surface, and capped at the stable-step window, so a
+    /// repeated preview cannot count as separate evidence.
+    fn run_auto_commit(scenario: &AutoCommitScenario) -> String {
+        let mut history = VecDeque::new();
+        for snapshot in &scenario.history {
+            push_live_conversion_history(&mut history, &snapshot.preview);
+        }
+        let found = find_auto_commit_live_conversion_snapshot(
+            &scenario.reading,
+            &scenario.reading,
+            &scenario.preview,
+            "",
+            &scenario.history,
+            &history,
+        );
+        match found {
+            Some(snapshot) => format!("{}:{}", snapshot.hiragana_len, snapshot.preview),
+            None => "none".to_string(),
+        }
+    }
+
+    #[test]
+    fn shared_auto_commit_matches_every_scenario() {
+        let scenarios = auto_commit_scenarios();
+        assert!(
+            scenarios.len() >= 6,
+            "auto-commit-cases.tsv should cover the commit and no-commit paths"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for scenario in &scenarios {
+            assert!(
+                seen.insert(scenario.id.clone()),
+                "auto-commit-cases.tsv:{}: duplicate id {}",
+                scenario.line,
+                scenario.id
+            );
+            assert_eq!(
+                run_auto_commit(scenario),
+                scenario.expect,
+                "auto-commit-cases.tsv:{}: {}",
+                scenario.line,
+                scenario.id
+            );
+        }
+    }
+
+    /// The commit target must be the longest stable prefix, not merely a stable one.
+    #[test]
+    fn auto_commit_prefers_the_longest_stable_prefix() {
+        let scenario = auto_commit_scenarios()
+            .into_iter()
+            .find(|scenario| scenario.id == "auto_commit_stable_clause")
+            .expect("auto_commit_stable_clause scenario");
+        let result = run_auto_commit(&scenario);
+        let prefix_length: usize = result
+            .split(':')
+            .next()
+            .and_then(|value| value.parse().ok())
+            .expect("reading length");
+        for snapshot in &scenario.history {
+            if snapshot.hiragana_len > prefix_length
+                && is_natural_auto_commit_prefix(&snapshot.preview, &scenario.preview)
+            {
+                assert!(
+                    !scenario
+                        .history
+                        .iter()
+                        .all(|entry| entry.preview.starts_with(&snapshot.preview)),
+                    "a longer natural prefix should have won: {}",
+                    snapshot.preview
+                );
+            }
+        }
     }
 }

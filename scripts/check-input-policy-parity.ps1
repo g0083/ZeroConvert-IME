@@ -1,12 +1,14 @@
 # Verifies that the input policy has one definition and that the Android
 # fallback copy still matches it.
 #
-#   tests/input-policy/cases.tsv                       <- behaviour specification
-#   windows/crates/shared/src/conversion_policy.rs     <- canonical tables
-#   android/.../InputPolicy.kt                         <- Android fallback tables
+#   tests/input-policy/cases.tsv                <- behaviour specification
+#   tests/input-policy/auto-commit-cases.tsv    <- live-conversion commit scenarios
+#   windows/crates/shared/src/conversion_policy.rs   <- canonical rule
+#   android/.../InputPolicy.kt                  <- Android fallback tables
+#   android/.../AutoCommitAndPipelineTest.kt     <- the Android-side input shape
 #
-# Run this after editing any of the three. `-SkipTests` only checks the tables;
-# the default also runs the JVM scenarios that read the same TSV.
+# Run this after editing any of those. `-SkipTests` only checks the tables; the
+# default also runs the JVM and Rust scenarios that read the same files.
 param(
     [switch]$SkipTests,
     [string]$Gradle = 'gradlew.bat'
@@ -14,11 +16,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $casesPath = Join-Path $root 'tests/input-policy/cases.tsv'
+$autoCommitPath = Join-Path $root 'tests/input-policy/auto-commit-cases.tsv'
 $rustPath = Join-Path $root 'windows/crates/shared/src/conversion_policy.rs'
 $kotlinPath = Join-Path $root 'android/app/src/main/java/com/zeroconvert/ime/InputPolicy.kt'
+$kotlinAutoCommitPath = Join-Path $root 'android/app/src/test/java/com/zeroconvert/ime/AutoCommitAndPipelineTest.kt'
 $docsPath = Join-Path $root 'docs/investigations/input-policy-sharing-plan.md'
 
-foreach ($required in @($casesPath, $rustPath, $kotlinPath)) {
+foreach ($required in @($casesPath, $autoCommitPath, $rustPath, $kotlinPath, $kotlinAutoCommitPath)) {
     if (!(Test-Path -LiteralPath $required)) { throw "Missing input policy source: $required" }
 }
 $failures = [System.Collections.Generic.List[string]]::new()
@@ -181,7 +185,53 @@ if ($kotlin -notmatch 'const val VERSION = (\d+)') {
     }
 }
 
-# ---- 4. Plan document still lists the same functions -----------------------
+# ---- 4. Auto-commit scenario table -----------------------------------------
+$autoIds = [System.Collections.Generic.HashSet[string]]::new()
+$autoCount = 0
+
+$autoLineNumber = 0
+foreach ($raw in Get-Content -LiteralPath $autoCommitPath -Encoding UTF8) {
+    $autoLineNumber++
+    $line = $raw.TrimEnd("`r")
+    if ($line.Trim().Length -eq 0 -or $line.StartsWith('#')) { continue }
+    $columns = $line.Split("`t")
+    if ($columns.Count -ne 5) {
+        Fail "auto-commit-cases.tsv:${autoLineNumber}: expected 5 tab-separated columns, found $($columns.Count)"
+        continue
+    }
+    $autoCount++
+    $id, $reading, $preview, $history, $expect = $columns
+    if (!$autoIds.Add($id)) { Fail "auto-commit-cases.tsv:${autoLineNumber}: duplicate id '$id'" }
+    if ($expect -ne 'none' -and $expect -notmatch '^\d+:.+$') {
+        Fail "auto-commit-cases.tsv:${autoLineNumber}: '$expect' is neither none nor <length>:<surface>"
+    }
+    $entries = $history.Split(';')
+    if ($entries.Count -lt 5) {
+        Fail "auto-commit-cases.tsv:${autoLineNumber}: a stable history needs at least five entries"
+    }
+    $lastSurface = $null
+    foreach ($entry in $entries) {
+        $parts = $entry.Split(':', 2)
+        if ($parts.Count -ne 2 -or $parts[0] -notmatch '^\d+$') {
+            Fail "auto-commit-cases.tsv:${autoLineNumber}: bad history entry '$entry'"
+            continue
+        }
+        $count = [int]$parts[0]
+        if ($count -gt $reading.Length) {
+            Fail "auto-commit-cases.tsv:${autoLineNumber}: reading count $count exceeds '$reading'"
+        }
+        if (!$preview.StartsWith($parts[1])) {
+            Fail "auto-commit-cases.tsv:${autoLineNumber}: surface '$($parts[1])' is not a prefix of the preview"
+        }
+        $lastSurface = $parts[1]
+    }
+    if ($null -ne $lastSurface -and $lastSurface -ne $preview) {
+        Fail "auto-commit-cases.tsv:${autoLineNumber}: the last history surface must equal the preview"
+    }
+}
+if ($autoCount -lt 6) { Fail "auto-commit-cases.tsv: only $autoCount scenarios" }
+
+# ---- 5. Plan document still lists the same functions -----------------------
 if (Test-Path -LiteralPath $docsPath) {
     $plan = Get-Content -LiteralPath $docsPath -Raw -Encoding UTF8
     foreach ($name in @('is_immediate_commit_char', 'punctuation_for_reading',
@@ -199,12 +249,13 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 Write-Host "Input policy tables match ($caseCount scenarios, $($rustWidths.Count) symbols, $($rustPunctuation.Count) punctuation mappings)."
+Write-Host "Auto-commit scenarios validated ($autoCount cases)."
 
-# ---- 5. Behaviour scenarios -------------------------------------------------
+# ---- 6. Behaviour scenarios -------------------------------------------------
 if (!$SkipTests) {
     Push-Location (Join-Path $root 'android')
     try {
-        & (Join-Path (Get-Location) $Gradle) ':rebuilt:testDebugUnitTest' '--tests' 'com.zeroconvert.ime.InputPolicyScenarioTest' '-x' ':rebuilt:verifySharedEngine'
+        & (Join-Path (Get-Location) $Gradle) ':rebuilt:testDebugUnitTest' '--tests' 'com.zeroconvert.ime.InputPolicyScenarioTest' '--tests' 'com.zeroconvert.ime.AutoCommitAndPipelineTest' '-x' ':rebuilt:verifySharedEngine'
         if ($LASTEXITCODE -ne 0) { throw 'Android input policy scenarios failed.' }
     } finally {
         Pop-Location
@@ -218,5 +269,8 @@ if (!$SkipTests) {
     }
 }
 Write-Host 'Input policy parity verified.'
+
+
+
 
 

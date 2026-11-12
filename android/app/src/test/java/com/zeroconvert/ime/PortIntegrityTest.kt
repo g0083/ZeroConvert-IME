@@ -42,13 +42,6 @@ class PortIntegrityTest {
         assertFalse(emoji.isIndependentInputBoundary(2))
     }
 
-    @Test fun repeatedPreviewsDoNotCountAsFiveIndependentStableSteps() {
-        val reading = "わたしはがっこうにいってべんきょうしています"
-        val history = listOf(InferenceSnapshot("わたしはがっこうにいって", "私は学校に行って")) +
-            (0..5).map { InferenceSnapshot(reading.dropLast(5 - it), "私は学校に行って勉強") }
-        assertNull(ZeroConvertInputMethodService.findStableAutoCommitPrefix(reading, history))
-    }
-
     @Test fun inferenceSnapshotsReplaceMatchingRawLengthsAndRemainBounded() {
         val history = mutableListOf<InferenceSnapshot>()
         ZeroConvertInputMethodService.recordInferenceSnapshot(history, InferenceSnapshot("きょ", "巨", 3))

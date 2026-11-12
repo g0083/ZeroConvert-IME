@@ -385,7 +385,15 @@ object WindowsEngine {
             .getOrNull()?.let { JSONObject(it).optInt("typoCount", 0) } ?: 0
     }
 
+    /**
+     * Returns the clause prefix the shared rule may commit, or null.
+     *
+     * This is the only auto-commit rule: Android has no second implementation, so
+     * a change here cannot drift from the Windows client. A not-ready engine
+     * declines instead of throwing, because this runs on the inference result path.
+     */
     fun autoCommit(raw: String, reading: String, history: List<InferenceSnapshot>, safeBoundary: (Int) -> Boolean): AutoCommitCandidate? {
+        if (!ready) return null
         val entries = JSONArray()
         history.forEach { snapshot ->
             entries.put(JSONObject().put("rawCount", snapshot.rawInputCount)

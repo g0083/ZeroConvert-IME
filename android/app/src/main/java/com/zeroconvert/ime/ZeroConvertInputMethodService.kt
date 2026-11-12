@@ -117,33 +117,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_EMOJI_RECENT = "emoji_recent" // newline separated, most recent first
         private const val EMOJI_CATALOG_ASSET = "emoji_catalog.tsv"
 
-        private const val MIN_READING_LEN_FOR_AUTO_COMMIT = 16
-        private const val MIN_TAIL_UNCOMMITTED_READING_LEN = 7
-        private const val STABLE_INFERENCE_COUNT = 5
         private const val MAX_LEFT_CONTEXT_LEN = EditorContext.MAX_CODE_POINTS
         // Autorepeat moves every 50 ms and editor callbacks can trail the write,
         // so a self-issued caret is trusted for a little longer than one tick.
         private const val SELF_CURSOR_MOVE_WINDOW_MS = 400L
 
-        fun isKanjiOrKatakana(ch: Char): Boolean {
-            val code = ch.code
-            return (code in 0x4E00..0x9FFF) || // CJK Unified Ideographs
-                (code in 0x3400..0x4DBF) ||    // CJK Extension A
-                (code == 0x3005) ||            // 々
-                (code in 0x30A1..0x30FA) ||    // Katakana
-                (code == 0x30FC)               // Prolonged sound mark ー
-        }
-
-        fun isHiraganaChar(ch: Char): Boolean {
-            return ch in '\u3041'..'\u3096'
-        }
-
         fun hasTrailingIncompleteRomaji(readingHiragana: String): Boolean {
             return readingHiragana.hasPendingRomaji()
-        }
-
-        fun isJapaneseClausePunctuation(ch: Char): Boolean {
-            return ch in "、。，．！？!?,\n"
         }
 
         /**
@@ -170,75 +150,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
          */
         fun translationSourceEligible(sourceIsEnglish: Boolean, source: String): Boolean {
             return sourceIsEnglish || hasJapaneseKana(source)
-        }
-
-        fun isNaturalAutoCommitPrefix(candidatePrefix: String, fullPreview: String): Boolean {
-            if (!fullPreview.startsWith(candidatePrefix)) return false
-            val remainder = fullPreview.substring(candidatePrefix.length)
-            if (remainder.isEmpty() || candidatePrefix.length < 4) return false
-            val lastChar = candidatePrefix.last()
-            val nextChar = remainder.first()
-            if (isJapaneseClausePunctuation(lastChar)) return true
-
-            // Must contain at least one Kanji or Katakana, end in Hiragana (okurigana/particle),
-            // and the next clause must start with Kanji, Katakana, or punctuation.
-            // This strictly prevents cutting inside inflected verbs (e.g. 変えられる -> 変 + えられる).
-            val hasKanjiOrKatakana = candidatePrefix.any { isKanjiOrKatakana(it) }
-            val endsWithHiragana = isHiraganaChar(lastChar)
-            val nextIsContentWord = isKanjiOrKatakana(nextChar)
-            return hasKanjiOrKatakana && endsWithHiragana && nextIsContentWord
-        }
-
-        /**
-         * Finds the longest natural, stable clause prefix (L, P) matching Windows IME rules:
-         * - currentReading.length >= 16 and no trailing incomplete romaji consonant
-         * - L <= currentReading.length - 7 (at least 7 hiragana chars remain uncommitted)
-         * - P has remained unchanged across the last 5 consecutive AI inferences
-         * - P is a natural clause boundary (ends in Hiragana okurigana/particle, next char is Kanji/Katakana)
-         */
-        fun findStableAutoCommitPrefix(
-            currentReading: String,
-            history: List<InferenceSnapshot>,
-            safeRawBoundary: (Int) -> Boolean = { true }
-        ): AutoCommitCandidate? {
-            if (currentReading.length < MIN_READING_LEN_FOR_AUTO_COMMIT) return null
-            if (hasTrailingIncompleteRomaji(currentReading)) return null
-            if (history.size < STABLE_INFERENCE_COUNT) return null
-
-            val currentAiSurface = history.last().aiSurface
-            val maxCommitReadingLen = currentReading.length - MIN_TAIL_UNCOMMITTED_READING_LEN
-            if (maxCommitReadingLen < 8) return null
-
-            val distinctPreviews = mutableListOf<String>()
-            for (entry in history) if (distinctPreviews.lastOrNull() != entry.aiSurface) distinctPreviews.add(entry.aiSurface)
-            if (distinctPreviews.size < STABLE_INFERENCE_COUNT) return null
-            val recent5 = distinctPreviews.takeLast(STABLE_INFERENCE_COUNT)
-            var bestCandidate: AutoCommitCandidate? = null
-
-            for (snap in history) {
-                val l = snap.readingHiragana.length
-                val p = snap.aiSurface
-                if (l < 8 || l > maxCommitReadingLen) continue
-                if (!safeRawBoundary(l)) continue
-                if (!currentReading.startsWith(snap.readingHiragana)) continue
-                if (!isNaturalAutoCommitPrefix(p, currentAiSurface)) continue
-
-                // Check that across the last 5 consecutive AI inferences, the surface prefix P
-                // remained strictly stable.
-                val isStableAcrossRecent5 = recent5.all { recent -> recent.startsWith(p) && recent.length > p.length }
-
-                if (isStableAcrossRecent5) {
-                    if (bestCandidate == null || l > bestCandidate.readingLength) {
-                        bestCandidate = AutoCommitCandidate(
-                            readingLength = l,
-                            committedReading = snap.readingHiragana,
-                            surfacePrefix = p
-                        )
-                    }
-                }
-            }
-
-            return bestCandidate
         }
 
         fun recordInferenceSnapshot(history: MutableList<InferenceSnapshot>, snapshot: InferenceSnapshot) {
@@ -2196,11 +2107,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     if (!sensitive && !reconversion && !rangeConversion && isAutoCommitEnabled() && composingText.isAtEndIndex &&
                         !corrections.holdsAutoCommit && !hasTrailingIncompleteRomaji(surface)
                     ) {
-                        val autoCommit = if (BuildConfig.WINDOWS_ENGINE) {
-                            com.zeroconvert.ime.engine.WindowsEngine.autoCommit(
-                                composingText.input.mapNotNull { (it.piece as? com.zeroconvert.ime.azookey.input.InputPiece.CharPiece)?.char }.joinToString(""),
-                                surface, inferenceHistory, composingText::isIndependentInputBoundary)
-                        } else findStableAutoCommitPrefix(surface, inferenceHistory, composingText::isIndependentInputBoundary)
+                        // Auto-commit is shared policy: the engine owns the rule and
+                        // its unit conversions, so Android has no second implementation.
+                        val autoCommit = com.zeroconvert.ime.engine.WindowsEngine.autoCommit(
+                            composingText.input.mapNotNull { (it.piece as? com.zeroconvert.ime.azookey.input.InputPiece.CharPiece)?.char }.joinToString(""),
+                            surface, inferenceHistory, composingText::isIndependentInputBoundary)
                         if (autoCommit != null && aiCand.startsWith(autoCommit.surfacePrefix)) {
                             performAutoCommit(autoCommit, aiCand)
                             return@withContext

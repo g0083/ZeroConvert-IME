@@ -2,7 +2,7 @@
 
 作成日: 2026-11-11
 
-状態: **実装済み（2026-11-11）**。Phase 0〜3 を実装し、Phase 4 は任意の後続作業として残す。
+状態: **実装済み（2026-11-11、Phase 4 は 2026-11-12）**。Phase 0〜4 を実装した。
 この文書は設計・手順・受け入れ条件を定義し、末尾「9. 実装結果」に実施内容と検証結果を記録する。
 
 関連:
@@ -167,7 +167,7 @@ width_at	width	@	half
 1. `engine/rust/src/bridge.rs` に `op: "inputPolicy"` を追加し、文字集合・正規化マップ・幅既定値・バージョン識別子を返す。
 2. `WindowsEngine.kt` に `inputPolicy` の取得（初期化時1回、キャッシュ、フォールバック付き）を追加。
 3. `PanelTextCommit.kt` / `ZeroConvertInputMethodService.kt` の手書き文字集合を、新設 `InputPolicy.kt` の参照へ置換。**判定ロジックの形は変えない**（構造を変えると回帰範囲が広がる）。
-4. `ZeroConvertInputMethodService.isNaturalAutoCommitPrefix` / `findStableAutoCommitPrefix` などの手移植関数は、**まず現状維持**とし、Phase 4 で段階的に寄せる（今回のスコープ外）。
+4. `ZeroConvertInputMethodService.isNaturalAutoCommitPrefix` / `findStableAutoCommitPrefix` などの手移植関数は Phase 4 で削除し、共有エンジンの判定へ一本化する。
 5. JVM テスト `InputPolicyScenarioTest` を追加し、TSV 全件を検証。
 6. `:rebuilt:testDebugUnitTest` / `:rebuilt:lintDebug` / `:rebuilt:assembleDebug` を通す。
 
@@ -178,9 +178,17 @@ width_at	width	@	half
 3. `docs/android-shared-engine.md` の共有表に「入力ポリシー（文字集合・幅既定値）」行を追加。
 4. `docs/windows-conversion-logic.md` / `docs/android-conversion-logic.md` に「正本は `conversion_policy.rs`、検証は `tests/input-policy/cases.tsv`」と明記。
 
-### Phase 4（任意・後続）: 手移植関数の段階的統合
+### Phase 4（実装済み 2026-11-12）: 自動確定を共有Rustへ一本化
 
-`is_natural_auto_commit_prefix` / `find_auto_commit_live_conversion_snapshot` 相当の Kotlin 実装を、共有 Rust の結果と突き合わせるテストを追加する。**実装の置換は行わない**（JNI 呼び出しが入力経路に入るため）。差分が見つかった場合のみ、個別に修正計画を立てる。
+Kotlin に手移植されていた自動確定の判定を削除し、共有エンジンの `find_auto_commit_live_conversion_snapshot` だけを残した（方式 (b)）。
+
+- `ZeroConvertInputMethodService` から `findStableAutoCommitPrefix` / `isNaturalAutoCommitPrefix` / `isKanjiOrKatakana` / `isHiraganaChar` / `isJapaneseClausePunctuation` と関連定数を削除。自動確定の呼び出しは `WindowsEngine.autoCommit` のみ。
+- `WindowsEngine.autoCommit` は engine 未準備なら `null` を返す（推論結果経路で例外にしない）。
+- 仕様表 `tests/input-policy/auto-commit-cases.tsv` は 7 シナリオ・5 列。`expect` は共有Rustの期待値のみ。
+- `conversion_policy.rs`: `push_live_conversion_history` を追加し、bridge とテストが同じ履歴構築関数を使う（重複除去と窓幅の定義を1箇所に）。
+- 検査: `scripts/check-input-policy-parity.ps1` が5列・履歴5件以上・surface が preview の前置・最後の surface = preview を検証。Android 側は `AutoCommitAndPipelineTest` が同じ表の入力形状を検証する。
+
+この一本化により、以前の表にあった 2 件の既知差分（CJK互換漢字の文字クラス、ASCII カンマの文区切り）は**解消**した。Android は判定を持たないため、差分自体が存在しない。
 
 ---
 
@@ -195,6 +203,8 @@ width_at	width	@	half
 - [x] 実端末（arm64 実機）で `、` `。` `？` と pending `n` の入力が組成/確定の期待どおり
 - [x] Windows 実IMEで `、` `。` `,` `.` `5` `!` の入力が従来どおり（退行なし）
 - [x] 入力経路に JNI 呼び出しが追加されていない（初期化時取得のみ）
+- [x] Phase 4: `tests/input-policy/auto-commit-cases.tsv` を共有Rustのテストが読み、`scripts/check-input-policy-parity.ps1` が表構造も検査する
+- [x] Phase 4: Android に自動確定の第2実装がなく、常に共有エンジンへ委譲する
 
 ## 6. リスクと対策
 
@@ -289,6 +299,27 @@ Android は arm64 実機へ `adb install -r` で反映し、`PortInstrumentation
 
 - `real_ime_keys_and_commit` へ組み込む方式にした理由: 別クラスで `uiAutomation.serviceInfo` を設定すると、この OEM 端末では `UiAutomationService ... already registered!` でプロセスが落ちる。既存テストが設定する `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` をそのまま使う必要がある。
 - ポリシー検査では変換結果ではなく composition の span を見る。ライブ変換が `ん` を `安` と表示しても、句読点が composition の末尾に残れば合格とする。`n` の直後だけは pending ローマ字確定のため composition 終了が正しい。
-- Phase 4（手移植の自動確定関数の突き合わせ）は未着手。
 - `IMMEDIATE_COMMIT_CHARS` は Android 固有の即確定記号を共有仕様として保持している。Windows 側に対応するキー経路はなく、`composition.rs` は変更していない。
 - 作業中に `KanaKanjiConverter.kt` と `WindowsEngine.kt` の学習系 API が別セッションで書き換えられた。入力ポリシーとは無関係で、当方は触れていない。
+
+### Phase 4 の実施結果（2026-11-12）
+
+方式 (b): Kotlin フォールバックを廃止し、自動確定は常に共有エンジンへ委譲する。
+
+| 項目 | 結果 |
+|---|---|
+| `tests/input-policy/auto-commit-cases.tsv` | 7 シナリオ・5列（commit 2 / none 5） |
+| 削除した Kotlin 実装 | `findStableAutoCommitPrefix` / `isNaturalAutoCommitPrefix` / `isKanjiOrKatakana` / `isHiraganaChar` / `isJapaneseClausePunctuation` と 3 定数 |
+| `WindowsEngine.autoCommit` | engine 未準備時は `null` を返す |
+| `conversion_policy.rs` | `push_live_conversion_history` を追加し、bridge とテストで共有 |
+| `cargo test -p shared --offline --lib conversion_policy` | 8 passed |
+| `cargo test --manifest-path engine/rust/Cargo.toml` | 81 passed |
+| `:rebuilt:testDebugUnitTest` | 284 tests, 0 failures |
+| `:rebuilt:lintDebug` / `:rebuilt:assembleDebug` | 成功 |
+| `scripts/check-input-policy-parity.ps1 -SkipTests` | 表構造 OK（7 cases） |
+| 共有エンジン指紋 | 両ABI再ビルド後一致 |
+
+以前記録した 2 件の差分（CJK互換漢字、ASCII カンマ）は、Android 側に判定がなくなったため解消した。実機での `、` `。` `？` `n` の確認は変更前と同じ経路（共有エンジン）であり、`PortInstrumentationRunner` の結果がそのまま該当する。
+
+
+

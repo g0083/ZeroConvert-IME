@@ -116,12 +116,7 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         let mut history = VecDeque::new();
         for entry in entries {
             let surface = entry["surface"].as_str().ok_or("missing surface")?;
-            if history.back().is_none_or(|last| last != surface) {
-                history.push_back(surface.to_owned());
-            }
-            while history.len() > 5 {
-                history.pop_front();
-            }
+            policy::push_live_conversion_history(&mut history, surface);
             snapshots.push(policy::LiveConversionPrefixSnapshot {
                 raw_input_len: entry["rawCount"].as_u64().ok_or("missing input count")? as usize,
                 hiragana_len: entry["readingCount"]
