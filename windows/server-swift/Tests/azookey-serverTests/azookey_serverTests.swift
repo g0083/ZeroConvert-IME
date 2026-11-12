@@ -1203,6 +1203,90 @@ private func testCandidate(
     }
 }
 
+@Test func deletionRemovesTheTaughtWordAndPersistsTheStore() async throws {
+    let packageRoot = packageRootURL()
+    let dictionaryURL = packageRoot
+        .appending(path: "azooKey_dictionary_storage")
+        .appending(path: "Dictionary")
+    let memoryURL = FileManager.default.temporaryDirectory
+        .appending(path: "azookey-server-deletion-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: memoryURL, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: memoryURL)
+    }
+
+    try await MainActor.run {
+        let previousConverter = converter
+        let previousSupplementConverter = normalNBestSupplementConverter
+        let previousLearningType = currentLearningType
+        let previousLearningMemoryDirectoryURL = currentLearningMemoryDirectoryURL
+        let previousLearningCandidateCache = learningCandidateCache
+        let previousLearningSelectionOverrides = learningSelectionOverrides
+        defer {
+            converter = previousConverter
+            normalNBestSupplementConverter = previousSupplementConverter
+            currentLearningType = previousLearningType
+            currentLearningMemoryDirectoryURL = previousLearningMemoryDirectoryURL
+            learningCandidateCache = previousLearningCandidateCache
+            learningSelectionOverrides = previousLearningSelectionOverrides
+        }
+
+        converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+        normalNBestSupplementConverter = KanaKanjiConverter(
+            dictionaryURL: dictionaryURL,
+            preloadDictionary: false
+        )
+        currentLearningType = .inputAndOutput
+        currentLearningMemoryDirectoryURL = memoryURL
+        learningCandidateCache.removeAll()
+        learningSelectionOverrides.removeAll()
+        let options = testLearningConvertRequestOptions(memoryURL: memoryURL)
+
+        var source = ComposingText()
+        source.insertAtCursorPosition("かとう", inputStyle: .direct)
+        let candidates = converter.requestCandidates(source, options: options).mainResults
+        let index = try #require(candidates.firstIndex { $0.text == "加藤" })
+        let target = candidates[index]
+        let firstId = try #require(cacheLearningCandidates(candidates))
+        let candidateId = learningCandidateId(at: index, batchFirstId: firstId)
+        #expect(candidateId != 0)
+
+        // Teach the selection first so the deletion has something to remove and so
+        // the persisted override makes the success path observable.
+        #expect(commit_learning_candidate(candidateId: candidateId, commitKind: 1))
+        learningSelectionOverrides.removeAll()
+        loadLearningSelectionOverrides()
+        #expect(learningSelectionOverrides["カトウ"] == "加藤")
+
+        // Re-request the same reading to obtain a fresh id, then delete it. The
+        // success path writes the memory trie and the selection override.
+        let overridesURL = memoryURL.appendingPathComponent("selection-overrides.json", isDirectory: false)
+
+        let refreshed = converter.requestCandidates(source, options: options).mainResults
+        let refreshedIndex = try #require(refreshed.firstIndex { $0.text == "加藤" })
+        let refreshedFirstId = try #require(cacheLearningCandidates(refreshed))
+        let refreshedId = learningCandidateId(at: refreshedIndex, batchFirstId: refreshedFirstId)
+
+        #expect(forget_learning_candidate(candidateId: refreshedId))
+
+        // The id was consumed by the successful deletion, so a repeat is refused.
+        #expect(!forget_learning_candidate(candidateId: refreshedId))
+
+        // The override is gone from both memory and disk: the delete wrote the store.
+        learningSelectionOverrides.removeAll()
+        loadLearningSelectionOverrides()
+        #expect(learningSelectionOverrides["カトウ"] == nil)
+        let persisted = try Data(contentsOf: overridesURL)
+        #expect(!String(decoding: persisted, as: UTF8.self).contains("加藤"))
+
+        // A failed trie update would leave a pause marker and disable learning.
+        #expect(!FileManager.default.fileExists(
+            atPath: memoryURL.appendingPathComponent(".pause").path
+        ))
+        _ = target
+    }
+}
+
 @Test func ffiFreeCStringAcceptsNullAndAllocatedStrings() async throws {
     free_c_string(nil)
 
