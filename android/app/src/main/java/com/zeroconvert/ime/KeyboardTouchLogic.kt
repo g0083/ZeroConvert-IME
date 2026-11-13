@@ -714,3 +714,15 @@ class QwertyTouchTracker {
         visualState = QwertyVisualState(pressedKeyIds = pressed, previews = previews)
     }
 }
+
+/**
+ * Decides whether a direct editor deletion (when IME composing buffers are empty) removed content
+ * and should trigger delete haptic feedback.
+ */
+internal fun shouldVibrateOnEditorDelete(
+    textBeforeCursor: CharSequence?,
+    deleteSurroundingAccepted: Boolean
+): Boolean = when {
+    textBeforeCursor != null -> textBeforeCursor.isNotEmpty()
+    else -> deleteSurroundingAccepted
+}

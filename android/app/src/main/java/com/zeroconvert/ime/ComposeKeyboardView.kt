@@ -1077,6 +1077,7 @@ fun RepeatingIconButton(
     baseColor: Color? = null,
     palette: ZeroConPalette = LocalZeroConPalette.current,
     onBeforePress: () -> Unit = {},
+    hapticOnPress: Boolean = true,
     contentDescription: String? = null,
     content: @Composable () -> Unit
 ) {
@@ -1119,13 +1120,13 @@ fun RepeatingIconButton(
                 true
             }
         }
-        .pointerInput(Unit) {
+        .pointerInput(hapticOnPress) {
             val forgivenessPx = with(density) { 12.dp.toPx() }
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 down.consume()
                 currentOnBeforePress()
-                haptic()
+                if (hapticOnPress) haptic()
                 isPressed = true
                 try {
                     awaitPointerReleaseInBounds(
@@ -1756,7 +1757,8 @@ private fun SharedQwertyLayout(
                     cornerRadius = 7.dp,
                     baseColor = actionKeyBg,
                     palette = palette,
-                    onBeforePress = flushBeforeAction
+                    onBeforePress = flushBeforeAction,
+                    hapticOnPress = false
                 ) {
                     Icon(
                         imageVector = Icons.Default.Backspace,
@@ -2077,7 +2079,8 @@ fun NumericPadLayout(
                 visualPadding = padFor(0, first = true, last = false),
                 cornerRadius = 7.dp,
                 baseColor = actionKeyBg,
-                palette = palette
+                palette = palette,
+                hapticOnPress = false
             ) {
                 Text(text = "↶", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
@@ -2090,7 +2093,8 @@ fun NumericPadLayout(
                 visualPadding = padFor(0, first = false, last = true),
                 cornerRadius = 7.dp,
                 baseColor = actionKeyBg,
-                palette = palette
+                palette = palette,
+                hapticOnPress = false
             ) {
                 Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
             }
@@ -2946,7 +2950,8 @@ fun EmojiPanel(
                 visualPadding = barPadding,
                 cornerRadius = 6.dp,
                 baseColor = actionKeyBg,
-                palette = palette
+                palette = palette,
+                hapticOnPress = false
             ) {
                 Icon(
                     imageVector = Icons.Default.Backspace,
@@ -3323,7 +3328,8 @@ fun SymbolsPanel(
                 visualPadding = barPadding,
                 cornerRadius = 6.dp,
                 baseColor = actionKeyBg,
-                palette = palette
+                palette = palette,
+                hapticOnPress = false
             ) {
                 Icon(
                     imageVector = Icons.Default.Backspace,

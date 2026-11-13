@@ -673,7 +673,8 @@ private fun FlickSideBackspaceButton(
         visualPadding = visualPadding,
         cornerRadius = 8.dp,
         baseColor = actionKeyBg,
-        palette = palette
+        palette = palette,
+        hapticOnPress = false
     ) {
         Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
     }
@@ -1087,7 +1088,8 @@ fun FlickNumericPadLayout(
                     visualPadding = pad,
                     cornerRadius = 8.dp,
                     baseColor = actionKeyBg,
-                    palette = palette
+                    palette = palette,
+                    hapticOnPress = false
                 ) {
                     Text(text = "↶", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }

@@ -861,11 +861,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun revertAiAssist() {
-        if (!corrections.isApplied) return
-        val ic = currentInputConnection ?: return
+        performRevertAiAssist()
+    }
+
+    private fun performRevertAiAssist(): Boolean {
+        if (!corrections.isApplied) return false
+        val ic = currentInputConnection ?: return false
         cancelPendingInference(edited = false)
         // Only restore the internal snapshot after the editor accepted the undo.
-        if (!setComposingPreview(ic, savedOriginalSurface)) return
+        if (!setComposingPreview(ic, savedOriginalSurface)) return false
         corrections.revert(composingText)
         currentComposingSurface.value = composingText.convertTargetBeforeCursor
         predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
@@ -877,6 +881,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         aiAssistAdoptedState.value = false
         aiAssistResultState.value = null
         pendingConversionContinuation = null
+        return true
     }
 
     private fun extractAndAddEntities(text: String) {
@@ -2322,14 +2327,18 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleDelete() {
-        if (isConfirming) return
+        if (performDelete()) {
+            vibrateOnKeyPress()
+        }
+    }
+
+    private fun performDelete(): Boolean {
+        if (isConfirming) return false
         if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
-            revertAiAssist()
-            return
+            return performRevertAiAssist()
         }
         if (englishComposing.isNotEmpty()) {
-            handleEnglishDelete()
-            return
+            return performEnglishDelete()
         }
         cancelPendingInference()
 
@@ -2341,12 +2350,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
             lastAutoCommitRewind = null
             clearInput()
             hasSelectionInEditor = false
-            ic?.commitText("", 1)
-            val stillSelected = ic?.getSelectedText(0)
+            if (ic == null) return false
+            ic.commitText("", 1)
+            val stillSelected = ic.getSelectedText(0)
             if (!stillSelected.isNullOrEmpty()) {
                 sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DEL)
             }
-            return
+            return true
         }
 
         // Check optional Backspace rewind right after an auto-commit
@@ -2355,7 +2365,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             canRewindOnNextBackspace = false
             lastAutoCommitRewind = null
 
-            val connection = currentInputConnection ?: return
+            val connection = currentInputConnection ?: return false
             val tailPreview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
             connection.beginBatchEdit()
             val rewindResult = try {
@@ -2366,10 +2376,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     override fun commit(text: String) = connection.commitText(text, 1)
                 })
             } finally { connection.endBatchEdit() }
-            if (rewindResult == AutoCommitRewind.Result.COMMITTED_FALLBACK) { clearInput(); return }
-            if (rewindResult != AutoCommitRewind.Result.RESTORED && rewindResult != AutoCommitRewind.Result.RESTORE_PENDING) return
+            if (rewindResult == AutoCommitRewind.Result.COMMITTED_FALLBACK) { clearInput(); return false }
+            if (rewindResult != AutoCommitRewind.Result.RESTORED && rewindResult != AutoCommitRewind.Result.RESTORE_PENDING) return false
             cachedLeftContext = rewindRecord.previousLeftContext
-            composingText.restoreFrom(rewindRecord.originalInput ?: return)
+            composingText.restoreFrom(rewindRecord.originalInput ?: return false)
             japaneseTouchBiases.clear()
             pendingConversionContinuation = null
 
@@ -2383,15 +2393,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
             if (restoredSurface.isNotEmpty()) {
                 triggerDebouncedConversion(restoredSurface)
             }
-            return
+            return true
         }
 
         canRewindOnNextBackspace = false
 
         if (!composingText.isEmpty) {
-            if (composingText.isAtStartIndex) { clearCandidateList(); return }
+            if (composingText.isAtStartIndex) { clearCandidateList(); return false }
             val previous = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
-            composingText.deleteBackwardFromCursorPosition(composingText.convertTargetCursorPosition - previous)
+            val deleteCount = composingText.convertTargetCursorPosition - previous
+            if (deleteCount <= 0) { clearCandidateList(); return false }
+            composingText.deleteBackwardFromCursorPosition(deleteCount)
             if (composingText.isAtEndIndex) {
                 while (japaneseTouchBiases.size > composingText.input.size) {
                     japaneseTouchBiases.removeAt(japaneseTouchBiases.lastIndex)
@@ -2420,11 +2432,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     triggerDebouncedConversion(surface)
                 } else clearCandidateList()
             }
+            return true
         } else {
-            val ok = currentInputConnection?.deleteSurroundingText(1, 0) ?: false
-            if (!ok) {
-                sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DEL)
-            }
+            return deleteDirectFromEditor()
         }
     }
 
@@ -2759,7 +2769,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleEnglishDelete() {
-        if (isConfirming) return
+        if (performEnglishDelete()) {
+            vibrateOnKeyPress()
+        }
+    }
+
+    private fun performEnglishDelete(): Boolean {
+        if (isConfirming) return false
         if (isTranslationMode()) {
             if (englishComposing.isNotEmpty()) {
                 englishComposing = englishComposing.dropLast(1)
@@ -2770,9 +2786,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     setManagedComposingText(currentInputConnection, "", 0)
                 }
                 scheduleTranslation()
+                return true
             } else if (!composingText.isEmpty) {
+                if (composingText.isAtStartIndex) return false
                 val previous = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
-                composingText.deleteBackwardFromCursorPosition(composingText.convertTargetCursorPosition - previous)
+                val deleteCount = composingText.convertTargetCursorPosition - previous
+                if (deleteCount <= 0) return false
+                composingText.deleteBackwardFromCursorPosition(deleteCount)
                 currentComposingSurface.value = composingText.convertTargetBeforeCursor
                 if (composingText.isEmpty) {
                     setManagedComposingText(currentInputConnection, "", 0)
@@ -2780,10 +2800,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     setManagedComposingText(currentInputConnection, composingText.convertTarget, 1)
                 }
                 scheduleTranslation()
+                return true
             } else {
-                currentInputConnection?.deleteSurroundingText(1, 0)
+                return deleteDirectFromEditor(sendKeyEventFallback = false)
             }
-            return
         }
         if (englishComposing.isNotEmpty()) {
             englishComposing = englishComposing.dropLast(1)
@@ -2799,9 +2819,24 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 candidatesList.clear()
                 predictedCandidate.value = ""
             }
+            return true
         } else {
-            currentInputConnection?.deleteSurroundingText(1, 0)
+            return deleteDirectFromEditor(sendKeyEventFallback = false)
         }
+    }
+
+    private fun deleteDirectFromEditor(sendKeyEventFallback: Boolean = true): Boolean {
+        val ic = currentInputConnection ?: return false
+        val textBefore = try {
+            ic.getTextBeforeCursor(1, 0)
+        } catch (_: RuntimeException) {
+            null
+        }
+        val ok = ic.deleteSurroundingText(1, 0)
+        if (!ok && sendKeyEventFallback) {
+            sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DEL)
+        }
+        return shouldVibrateOnEditorDelete(textBefore, ok)
     }
 
     fun handleEnglishSpace() {

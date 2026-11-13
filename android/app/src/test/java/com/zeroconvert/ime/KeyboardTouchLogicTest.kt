@@ -473,4 +473,14 @@ class KeyboardTouchLogicTest {
         assertTrue(upFlickCommit.upFlick)
         assertEquals(null, upFlickCommit.touchBias)
     }
+
+    @Test
+    fun shouldVibrateOnEditorDelete_vibratesOnlyWhenTextRemoved() {
+        assertTrue(shouldVibrateOnEditorDelete(textBeforeCursor = "あ", deleteSurroundingAccepted = true))
+        assertTrue(shouldVibrateOnEditorDelete(textBeforeCursor = "a", deleteSurroundingAccepted = false))
+        assertFalse(shouldVibrateOnEditorDelete(textBeforeCursor = "", deleteSurroundingAccepted = true))
+        assertFalse(shouldVibrateOnEditorDelete(textBeforeCursor = "", deleteSurroundingAccepted = false))
+        assertTrue(shouldVibrateOnEditorDelete(textBeforeCursor = null, deleteSurroundingAccepted = true))
+        assertFalse(shouldVibrateOnEditorDelete(textBeforeCursor = null, deleteSurroundingAccepted = false))
+    }
 }
