@@ -726,3 +726,47 @@ internal fun shouldVibrateOnEditorDelete(
     textBeforeCursor != null -> textBeforeCursor.isNotEmpty()
     else -> deleteSurroundingAccepted
 }
+
+/**
+ * Pixel bounds for a floating QWERTY key preview bubble anchored above the pressed key.
+ */
+internal data class QwertyPreviewBounds(
+    val leftPx: Float,
+    val topPx: Float,
+    val widthPx: Float,
+    val heightPx: Float
+)
+
+/**
+ * Anchors the QWERTY key preview bubble centered above [targetRect] while clamping horizontally
+ * only by its own width + [marginPx], keeping edge keys aligned directly above the pressed key.
+ */
+internal fun computeQwertyPreviewBubbleBounds(
+    targetRect: KeyRect,
+    bubbleWidthPx: Float,
+    bubbleHeightPx: Float,
+    gapPx: Float,
+    marginPx: Float,
+    rootWidthPx: Float,
+    rootHeightPx: Float
+): QwertyPreviewBounds {
+    val x = if (rootWidthPx > 0f) {
+        (targetRect.centerX - bubbleWidthPx / 2f)
+            .coerceIn(marginPx, (rootWidthPx - bubbleWidthPx - marginPx).coerceAtLeast(marginPx))
+    } else {
+        targetRect.centerX - bubbleWidthPx / 2f
+    }
+    // Never clamp against top edge (0f): Row 0 previews intentionally float above the key area.
+    val rawY = targetRect.top - bubbleHeightPx - gapPx
+    val y = if (rootHeightPx > 0f) {
+        rawY.coerceAtMost(rootHeightPx - bubbleHeightPx - marginPx)
+    } else {
+        rawY
+    }
+    return QwertyPreviewBounds(
+        leftPx = x,
+        topPx = y,
+        widthPx = bubbleWidthPx,
+        heightPx = bubbleHeightPx
+    )
+}

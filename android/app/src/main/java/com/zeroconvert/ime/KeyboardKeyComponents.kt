@@ -6,8 +6,12 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -329,8 +333,9 @@ fun KeyboardActionKey(
 
 /**
  * Floating enlarged character preview bubble drawn in-window inside the keyboard Box
- * strictly above the pressed QWERTY key. Never renders secondary up-flick labels so it stays
- * distinct from [FlickPopupGuide].
+ * directly above the pressed QWERTY key. When [upLabel] is provided, unifies tap and up-flick
+ * preview in the same anchored position with the secondary digit/symbol displayed above the
+ * primary letter.
  */
 @Composable
 fun QwertyKeyPreviewBubble(
@@ -338,29 +343,29 @@ fun QwertyKeyPreviewBubble(
     targetRect: KeyRect,
     rootWidthPx: Float,
     rootHeightPx: Float,
-    palette: ZeroConPalette
+    palette: ZeroConPalette,
+    upLabel: String? = null,
+    flickDirection: FlickDirection = FlickDirection.CENTER
 ) {
     val density = LocalDensity.current
+    val resolvedUpLabel = upLabel?.takeIf { it.isNotEmpty() }
+    val isUpSelected = resolvedUpLabel != null && flickDirection == FlickDirection.UP
     val bubbleWidthDp = with(density) { max(targetRect.width + 10.dp.toPx(), 46.dp.toPx()).toDp() }
-    val bubbleHeightDp = 50.dp
+    val bubbleHeightDp = if (resolvedUpLabel != null) 66.dp else 50.dp
     val gapPx = with(density) { 6.dp.toPx() }
     val marginPx = with(density) { 4.dp.toPx() }
     val bubbleWidthPx = with(density) { bubbleWidthDp.toPx() }
     val bubbleHeightPx = with(density) { bubbleHeightDp.toPx() }
 
-    val x = if (rootWidthPx > 0f) {
-        (targetRect.centerX - bubbleWidthPx / 2f)
-            .coerceIn(marginPx, (rootWidthPx - bubbleWidthPx - marginPx).coerceAtLeast(marginPx))
-    } else {
-        targetRect.centerX - bubbleWidthPx / 2f
-    }
-    // Never clamp against top edge (0f): Row 0 previews intentionally float above the key area.
-    val rawY = targetRect.top - bubbleHeightPx - gapPx
-    val y = if (rootHeightPx > 0f) {
-        rawY.coerceAtMost(rootHeightPx - bubbleHeightPx - marginPx)
-    } else {
-        rawY
-    }
+    val bounds = computeQwertyPreviewBubbleBounds(
+        targetRect = targetRect,
+        bubbleWidthPx = bubbleWidthPx,
+        bubbleHeightPx = bubbleHeightPx,
+        gapPx = gapPx,
+        marginPx = marginPx,
+        rootWidthPx = rootWidthPx,
+        rootHeightPx = rootHeightPx
+    )
 
     val shape = RoundedCornerShape(10.dp)
     Box(
@@ -370,22 +375,72 @@ fun QwertyKeyPreviewBubble(
     ) {
         Box(
             modifier = Modifier
-                .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                .offset { IntOffset(bounds.leftPx.roundToInt(), bounds.topPx.roundToInt()) }
                 .size(width = bubbleWidthDp, height = bubbleHeightDp)
                 .shadow(elevation = 6.dp, shape = shape, clip = false)
                 .clip(shape)
                 .background(palette.surfaceElevated)
-                .border(1.dp, palette.primaryAccent.copy(alpha = 0.55f), shape),
+                .border(
+                    width = if (isUpSelected) 1.5.dp else 1.dp,
+                    color = palette.primaryAccent.copy(alpha = if (isUpSelected) 0.9f else 0.55f),
+                    shape = shape
+                ),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = label,
-                color = palette.textPrimary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                maxLines = 1
-            )
+            if (resolvedUpLabel != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(3.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(25.dp)
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(
+                                if (isUpSelected) palette.primaryAccent
+                                else palette.keyModifier.copy(alpha = 0.55f)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = resolvedUpLabel,
+                            color = if (isUpSelected) palette.onAccent else palette.textSecondary,
+                            fontSize = if (isUpSelected) 15.sp else 13.sp,
+                            fontWeight = if (isUpSelected) FontWeight.Bold else FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isUpSelected) palette.textMuted else palette.textPrimary,
+                            fontSize = if (isUpSelected) 18.sp else 21.sp,
+                            fontWeight = if (isUpSelected) FontWeight.Medium else FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = label,
+                    color = palette.textPrimary,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

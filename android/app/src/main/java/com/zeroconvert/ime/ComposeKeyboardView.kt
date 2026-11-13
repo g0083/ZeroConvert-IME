@@ -1917,34 +1917,24 @@ private fun SharedQwertyLayout(
             }
         }
 
-        // Floating key preview / up-flick guide overlay rendered inside the IME Box
-        // so it never overflows into an illegal window Popup token or moves rows.
+        // Floating unified key preview / up-flick overlay rendered inside the IME Box
+        // so edge keys stay directly above the pressed key without overflowing window bounds.
         val rootWidthPx = host.rootCoordinates?.size?.width?.toFloat() ?: 0f
         val rootHeightPx = host.rootCoordinates?.size?.height?.toFloat() ?: 0f
         for (preview in host.visualState.previews.values) {
             val spec = host.specsById[preview.keyId] ?: continue
             val rect = host.visualRects[preview.keyId] ?: host.hitRects[preview.keyId] ?: continue
             val charLabel = spec.charFor(preview.isShifted).toString()
-            val upLabel = spec.upFlickFor(preview.isShifted)?.toString()
-            if (preview.guideExpanded && upLabel != null) {
-                val guideDef = FlickKeyDef(label = charLabel, center = charLabel, up = upLabel)
-                FlickPopupGuide(
-                    popupState = ActiveFlickPopupState(
-                        keyDef = guideDef,
-                        centerOffset = Offset(rect.centerX, rect.centerY),
-                        direction = preview.flickDirection,
-                        rootWidthPx = rootWidthPx,
-                        rootHeightPx = rootHeightPx
-                    ),
-                    palette = palette
-                )
-            } else if (keyPreviewEnabled) {
+            val upLabel = if (!showNumberRow) spec.upFlickFor(preview.isShifted)?.toString() else null
+            if (keyPreviewEnabled || (preview.guideExpanded && upLabel != null)) {
                 QwertyKeyPreviewBubble(
                     label = charLabel,
                     targetRect = rect,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
-                    palette = palette
+                    palette = palette,
+                    upLabel = upLabel,
+                    flickDirection = preview.flickDirection
                 )
             }
         }

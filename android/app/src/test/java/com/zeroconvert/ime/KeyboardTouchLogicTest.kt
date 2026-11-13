@@ -483,4 +483,66 @@ class KeyboardTouchLogicTest {
         assertTrue(shouldVibrateOnEditorDelete(textBeforeCursor = null, deleteSurroundingAccepted = true))
         assertFalse(shouldVibrateOnEditorDelete(textBeforeCursor = null, deleteSurroundingAccepted = false))
     }
+
+    @Test
+    fun computeQwertyPreviewBubbleBounds_keepsEdgeKeysAlignedWithConsistentBottomGap() {
+        val rootW = 1000f
+        val rootH = 600f
+        val bubbleW = 120f
+        val gap = 16f
+        val margin = 10f
+
+        // Rightmost key ('p'): clamped only by bubble own width + margin, not a wide cross-flick extent.
+        val rightKey = KeyRect(left = 900f, top = 0f, right = 1000f, bottom = 100f)
+        val rightSingle = computeQwertyPreviewBubbleBounds(
+            targetRect = rightKey,
+            bubbleWidthPx = bubbleW,
+            bubbleHeightPx = 140f,
+            gapPx = gap,
+            marginPx = margin,
+            rootWidthPx = rootW,
+            rootHeightPx = rootH
+        )
+        val rightWithUpFlick = computeQwertyPreviewBubbleBounds(
+            targetRect = rightKey,
+            bubbleWidthPx = bubbleW,
+            bubbleHeightPx = 180f,
+            gapPx = gap,
+            marginPx = margin,
+            rootWidthPx = rootW,
+            rootHeightPx = rootH
+        )
+        // Left edges align at rootW - bubbleW - margin = 870f, directly above 'p' (900..1000).
+        assertEquals(870f, rightSingle.leftPx, 0.01f)
+        assertEquals(rightSingle.leftPx, rightWithUpFlick.leftPx, 0.01f)
+        // Bottom edge stays anchored at targetRect.top - gap regardless of whether up-flick digit row is shown.
+        assertEquals(-gap, rightSingle.topPx + rightSingle.heightPx, 0.01f)
+        assertEquals(-gap, rightWithUpFlick.topPx + rightWithUpFlick.heightPx, 0.01f)
+
+        // Leftmost key ('q'): left edge stays at margin (10f), directly above 'q' (0..100).
+        val leftKey = KeyRect(left = 0f, top = 0f, right = 100f, bottom = 100f)
+        val leftBounds = computeQwertyPreviewBubbleBounds(
+            targetRect = leftKey,
+            bubbleWidthPx = bubbleW,
+            bubbleHeightPx = 180f,
+            gapPx = gap,
+            marginPx = margin,
+            rootWidthPx = rootW,
+            rootHeightPx = rootH
+        )
+        assertEquals(10f, leftBounds.leftPx, 0.01f)
+
+        // Middle key ('t'): centered directly above target key.
+        val midKey = KeyRect(left = 400f, top = 0f, right = 500f, bottom = 100f)
+        val midBounds = computeQwertyPreviewBubbleBounds(
+            targetRect = midKey,
+            bubbleWidthPx = bubbleW,
+            bubbleHeightPx = 180f,
+            gapPx = gap,
+            marginPx = margin,
+            rootWidthPx = rootW,
+            rootHeightPx = rootH
+        )
+        assertEquals(390f, midBounds.leftPx, 0.01f)
+    }
 }
