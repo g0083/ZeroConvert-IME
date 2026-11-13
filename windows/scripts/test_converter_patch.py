@@ -28,10 +28,18 @@ MODULEMAP = '''module llama [system] {
 
 ZENZ_CONTEXT = '''        model_params.use_mmap = true
         ctx_params.n_ctx = 512
+        ctx_params.n_batch = 512
         llama_backend_init()
         llama_kv_cache_seq_rm(context, 0, -1, -1)
         llama_kv_cache_seq_cp(context, 0, 1, -1, -1)
         let position = llama_kv_cache_seq_pos_max(self.context, 0)
+        var batch = llama_batch_init(512, 0, 1)
+        defer { llama_batch_free(batch) }
+        let n_ctx = llama_n_ctx(context)
+        let n_kv_req = tokens.count + (Int(n_len) - tokens.count)
+        if n_kv_req > n_ctx {
+            debug("error: n_kv_req > n_ctx, the required KV cache size is not big enough")
+        }
 '''
 
 
