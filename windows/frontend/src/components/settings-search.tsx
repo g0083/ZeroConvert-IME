@@ -4,6 +4,12 @@ import { Search } from "lucide-react";
 import { searchSettings } from "@/lib/settings-index";
 import { setPendingSettingsTarget } from "@/lib/settings-search-target";
 
+export const OPEN_SETTINGS_SEARCH_EVENT = "zerocon:open-settings-search";
+
+export function openSettingsSearch() {
+    window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_SEARCH_EVENT));
+}
+
 /**
  * Ctrl+K で設定を横断検索する。選択した項目のページへ移動し、
  * data-settings-label を目印に該当行までスクロールして一時的に強調する。
@@ -27,8 +33,17 @@ export function SettingsSearch() {
                 setOpen(false);
             }
         };
+        const onOpen = () => {
+            setOpen(true);
+            setQuery("");
+            setActive(0);
+        };
         window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
+        window.addEventListener(OPEN_SETTINGS_SEARCH_EVENT, onOpen);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener(OPEN_SETTINGS_SEARCH_EVENT, onOpen);
+        };
     }, [open]);
 
     if (!open) return null;

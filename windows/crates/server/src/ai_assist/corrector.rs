@@ -58,6 +58,7 @@ pub(super) fn explicit_typo_surface(input: &str) -> Option<&'static str> {
 fn known_reading(input: &str) -> bool {
     let hira = katakana_to_hiragana(input);
     STANDARD_VOCAB.iter().any(|(reading, _)| *reading == hira)
+        || super::typo_variant::lookup_surface(&hira).is_some()
 }
 
 fn trailing_phrase<'a>(input: &'a str, baseline: &'a str) -> Option<(&'a str, &'a str)> {

@@ -7,6 +7,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -134,8 +135,10 @@ fun HorizontalCandidateStrip(
         ) {
             // Index into the snapshot the composition was built from. Deletion
             // removes an entry asynchronously, so a stale index would throw.
-            items(candidates) { item ->
-                val index = candidates.indexOf(item)
+            itemsIndexed(
+                items = candidates,
+                key = { index, item -> "$index:${item.itemKey}" }
+            ) { index, item ->
                 Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
                     val canForget = onForget != null && item.engineCandidateId.isNotEmpty()
                     Box(

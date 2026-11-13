@@ -13,20 +13,26 @@ class ConversionRangeSession {
         if (active || !input.isAtEndIndex || input.convertTarget.codePointCount(0, input.convertTarget.length) !in 2..128) return false
         original = input.clone()
         originalPreview = preview
-        val boundary = input.convertTarget.offsetByCodePoints(input.convertTarget.length, -1)
+        val boundary = ComposingEditorState.moveByCodePoint(input.convertTarget, input.convertTarget.length, -1)
         input.moveCursorFromCursorPosition(boundary - input.convertTargetCursorPosition)
         return true
     }
 
-    fun canAdjust(input: ComposingText, direction: Int): Boolean = original?.convertTarget == input.convertTarget && active && when (direction) {
-        -1 -> input.convertTargetCursorPosition > input.convertTarget.offsetByCodePoints(0, 1)
-        1 -> input.convertTargetCursorPosition < input.convertTarget.length
-        else -> false
+    fun canAdjust(input: ComposingText, direction: Int): Boolean {
+        if (original?.convertTarget != input.convertTarget || !active || input.convertTarget.isEmpty()) return false
+        val firstBoundary = ComposingEditorState.moveByCodePoint(input.convertTarget, 0, 1)
+        val cursor = ComposingEditorState.snapBoundary(input.convertTarget, input.convertTargetCursorPosition)
+        return when (direction) {
+            -1 -> cursor > firstBoundary
+            1 -> cursor < input.convertTarget.length
+            else -> false
+        }
     }
 
     fun adjust(input: ComposingText, direction: Int): Boolean {
         if (!canAdjust(input, direction)) return false
-        val boundary = input.convertTarget.offsetByCodePoints(input.convertTargetCursorPosition, direction)
+        val cursor = ComposingEditorState.snapBoundary(input.convertTarget, input.convertTargetCursorPosition)
+        val boundary = ComposingEditorState.moveByCodePoint(input.convertTarget, cursor, direction)
         input.moveCursorFromCursorPosition(boundary - input.convertTargetCursorPosition)
         return true
     }

@@ -373,49 +373,99 @@ pub fn katakana_to_hiragana(s: &str) -> String {
 }
 
 fn damerau_levenshtein_distance(s1: &str, s2: &str) -> usize {
-    let s1_chars: Vec<char> = s1.chars().collect();
-    let s2_chars: Vec<char> = s2.chars().collect();
-    let len1 = s1_chars.len();
-    let len2 = s2_chars.len();
+    use std::cell::RefCell;
 
-    if len1 == 0 {
-        return len2;
-    }
-    if len2 == 0 {
-        return len1;
+    thread_local! {
+        static SCRATCH: RefCell<DamerauScratch> = RefCell::new(DamerauScratch::default());
     }
 
-    let mut dp = vec![vec![0usize; len2 + 1]; len1 + 1];
-
-    for i in 0..=len1 {
-        dp[i][0] = i;
+    #[derive(Default)]
+    struct DamerauScratch {
+        s1_chars: Vec<char>,
+        s2_chars: Vec<char>,
+        prev2: Vec<usize>,
+        prev1: Vec<usize>,
+        curr: Vec<usize>,
     }
-    for j in 0..=len2 {
-        dp[0][j] = j;
-    }
 
-    for i in 1..=len1 {
-        for j in 1..=len2 {
-            let cost = if s1_chars[i - 1] == s2_chars[j - 1] {
-                0
-            } else {
-                1
-            };
-            dp[i][j] = (dp[i - 1][j] + 1)
-                .min(dp[i][j - 1] + 1)
-                .min(dp[i - 1][j - 1] + cost);
+    SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        let DamerauScratch {
+            s1_chars,
+            s2_chars,
+            prev2,
+            prev1,
+            curr,
+        } = &mut *scratch;
 
-            if i > 1
-                && j > 1
-                && s1_chars[i - 1] == s2_chars[j - 2]
-                && s1_chars[i - 2] == s2_chars[j - 1]
-            {
-                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + 1);
-            }
+        s1_chars.clear();
+        s1_chars.extend(s1.chars());
+        s2_chars.clear();
+        s2_chars.extend(s2.chars());
+
+        let len1 = s1_chars.len();
+        let len2 = s2_chars.len();
+
+        if len1 == 0 {
+            return len2;
         }
+        if len2 == 0 {
+            return len1;
+        }
+
+        prev2.resize(len2 + 1, 0);
+        prev1.resize(len2 + 1, 0);
+        curr.resize(len2 + 1, 0);
+        for (j, slot) in prev1.iter_mut().enumerate() {
+            *slot = j;
+        }
+
+        for i in 1..=len1 {
+            curr[0] = i;
+            let c1 = s1_chars[i - 1];
+            for j in 1..=len2 {
+                let c2 = s2_chars[j - 1];
+                let cost = usize::from(c1 != c2);
+                let mut best = (prev1[j] + 1).min(curr[j - 1] + 1).min(prev1[j - 1] + cost);
+
+                if i > 1 && j > 1 && c1 == s2_chars[j - 2] && s1_chars[i - 2] == c2 {
+                    best = best.min(prev2[j - 2] + 1);
+                }
+                curr[j] = best;
+            }
+            std::mem::swap(prev2, prev1);
+            std::mem::swap(prev1, curr);
+        }
+
+        prev1[len2]
+    })
+}
+
+fn is_damerau_levenshtein_distance_one_chars(a: &[char], b: &[char]) -> bool {
+    let len_a = a.len();
+    let len_b = b.len();
+    if len_a.abs_diff(len_b) > 1 {
+        return false;
     }
 
-    dp[len1][len2]
+    let common = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    if len_a == len_b {
+        if common == len_a {
+            return false;
+        }
+        if a[common + 1..] == b[common + 1..] {
+            return true;
+        }
+        return common + 1 < len_a
+            && a[common] == b[common + 1]
+            && a[common + 1] == b[common]
+            && a[common + 2..] == b[common + 2..];
+    }
+
+    if len_a + 1 == len_b {
+        return a[common..] == b[common + 1..];
+    }
+    b[common..] == a[common + 1..]
 }
 
 /// 標準頻出語彙テーブル (読み -> 正式表記)
@@ -777,10 +827,6 @@ const TYPO_TABLE: &[(&str, &str)] = &[
     ("かさおさす", "傘を差す"),
     ("じかんわ", "時間は"),
     ("だいじょぶ", "大丈夫"),
-    ("へんかん", "変換"),
-    ("へんこう", "変更"),
-    ("かくにん", "確認"),
-    ("かくにんします", "確認します"),
     ("にゅうしよく", "入所"),
     ("りようほう", "両方"),
     ("ゆざ", "ユーザー"),
@@ -962,18 +1008,21 @@ fn heuristic_typo_suggestion(
         return None;
     }
 
-    let hiragana = raw_hiragana.trim();
-    if hiragana.chars().count() < 2 {
+    let raw_trimmed = raw_hiragana.trim();
+    if raw_trimmed.chars().count() < 2 {
         return None;
     }
+    let hiragana_owned = katakana_to_hiragana(raw_trimmed);
+    let hiragana = hiragana_owned.as_str();
 
     // 0.5. ローマ字子音浮き・混入タイポ (例: 「おｋせり」->「おかえり」, 「おｔかれ」->「おつかれ」)
-    if let Some(decoded_hira) = romaji_decoder::decode_floating_consonant_typo(raw_hiragana) {
-        let surface =
-            typo_variant::lookup_surface(&decoded_hira).unwrap_or_else(|| decoded_hira.clone());
+    if let Some(decoded_hira) = romaji_decoder::decode_floating_consonant_typo(hiragana) {
+        let surface = typo_variant::lookup_surface(&decoded_hira)
+            .filter(|s| is_valid_lookup_surface(s))
+            .unwrap_or_else(|| decoded_hira.clone());
         return Some(TypoSuggestion {
             surface,
-            token_reading: raw_hiragana.to_string(),
+            token_reading: raw_trimmed.to_string(),
             token_surface: decoded_hira,
             learned: false,
         });
@@ -990,12 +1039,17 @@ fn heuristic_typo_suggestion(
         });
     }
 
+    if is_known_clean_reading(hiragana) {
+        return None;
+    }
+
     // 1. 完全一致 (TYPO_TABLE)
     for &(typo, fix) in TYPO_TABLE {
-        if hiragana == typo {
+        let typo_hira = katakana_to_hiragana(typo);
+        if hiragana == typo_hira {
             return Some(TypoSuggestion {
                 surface: fix.to_string(),
-                token_reading: typo.to_string(),
+                token_reading: typo_hira,
                 token_surface: fix.to_string(),
                 learned: false,
             });
@@ -1005,10 +1059,25 @@ fn heuristic_typo_suggestion(
     // 2. 先頭一致（誤入力の後に続きがあるケース）。最長一致を優先する。
     let mut prefix_match: Option<(usize, &str)> = None;
     for &(typo, fix) in TYPO_TABLE {
-        if !hiragana.starts_with(typo) {
+        let typo_hira = katakana_to_hiragana(typo);
+        let typo_len = typo_hira.chars().count();
+        if typo_len < 3 || !hiragana.starts_with(&typo_hira) {
             continue;
         }
-        let typo_len = typo.chars().count();
+        let tail = &hiragana[typo_hira.len()..];
+        let next_extends_clean_word = tail
+            .chars()
+            .next()
+            .is_some_and(|next| is_known_clean_reading(&format!("{typo_hira}{next}")));
+        const MORPHEME_CONTINUATION_KANA: &[char] = &[
+            'ー', 'ん', 'っ', 'ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ',
+        ];
+        if tail.starts_with(MORPHEME_CONTINUATION_KANA)
+            || is_known_clean_reading(&typo_hira)
+            || next_extends_clean_word
+        {
+            continue;
+        }
         if prefix_match.is_none_or(|(best_len, _)| typo_len > best_len) {
             prefix_match = Some((typo_len, fix));
         }
@@ -1038,14 +1107,18 @@ fn heuristic_typo_suggestion(
         });
     }
 
-    // 5. Damerau-Levenshtein 編集距離による標準語彙検索 (全文距離 1、QWERTY 近接ミス優先)
+    // 5. Damerau-Levenshtein 編集距離による標準語彙検索 (全文距離 1、QWERTY 近接・音韻妥当性ありのみ)
+    let hiragana_chars: Vec<char> = hiragana.chars().collect();
+    let total_len = hiragana_chars.len();
+    let mut v_chars = Vec::with_capacity(32);
     let mut best_vocab_match: Option<(bool, &str)> = None;
     for &(v_reading, v_surface) in STANDARD_VOCAB {
-        if hiragana == v_reading {
+        if hiragana == v_reading || !is_plausible_distance1_vocab_typo(hiragana, v_reading) {
             continue;
         }
-        let dist = damerau_levenshtein_distance(hiragana, v_reading);
-        if dist == 1 {
+        v_chars.clear();
+        v_chars.extend(v_reading.chars());
+        if is_damerau_levenshtein_distance_one_chars(&hiragana_chars, &v_chars) {
             let qwerty_adj = has_qwerty_adjacent_difference(hiragana, v_reading);
             if qwerty_adj {
                 return Some(TypoSuggestion {
@@ -1070,15 +1143,29 @@ fn heuristic_typo_suggestion(
 
     // 6. プレフィックス Damerau-Levenshtein 編集距離による誤字補正
     // （例: 「おあようございます」の先頭「おあよう」が「おはよう」に距離1で補正され、「おはようございます」を生成）
-    let hiragana_chars: Vec<char> = hiragana.chars().collect();
-    let total_len = hiragana_chars.len();
+    // 候補長ごとに先頭部分と妥当性チェックを事前計算し、語彙ループ内の重複走査・文字列生成を避ける
+    let prefix_candidates: Vec<Option<String>> = (0..total_len)
+        .map(|cand_len| {
+            if cand_len < 4 {
+                return None;
+            }
+            let prefix: String = hiragana_chars[..cand_len].iter().collect();
+            if is_known_clean_reading(&prefix) || starts_with_known_word_plus_boundary(&prefix) {
+                None
+            } else {
+                Some(prefix)
+            }
+        })
+        .collect();
 
     // プレフィックス誤字は QWERTY 近接ミス優先、次いで最長一致を優先する
     let mut best_prefix_correction: Option<(bool, usize, String, String, String)> = None;
 
     for &(v_reading, v_surface) in STANDARD_VOCAB {
-        let v_len = v_reading.chars().count();
-        if v_len < 3 || v_len >= total_len {
+        v_chars.clear();
+        v_chars.extend(v_reading.chars());
+        let v_len = v_chars.len();
+        if v_len < 4 || v_len >= total_len {
             continue;
         }
 
@@ -1087,25 +1174,33 @@ fn heuristic_typo_suggestion(
             continue;
         }
 
-        // 辞書語の長さ ±1 の範囲でプレフィックスを切り出して比較
-        let min_cand_len = if v_len > 1 { v_len - 1 } else { 1 };
+        // 辞書語の長さ ±1 の範囲 (最小 4 文字) でプレフィックスを切り出して比較
+        let min_cand_len = (v_len - 1).max(4);
         let max_cand_len = (v_len + 1).min(total_len - 1);
+        if min_cand_len > max_cand_len {
+            continue;
+        }
 
         for cand_len in min_cand_len..=max_cand_len {
-            let prefix: String = hiragana_chars[..cand_len].iter().collect();
+            let Some(prefix) = prefix_candidates.get(cand_len).and_then(Option::as_ref) else {
+                continue;
+            };
             if prefix == v_reading {
                 continue;
             }
-
-            // 【重要】切り出した prefix 自体が辞書に存在する正当な単語（例: 「きょう」）である場合、
-            // それは誤字ではなく意図された入力なので、別の単語（例: 「きのう」）へ勝手に補正しない
-            if STANDARD_VOCAB.iter().any(|&(r, _)| r == prefix) {
+            if cand_len < v_len
+                && v_reading.starts_with(prefix.as_str())
+                && hiragana_chars
+                    .get(cand_len)
+                    .is_some_and(|next| !WORD_BOUNDARY_CHARS.contains(next))
+            {
                 continue;
             }
 
-            let dist = damerau_levenshtein_distance(&prefix, v_reading);
-            if dist == 1 {
-                let qwerty_adj = has_qwerty_adjacent_difference(&prefix, v_reading);
+            if is_damerau_levenshtein_distance_one_chars(&hiragana_chars[..cand_len], &v_chars)
+                && is_plausible_distance1_vocab_typo(prefix, v_reading)
+            {
+                let qwerty_adj = has_qwerty_adjacent_difference(prefix, v_reading);
                 let tail: String = hiragana_chars[cand_len..].iter().collect();
                 let full = format!("{}{}", v_surface, tail);
                 // QWERTY隣接ミス (qwerty_adj: bool) を最優先し、次に語長 (v_len: usize) で比較
@@ -1115,8 +1210,13 @@ fn heuristic_typo_suggestion(
                         (qwerty_adj, v_len) > (*best_adj, *best_len)
                     })
                 {
-                    best_prefix_correction =
-                        Some((qwerty_adj, v_len, full, prefix, v_surface.to_string()));
+                    best_prefix_correction = Some((
+                        qwerty_adj,
+                        v_len,
+                        full,
+                        prefix.clone(),
+                        v_surface.to_string(),
+                    ));
                 }
             }
         }
@@ -1145,6 +1245,109 @@ fn heuristic_typo_suggestion(
 }
 
 /// 音韻規則による動的誤入力補正
+fn is_valid_lookup_surface(surface: &str) -> bool {
+    !surface.is_empty()
+        && !surface
+            .chars()
+            .any(|ch| ('\u{E000}'..='\u{F8FF}').contains(&ch))
+}
+
+fn is_known_clean_reading(hiragana: &str) -> bool {
+    STANDARD_VOCAB
+        .iter()
+        .any(|&(reading, _)| reading == hiragana)
+        || typo_variant::lookup_surface(hiragana).is_some()
+}
+
+fn starts_with_known_word_plus_boundary(prefix: &str) -> bool {
+    let chars: Vec<char> = prefix.chars().collect();
+    if chars.len() < 3 {
+        return false;
+    }
+    let last = chars[chars.len() - 1];
+    if !WORD_BOUNDARY_CHARS.contains(&last) {
+        return false;
+    }
+    let stem: String = chars[..chars.len() - 1].iter().collect();
+    is_known_clean_reading(&stem)
+}
+
+fn kana_vowel_group(c: char) -> Option<u8> {
+    hiragana_to_romaji(c)
+        .as_bytes()
+        .last()
+        .copied()
+        .filter(|b| b"aiueo".contains(b))
+}
+
+fn is_same_vowel_consonant_drop(a: char, b: char) -> bool {
+    const VOWELS: &str = "あいうえお";
+    (VOWELS.contains(a) || VOWELS.contains(b))
+        && kana_vowel_group(a).is_some_and(|va| kana_vowel_group(b) == Some(va))
+}
+
+fn is_transposition(a: &[char], b: &[char]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = [0usize; 2];
+    let mut count = 0;
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            if count >= 2 {
+                return false;
+            }
+            diff[count] = i;
+            count += 1;
+        }
+    }
+    count == 2 && diff[0] + 1 == diff[1] && a[diff[0]] == b[diff[1]] && a[diff[1]] == b[diff[0]]
+}
+
+fn is_plausible_distance1_vocab_typo(typo: &str, vocab: &str) -> bool {
+    let typo_chars: Vec<char> = typo.chars().collect();
+    let vocab_chars: Vec<char> = vocab.chars().collect();
+    if typo_chars.len() == vocab_chars.len() {
+        if has_qwerty_adjacent_difference(typo, vocab)
+            || is_transposition(&typo_chars, &vocab_chars)
+        {
+            return true;
+        }
+        let mut diffs = (0..typo_chars.len()).filter(|&i| typo_chars[i] != vocab_chars[i]);
+        if let (Some(i), None) = (diffs.next(), diffs.next()) {
+            return is_same_vowel_consonant_drop(typo_chars[i], vocab_chars[i]);
+        }
+        return false;
+    }
+    if vocab_chars.len() < 4 || typo_chars.len() < 3 {
+        return false;
+    }
+    if typo_chars.len() == vocab_chars.len() + 1 && typo.starts_with(vocab) {
+        return false;
+    }
+    if typo_chars.len() + 1 == vocab_chars.len() {
+        let mut ti = 0;
+        let mut vi = 0;
+        let mut deleted = None;
+        while ti < typo_chars.len() && vi < vocab_chars.len() {
+            if typo_chars[ti] == vocab_chars[vi] {
+                ti += 1;
+                vi += 1;
+            } else if deleted.is_none() {
+                deleted = Some((vi, vocab_chars[vi]));
+                vi += 1;
+            } else {
+                return false;
+            }
+        }
+        let (pos, ch) =
+            deleted.unwrap_or((vocab_chars.len() - 1, vocab_chars[vocab_chars.len() - 1]));
+        return matches!(ch, 'っ' | 'ん' | 'ー' | 'あ' | 'い' | 'う' | 'え' | 'お')
+            || (pos > 0 && pos + 1 < vocab_chars.len());
+    }
+    false
+}
+
 fn rule_based_typo_correction(hiragana: &str) -> Option<String> {
     let chars: Vec<char> = hiragana.chars().collect();
     let len = chars.len();
@@ -1240,15 +1443,16 @@ fn correction_for_embedded_typo(hiragana: &str) -> Option<TypoSuggestion> {
         }
 
         let rest = &hiragana[byte_index + boundary_char.len_utf8()..];
-        let mut best: Option<(&str, &str)> = None;
+        let mut best: Option<(String, &str)> = None;
         for &(typo, fix) in TYPO_TABLE {
-            if typo.chars().count() < 3 {
+            let typo_hira = katakana_to_hiragana(typo);
+            if typo_hira.chars().count() < 3 || is_known_clean_reading(&typo_hira) {
                 continue;
             }
-            if !rest.starts_with(typo) {
+            if !rest.starts_with(&typo_hira) {
                 continue;
             }
-            let after = &rest[typo.len()..];
+            let after = &rest[typo_hira.len()..];
             let ends_at_boundary = after
                 .chars()
                 .next()
@@ -1256,8 +1460,11 @@ fn correction_for_embedded_typo(hiragana: &str) -> Option<TypoSuggestion> {
             if !ends_at_boundary {
                 continue;
             }
-            if best.is_none_or(|(best_typo, _)| typo.chars().count() > best_typo.chars().count()) {
-                best = Some((typo, fix));
+            if best
+                .as_ref()
+                .is_none_or(|(best_typo, _)| typo_hira.chars().count() > best_typo.chars().count())
+            {
+                best = Some((typo_hira, fix));
             }
         }
 
@@ -1268,7 +1475,7 @@ fn correction_for_embedded_typo(hiragana: &str) -> Option<TypoSuggestion> {
             corrected.push_str(&rest[typo.len()..]);
             return Some(TypoSuggestion {
                 surface: corrected,
-                token_reading: typo.to_string(),
+                token_reading: typo,
                 token_surface: fix.to_string(),
                 learned: false,
             });
@@ -1280,7 +1487,10 @@ fn correction_for_embedded_typo(hiragana: &str) -> Option<TypoSuggestion> {
 
 #[cfg(test)]
 mod tests {
-    use super::{damerau_levenshtein_distance, fetch_moshikashite_candidate, AiAssistConfig};
+    use super::{
+        damerau_levenshtein_distance, fetch_moshikashite_candidate,
+        is_damerau_levenshtein_distance_one_chars, AiAssistConfig,
+    };
 
     #[test]
     fn test_qwerty_adjacent() {
@@ -1319,6 +1529,45 @@ mod tests {
         assert_eq!(damerau_levenshtein_distance("きんにちは", "こんにちは"), 1);
         assert_eq!(damerau_levenshtein_distance("abc", "abc"), 0);
         assert_eq!(damerau_levenshtein_distance("abc", "acb"), 1);
+    }
+
+    #[test]
+    fn is_damerau_levenshtein_distance_one_matches_full_distance() {
+        let samples = [
+            "",
+            "a",
+            "b",
+            "ab",
+            "ba",
+            "abc",
+            "acb",
+            "bac",
+            "abcd",
+            "abdc",
+            "acbd",
+            "てすと",
+            "てそと",
+            "てす",
+            "てすとです",
+            "てつと",
+            "こんにちは",
+            "きんにちは",
+            "こんんちは",
+            "こにちは",
+            "あいうえお",
+            "あいうおえ",
+        ];
+        for lhs in samples {
+            let lhs_chars: Vec<char> = lhs.chars().collect();
+            for rhs in samples {
+                let rhs_chars: Vec<char> = rhs.chars().collect();
+                assert_eq!(
+                    is_damerau_levenshtein_distance_one_chars(&lhs_chars, &rhs_chars),
+                    damerau_levenshtein_distance(lhs, rhs) == 1,
+                    "mismatch for lhs={lhs:?}, rhs={rhs:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1449,6 +1698,92 @@ mod tests {
         assert_eq!(
             fetch_moshikashite_candidate("", "あｒがとう", &conf),
             Some("ありがとう".to_string())
+        );
+    }
+
+    #[test]
+    fn test_katakana_typo_and_clean_normal_inputs_are_not_corrupted() {
+        let conf = config();
+        // カタカナ読みで渡されてもひらがな正規化して誤字候補を返せること
+        assert_eq!(
+            fetch_moshikashite_candidate("", "キンニチハ", &conf),
+            Some("こんにちは".to_string())
+        );
+        assert_eq!(
+            fetch_moshikashite_candidate("", "オツクレサマ", &conf),
+            Some("お疲れ様".to_string())
+        );
+        assert_eq!(
+            fetch_moshikashite_candidate("", "ウレスイ", &conf),
+            Some("嬉しい".to_string())
+        );
+        assert_eq!(
+            fetch_moshikashite_candidate("", "おｔかれ", &conf),
+            Some("お疲れ".to_string())
+        );
+
+        // 正常入力（clean Japanese）に対して誤って誤字補正を出さないこと
+        for clean in [
+            "こんにちは",
+            "コンニチハ",
+            "ありがとう",
+            "おつかれさま",
+            "せってい",
+            "きょうと",
+            "がっこう",
+            "とうきょう",
+            "かんじへんかん",
+            "しらんけど",
+            "あしたはやすみだ",
+            "らーめんをたべる",
+            "かくにんします",
+            "へんかん",
+            "へんこう",
+            "かくにん",
+            "なつにやすむ",
+            "きょうはいいてんきですね",
+            "おなかいっぱいになった",
+            "かきなおしをおこなう",
+            "ぼとるねっくをかいしょう",
+        ] {
+            assert_eq!(
+                fetch_moshikashite_candidate("", clean, &conf),
+                None,
+                "clean reading `{clean}` must not trigger heuristic typo correction"
+            );
+        }
+    }
+
+    #[test]
+    fn heuristic_typo_blocks_broken_partial_rewrites_while_keeping_valid_typos() {
+        let conf = config();
+
+        assert_ne!(
+            fetch_moshikashite_candidate("", "ゴカクニンクダサ", &conf).as_deref(),
+            Some("ご確認んくださ"),
+            "partial prefix match must not rewrite `ゴカクニンクダサ` mid-word"
+        );
+        assert_ne!(
+            fetch_moshikashite_candidate("", "ライシュクノスイヨウビデス", &conf).as_deref(),
+            Some("来週くのすいようびです"),
+            "truncated vocab match must not leave stray suffix character in `ライシュクノスイヨウビデス`"
+        );
+        assert_ne!(
+            fetch_moshikashite_candidate("", "かきなおしをおこなう", &conf).as_deref(),
+            Some("かきなおしを行い"),
+        );
+        assert_ne!(
+            fetch_moshikashite_candidate("", "ぼとるねっくをかいしょう", &conf).as_deref(),
+            Some("ぼとるねっくをか異常"),
+        );
+
+        assert_eq!(
+            fetch_moshikashite_candidate("", "ごかくに", &conf).as_deref(),
+            Some("ご確認"),
+        );
+        assert_eq!(
+            fetch_moshikashite_candidate("", "モウイッカイヤロイ", &conf).as_deref(),
+            Some("もう一回やろう"),
         );
     }
 }

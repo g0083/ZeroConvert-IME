@@ -50,17 +50,25 @@ fn candidate_html() -> String {
             <head>
                 <style>
                     body, html {
+                        width: 100%;
+                        height: 100%;
+                        margin: 0;
+                        padding: 0;
+                        overflow: hidden;
                         overscroll-behavior: none;
                         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic UI", sans-serif;
                     }
                     body {
                         margin: 0;
                         padding: 8px;
+                        box-sizing: border-box;
+                        overflow: hidden;
                         filter: drop-shadow(0 10px 25px rgba(0, 0, 0, 0.12));
                     }
                     main {
                         width: 100%;
                         height: 100%;
+                        min-width: 0;
                         padding: 6px;
                         border: 1px solid rgba(0, 0, 0, 0.08);
                         border-radius: 12px;
@@ -68,14 +76,51 @@ fn candidate_html() -> String {
                         box-sizing: border-box;
                         display: flex;
                         flex-direction: column;
+                        overflow: hidden;
                     }
                     main[data-candidate-list-hidden] ol {
                         display: none;
+                    }
+                    main[data-candidate-list-hidden] #candidate-footer {
+                        display: none;
+                    }
+                    #candidate-footer {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 8px;
+                        width: 100%;
+                        min-width: 0;
+                        box-sizing: border-box;
+                        margin-top: 4px;
+                        padding: 4px 6px 2px 6px;
+                        border-top: 1px solid var(--ime-border, rgba(0, 0, 0, 0.08));
+                        color: var(--ime-muted, #64748B);
+                        font-size: 10px;
+                        line-height: 1.25;
+                        white-space: nowrap;
+                        overflow: hidden;
+                        user-select: none;
+                    }
+                    #candidate-footer[hidden] {
+                        display: none;
+                    }
+                    #candidate-count {
+                        flex-shrink: 0;
+                    }
+                    #candidate-hint {
+                        min-width: 0;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                        text-align: right;
                     }
                     ol {
                         margin: 0;
                         padding: 0;
                         flex: 1;
+                        min-height: 0;
+                        overflow-x: hidden;
                         overflow-y: auto;
                         overflow-anchor: none;
                         list-style-position: inside;
@@ -343,6 +388,7 @@ fn candidate_html() -> String {
                             candidateList.scrollTop = 0;
                             renderedRangeStart = 0;
                             renderedRangeEnd = 0;
+                            updateCandidateFooter();
                             return;
                         }
 
@@ -388,6 +434,26 @@ fn candidate_html() -> String {
                         }
                         renderedRangeStart = range.start;
                         renderedRangeEnd = range.end;
+                        updateCandidateFooter();
+                    }
+
+                    function updateCandidateFooter() {
+                        const footer = document.getElementById('candidate-footer');
+                        const countEl = document.getElementById('candidate-count');
+                        if (!footer || !countEl) {
+                            return;
+                        }
+                        const total = currentCandidates.length;
+                        if (total === 0) {
+                            footer.hidden = true;
+                            countEl.textContent = '';
+                            return;
+                        }
+                        footer.hidden = false;
+                        const active = currentSelectionIndex >= 0 && currentSelectionIndex < total
+                            ? `${currentSelectionIndex + 1} / ${total} 件`
+                            : `${total} 件`;
+                        countEl.textContent = active;
                     }
 
                     function updateCandidates(candidates, selectedIndex = null) {
@@ -465,11 +531,25 @@ fn candidate_html() -> String {
                         const candidateListVisible = !main.hasAttribute('data-candidate-list-hidden');
                         const itemHeight = candidateListVisible ? measureListItemHeight(candidateList) : 0;
                         const candidateListHeight = itemHeight * Math.min(VISIBLE_ITEM_COUNT, currentCandidates.length);
-                        const mainPadding = parseInt(window.getComputedStyle(main).paddingTop) + 
-                                           parseInt(window.getComputedStyle(main).paddingBottom);
-                        const bodyPadding = parseInt(window.getComputedStyle(body).paddingTop) + 
-                                          parseInt(window.getComputedStyle(body).paddingBottom);
-                        const totalHeight = candidateListHeight + mainPadding + bodyPadding;
+                        const cssPx = (style, prop) => Number.parseFloat(style.getPropertyValue(prop)) || 0;
+                        const mainStyle = window.getComputedStyle(main);
+                        const bodyStyle = window.getComputedStyle(body);
+                        const mainChromeHeight = cssPx(mainStyle, 'padding-top')
+                            + cssPx(mainStyle, 'padding-bottom')
+                            + cssPx(mainStyle, 'border-top-width')
+                            + cssPx(mainStyle, 'border-bottom-width');
+                        const bodyChromeHeight = cssPx(bodyStyle, 'padding-top')
+                            + cssPx(bodyStyle, 'padding-bottom');
+                        const footer = document.getElementById('candidate-footer');
+                        let footerHeight = 0;
+                        if (candidateListVisible && footer && !footer.hidden && currentCandidates.length > 0) {
+                            const footerStyle = window.getComputedStyle(footer);
+                            const measuredFooterHeight = footer.getBoundingClientRect().height || footer.offsetHeight;
+                            footerHeight = measuredFooterHeight
+                                + cssPx(footerStyle, 'margin-top')
+                                + cssPx(footerStyle, 'margin-bottom');
+                        }
+                        const totalHeight = Math.ceil(candidateListHeight + footerHeight + mainChromeHeight + bodyChromeHeight);
                         
                         window.ipc.postMessage(JSON.stringify({
                             type: 'resize',
@@ -527,6 +607,10 @@ fn candidate_html() -> String {
                 <main>
                     <ol id="candidate-list">
                     </ol>
+                    <footer id="candidate-footer" hidden>
+                        <span id="candidate-count"></span>
+                        <span id="candidate-hint">Tab:補正 · 右×2:削除</span>
+                    </footer>
                 </main>
             </body>
         </html>"##

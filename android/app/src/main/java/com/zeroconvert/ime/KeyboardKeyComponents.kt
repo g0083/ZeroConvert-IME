@@ -29,12 +29,13 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
@@ -60,6 +61,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Invoked strictly on initial pointer-down for press-only haptic feedback. */
@@ -136,6 +138,16 @@ fun resolveKeyCapColors(
 }
 
 /**
+ * Clamps [requestedRadiusPx] to at most half the shorter edge so bevel path geometry matches
+ * Compose's rendered [RoundedCornerShape] on circular/pill keys as well as rectangular keys.
+ */
+internal fun effectiveKeyCapCornerRadiusPx(
+    widthPx: Float,
+    heightPx: Float,
+    requestedRadiusPx: Float
+): Float = min(requestedRadiusPx.coerceAtLeast(0f), min(widthPx, heightPx).coerceAtLeast(0f) / 2f)
+
+/**
  * Separates a key's outer zero-deadzone touch hitbox ([modifier]) from its visual keycap margins
  * ([visualPadding]), drawing the background, pressed highlight, subtle border, and 3D bottom rim.
  */
@@ -158,6 +170,9 @@ fun KeyCapFrame(
         isPressed = isPressed,
         isAccent = isAccent
     )
+    val currentIsPressed by rememberUpdatedState(isPressed)
+    val currentColors by rememberUpdatedState(colors)
+    val currentCornerRadius by rememberUpdatedState(cornerRadius)
     val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = modifier,
@@ -172,25 +187,58 @@ fun KeyCapFrame(
                 .then(
                     if (bordersEnabled) {
                         Modifier
-                            .drawWithContent {
-                                drawContent()
-                                val radiusPx = cornerRadius.toPx()
-                                if (!isPressed && colors.topHighlight.alpha > 0f) {
-                                    val highlightH = 0.75.dp.toPx()
-                                    drawRoundRect(
-                                        color = colors.topHighlight,
-                                        topLeft = Offset.Zero,
-                                        size = Size(size.width, highlightH + radiusPx * 0.2f),
-                                        cornerRadius = CornerRadius(radiusPx, radiusPx)
+                            .drawWithCache {
+                                if (size.width <= 0f || size.height <= 0f) {
+                                    onDrawWithContent { drawContent() }
+                                } else {
+                                    val effectiveRadius = effectiveKeyCapCornerRadiusPx(
+                                        widthPx = size.width,
+                                        heightPx = size.height,
+                                        requestedRadiusPx = currentCornerRadius.toPx()
                                     )
-                                }
-                                if (!isPressed && colors.bottomRim.alpha > 0f) {
-                                    val rimH = 1.6.dp.toPx()
-                                    drawRect(
-                                        color = colors.bottomRim,
-                                        topLeft = Offset(0f, size.height - rimH),
-                                        size = Size(size.width, rimH)
-                                    )
+                                    val corner = CornerRadius(effectiveRadius, effectiveRadius)
+                                    val outerPath = Path().apply {
+                                        addRoundRect(RoundRect(0f, 0f, size.width, size.height, corner))
+                                    }
+                                    // Subtract a shifted identical shape so top highlight and bottom rim
+                                    // follow the exact keycap contour (including 22dp pill buttons) instead
+                                    // of forming flat horizontal bands across curved top/bottom edges.
+                                    val highlightH = 1.65.dp.toPx()
+                                    val shiftedDown = Path().apply {
+                                        addRoundRect(
+                                            RoundRect(
+                                                left = 0f,
+                                                top = highlightH,
+                                                right = size.width,
+                                                bottom = size.height + highlightH,
+                                                cornerRadius = corner
+                                            )
+                                        )
+                                    }
+                                    val topBevelPath = Path.combine(PathOperation.Difference, outerPath, shiftedDown)
+                                    val rimH = 1.8.dp.toPx()
+                                    val shiftedUp = Path().apply {
+                                        addRoundRect(
+                                            RoundRect(
+                                                left = 0f,
+                                                top = -rimH,
+                                                right = size.width,
+                                                bottom = size.height - rimH,
+                                                cornerRadius = corner
+                                            )
+                                        )
+                                    }
+                                    val bottomBevelPath = Path.combine(PathOperation.Difference, outerPath, shiftedUp)
+                                    onDrawWithContent {
+                                        drawContent()
+                                        val latestColors = currentColors
+                                        if (!currentIsPressed && latestColors.topHighlight.alpha > 0f) {
+                                            drawPath(path = topBevelPath, color = latestColors.topHighlight)
+                                        }
+                                        if (!currentIsPressed && latestColors.bottomRim.alpha > 0f) {
+                                            drawPath(path = bottomBevelPath, color = latestColors.bottomRim)
+                                        }
+                                    }
                                 }
                             }
                             .border(width = 0.8.dp, color = colors.border, shape = shape)

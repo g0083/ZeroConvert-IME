@@ -285,6 +285,16 @@ pub fn find_qwerty_variant_correction(reading: &str) -> Option<VariantCorrection
         let Some(surface) = lookup_surface(&variant) else {
             continue;
         };
+        if surface
+            .chars()
+            .any(|ch| ('\u{E000}'..='\u{F8FF}').contains(&ch))
+        {
+            continue;
+        }
+        // 五段動詞の終止形末尾「う」を名詞「い」に化けさせない（例: おこなう -> 行い）
+        if trimmed.ends_with('う') && variant.ends_with('い') {
+            continue;
+        }
         let correction = VariantCorrection {
             variant: variant.clone(),
             original: trimmed.to_string(),
@@ -319,15 +329,24 @@ pub fn find_qwerty_correction(reading: &str) -> Option<TypoVariantCorrection> {
     }
 
     let characters: Vec<char> = trimmed.chars().collect();
+    const SUFFIX_SPLIT_BOUNDARIES: &[char] = &[
+        ' ', '　', '、', '。', '！', '？', '!', '?', ',', '.', '・', '，', '．', '：', ':', '；',
+        ';', 'を', 'に', 'は', 'が', 'で', 'と', 'へ', 'も', 'の',
+    ];
     for start in 1..characters.len().saturating_sub(1) {
+        let prefix: String = characters[..start].iter().collect();
+        let at_boundary = SUFFIX_SPLIT_BOUNDARIES.contains(&characters[start - 1])
+            || lookup_surface(&prefix).is_some();
+        if !at_boundary {
+            continue;
+        }
         let suffix: String = characters[start..].iter().collect();
-        if suffix.chars().count() < 3 {
+        if suffix.chars().count() < 4 {
             break;
         }
         let Some(correction) = find_qwerty_variant_correction(&suffix) else {
             continue;
         };
-        let prefix: String = characters[..start].iter().collect();
         return Some(TypoVariantCorrection {
             surface: format!("{prefix}{}", correction.surface),
             token_reading: suffix,

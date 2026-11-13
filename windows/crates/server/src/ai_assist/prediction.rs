@@ -61,10 +61,33 @@ fn reading_extension(value: &Value) -> Option<&str> {
     complete_response(value).filter(|s| useful(s))
 }
 
+const CLAUSE_PUNCTUATION: &[char] = &[
+    '、', '。', '！', '？', '!', '?', '，', '．', ',', '.', ' ', '　', '\t', '\n', '\r',
+];
+
+fn repeats_surface_clause(surface: &str, suffix: &str) -> bool {
+    let trimmed_surface = surface.trim_end_matches(CLAUSE_PUNCTUATION);
+    let clean_suffix = suffix.trim_start_matches(CLAUSE_PUNCTUATION);
+    if trimmed_surface.is_empty() || clean_suffix.is_empty() {
+        return false;
+    }
+    for (byte_idx, _) in trimmed_surface.char_indices() {
+        let tail = &trimmed_surface[byte_idx..];
+        if tail.chars().count() >= 4 && clean_suffix.starts_with(tail) {
+            return true;
+        }
+    }
+    suffix.split(CLAUSE_PUNCTUATION).any(|clause| {
+        let clause = clause.trim();
+        clause.chars().count() >= 4 && trimmed_surface.contains(clause)
+    })
+}
+
 // A model may extend the text, never silently replace the user's visible prefix.
 fn surface_suffix<'a>(surface: &str, completed: &'a str) -> Option<&'a str> {
     let suffix = completed.strip_prefix(surface)?;
-    (useful(suffix) && !suffix.contains(surface)).then_some(suffix)
+    (useful(suffix) && !suffix.contains(surface) && !repeats_surface_clause(surface, suffix))
+        .then_some(suffix)
 }
 
 // Only kana, the long vowel mark, and Japanese clause punctuation can still
@@ -401,5 +424,51 @@ pub(crate) mod tests {
             listener.accept().is_err(),
             "a rejected tail must not issue a model request"
         );
+    }
+
+    #[test]
+    fn suggest_rejects_clause_repetition_and_allows_valid_continuation() {
+        assert_eq!(
+            surface_suffix(
+                "今日は雨が降っているので",
+                "今日は雨が降っているので、雨が降っているので、",
+            ),
+            None
+        );
+        assert_eq!(
+            surface_suffix(
+                "雨が降っているので",
+                "雨が降っているので、電車が遅れています。",
+            ),
+            Some("、電車が遅れています。")
+        );
+
+        let _guard = MODEL_TEST_LOCK.lock().unwrap();
+        let (config, worker) = model_fixture([
+            "、アメガフッテイルノデ、",
+            "今日は雨が降っているので、雨が降っているので、",
+        ]);
+        assert!(suggest(
+            "",
+            "きょうはあめがふっているので",
+            "今日は雨が降っているので",
+            &config
+        )
+        .is_none());
+        let _ = worker.join().unwrap();
+
+        let (valid_config, valid_worker) = model_fixture([
+            "、デンシャガオクレテイマス。",
+            "雨が降っているので、電車が遅れています。",
+        ]);
+        let valid = suggest(
+            "",
+            "あめがふっているので",
+            "雨が降っているので",
+            &valid_config,
+        )
+        .expect("non-repeating clause continuation must pass");
+        assert_eq!(valid.continuation, "、電車が遅れています。");
+        let _ = valid_worker.join().unwrap();
     }
 }

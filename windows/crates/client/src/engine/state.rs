@@ -1,7 +1,10 @@
 use std::{
     fs, io,
     path::PathBuf,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex, MutexGuard,
+    },
     time::SystemTime,
 };
 
@@ -308,6 +311,14 @@ impl IMEState {
     }
 
     pub fn ensure_ipc_service() -> anyhow::Result<bool> {
+        static IPC_INIT_GATE: Mutex<()> = Mutex::new(());
+        if Self::ipc_service()?.is_some() {
+            return Ok(false);
+        }
+
+        let _gate = IPC_INIT_GATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if Self::ipc_service()?.is_some() {
             return Ok(false);
         }
@@ -317,6 +328,41 @@ impl IMEState {
         Self::set_ipc_service(ipc_service)?;
 
         Ok(true)
+    }
+
+    pub fn prewarm_ipc_service_in_background() {
+        static PREWARM_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+        struct PrewarmResetGuard;
+        impl Drop for PrewarmResetGuard {
+            fn drop(&mut self) {
+                PREWARM_IN_FLIGHT.store(false, Ordering::Release);
+            }
+        }
+
+        if Self::ipc_service().ok().flatten().is_some() {
+            return;
+        }
+        if PREWARM_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        match super::ipc_service::shared_ipc_runtime() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(|| {
+                    let _guard = PrewarmResetGuard;
+                    if let Err(error) = Self::ensure_ipc_service() {
+                        tracing::debug!(?error, "Background IPC prewarm skipped");
+                    }
+                });
+            }
+            Err(error) => {
+                PREWARM_IN_FLIGHT.store(false, Ordering::Release);
+                tracing::debug!(?error, "Failed to acquire shared IPC runtime for prewarm");
+            }
+        }
     }
 
     pub fn input_mode() -> anyhow::Result<InputMode> {

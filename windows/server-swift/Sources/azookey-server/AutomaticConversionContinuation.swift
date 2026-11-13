@@ -37,27 +37,25 @@ func katakanaToHiragana(_ text: String) -> String {
     return String(scalars)
 }
 
-@MainActor private var automaticConversionContinuationPathCache: (
+// Serialized by the single-threaded FFI executor in Rust and @MainActor in tests.
+nonisolated(unsafe) private var automaticConversionContinuationPathCache: (
     context: String,
     path: AutomaticConversionContinuationPath?
 )?
 
-@MainActor private var automaticContinuationDisabledContext: String?
+nonisolated(unsafe) private var automaticContinuationDisabledContext: String?
 
 /// Stop an automatic continuation for one exact context so repeated keystrokes
 /// do not keep paying a configured conversion that produced no usable result.
-@MainActor
 func disableAutomaticConversionContinuation(context: String) {
     automaticContinuationDisabledContext = context
 }
 
-@MainActor
 func invalidateAutomaticConversionContinuationCache() {
     automaticConversionContinuationPathCache = nil
     automaticContinuationDisabledContext = nil
 }
 
-@MainActor
 private func automaticConversionContinuationPath(
     for context: String
 ) -> AutomaticConversionContinuationPath? {
@@ -102,7 +100,6 @@ private func isAutomaticConversionContinuationStopCharacter(_ character: Charact
 /// Rebuild the committed prefix of the sentence from the surrounding text so a
 /// continued composition can reconvert the same boundary-aware reading that an
 /// explicit auto-commit/partial commit would use.
-@MainActor
 func makeAutomaticConversionContinuation(
     context: String,
     currentReading: String,

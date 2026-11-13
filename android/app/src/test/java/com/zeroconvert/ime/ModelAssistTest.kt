@@ -49,8 +49,38 @@ class ModelAssistTest {
     }
 
     @Test fun refusesUnsupportedReferencesSpecialTokensAndRepetition() {
-        for (text in listOf("よろしくお願いこの記事をご覧ください。", "よろしくお願いよろしくお願い", "よろしくお願い\uEE00本文")) {
+        for (text in listOf(
+            "よろしくお願いこの記事をご覧ください。",
+            "よろしくお願いよろしくお願い",
+            "よろしくお願い\uEE00本文"
+        )) {
             assertNull(prediction(ModelCompletion("イタシマス。", "eos"), ModelCompletion(text, "eos")).first)
+        }
+        val clauseFixture = Fixture { _, prompt ->
+            if (prompt.endsWith('\uEE01')) {
+                ModelCompletion("今日は雨が降っているので、雨が降っているので、", "eos")
+            } else {
+                ModelCompletion("、アメガフッテイルノデ、", "limit")
+            }
+        }
+        assertNull(ModelPredictor(clauseFixture).suggest("", "きょうはあめがふっているので", "今日は雨が降っているので"))
+        assertTrue(repeatsSurfaceClause("今日は雨が降っているので", "、雨が降っているので、"))
+        assertNull(validatePredictionSuffix("", "今日は雨が降っているので", "今日は雨が降っているので、雨が降っているので、"))
+
+        assertFalse(repeatsSurfaceClause("雨が降っているので", "、電車が遅れているので、遅刻します。"))
+        assertEquals(
+            "、電車が遅れているので、遅刻します。",
+            validatePredictionSuffix("", "雨が降っているので", "雨が降っているので、電車が遅れているので、遅刻します。")
+        )
+        val validContinuation = Fixture { _, prompt ->
+            if (prompt.endsWith('\uEE01')) {
+                ModelCompletion("雨が降っているので、電車が遅れているので、遅刻します。", "eos")
+            } else {
+                ModelCompletion("、デンシャガオクレテイルノデ、チコクシマス。", "eos")
+            }
+        }
+        if (!BuildConfig.WINDOWS_ENGINE) {
+            assertNotNull(ModelPredictor(validContinuation).suggest("", "あめがふっているので", "雨が降っているので"))
         }
     }
 

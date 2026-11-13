@@ -1772,9 +1772,14 @@ fun MainScreen(
                                 if (!model.isDefault) {
                                     IconButton(
                                         onClick = {
-                                            ModelManager.deleteModel(context, model)
-                                            availableModels = ModelManager.getAvailableModels(context)
-                                            onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                                            coroutineScope.launch {
+                                                val models = withContext(Dispatchers.IO) {
+                                                    ModelManager.deleteModel(context, model)
+                                                    ModelManager.getAvailableModels(context)
+                                                }
+                                                availableModels = models
+                                                onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                                            }
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {

@@ -391,8 +391,12 @@ class PortInstrumentationRunner : Instrumentation() {
             }
             lateinit var warm: List<Candidate>
             waitUntil("Zenzai neural conversion stayed busy or cancelled during warm-up") {
-                warm = neural("トウキョウニイク")
-                warm.isNotEmpty()
+                try {
+                    warm = neural("トウキョウニイク")
+                    warm.isNotEmpty()
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    if (cancelled.message?.contains("superseded") == true) false else throw cancelled
+                }
             }
             // The shared Rust bridge rejects a reading above 512 characters with
             // {"error":"request exceeds engine limits"}. That limit is a separate defect from
@@ -413,15 +417,34 @@ class PortInstrumentationRunner : Instrumentation() {
                 for (count in repeats) {
                     val reading = base.repeat(count)
                     android.util.Log.i("ZeroConRepro", "zenzai $family chars=${reading.length}")
-                    var thrown: Throwable? = null
-                    var results = emptyList<Candidate>()
-                    val started = SystemClock.elapsedRealtime()
-                    try { results = neural(reading) } catch (failure: Throwable) { thrown = failure }
-                    val elapsed = SystemClock.elapsedRealtime() - started
-                    // A call that never returns is the failure under test, so it fails even
-                    // when the thrown error would otherwise be treated as a limit.
-                    check(elapsed < 6000) {
-                        "Zenzai $family did not return within the probe budget: chars=${reading.length} repeats=$count elapsed=${elapsed}ms"
+                    var attempts = 0
+                    var thrown: Throwable?
+                    var results: List<Candidate>
+                    var elapsed: Long
+                    while (true) {
+                        attempts++
+                        thrown = null
+                        results = emptyList()
+                        val started = SystemClock.elapsedRealtime()
+                        try { results = neural(reading) } catch (failure: Throwable) { thrown = failure }
+                        elapsed = SystemClock.elapsedRealtime() - started
+                        // A call that never returns is the failure under test, so it fails even
+                        // when the thrown error would otherwise be treated as a limit.
+                        check(elapsed < 6000) {
+                            "Zenzai $family did not return within the probe budget: chars=${reading.length} repeats=$count elapsed=${elapsed}ms"
+                        }
+                        if (thrown is kotlinx.coroutines.CancellationException &&
+                            thrown.message?.contains("superseded") == true &&
+                            attempts < 3
+                        ) {
+                            android.util.Log.i(
+                                "ZeroConRepro",
+                                "zenzai $family superseded during setup; retrying chars=${reading.length} attempt=$attempts"
+                            )
+                            SystemClock.sleep(50)
+                            continue
+                        }
+                        break
                     }
                     if (thrown != null && limitError(thrown)) {
                         android.util.Log.i("ZeroConRepro",
@@ -489,6 +512,62 @@ class PortInstrumentationRunner : Instrumentation() {
             check(!selected.isLearningTarget)
             check(selected.reading == "シマスタ")
             check(input.convertTarget == "しますた")
+        }
+        if (BuildConfig.WINDOWS_ENGINE) test("zenzai_11b_exact_and_predictions") {
+            KanaKanjiConverter.ensureInitialized(targetContext)
+            val converter = KanaKanjiConverter()
+            fun convertAi(label: String, input: ComposingText): List<Candidate> {
+                var out = emptyList<Candidate>()
+                waitUntil("1-1B AI conversion stayed busy for $label") {
+                    out = try {
+                        runBlocking {
+                            converter.requestCandidates(input, "", enableAI = true, personalize = false)
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        if (cancelled.message?.contains("superseded") == true) emptyList() else throw cancelled
+                    }
+                    out.isNotEmpty()
+                }
+                android.util.Log.i(
+                    "ZeroCon11B",
+                    "$label -> " + out.take(12).joinToString(" | ") { "${it.text}[${it.reading},ai=${it.isAI}]" }
+                )
+                return out
+            }
+
+            val yorosi = convertAi("yorosi", romanInput("yorosi"))
+            check(yorosi.first().reading == "ヨロシ" && yorosi.first().text.length <= 4) {
+                "Top 1 for `yorosi` must be full-span exact conversion, got: ${yorosi.take(5)}"
+            }
+            val yorosiPredIdx = yorosi.indexOfFirst {
+                it.text.length > 3 && (it.text.startsWith("よろし") || it.text.startsWith("宜し"))
+            }
+            check(yorosiPredIdx > 0) {
+                "Expected Gboard-style predictive completions after exact Top 1 for `yorosi`, got: ${yorosi.take(12)}"
+            }
+            android.util.Log.i("ZeroCon11B", "yorosi first prediction at index=$yorosiPredIdx: ${yorosi[yorosiPredIdx].text}")
+
+            val savePhoto = convertAi("syasinwoforudanihozonsuru", romanInput("syasinwoforudanihozonsuru"))
+            check(savePhoto.first().reading == "シャシンヲフォルダニホゾンスル") {
+                "Top 1 for `syasinwoforudanihozonsuru` must stay exact without predicted tail: ${savePhoto.take(5)}"
+            }
+            check(savePhoto.first().text.contains("写真") && savePhoto.first().text.contains("保存") && !savePhoto.first().text.contains("スルー")) {
+                "Top 1 for `syasinwoforudanihozonsuru` degraded: ${savePhoto.first()}"
+            }
+
+            val sendMailInput = ComposingText().apply { insertAtCursorPosition("めーるをおくる", com.zeroconvert.ime.azookey.input.InputStyle.DIRECT) }
+            val sendMail = convertAi("めーるをおくる", sendMailInput)
+            check(sendMail.first().reading == "メールヲオクル") {
+                "Top 1 for `めーるをおくる` must stay exact without predicted tail: ${sendMail.take(5)}"
+            }
+            check(sendMail.first().text.contains("メール") && !sendMail.first().text.contains("くるみ")) {
+                "Top 1 for `めーるをおくる` degraded: ${sendMail.first()}"
+            }
+
+            val konnichiwa = convertAi("konnnitiha", romanInput("konnnitiha"))
+            check(konnichiwa.first().reading == "コンニチハ" && konnichiwa.first().text in listOf("こんにちは", "今日は", "コンニチハ")) {
+                "Top 1 for `konnnitiha` must be exact without predicted punctuation/tail: ${konnichiwa.take(5)}"
+            }
         }
         test("user_dictionary_inside_native_lattice_and_cache_isolation") {
             val reading = "ゼロコンヲツカウ"

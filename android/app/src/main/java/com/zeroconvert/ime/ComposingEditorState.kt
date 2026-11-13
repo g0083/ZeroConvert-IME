@@ -23,17 +23,23 @@ internal class ComposingEditorState {
                 (reportedStart == start && reportedEnd >= reportedStart)
         }
     }
+    data class PreviewCursor(val preview: String, val cursor: Int)
     private val pendingSelections = ArrayDeque<Selection>()
     private var currentSelection: Selection? = null
     private var startHint: Int? = null
+    val composingStartHint: Int? get() = startHint
     var preview: String = ""
         private set
     var cursor: Int = 0
+        private set
+    @Volatile
+    var previewCursor: PreviewCursor = PreviewCursor("", 0)
         private set
 
     fun recordPreview(text: String, expectTailCursor: Boolean = false) {
         preview = text
         cursor = text.length
+        previewCursor = PreviewCursor(text, text.length)
         currentSelection = null
         if (text.isEmpty()) {
             startHint = null
@@ -68,7 +74,9 @@ internal class ComposingEditorState {
     /** Adopts a caret the editor reported inside the current preview. */
     fun adoptCursor(offset: Int): Boolean {
         if (offset !in 0..preview.length) return false
-        cursor = offset
+        val safeOffset = snapBoundary(preview, offset)
+        cursor = safeOffset
+        previewCursor = PreviewCursor(preview, safeOffset)
         return true
     }
 
@@ -108,6 +116,7 @@ internal class ComposingEditorState {
             expect(start + text.length, start, start + text.length)
             if (!editor.select(start + cursorOffset)) return false
             cursor = cursorOffset
+            previewCursor = PreviewCursor(text, cursorOffset)
             expect(start + cursorOffset, start, start + text.length)
             return true
         } finally { editor.endBatch() }
@@ -132,10 +141,17 @@ internal class ComposingEditorState {
         fun isBoundary(text: String, offset: Int): Boolean = offset in 0..text.length &&
             !(offset > 0 && offset < text.length && text[offset - 1].isHighSurrogate() && text[offset].isLowSurrogate())
 
+        fun snapBoundary(text: String, offset: Int, preferForward: Boolean = false): Int {
+            val clamped = offset.coerceIn(0, text.length)
+            if (isBoundary(text, clamped)) return clamped
+            return if (preferForward) clamped + 1 else clamped - 1
+        }
+
         fun moveByCodePoint(text: String, cursor: Int, direction: Int): Int {
-            require(isBoundary(text, cursor) && (direction == -1 || direction == 1))
-            return if ((direction < 0 && cursor == 0) || (direction > 0 && cursor == text.length)) cursor
-                else text.offsetByCodePoints(cursor, direction)
+            require(direction == -1 || direction == 1)
+            val safeCursor = snapBoundary(text, cursor, preferForward = direction < 0)
+            return if ((direction < 0 && safeCursor == 0) || (direction > 0 && safeCursor == text.length)) safeCursor
+                else text.offsetByCodePoints(safeCursor, direction)
         }
 
         /** Marks an expectation whose absolute composing origin is not known yet. */

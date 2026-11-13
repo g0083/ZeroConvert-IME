@@ -14,7 +14,7 @@ const LAUNCHER_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const LAUNCHER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn request_restart() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = crate::engine::ipc_service::shared_ipc_runtime()?;
     runtime.block_on(async {
         let mut client = open_launcher_pipe()
             .await?

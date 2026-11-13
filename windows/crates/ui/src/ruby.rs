@@ -100,6 +100,12 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         border: 1px solid #C7D2FE;
                         box-sizing: border-box;
                         white-space: normal;
+                        pointer-events: auto;
+                        cursor: pointer;
+                        transition: filter 120ms ease;
+                    }
+                    .ai-assist-pill:hover {
+                        filter: brightness(0.96);
                     }
                     .assist-change { flex: 1; min-width: 0; overflow-wrap: anywhere; }
                     .assist-original { opacity: .8; }
@@ -120,9 +126,9 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
 
                     /* Translation Mode Card Styles */
                     main.translation-mode {
-                        width: 380px;
-                        min-width: 320px;
-                        max-width: 440px;
+                        width: auto;
+                        min-width: 340px;
+                        max-width: 460px;
                         padding: 10px 14px;
                         border-radius: 12px;
                         background-color: var(--ime-background, #ffffff);
@@ -137,7 +143,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         display: flex;
                         flex-direction: column;
                         gap: 8px;
-                        width: 380px;
+                        width: 420px;
                         max-width: 100%;
                         box-sizing: border-box;
                     }
@@ -169,7 +175,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                     }
                     .translation-row {
                         display: flex;
-                        align-items: center;
+                        align-items: flex-start;
                         gap: 8px;
                         font-size: 14px;
                         line-height: 1.4;
@@ -179,6 +185,7 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         font-weight: 600;
                         color: var(--ime-muted, #64748b);
                         min-width: 44px;
+                        padding-top: 2px;
                         flex-shrink: 0;
                     }
                     .translation-label.en-label {
@@ -189,9 +196,10 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         flex: 1;
                         min-width: 0;
                         font-weight: 500;
-                        white-space: nowrap;
-                        overflow: hidden;
-                        text-overflow: ellipsis;
+                        white-space: pre-wrap;
+                        overflow-wrap: anywhere;
+                        max-height: 112px;
+                        overflow-y: auto;
                         color: var(--ime-text, #0f172a);
                     }
                     .translation-text.en-text {
@@ -573,6 +581,23 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         if (window.ResizeObserver && main) {
                             resizeObserver = new ResizeObserver(scheduleMeasureRuby);
                             resizeObserver.observe(main);
+                        }
+
+                        const readingRoot = document.getElementById('reading');
+                        if (readingRoot) {
+                            readingRoot.addEventListener('click', (event) => {
+                                const pill = event.target instanceof Element
+                                    ? event.target.closest('.ai-assist-pill')
+                                    : null;
+                                if (!pill) {
+                                    return;
+                                }
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (window.ipc && typeof window.ipc.postMessage === 'function') {
+                                    window.ipc.postMessage(JSON.stringify({ type: 'ruby-assist-click' }));
+                                }
+                            });
                         }
 
                         scheduleMeasureRuby();

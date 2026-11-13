@@ -902,9 +902,11 @@ private func testCandidate(
     await MainActor.run {
         let previousLearningType = currentLearningType
         let previousLearningSelectionOverrides = learningSelectionOverrides
+        let previousPredictiveConversion = config["predictiveConversion"]
         defer {
             currentLearningType = previousLearningType
             learningSelectionOverrides = previousLearningSelectionOverrides
+            config["predictiveConversion"] = previousPredictiveConversion
         }
 
         currentLearningType = .inputAndOutput
@@ -937,9 +939,11 @@ private func testCandidate(
     await MainActor.run {
         let previousLearningType = currentLearningType
         let previousLearningSelectionOverrides = learningSelectionOverrides
+        let previousPredictiveConversion = config["predictiveConversion"]
         defer {
             currentLearningType = previousLearningType
             learningSelectionOverrides = previousLearningSelectionOverrides
+            config["predictiveConversion"] = previousPredictiveConversion
         }
 
         currentLearningType = .inputAndOutput
@@ -963,9 +967,11 @@ private func testCandidate(
     await MainActor.run {
         let previousLearningType = currentLearningType
         let previousLearningSelectionOverrides = learningSelectionOverrides
+        let previousPredictiveConversion = config["predictiveConversion"]
         defer {
             currentLearningType = previousLearningType
             learningSelectionOverrides = previousLearningSelectionOverrides
+            config["predictiveConversion"] = previousPredictiveConversion
         }
 
         currentLearningType = .inputAndOutput
@@ -989,9 +995,11 @@ private func testCandidate(
     await MainActor.run {
         let previousLearningType = currentLearningType
         let previousLearningSelectionOverrides = learningSelectionOverrides
+        let previousPredictiveConversion = config["predictiveConversion"]
         defer {
             currentLearningType = previousLearningType
             learningSelectionOverrides = previousLearningSelectionOverrides
+            config["predictiveConversion"] = previousPredictiveConversion
         }
 
         currentLearningType = .inputAndOutput
@@ -1025,9 +1033,11 @@ private func testCandidate(
     await MainActor.run {
         let previousConverter = converter
         let previousComposingText = composingText
+        let previousPredictiveConversion = config["predictiveConversion"]
         defer {
             converter = previousConverter
             composingText = previousComposingText
+            config["predictiveConversion"] = previousPredictiveConversion
         }
 
         converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
@@ -3665,4 +3675,111 @@ private func testCandidate(
     let supplement = optionsForNormalNBestSupplement(from: original)
     #expect(supplement.requireJapanesePrediction == .disabled)
     #expect(supplement.requireEnglishPrediction == .disabled)
+}
+
+@Test func optionsForZenzaiConversionAndNormalNBestSupplementWithPredictionMatch11B() async throws {
+    let predictiveEnabled = await MainActor.run {
+        var opts = getOptions(zenzaiEnabled: true)
+        opts.requireJapanesePrediction = .autoMix
+        opts.requireEnglishPrediction = .autoMix
+        return opts
+    }
+    let zenzaiOpts = optionsForZenzaiConversion(from: predictiveEnabled)
+    #expect(zenzaiOpts.requireJapanesePrediction == .disabled)
+    #expect(zenzaiOpts.requireEnglishPrediction == .disabled)
+
+    let supplementPredictive = optionsForNormalNBestSupplementWithPrediction(from: predictiveEnabled)
+    #expect(supplementPredictive.requireJapanesePrediction == .manualMix)
+    #expect(supplementPredictive.requireEnglishPrediction == .manualMix)
+
+    let predictiveDisabled = await MainActor.run {
+        var opts = getOptions(zenzaiEnabled: true)
+        opts.requireJapanesePrediction = .disabled
+        opts.requireEnglishPrediction = .disabled
+        return opts
+    }
+    let supplementDisabled = optionsForNormalNBestSupplementWithPrediction(from: predictiveDisabled)
+    #expect(supplementDisabled.requireJapanesePrediction == .disabled)
+    #expect(supplementDisabled.requireEnglishPrediction == .disabled)
+}
+
+@Test func mergePredictiveSupplementCandidatesPlacesPredictionsAfterFullSpanExactAndBeforeSubClauses() async throws {
+    let hiragana = "よろし"
+    let full1 = testCandidate(word: "宜し", ruby: "よろし", composingCount: .inputCount(3))
+    let full2 = testCandidate(word: "芳し", ruby: "よろし", composingCount: .inputCount(3))
+    let partial = testCandidate(word: "よろ", ruby: "よろ", composingCount: .inputCount(2))
+
+    let dupFull = testCandidate(word: "宜し", ruby: "よろし", composingCount: .inputCount(3))
+    let echoHira = testCandidate(word: "よろし", ruby: "よろし", composingCount: .inputCount(3))
+    let echoKata = testCandidate(word: "ヨロシ", ruby: "よろし", composingCount: .inputCount(3))
+    let emptyPred = testCandidate(word: "   ", ruby: "よろし", composingCount: .inputCount(3))
+    let pred1 = testCandidate(word: "よろしくお願いします", ruby: "よろしくおねがいします", composingCount: .inputCount(3))
+    let pred2 = testCandidate(word: "よろしくお願いいたします", ruby: "よろしくおねがいいたします", composingCount: .inputCount(3))
+    let pred3 = testCandidate(word: "よろしいですか", ruby: "よろしいですか", composingCount: .inputCount(3))
+    let pred4 = testCandidate(word: "よろしくね", ruby: "よろしくね", composingCount: .inputCount(3))
+
+    let merged = mergePredictiveSupplementCandidates(
+        exactMerged: [full1, full2, partial],
+        predictionResults: [dupFull, echoHira, echoKata, emptyPred, pred1, pred2, pred3, pred4],
+        hiragana: hiragana
+    )
+
+    #expect(
+        merged.map(\.text) == [
+            "宜し",
+            "芳し",
+            "よろしくお願いします",
+            "よろしくお願いいたします",
+            "よろしいですか",
+            "よろ",
+        ]
+    )
+}
+
+@Test func realConverterManualMixSeparatesPureExactMainResultsFromPredictionsForZenzai11B() async throws {
+    let packageRoot = packageRootURL()
+    let dictionaryURL = packageRoot
+        .appending(path: "azooKey_dictionary_storage")
+        .appending(path: "Dictionary")
+
+    try await MainActor.run {
+        let converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+
+        var input = ComposingText()
+        input.insertAtCursorPosition("yorosi", inputStyle: .roman2kana)
+        let hiragana = input.convertTarget
+        #expect(hiragana == "よろし")
+
+        var basePredictiveOptions = getOptions(zenzaiEnabled: true)
+        basePredictiveOptions.requireJapanesePrediction = .autoMix
+        basePredictiveOptions.requireEnglishPrediction = .autoMix
+        let zenzaiOpts = optionsForZenzaiConversion(from: basePredictiveOptions)
+        let supplementOpts = optionsForNormalNBestSupplementWithPrediction(from: basePredictiveOptions)
+
+        let zenzaiStyleResult = converter.requestCandidates(input, options: zenzaiOpts)
+        let supplementResult = converter.requestCandidates(input, options: supplementOpts)
+
+        #expect(zenzaiStyleResult.predictionResults.isEmpty)
+        #expect(!supplementResult.predictionResults.isEmpty)
+        #expect(supplementResult.mainResults.map(\.text) == zenzaiStyleResult.mainResults.map(\.text))
+
+        let combined = mergePredictiveSupplementCandidates(
+            exactMerged: zenzaiStyleResult.mainResults,
+            predictionResults: supplementResult.predictionResults,
+            hiragana: hiragana
+        )
+        let topExact = try #require(zenzaiStyleResult.mainResults.first?.text)
+        #expect(combined.first?.text == topExact)
+        let firstPartialIndex = combined.firstIndex { $0.rubyCount < hiragana.count }
+        let firstPredictionIndex = combined.firstIndex { candidate in
+            supplementResult.predictionResults.contains { $0.text == candidate.text }
+                && !zenzaiStyleResult.mainResults.contains { $0.text == candidate.text }
+        }
+        if let firstPredictionIndex {
+            #expect(firstPredictionIndex >= 1)
+            if let firstPartialIndex {
+                #expect(firstPredictionIndex < firstPartialIndex)
+            }
+        }
+    }
 }

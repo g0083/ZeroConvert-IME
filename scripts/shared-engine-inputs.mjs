@@ -20,6 +20,9 @@ export const NATIVE_INPUTS = [
 export const SHARED_INPUTS = [
   'windows/scripts/converter_patch.py',
   'windows/crates/shared/src/conversion_policy.rs',
+  // Compiled into libzenz_jni.so by engine/native/keyboard_assist.cpp.
+  'windows/native/keyboard-prior/channel.hpp',
+  'windows/native/keyboard-prior/roman_table.hpp',
   // Android resolves its Swift dependencies from this file, not from the
   // Windows checkout, so this is the pin that decides the Android build.
   'engine/Package.resolved',

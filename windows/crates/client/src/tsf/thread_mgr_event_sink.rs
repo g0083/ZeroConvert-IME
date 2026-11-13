@@ -21,11 +21,11 @@ use super::edit_session::{has_same_com_identity, request_async_read_edit_session
 use super::factory::{TextServiceFactory, TextServiceFactory_Impl};
 
 fn ensure_ipc_service_for_tsf_event(event: &str) {
-    match IMEState::ensure_ipc_service() {
-        Ok(true) => tracing::debug!(event, "Initialized IPC service during TSF event"),
-        Ok(false) => {}
-        Err(error) => tracing::warn!(?error, event, "IPC service is unavailable during TSF event"),
-    }
+    tracing::debug!(
+        event,
+        "Prewarming IPC service in background during TSF focus event"
+    );
+    IMEState::prewarm_ipc_service_in_background();
 }
 
 /// Input mode implied by the InputScope of the current selection, if any.

@@ -38,7 +38,9 @@ use windows::{
         UI::{
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
-                GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+                GetAsyncKeyState, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LBUTTON, VK_LEFT,
+                VK_MBUTTON, VK_NEXT, VK_PRIOR, VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB,
+                VK_UP,
             },
             WindowsAndMessaging::*,
         },
@@ -118,6 +120,9 @@ struct View {
     generation: Arc<AtomicUsize>,
     guard: Option<TranslationSessionGuard>,
     action: u8,
+    auto_dismiss_secs: u32,
+    hover_selection_action: u8,
+    hover_result_action: u8,
     updates: mpsc::Sender<Update>,
 }
 impl View {
@@ -127,6 +132,7 @@ impl View {
     unsafe fn configure(&mut self) {
         let config = shared::AppConfig::read().unwrap_or_default();
         self.enabled = config.general.experimental_translation;
+        self.auto_dismiss_secs = config.general.selection_popup_auto_dismiss_secs;
         let id = serde_json::to_value(config.appearance.ime_theme).unwrap_or_default();
         let themes: serde_json::Value =
             serde_json::from_str(include_str!("../../shared/themes.json")).unwrap();
@@ -198,7 +204,7 @@ impl View {
         .as_bool()
         {
             let (width, height) = (self.px(width), self.px(height));
-            let (x, y) = popup_position(self.anchor, monitor.rcWork, width, height, self.px(8));
+            let (x, y) = popup_position(self.anchor, monitor.rcWork, width, height, self.px(12));
             let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, self.px(18), self.px(18));
             if SetWindowRgn(hwnd, region, false) == 0 {
                 let _ = DeleteObject(region);
@@ -218,7 +224,80 @@ impl View {
     unsafe fn close_result(&mut self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.guard = None;
+        self.hover_result_action = 0;
         let _ = ShowWindow(self.result, SW_HIDE);
+    }
+
+    unsafe fn hide_selection(&mut self) {
+        self.hover_selection_action = 0;
+        let _ = ShowWindow(self.selection, SW_HIDE);
+    }
+
+    unsafe fn owner_lost_focus(&self) -> bool {
+        if self.owner.is_invalid() {
+            return false;
+        }
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() || fg == self.selection || fg == self.result {
+            return false;
+        }
+        let fg_root = GetAncestor(fg, GA_ROOT);
+        let root = if fg_root.is_invalid() { fg } else { fg_root };
+        root != self.owner
+    }
+
+    unsafe fn is_typing_or_nav_key_pressed() -> bool {
+        let is_down = |vk: i32| (GetAsyncKeyState(vk) as u16 & 0x8000) != 0;
+        if is_down(VK_CONTROL.0 as i32) {
+            return is_down(b'V' as i32)
+                || is_down(b'X' as i32)
+                || is_down(b'F' as i32)
+                || is_down(b'W' as i32);
+        }
+        if [
+            VK_RETURN.0 as i32,
+            VK_BACK.0 as i32,
+            VK_TAB.0 as i32,
+            VK_SPACE.0 as i32,
+            VK_UP.0 as i32,
+            VK_DOWN.0 as i32,
+            VK_LEFT.0 as i32,
+            VK_RIGHT.0 as i32,
+            VK_PRIOR.0 as i32,
+            VK_NEXT.0 as i32,
+        ]
+        .into_iter()
+        .any(is_down)
+        {
+            return true;
+        }
+        (0x30_i32..=0x5A_i32).any(is_down)
+    }
+
+    fn hit_selection_action(&self, x: i32) -> u8 {
+        if self.enabled {
+            if (98..=214).contains(&x) {
+                1
+            } else if x >= 218 {
+                4
+            } else {
+                0
+            }
+        } else if x >= 94 {
+            4
+        } else {
+            0
+        }
+    }
+
+    fn hit_result_action(&self, x: i32, y: i32) -> u8 {
+        if x >= 378 && y < 44 {
+            2
+        } else if x >= 300 && y >= self.card_height() - 44 {
+            3
+        } else {
+            0
+        }
     }
     unsafe fn translate(&mut self) {
         if !self.enabled || self.source.is_empty() {
@@ -351,13 +430,28 @@ impl View {
                     right: self.px(214),
                     bottom: self.px(33),
                 };
-                let brush = CreateSolidBrush(self.colors[1]);
+                let bg = if self.hover_selection_action == 1 {
+                    self.colors[5]
+                } else {
+                    self.colors[1]
+                };
+                let brush = CreateSolidBrush(bg);
                 FillRect(dc, &button, brush);
                 let _ = DeleteObject(brush);
                 self.text(dc, "翻訳  Ctrl+T", (106, 0, 208, 38), 4, true);
-                self.text(dc, "×", (220, 0, 240, 38), 3, true);
+                let close_color = if self.hover_selection_action == 4 {
+                    2
+                } else {
+                    3
+                };
+                self.text(dc, "×", (220, 0, 240, 38), close_color, true);
             } else {
-                self.text(dc, "×", (96, 0, 116, 38), 3, true);
+                let close_color = if self.hover_selection_action == 4 {
+                    2
+                } else {
+                    3
+                };
+                self.text(dc, "×", (96, 0, 116, 38), close_color, true);
             }
         } else {
             let status = match self.phase {
@@ -367,7 +461,8 @@ impl View {
                 Phase::Error => "翻訳できませんでした",
             };
             self.text(dc, status, (16, 14, 366, 40), 4, false);
-            self.text(dc, "×", (384, 8, 414, 40), 3, true);
+            let close_color = if self.hover_result_action == 2 { 2 } else { 3 };
+            self.text(dc, "×", (384, 8, 414, 40), close_color, true);
             self.text(dc, &self.result_source, (16, 48, 402, 76), 3, true);
             let text = if self.output.is_empty() {
                 match self.phase {
@@ -388,7 +483,12 @@ impl View {
                     right: self.px(404),
                     bottom: self.px(height - 10),
                 };
-                let brush = CreateSolidBrush(self.colors[1]);
+                let bg = if self.hover_result_action == 3 {
+                    self.colors[5]
+                } else {
+                    self.colors[1]
+                };
+                let brush = CreateSolidBrush(bg);
                 FillRect(dc, &button, brush);
                 let _ = DeleteObject(brush);
                 self.text(dc, "コピー", (330, height - 40, 400, height - 10), 4, true);
@@ -511,27 +611,31 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 (*ptr).action = 2;
                 return LRESULT(0);
             }
+            WM_MOUSEMOVE => {
+                let x = (lp.0 as u16 as i16 as i32) * 96 / (*ptr).scale;
+                let y = ((lp.0 >> 16) as u16 as i16 as i32) * 96 / (*ptr).scale;
+                if hwnd == (*ptr).selection {
+                    let next = (*ptr).hit_selection_action(x);
+                    if next != (*ptr).hover_selection_action {
+                        (*ptr).hover_selection_action = next;
+                        let _ = InvalidateRect(hwnd, None, false);
+                    }
+                } else if hwnd == (*ptr).result {
+                    let next = (*ptr).hit_result_action(x, y);
+                    if next != (*ptr).hover_result_action {
+                        (*ptr).hover_result_action = next;
+                        let _ = InvalidateRect(hwnd, None, false);
+                    }
+                }
+                return LRESULT(0);
+            }
             WM_LBUTTONUP => {
                 let x = (lp.0 as u16 as i16 as i32) * 96 / (*ptr).scale;
                 let y = ((lp.0 >> 16) as u16 as i16 as i32) * 96 / (*ptr).scale;
                 (*ptr).action = if hwnd == (*ptr).selection {
-                    if (*ptr).enabled {
-                        if (98..=214).contains(&x) {
-                            1
-                        } else if x >= 218 {
-                            4
-                        } else {
-                            0
-                        }
-                    } else if x >= 94 {
-                        4
-                    } else {
-                        0
-                    }
-                } else if hwnd == (*ptr).result && x >= 378 && y < 44 {
-                    2
-                } else if hwnd == (*ptr).result && x >= 300 && y >= (*ptr).card_height() - 44 {
-                    3
+                    (*ptr).hit_selection_action(x)
+                } else if hwnd == (*ptr).result {
+                    (*ptr).hit_result_action(x, y)
                 } else {
                     0
                 };
@@ -570,6 +674,9 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
         generation: Arc::new(AtomicUsize::new(0)),
         guard: None,
         action: 0,
+        auto_dismiss_secs: 4,
+        hover_selection_action: 0,
+        hover_result_action: 0,
         updates: send,
     });
     let class = w!("ZeroConSelectionPopupV2");
@@ -635,7 +742,7 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                     selection_shown_at = Some(Instant::now());
                 }
                 Command::Hide => {
-                    let _ = ShowWindow(view.selection, SW_HIDE);
+                    view.hide_selection();
                     selection_shown_at = None;
                 }
                 Command::Translate => {
@@ -671,7 +778,7 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
                 view.close_result();
             }
             4 => {
-                let _ = ShowWindow(view.selection, SW_HIDE);
+                view.hide_selection();
                 selection_shown_at = None;
             }
             _ => {}
@@ -679,21 +786,41 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
         let is_mouse_down = (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0)
             || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000 != 0)
             || (GetAsyncKeyState(VK_MBUTTON.0 as i32) as u16 & 0x8000 != 0);
+        let is_esc_down = (GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000) != 0;
         if IsWindowVisible(view.selection).as_bool() {
-            let is_esc_down = (GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000) != 0;
-
-            if is_esc_down {
-                let _ = ShowWindow(view.selection, SW_HIDE);
+            let inside_selection = cursor_inside(view.selection);
+            if !inside_selection && view.hover_selection_action != 0 {
+                view.hover_selection_action = 0;
+                let _ = InvalidateRect(view.selection, None, false);
+            }
+            if inside_selection {
+                // Pause auto-dismiss while the user points at the toolbar.
+                selection_shown_at = Some(Instant::now());
+            }
+            let shown_elapsed = selection_shown_at.map(|t| t.elapsed());
+            let should_hide = if is_esc_down
+                && shown_elapsed.is_some_and(|e| e >= Duration::from_millis(80))
+            {
+                true
+            } else if is_mouse_down
+                && !was_mouse_down
+                && !inside_selection
+                && shown_elapsed.is_some_and(|e| e >= Duration::from_millis(150))
+            {
+                true
+            } else if !inside_selection
+                && shown_elapsed.is_some_and(|e| e >= Duration::from_millis(200))
+            {
+                let timed_out = view.auto_dismiss_secs > 0
+                    && shown_elapsed
+                        .is_some_and(|e| e >= Duration::from_secs(view.auto_dismiss_secs as u64));
+                timed_out || view.owner_lost_focus() || View::is_typing_or_nav_key_pressed()
+            } else {
+                false
+            };
+            if should_hide {
+                view.hide_selection();
                 selection_shown_at = None;
-            } else if is_mouse_down && !was_mouse_down {
-                if let Some(shown_at) = selection_shown_at {
-                    if shown_at.elapsed() >= Duration::from_millis(150)
-                        && !cursor_inside(view.selection)
-                    {
-                        let _ = ShowWindow(view.selection, SW_HIDE);
-                        selection_shown_at = None;
-                    }
-                }
             }
             was_mouse_down = is_mouse_down;
         } else {
@@ -701,16 +828,28 @@ unsafe fn run(receiver: mpsc::Receiver<Command>) {
             selection_shown_at = None;
         }
         if IsWindowVisible(view.result).as_bool() {
-            if is_mouse_down && !was_result_mouse_down {
-                if let Some(shown_at) = result_shown_at {
-                    if shown_at.elapsed() >= Duration::from_millis(150)
-                        && !cursor_inside(view.result)
-                        && !(IsWindowVisible(view.selection).as_bool()
-                            && cursor_inside(view.selection))
-                    {
-                        view.close_result();
-                    }
-                }
+            let inside_result = cursor_inside(view.result);
+            if !inside_result && view.hover_result_action != 0 {
+                view.hover_result_action = 0;
+                let _ = InvalidateRect(view.result, None, false);
+            }
+            let shown_elapsed = result_shown_at.map(|t| t.elapsed());
+            let should_close =
+                if is_esc_down && shown_elapsed.is_some_and(|e| e >= Duration::from_millis(80)) {
+                    true
+                } else if is_mouse_down
+                    && !was_result_mouse_down
+                    && shown_elapsed.is_some_and(|e| e >= Duration::from_millis(150))
+                    && !inside_result
+                    && !(IsWindowVisible(view.selection).as_bool() && cursor_inside(view.selection))
+                {
+                    true
+                } else {
+                    shown_elapsed.is_some_and(|e| e >= Duration::from_millis(250))
+                        && view.owner_lost_focus()
+                };
+            if should_close {
+                view.close_result();
             }
             was_result_mouse_down = is_mouse_down;
         } else {

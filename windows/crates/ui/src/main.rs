@@ -242,6 +242,7 @@ fn next_ruby_size_request_id(current_request_id: &mut u32) -> u32 {
 
 fn show_ruby_window_if_ready(
     ruby_window: &tao::window::Window,
+    ruby_window_shown: &mut bool,
     window_visible: bool,
     reading: &str,
     _ruby_size_ready: bool,
@@ -250,7 +251,7 @@ fn show_ruby_window_if_ready(
     // ruby_size_ready が未完了でも、非表示ウィンドウでのrequestAnimationFrameブロックを防ぐため
     // window_visible かつ has_candidate_rect かつ reading があれば確実に表示する
     if window_visible && has_candidate_rect && !reading.is_empty() {
-        show_window_no_activate(ruby_window);
+        set_window_shown_no_activate(ruby_window, ruby_window_shown);
     }
 }
 
@@ -293,6 +294,93 @@ fn show_window_no_activate(window: &tao::window::Window) {
 
 fn hide_window(window: &tao::window::Window) {
     let _ = unsafe { ShowWindow(HWND(window.hwnd() as *mut std::ffi::c_void), SW_HIDE) };
+}
+
+fn set_window_shown_no_activate(window: &tao::window::Window, visible_state: &mut bool) {
+    if !*visible_state {
+        *visible_state = true;
+        show_window_no_activate(window);
+    }
+}
+
+fn set_window_hidden(window: &tao::window::Window, visible_state: &mut bool) {
+    if *visible_state {
+        *visible_state = false;
+        hide_window(window);
+    }
+}
+
+fn cancel_indicator_popup(
+    task_guard: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    indicator_window: &tao::window::Window,
+    indicator_window_shown: &mut bool,
+    indicator_generation: &mut u64,
+) {
+    *indicator_generation = indicator_generation.wrapping_add(1);
+    if let Ok(mut guard) = task_guard.try_lock() {
+        if let Some(task) = guard.take() {
+            task.abort();
+        }
+    } else {
+        eprintln!("Warning: Failed to lock task_guard, skipping indicator timer cancel");
+    }
+    set_window_hidden(indicator_window, indicator_window_shown);
+}
+
+fn schedule_indicator_popup(
+    task_guard: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    indicator_window: &tao::window::Window,
+    indicator_window_shown: &mut bool,
+    indicator_generation: &mut u64,
+    proxy: &EventLoopProxy<UserEvent>,
+) {
+    *indicator_generation = indicator_generation.wrapping_add(1);
+    let generation = *indicator_generation;
+    set_window_shown_no_activate(indicator_window, indicator_window_shown);
+    if let Ok(mut guard) = task_guard.try_lock() {
+        if let Some(task) = guard.take() {
+            task.abort();
+        }
+        let proxy = proxy.clone();
+        *guard = Some(tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            send_user_event(&proxy, UserEvent::HideIndicatorIfGeneration(generation));
+        }));
+    }
+}
+
+fn should_render_candidate_list_visible(cached: &mut Option<bool>, next: bool) -> bool {
+    if *cached == Some(next) {
+        return false;
+    }
+    *cached = Some(next);
+    true
+}
+
+fn should_render_reading(cached: &mut Option<String>, next: &str) -> bool {
+    if cached.as_deref() == Some(next) {
+        return false;
+    }
+    *cached = Some(next.to_string());
+    true
+}
+
+fn candidate_list_update_diff(
+    cached: &mut Option<(Vec<String>, Option<i32>)>,
+    candidates: &[String],
+    selected_index: Option<i32>,
+) -> (bool, bool) {
+    let width_changed = cached
+        .as_ref()
+        .is_none_or(|(prev_cands, _)| prev_cands.as_slice() != candidates);
+    let list_changed = width_changed
+        || cached
+            .as_ref()
+            .is_none_or(|(_, prev_sel)| *prev_sel != selected_index);
+    if list_changed {
+        *cached = Some((candidates.to_vec(), selected_index));
+    }
+    (width_changed, list_changed)
 }
 
 fn keep_windows_topmost(
@@ -346,9 +434,12 @@ pub enum UserEvent {
     UpdateCandidates(String),
     UpdateSelection(i32),
     CandidateClicked(i32),
+    /// The user clicked the AI assist pill in the ruby overlay.
+    RubyAssistClicked,
     /// The user asked to delete one candidate's learning (context menu).
     CandidateForgetRequested(i32),
     UpdateInputMethod(String),
+    HideIndicatorIfGeneration(u64),
     WindowAction(WindowAction),
     ClipboardUpdated,
     CopyTranslationShow {
@@ -412,10 +503,11 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let event_loop_proxy = event_loop.create_proxy();
-    let initial_theme = shared::AppConfig::read()
+    let initial_theme = shared::AppConfig::read_cached()
         .unwrap_or_default()
         .appearance
         .ime_theme;
+    let mut current_theme = initial_theme;
     let theme_script = theme::initialization_script(initial_theme);
     theme::watch_settings(event_loop_proxy.clone(), initial_theme)?;
     let task_guard: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
@@ -487,6 +579,10 @@ async fn main() -> anyhow::Result<()> {
                             },
                         );
                     }
+                } else if message.get("type").and_then(|value| value.as_str())
+                    == Some("ruby-assist-click")
+                {
+                    send_user_event(&proxy_clone, UserEvent::RubyAssistClicked);
                 }
             }
         })
@@ -494,11 +590,7 @@ async fn main() -> anyhow::Result<()> {
 
     let clipboard_state = Arc::new(std::sync::Mutex::new(clipboard::ClipboardState::new()));
     let clipboard_window = clipboard::create_clipboard_window(&event_loop)?;
-    let clipboard_webview = clipboard::create_clipboard_webview(
-        &clipboard_window,
-        &mut web_context,
-        event_loop_proxy.clone(),
-    )?;
+    let mut clipboard_webview: Option<wry::WebView> = None;
     let _clipboard_listener_thread =
         clipboard::start_clipboard_listener(clipboard_state.clone(), event_loop_proxy.clone());
     let clipboard_window_id = clipboard_window.id();
@@ -530,6 +622,14 @@ async fn main() -> anyhow::Result<()> {
         LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT;
     let mut current_input_method: Option<String> = None;
     let mut current_engine_hwnd: u64 = 0;
+    let mut candidate_window_shown = false;
+    let mut ruby_window_shown = false;
+    let mut indicator_window_shown = false;
+    let mut indicator_generation = 0_u64;
+    let mut last_rendered_candidates: Option<(Vec<String>, Option<i32>)> = None;
+    let mut last_rendered_candidate_list_visible: Option<bool> = None;
+    let mut last_rendered_reading: Option<String> = None;
+    let mut last_rendered_selection: Option<i32> = None;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -562,6 +662,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Event::UserEvent(script) => match script {
                 UserEvent::UpdateTheme(theme) => {
+                    current_theme = theme;
                     let script = format!(
                         "window.setColorTheme({})",
                         serde_json::to_string(&theme).expect("theme is serializable")
@@ -569,19 +670,26 @@ async fn main() -> anyhow::Result<()> {
                     for webview in [&candidate_webview, &ruby_webview, &indicator_webview] {
                         evaluate_script(webview, &script);
                     }
+                    if let Some(ref clipboard_webview) = clipboard_webview {
+                        evaluate_script(clipboard_webview, &script);
+                    }
                 }
                 UserEvent::CandidateReady => {
                     candidate_ready = true;
                     set_candidate_list_visible(&candidate_webview, current_candidate_list_visible);
+                    last_rendered_candidate_list_visible = Some(current_candidate_list_visible);
                     set_candidate_window_width(&candidate_window, &latest_candidates);
                     update_candidate_list(&candidate_webview, &latest_candidates, Some(latest_selection));
+                    last_rendered_candidates = Some((latest_candidates.clone(), Some(latest_selection)));
+                    last_rendered_selection = Some(latest_selection);
                     if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
-                        show_window_no_activate(&candidate_window);
+                        set_window_shown_no_activate(&candidate_window, &mut candidate_window_shown);
                     }
                 }
                 UserEvent::UpdateCandidates(candidates) => {
                     if let Ok(values) = serde_json::from_str::<Vec<String>>(&candidates) {
-                        latest_candidates = values;
+                        latest_candidates = values.clone();
+                        last_rendered_candidates = Some((values, None));
                     }
                     evaluate_script(
                         &candidate_webview,
@@ -590,6 +698,10 @@ async fn main() -> anyhow::Result<()> {
                 }
                 UserEvent::UpdateSelection(index) => {
                     latest_selection = index;
+                    last_rendered_selection = Some(index);
+                    if let Some((_, ref mut sel)) = last_rendered_candidates {
+                        *sel = Some(index);
+                    }
                     evaluate_script(&candidate_webview, &format!("updateSelection({})", index));
                 }
                 UserEvent::CandidateClicked(index) => {
@@ -609,6 +721,39 @@ async fn main() -> anyhow::Result<()> {
                             WPARAM(index as usize),
                             LPARAM(0),
                         );
+                    }
+                }
+                UserEvent::RubyAssistClicked => {
+                    if !current_window_visible || current_engine_hwnd == 0 {
+                        return;
+                    }
+                    let assist_replacement = serde_json::from_str::<serde_json::Value>(
+                        &current_reading,
+                    )
+                    .ok()
+                    .and_then(|value| {
+                        let assist = value.get("assist")?;
+                        if assist.get("status").and_then(|v| v.as_str()) == Some("applied") {
+                            return None;
+                        }
+                        assist
+                            .get("replacement")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    });
+                    if let Some(replacement) = assist_replacement {
+                        if let Some(index) =
+                            latest_candidates.iter().position(|c| *c == replacement)
+                        {
+                            unsafe {
+                                let _ = PostMessageW(
+                                    HWND(current_engine_hwnd as *mut std::ffi::c_void),
+                                    shared::ENGINE_CANDIDATE_SELECT_MESSAGE,
+                                    WPARAM(index),
+                                    LPARAM(0),
+                                );
+                            }
+                        }
                     }
                 }
                 UserEvent::CandidateForgetRequested(index) => {
@@ -632,6 +777,11 @@ async fn main() -> anyhow::Result<()> {
                 }
                 UserEvent::UpdateInputMethod(input_method) => {
                     update_indicator(&indicator_webview, &input_method);
+                }
+                UserEvent::HideIndicatorIfGeneration(generation) => {
+                    if generation == indicator_generation {
+                        set_window_hidden(&indicator_window, &mut indicator_window_shown);
+                    }
                 }
                 UserEvent::UpdateHeight(height) => {
                     let width = candidate_window.inner_size().width;
@@ -700,6 +850,7 @@ async fn main() -> anyhow::Result<()> {
 
                     show_ruby_window_if_ready(
                         &ruby_window,
+                        &mut ruby_window_shown,
                         current_window_visible,
                         &current_reading,
                         current_ruby_size_ready,
@@ -707,22 +858,25 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
                 UserEvent::ClipboardUpdated => {
-                    let items = {
-                        let s = clipboard_state.lock().unwrap();
-                        s.items.clone()
-                    };
-                    if let Ok(json) = serde_json::to_string(&items) {
-                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    if let Some(ref clipboard_webview) = clipboard_webview {
+                        let items = {
+                            let s = clipboard_state.lock().unwrap();
+                            s.items.clone()
+                        };
+                        if let Ok(json) = serde_json::to_string(&items) {
+                            evaluate_script(clipboard_webview, &format!("updateItems({})", json));
+                        }
                     }
                 }
                 UserEvent::CopyTranslationShow { text, owner, x, y } => {
-                    copy_popup = None;
-                    COPY_POPUP_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
                     let (count, truncated) = copy_translation::count_text(&text);
                     if count == 0 {
                         return;
                     }
-                    if let Ok(popup_thread) = selection_ui::PopupThread::start() {
+                    if copy_popup.is_none() {
+                        copy_popup = selection_ui::PopupThread::start().ok();
+                    }
+                    if let Some(popup_thread) = copy_popup.as_ref() {
                         let anchor = windows::Win32::Foundation::RECT {
                             left: x,
                             top: y,
@@ -738,11 +892,12 @@ async fn main() -> anyhow::Result<()> {
                         });
                         copy_popup_visible = true;
                         COPY_POPUP_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
-                        copy_popup = Some(popup_thread);
                     }
                 }
                 UserEvent::CopyTranslationHide => {
-                    copy_popup = None;
+                    if let Some(popup_thread) = copy_popup.as_ref() {
+                        popup_thread.send(selection_ui::Command::Hide);
+                    }
                     copy_popup_visible = false;
                     COPY_POPUP_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
@@ -779,14 +934,37 @@ async fn main() -> anyhow::Result<()> {
                             // Retention is time-based, so entries can expire while the
                             // IME keeps running; prune before every reveal.
                             s.cleanup_expired(
-                                shared::AppConfig::read()
+                                shared::AppConfig::read_cached()
                                     .map(|config| config.clipboard.retention_hours)
                                     .unwrap_or(0),
                             );
                             s.items.clone()
                         };
-                        if let Ok(json) = serde_json::to_string(&items) {
-                            evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                        let items_json = serde_json::to_string(&items).ok();
+                        if let Some(ref webview) = clipboard_webview {
+                            if let Some(ref json) = items_json {
+                                evaluate_script(webview, &format!("updateItems({})", json));
+                            }
+                        } else {
+                            let bootstrap_script = match items_json {
+                                Some(ref json) => format!(
+                                    "{}\nwindow.addEventListener('DOMContentLoaded', () => updateItems({}));",
+                                    theme::initialization_script(current_theme),
+                                    json
+                                ),
+                                None => theme::initialization_script(current_theme),
+                            };
+                            match clipboard::create_clipboard_webview(
+                                &clipboard_window,
+                                &mut web_context,
+                                event_loop_proxy.clone(),
+                                &bootstrap_script,
+                            ) {
+                                Ok(webview) => clipboard_webview = Some(webview),
+                                Err(error) => {
+                                    eprintln!("Warning: Failed to create clipboard WebView: {error:?}");
+                                }
+                            }
                         }
 
                         unsafe {
@@ -832,8 +1010,10 @@ async fn main() -> anyhow::Result<()> {
                         s.toggle_pin(id);
                         s.items.clone()
                     };
-                    if let Ok(json) = serde_json::to_string(&items) {
-                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    if let (Some(ref clipboard_webview), Ok(json)) =
+                        (&clipboard_webview, serde_json::to_string(&items))
+                    {
+                        evaluate_script(clipboard_webview, &format!("updateItems({})", json));
                     }
                 }
                 UserEvent::ClipboardDelete(id) => {
@@ -842,8 +1022,10 @@ async fn main() -> anyhow::Result<()> {
                         s.delete_item(id);
                         s.items.clone()
                     };
-                    if let Ok(json) = serde_json::to_string(&items) {
-                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    if let (Some(ref clipboard_webview), Ok(json)) =
+                        (&clipboard_webview, serde_json::to_string(&items))
+                    {
+                        evaluate_script(clipboard_webview, &format!("updateItems({})", json));
                     }
                 }
                 UserEvent::ClipboardUpdateText(id, new_text) => {
@@ -852,8 +1034,10 @@ async fn main() -> anyhow::Result<()> {
                         s.update_text(id, new_text);
                         s.items.clone()
                     };
-                    if let Ok(json) = serde_json::to_string(&items) {
-                        evaluate_script(&clipboard_webview, &format!("updateItems({})", json));
+                    if let (Some(ref clipboard_webview), Ok(json)) =
+                        (&clipboard_webview, serde_json::to_string(&items))
+                    {
+                        evaluate_script(clipboard_webview, &format!("updateItems({})", json));
                     }
                 }
                 UserEvent::ClipboardClose => {
@@ -868,31 +1052,22 @@ async fn main() -> anyhow::Result<()> {
                     match action {
                         WindowAction::Show => {
                             // if mode indicator is already shown, hide it
-                            let mut task_guard = match task_guard.try_lock() {
-                                Ok(guard) => guard,
-                                Err(_) => {
-                                    eprintln!(
-                                        "Warning: Failed to lock task_guard, skipping cleanup"
-                                    );
-                                    return;
-                                }
-                            };
-                            if let Some(task) = task_guard.take() {
-                                task.abort();
-                                let _ = unsafe {
-                                    ShowWindow(
-                                        HWND(indicator_hwnd as *mut std::ffi::c_void),
-                                        SW_HIDE,
-                                    )
-                                };
-                            }
+                            cancel_indicator_popup(
+                                &task_guard,
+                                &indicator_window,
+                                &mut indicator_window_shown,
+                                &mut indicator_generation,
+                            );
 
                             current_window_visible = true;
                             if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
-                                show_window_no_activate(&candidate_window);
-                            } else { hide_window(&candidate_window); }
+                                set_window_shown_no_activate(&candidate_window, &mut candidate_window_shown);
+                            } else {
+                                set_window_hidden(&candidate_window, &mut candidate_window_shown);
+                            }
                             show_ruby_window_if_ready(
                                 &ruby_window,
+                                &mut ruby_window_shown,
                                 current_window_visible,
                                 &current_reading,
                                 current_ruby_size_ready,
@@ -904,11 +1079,13 @@ async fn main() -> anyhow::Result<()> {
                             current_reading.clear();
                             current_ruby_size_ready = false;
                             current_ruby_measured_size = None;
-                            let request_id =
-                                next_ruby_size_request_id(&mut current_ruby_size_request_id);
-                            update_ruby_reading(&ruby_webview, "", request_id);
-                            hide_window(&candidate_window);
-                            hide_window(&ruby_window);
+                            if should_render_reading(&mut last_rendered_reading, "") {
+                                let request_id =
+                                    next_ruby_size_request_id(&mut current_ruby_size_request_id);
+                                update_ruby_reading(&ruby_webview, "", request_id);
+                            }
+                            set_window_hidden(&candidate_window, &mut candidate_window_shown);
+                            set_window_hidden(&ruby_window, &mut ruby_window_shown);
                         }
                         WindowAction::SetPosition {
                             top,
@@ -919,7 +1096,9 @@ async fn main() -> anyhow::Result<()> {
                             let rect = CandidateRect::new(top, left, bottom, right);
                             last_candidate_rect = Some(rect);
 
-                            keep_windows_topmost(&candidate_window, &ruby_window, indicator_hwnd);
+                            if current_window_visible || indicator_window_shown || !current_reading.is_empty() {
+                                keep_windows_topmost(&candidate_window, &ruby_window, indicator_hwnd);
+                            }
                             if current_ruby_size_ready && !current_reading.is_empty() {
                                 if let Some(measured_size) = current_ruby_measured_size {
                                     set_and_place_ruby_window(
@@ -951,6 +1130,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                             show_ruby_window_if_ready(
                                 &ruby_window,
+                                &mut ruby_window_shown,
                                 current_window_visible,
                                 &current_reading,
                                 current_ruby_size_ready,
@@ -960,9 +1140,24 @@ async fn main() -> anyhow::Result<()> {
                         WindowAction::SetCandidate { candidates } => {
                             latest_candidates = candidates.clone();
                             current_candidate_list_visible = true;
-                            set_candidate_list_visible(&candidate_webview, true);
-                            set_candidate_window_width(&candidate_window, &candidates);
-                            update_candidate_list(&candidate_webview, &candidates, None);
+                            if should_render_candidate_list_visible(
+                                &mut last_rendered_candidate_list_visible,
+                                true,
+                            ) {
+                                set_candidate_list_visible(&candidate_webview, true);
+                            }
+                            let (width_changed, list_changed) = candidate_list_update_diff(
+                                &mut last_rendered_candidates,
+                                &candidates,
+                                None,
+                            );
+                            if width_changed {
+                                set_candidate_window_width(&candidate_window, &candidates);
+                            }
+                            if list_changed {
+                                update_candidate_list(&candidate_webview, &candidates, None);
+                                last_rendered_selection = None;
+                            }
                             if let Some(rect) = last_candidate_rect {
                                 place_candidate_windows(
                                     &candidate_window,
@@ -999,29 +1194,13 @@ async fn main() -> anyhow::Result<()> {
                             }
 
                             if mode_changed && was_already_set {
-                                let task_guard = task_guard.try_lock();
-
-                                if let Ok(mut task_guard) = task_guard {
-                                    if let Some(task) = task_guard.take() {
-                                        task.abort();
-                                    }
-
-                                    *task_guard = Some(tokio::spawn(async move {
-                                        let _ = unsafe {
-                                            ShowWindow(
-                                                HWND(indicator_hwnd as *mut std::ffi::c_void),
-                                                SW_SHOWNOACTIVATE,
-                                            )
-                                        };
-                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                        let _ = unsafe {
-                                            ShowWindow(
-                                                HWND(indicator_hwnd as *mut std::ffi::c_void),
-                                                SW_HIDE,
-                                            )
-                                        };
-                                    }));
-                                }
+                                schedule_indicator_popup(
+                                    &task_guard,
+                                    &indicator_window,
+                                    &mut indicator_window_shown,
+                                    &mut indicator_generation,
+                                    &event_loop_proxy,
+                                );
                             }
                         }
                         WindowAction::UpdateCandidateWindow {
@@ -1054,49 +1233,79 @@ async fn main() -> anyhow::Result<()> {
                                     current_reading.clear();
                                     current_ruby_size_ready = false;
                                     current_ruby_measured_size = None;
-                                    let request_id =
-                                        next_ruby_size_request_id(&mut current_ruby_size_request_id);
-                                    update_ruby_reading(&ruby_webview, "", request_id);
+                                    if should_render_reading(&mut last_rendered_reading, "") {
+                                        let request_id = next_ruby_size_request_id(
+                                            &mut current_ruby_size_request_id,
+                                        );
+                                        update_ruby_reading(&ruby_webview, "", request_id);
+                                    }
                                 }
                             }
 
                             if let Some(candidate_list_visible) = candidate_list_visible {
                                 current_candidate_list_visible = candidate_list_visible;
-                                set_candidate_list_visible(
-                                    &candidate_webview,
+                                if should_render_candidate_list_visible(
+                                    &mut last_rendered_candidate_list_visible,
                                     candidate_list_visible,
-                                );
+                                ) {
+                                    set_candidate_list_visible(
+                                        &candidate_webview,
+                                        candidate_list_visible,
+                                    );
+                                }
                             }
 
                             if let Some(ref reading) = reading {
                                 current_reading = reading.clone();
-                                let request_id =
-                                    next_ruby_size_request_id(&mut current_ruby_size_request_id);
-                                update_ruby_reading(&ruby_webview, reading, request_id);
+                                if should_render_reading(&mut last_rendered_reading, reading) {
+                                    let request_id = next_ruby_size_request_id(
+                                        &mut current_ruby_size_request_id,
+                                    );
+                                    update_ruby_reading(&ruby_webview, reading, request_id);
+                                }
                                 if reading.is_empty() {
                                     current_ruby_size_ready = false;
                                     current_ruby_measured_size = None;
-                                    hide_window(&ruby_window);
+                                    set_window_hidden(&ruby_window, &mut ruby_window_shown);
                                 }
                             }
 
-                            if let Some(index) = selected_index { latest_selection = index; }
+                            let previous_rendered_selection = last_rendered_selection;
+                            if let Some(index) = selected_index {
+                                latest_selection = index;
+                            }
                             if let Some(ref candidates) = candidates {
                                 latest_candidates = candidates.clone();
-                                set_candidate_window_width(&candidate_window, candidates);
-                                update_candidate_list(
-                                    &candidate_webview,
+                                let (width_changed, list_changed) = candidate_list_update_diff(
+                                    &mut last_rendered_candidates,
                                     candidates,
                                     selected_index,
                                 );
+                                if width_changed {
+                                    set_candidate_window_width(&candidate_window, candidates);
+                                }
+                                if list_changed {
+                                    update_candidate_list(
+                                        &candidate_webview,
+                                        candidates,
+                                        selected_index,
+                                    );
+                                    last_rendered_selection = selected_index;
+                                }
                             }
 
                             if candidates.is_none() {
                                 if let Some(index) = selected_index {
-                                    evaluate_script(
-                                        &candidate_webview,
-                                        &format!("updateSelection({})", index),
-                                    );
+                                    if previous_rendered_selection != Some(index) {
+                                        evaluate_script(
+                                            &candidate_webview,
+                                            &format!("updateSelection({})", index),
+                                        );
+                                        last_rendered_selection = Some(index);
+                                        if let Some((_, ref mut sel)) = last_rendered_candidates {
+                                            *sel = Some(index);
+                                        }
+                                    }
                                 }
                             }
 
@@ -1108,7 +1317,16 @@ async fn main() -> anyhow::Result<()> {
                                     position.right,
                                 );
                                 last_candidate_rect = Some(rect);
-                                keep_windows_topmost(&candidate_window, &ruby_window, indicator_hwnd);
+                                if current_window_visible
+                                    || indicator_window_shown
+                                    || !current_reading.is_empty()
+                                {
+                                    keep_windows_topmost(
+                                        &candidate_window,
+                                        &ruby_window,
+                                        indicator_hwnd,
+                                    );
+                                }
                                 if !current_reading.is_empty() {
                                     let measured_size = current_ruby_measured_size.unwrap_or_else(|| {
                                         let char_count = current_reading.chars().count();
@@ -1142,6 +1360,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 show_ruby_window_if_ready(
                                     &ruby_window,
+                                    &mut ruby_window_shown,
                                     current_window_visible,
                                     &current_reading,
                                     current_ruby_size_ready,
@@ -1170,6 +1389,7 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                     show_ruby_window_if_ready(
                                         &ruby_window,
+                                        &mut ruby_window_shown,
                                         current_window_visible,
                                         &current_reading,
                                         current_ruby_size_ready,
@@ -1188,73 +1408,47 @@ async fn main() -> anyhow::Result<()> {
                                 }
 
                                 if mode_changed && was_already_set {
-                                    let task_guard = task_guard.try_lock();
-
-                                    if let Ok(mut task_guard) = task_guard {
-                                        if let Some(task) = task_guard.take() {
-                                            task.abort();
-                                        }
-
-                                        *task_guard = Some(tokio::spawn(async move {
-                                            let _ = unsafe {
-                                                ShowWindow(
-                                                    HWND(indicator_hwnd as *mut std::ffi::c_void),
-                                                    SW_SHOWNOACTIVATE,
-                                                )
-                                            };
-                                            tokio::time::sleep(std::time::Duration::from_millis(500))
-                                                .await;
-                                            let _ = unsafe {
-                                                ShowWindow(
-                                                    HWND(indicator_hwnd as *mut std::ffi::c_void),
-                                                    SW_HIDE,
-                                                )
-                                            };
-                                        }));
-                                    }
+                                    schedule_indicator_popup(
+                                        &task_guard,
+                                        &indicator_window,
+                                        &mut indicator_window_shown,
+                                        &mut indicator_generation,
+                                        &event_loop_proxy,
+                                    );
                                 }
                             }
 
                             if let Some(visible) = visible {
                                 if visible {
-                                    let mut task_guard = match task_guard.try_lock() {
-                                        Ok(guard) => guard,
-                                        Err(_) => {
-                                            eprintln!(
-                                                "Warning: Failed to lock task_guard, skipping cleanup"
-                                            );
-                                            return;
-                                        }
-                                    };
-                                    if let Some(task) = task_guard.take() {
-                                        task.abort();
-                                        let _ = unsafe {
-                                            ShowWindow(
-                                                HWND(indicator_hwnd as *mut std::ffi::c_void),
-                                                SW_HIDE,
-                                            )
-                                        };
-                                    }
+                                    cancel_indicator_popup(
+                                        &task_guard,
+                                        &indicator_window,
+                                        &mut indicator_window_shown,
+                                        &mut indicator_generation,
+                                    );
 
                                     if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
-                                show_window_no_activate(&candidate_window);
-                            } else { hide_window(&candidate_window); }
+                                        set_window_shown_no_activate(&candidate_window, &mut candidate_window_shown);
+                                    } else {
+                                        set_window_hidden(&candidate_window, &mut candidate_window_shown);
+                                    }
 
                                     show_ruby_window_if_ready(
                                         &ruby_window,
+                                        &mut ruby_window_shown,
                                         current_window_visible,
                                         &current_reading,
                                         current_ruby_size_ready,
                                         last_candidate_rect.is_some(),
                                     );
                                 } else {
-                                    hide_window(&candidate_window);
-                                    hide_window(&ruby_window);
+                                    set_window_hidden(&candidate_window, &mut candidate_window_shown);
+                                    set_window_hidden(&ruby_window, &mut ruby_window_shown);
                                 }
                             }
 
                             if !candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
-                                hide_window(&candidate_window);
+                                set_window_hidden(&candidate_window, &mut candidate_window_shown);
                             }
 
                             // Always re-evaluate the floating "原文" window once every state
@@ -1263,6 +1457,7 @@ async fn main() -> anyhow::Result<()> {
                             // the client sent the individual fields.
                             show_ruby_window_if_ready(
                                 &ruby_window,
+                                &mut ruby_window_shown,
                                 current_window_visible,
                                 &current_reading,
                                 current_ruby_size_ready,
@@ -1332,5 +1527,43 @@ mod tests {
     fn candidate_window_resize_uses_safe_scale_for_invalid_dpi() {
         assert_eq!(logical_width_for_physical_width(300, 0.0), 300.0);
         assert_eq!(logical_width_for_physical_width(300, f64::NAN), 300.0);
+    }
+
+    #[test]
+    fn ui_render_caches_skip_unchanged_updates() {
+        let mut list_visible = None;
+        assert!(super::should_render_candidate_list_visible(
+            &mut list_visible,
+            true
+        ));
+        assert!(!super::should_render_candidate_list_visible(
+            &mut list_visible,
+            true
+        ));
+        assert!(super::should_render_candidate_list_visible(
+            &mut list_visible,
+            false
+        ));
+
+        let mut reading = None;
+        assert!(super::should_render_reading(&mut reading, ""));
+        assert!(!super::should_render_reading(&mut reading, ""));
+        assert!(super::should_render_reading(&mut reading, "きょう"));
+        assert!(!super::should_render_reading(&mut reading, "きょう"));
+
+        let mut candidates = None;
+        let first = vec!["今日".to_string(), "京".to_string()];
+        assert_eq!(
+            super::candidate_list_update_diff(&mut candidates, &first, Some(0)),
+            (true, true)
+        );
+        assert_eq!(
+            super::candidate_list_update_diff(&mut candidates, &first, Some(0)),
+            (false, false)
+        );
+        assert_eq!(
+            super::candidate_list_update_diff(&mut candidates, &first, Some(1)),
+            (false, true)
+        );
     }
 }

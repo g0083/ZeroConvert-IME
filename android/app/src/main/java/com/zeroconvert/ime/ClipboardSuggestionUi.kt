@@ -6,6 +6,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -17,8 +18,16 @@ import kotlinx.coroutines.delay
 
 /** Wake at expiry even when no key, selection, or clipboard event arrives. */
 @Composable
-fun rememberClipboardSuggestion(history: List<ClipboardEntry>, minutes: Int): ClipboardEntry? {
-    val snapshot = history.toList()
+fun rememberClipboardSuggestion(
+    history: List<ClipboardEntry>,
+    minutes: Int,
+    enabled: Boolean = true,
+): ClipboardEntry? {
+    if (!enabled || minutes <= 0) return null
+    val snapshot by remember(history) {
+        derivedStateOf { if (history.isEmpty()) emptyList() else history.toList() }
+    }
+    if (snapshot.isEmpty()) return null
     var now by remember(snapshot, minutes) { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(snapshot, minutes) {
         while (true) {

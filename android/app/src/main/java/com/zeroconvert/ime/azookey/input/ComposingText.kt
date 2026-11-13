@@ -283,14 +283,20 @@ class ComposingText(
     }
 
     fun moveCursorFromCursorPosition(count: Int): Int {
-        val target = max(0, min(convertTarget.length, convertTargetCursorPosition + count))
+        val rawTarget = max(0, min(convertTarget.length, convertTargetCursorPosition + count))
+        val target = com.zeroconvert.ime.ComposingEditorState.snapBoundary(
+            convertTarget,
+            rawTarget,
+            preferForward = count > 0,
+        )
         val moved = target - convertTargetCursorPosition
         convertTargetCursorPosition = target
         return moved
     }
 
     fun prefixComplete(surfaceCount: Int) {
-        val count = min(convertTarget.length, max(0, surfaceCount))
+        val rawCount = min(convertTarget.length, max(0, surfaceCount))
+        val count = com.zeroconvert.ime.ComposingEditorState.snapBoundary(convertTarget, rawCount)
         if (count == 0) return
         val index = forceGetInputCursorPosition(count)
 
@@ -298,7 +304,10 @@ class ComposingText(
             input.removeAt(0)
         }
         convertTarget = convertTarget.drop(count)
-        convertTargetCursorPosition = max(0, convertTargetCursorPosition - count)
+        convertTargetCursorPosition = com.zeroconvert.ime.ComposingEditorState.snapBoundary(
+            convertTarget,
+            max(0, convertTargetCursorPosition - count),
+        )
         if (convertTargetCursorPosition == 0 && convertTarget.isNotEmpty()) {
             convertTargetCursorPosition = convertTarget.length
         }

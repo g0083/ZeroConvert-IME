@@ -1202,6 +1202,7 @@ fn watch_assist_server(install_dir: &Path, role: AssistRole) {
     } else {
         "[prediction]"
     };
+    let mut config_cache = shared::AppConfigCache::new();
     let mut owned: Option<(AssistServerSpec, Child, PredictionJob)> = None;
     loop {
         if shared::model_update::requested() {
@@ -1218,16 +1219,16 @@ fn watch_assist_server(install_dir: &Path, role: AssistRole) {
         }
         // AppConfig::new() normalizes and rewrites settings. Polling must only
         // read them, and a transient read error must not stop a healthy model.
-        let Ok(config) = AppConfig::read() else {
+        let Ok(config) = config_cache.read() else {
             thread::sleep(Duration::from_secs(2));
             continue;
         };
         let desired = if translation {
-            translation_server_spec(install_dir, &config)
+            translation_server_spec(install_dir, config)
         } else if corrector {
-            assist_server_spec(install_dir, &config, true)
+            assist_server_spec(install_dir, config, true)
         } else {
-            prediction_server_spec(install_dir, &config)
+            prediction_server_spec(install_dir, config)
         };
         if let Some((spec, child, _job)) = owned.as_mut() {
             if desired.as_ref() != Some(spec) {

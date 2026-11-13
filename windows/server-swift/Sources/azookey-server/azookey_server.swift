@@ -13,28 +13,29 @@ private let fallbackDictionaryURL =
     executableDirectoryURL()?.appendingPathComponent("Dictionary", isDirectory: true)
     ?? URL(filePath: FileManager.default.currentDirectoryPath)
 
-@MainActor var converterDictionaryURL = fallbackDictionaryURL
-@MainActor var converterPreloadDictionary = false
-@MainActor var converter = KanaKanjiConverter(
+// Serialized by the single-threaded FFI executor in Rust and @MainActor in tests.
+nonisolated(unsafe) var converterDictionaryURL = fallbackDictionaryURL
+nonisolated(unsafe) var converterPreloadDictionary = false
+nonisolated(unsafe) var converterDicdataStore = DicdataStore(
     dictionaryURL: fallbackDictionaryURL,
     preloadDictionary: false
 )
-@MainActor var normalNBestSupplementConverter = KanaKanjiConverter(
-    dictionaryURL: fallbackDictionaryURL,
-    preloadDictionary: false
+nonisolated(unsafe) var converter = KanaKanjiConverter(dicdataStore: converterDicdataStore)
+nonisolated(unsafe) var normalNBestSupplementConverter = KanaKanjiConverter(
+    dicdataStore: converterDicdataStore
 )
-@MainActor var composingText = ComposingText()
-@MainActor var composingTextSnapshots: [ComposingText] = []
-@MainActor var currentInputStyle: InputStyle = .roman2kana
-@MainActor var customRomajiTableEnabled = false
-@MainActor var currentLearningType: LearningType = .inputAndOutput
-@MainActor var currentLearningMemoryDirectoryURL: URL?
-@MainActor var learningCandidateCache = LearningCandidateCache()
-@MainActor var learningSelectionOverrides = LearningSelectionStore()
-@MainActor var reconversionDictionary = ReconversionDictionary()
+nonisolated(unsafe) var composingText = ComposingText()
+nonisolated(unsafe) var composingTextSnapshots: [ComposingText] = []
+nonisolated(unsafe) var currentInputStyle: InputStyle = .roman2kana
+nonisolated(unsafe) var customRomajiTableEnabled = false
+nonisolated(unsafe) var currentLearningType: LearningType = .inputAndOutput
+nonisolated(unsafe) var currentLearningMemoryDirectoryURL: URL?
+nonisolated(unsafe) var learningCandidateCache = LearningCandidateCache()
+nonisolated(unsafe) var learningSelectionOverrides = LearningSelectionStore()
+nonisolated(unsafe) var reconversionDictionary = ReconversionDictionary()
 
-@MainActor var execURL = URL(filePath: "")
-@MainActor var config: [String : Any] = [
+nonisolated(unsafe) var execURL = URL(filePath: "")
+nonisolated(unsafe) var config: [String : Any] = [
     "enable": false,
     "profile": "",
     "backend": "cpu",
@@ -62,7 +63,7 @@ let maxReconversionSurfaceCount = 128
 let maxReconversionDictionarySpan = 40
 let maxReconversionReadingCount = 4
 
-@MainActor var currentRequestId: UInt64 = 0
+nonisolated(unsafe) var currentRequestId: UInt64 = 0
 
 struct ReconversionDictionaryEntry: Equatable {
     let reading: String
@@ -599,7 +600,7 @@ func serverLog(
     }
 }
 
-@MainActor func serverLog(
+func serverLog(
     _ level: String = "INFO",
     _ message: @autoclosure () -> String,
     flush: Bool = false
@@ -626,7 +627,7 @@ private func crashTrace(
     )
 }
 
-@MainActor private func crashTrace(
+private func crashTrace(
     operation: String,
     stage: String,
     state: String,
@@ -641,7 +642,7 @@ private func crashTrace(
     )
 }
 
-@MainActor private func candidateCrashTrace(
+private func candidateCrashTrace(
     useZenzai: Bool,
     operation: String,
     stage: String,
@@ -675,7 +676,7 @@ private func performanceLog(
     )
 }
 
-@MainActor private func performanceLog(
+private func performanceLog(
     operation: String,
     stage: String,
     elapsedMs: Int,
@@ -737,25 +738,24 @@ private func readAppSettings(at path: URL) throws -> AppSettings {
     return try JSONDecoder().decode(AppSettings.self, from: data)
 }
 
-@MainActor private func rebuildConverter() {
-    converter = KanaKanjiConverter(
+private func rebuildConverter() {
+    let dicdataStore = DicdataStore(
         dictionaryURL: converterDictionaryURL,
         preloadDictionary: converterPreloadDictionary
     )
-    normalNBestSupplementConverter = KanaKanjiConverter(
-        dictionaryURL: converterDictionaryURL,
-        preloadDictionary: converterPreloadDictionary
-    )
+    converterDicdataStore = dicdataStore
+    converter = KanaKanjiConverter(dicdataStore: dicdataStore)
+    normalNBestSupplementConverter = KanaKanjiConverter(dicdataStore: dicdataStore)
 }
 
-@MainActor private func converterRuntimeDirectoryURL() -> URL {
+private func converterRuntimeDirectoryURL() -> URL {
     engineRuntimeDirectoryURL(
         appDataPath: ProcessInfo.processInfo.environment["APPDATA"],
         temporaryDirectoryURL: FileManager.default.temporaryDirectory
     )
 }
 
-@MainActor private func ensureConverterRuntimeDirectory() {
+private func ensureConverterRuntimeDirectory() {
     let runtimeDirectoryURL = converterRuntimeDirectoryURL()
     do {
         try FileManager.default.createDirectory(
@@ -781,7 +781,7 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
     return zenzaiEnabled && !normalizedBackend.isEmpty && normalizedBackend != "cpu"
 }
 
-@MainActor private func converterModelURL() -> URL {
+private func converterModelURL() -> URL {
     if let embeddedPath = config["embeddedModelPath"] as? String {
         return URL(filePath: embeddedPath)
     }
@@ -791,7 +791,7 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
     return execURL.appendingPathComponent("models/" + filename)
 }
 
-@MainActor private func configureEngineRuntime(zenzaiEnabled: Bool) {
+private func configureEngineRuntime(zenzaiEnabled: Bool) {
     let shouldOffloadToGpu = shouldOffloadZenzaiToGpu(
         zenzaiEnabled: zenzaiEnabled,
         backend: config["backend"] as? String
@@ -805,7 +805,7 @@ func resolvedGpuLayerCount(_ configured: Int?) -> Int32 {
     Int32(max(0, min(99, configured ?? 99)))
 }
 
-@MainActor private func learningMemoryDirectoryURL(settingsPath: URL?) -> URL {
+private func learningMemoryDirectoryURL(settingsPath: URL?) -> URL {
     if let settingsPath {
         return settingsPath
             .deletingLastPathComponent()
@@ -834,7 +834,7 @@ private func learningType(for mode: String?) -> LearningType {
     }
 }
 
-@MainActor private func ensureLearningMemoryDirectoryIfNeeded() {
+private func ensureLearningMemoryDirectoryIfNeeded() {
     guard currentLearningType != .nothing,
           let currentLearningMemoryDirectoryURL else {
         return
@@ -853,7 +853,7 @@ private func learningType(for mode: String?) -> LearningType {
     }
 }
 
-@MainActor private func resetLearningMemoryDirectory() -> Bool {
+private func resetLearningMemoryDirectory() -> Bool {
     guard let currentLearningMemoryDirectoryURL else {
         serverLog("WARN", "ResetLearningMemory: learning memory directory is not configured")
         return false
@@ -1102,11 +1102,11 @@ struct LearningCandidateCache {
     }
 }
 
-@MainActor private func clearLearningCandidateCache() {
+private func clearLearningCandidateCache() {
     learningCandidateCache.removeAll()
 }
 
-@MainActor func cacheLearningCandidates(_ candidates: [Candidate]) -> UInt64? {
+func cacheLearningCandidates(_ candidates: [Candidate]) -> UInt64? {
     guard currentLearningType == .inputAndOutput else {
         return nil
     }
@@ -1120,7 +1120,7 @@ struct LearningCandidateCache {
     )
 }
 
-@MainActor func learningCandidateId(at index: Int, batchFirstId: UInt64?) -> UInt64 {
+func learningCandidateId(at index: Int, batchFirstId: UInt64?) -> UInt64 {
     guard let batchFirstId else {
         return 0
     }
@@ -1128,23 +1128,23 @@ struct LearningCandidateCache {
     return learningCandidateCache.candidateId(at: index, batchFirstId: batchFirstId)
 }
 
-@MainActor func consumeLearningCandidate(_ candidateId: UInt64) -> Candidate? {
+func consumeLearningCandidate(_ candidateId: UInt64) -> Candidate? {
     learningCandidateCache.consume(candidateId)
 }
 
-@MainActor func learningCandidate(_ candidateId: UInt64) -> Candidate? {
+func learningCandidate(_ candidateId: UInt64) -> Candidate? {
     learningCandidateCache.candidate(for: candidateId)
 }
 
 @_silgen_name("PinLearningCandidate")
-@MainActor public func pin_learning_candidate(candidateId: UInt64) -> Bool {
+public func pin_learning_candidate(candidateId: UInt64) -> Bool {
     learningCandidateCache.pin(candidateId)
 }
 
 // Client-side future snapshots do not have matching server composition
 // snapshots. The first subsequent composition edit invalidates those futures,
 // so release their selected candidates without adding another IPC round trip.
-@MainActor func discardPinnedLearningCandidatesBeforeCompositionEdit() {
+func discardPinnedLearningCandidatesBeforeCompositionEdit() {
     guard composingTextSnapshots.isEmpty,
           learningCandidateCache.protectedSlotCount > 0 else {
         return
@@ -1173,7 +1173,7 @@ private func learningCandidateOutput(_ candidate: Candidate) -> String {
     candidate.data.reduce(into: "") { $0 += $1.word }
 }
 
-@MainActor private func learningSelectionOverridesURL() -> URL? {
+private func learningSelectionOverridesURL() -> URL? {
     currentLearningMemoryDirectoryURL?.appendingPathComponent(
         learningSelectionOverridesFilename,
         isDirectory: false
@@ -1282,7 +1282,7 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
     }
 }
 
-@MainActor func loadLearningSelectionOverrides() {
+func loadLearningSelectionOverrides() {
     guard currentLearningType != .nothing,
           let overridesURL = learningSelectionOverridesURL() else {
         learningSelectionOverrides.removeAll(keepingCapacity: false)
@@ -1306,7 +1306,7 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
     }
 }
 
-@MainActor private func saveLearningSelectionOverrides() {
+private func saveLearningSelectionOverrides() {
     guard let overridesURL = learningSelectionOverridesURL() else {
         return
     }
@@ -1325,7 +1325,7 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
     }
 }
 
-@MainActor private func updateLearningSelectionOverride(_ candidate: Candidate) -> Bool {
+private func updateLearningSelectionOverride(_ candidate: Candidate) -> Bool {
     guard candidate.isLearningTarget else {
         return false
     }
@@ -1345,14 +1345,13 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
     return true
 }
 
-@MainActor private func recordLearningSelectionOverride(_ candidate: Candidate) {
+private func recordLearningSelectionOverride(_ candidate: Candidate) {
     guard updateLearningSelectionOverride(candidate) else {
         return
     }
     saveLearningSelectionOverrides()
 }
 
-@MainActor
 func synthesizeLearnedCandidate(
     word: String,
     ruby: String,
@@ -1375,7 +1374,7 @@ func synthesizeLearnedCandidate(
     )
 }
 
-@MainActor func prioritizeLearningSelectionOverrides<Element>(
+func prioritizeLearningSelectionOverrides<Element>(
     _ elements: [Element],
     ruby: String,
     candidate: (Element) -> Candidate,
@@ -1499,7 +1498,7 @@ struct EmojiTextReplacerCache {
     mutating func reset() { resourceURL = nil; replacer = nil }
 }
 
-@MainActor private var emojiTextReplacerCache = EmojiTextReplacerCache()
+nonisolated(unsafe) private var emojiTextReplacerCache = EmojiTextReplacerCache()
 
 private func makeConvertRequestOptions(
     context: String,
@@ -1632,12 +1631,12 @@ private func cpuZenzaiBackendSupportedFromEnvironment() -> Bool {
     ProcessInfo.processInfo.environment["AZOOKEY_ZENZAI_CPU_SUPPORTED"] != "0"
 }
 
-@MainActor private func setRoman2KanaInputStyle() {
+private func setRoman2KanaInputStyle() {
     currentInputStyle = .roman2kana
     customRomajiTableEnabled = false
 }
 
-@MainActor private func setCustomRomajiInputStyle(rows: [RomajiTableRow]?) {
+private func setCustomRomajiInputStyle(rows: [RomajiTableRow]?) {
     guard let rows, let content = buildCustomRomajiTableContent(rows: rows) else {
         setRoman2KanaInputStyle()
         return
@@ -1667,7 +1666,7 @@ private func cpuZenzaiBackendSupportedFromEnvironment() -> Bool {
     }
 }
 
-@MainActor private func applyRomajiInputStyle(
+private func applyRomajiInputStyle(
     rows: [RomajiTableRow]?
 ) {
     switch resolveRomajiInputStyleSelection(
@@ -1761,7 +1760,7 @@ private func adjustedCorrespondingCountForDelayedSingleN(
     return splitAt - 1
 }
 
-@MainActor func resolveCandidateComposition(
+func resolveCandidateComposition(
     composingText: ComposingText,
     candidateComposingCount: ComposingCount
 ) -> (correspondingCount: Int, remainingConvertTarget: String) {
@@ -1790,7 +1789,7 @@ private func adjustedCorrespondingCountForDelayedSingleN(
     )
 }
 
-@MainActor func makeCandidatePreviewComposingText(
+func makeCandidatePreviewComposingText(
     from composingText: ComposingText
 ) -> (composingText: ComposingText, syntheticEndOfText: Bool) {
     guard composingText.convertTarget.last == "n" else {
@@ -1823,7 +1822,7 @@ private func adjustedCorrespondingCountForDelayedSingleN(
     return (composingText: previewComposingText, syntheticEndOfText: true)
 }
 
-@MainActor func makeCandidatePreviewComposingTextForCursorPrefix(
+func makeCandidatePreviewComposingTextForCursorPrefix(
     prefixComposingText: ComposingText,
     suffixAfterCursor: String
 ) -> (composingText: ComposingText, syntheticEndOfText: Bool) {
@@ -1834,7 +1833,7 @@ private func adjustedCorrespondingCountForDelayedSingleN(
     return makeCandidatePreviewComposingText(from: prefixComposingText)
 }
 
-@MainActor func resolveCandidateCompositionForDisplay(
+func resolveCandidateCompositionForDisplay(
     originalComposingText: ComposingText,
     previewComposingText: ComposingText,
     candidateComposingCount: ComposingCount
@@ -2018,7 +2017,7 @@ private func preferCursorPrefixBoundary(
     return candidate.index < current.index
 }
 
-@MainActor func resolveCandidateCompositionForDisplay(
+func resolveCandidateCompositionForDisplay(
     originalComposingText: ComposingText,
     previewComposingText: ComposingText,
     candidateComposingCount: ComposingCount,
@@ -2038,7 +2037,7 @@ private func preferCursorPrefixBoundary(
     return resolved
 }
 
-@MainActor func cursorPrefixCandidateResults(
+func cursorPrefixCandidateResults(
     mainResults: [Candidate],
     firstClauseResults: [Candidate],
     exactClauseResults: [Candidate] = [],
@@ -2056,7 +2055,7 @@ private func preferCursorPrefixBoundary(
     ).map(\.candidate)
 }
 
-@MainActor func cursorPrefixCandidateDisplayResults(
+func cursorPrefixCandidateDisplayResults(
     mainResults: [Candidate],
     firstClauseResults: [Candidate],
     exactClauseResults: [Candidate] = [],
@@ -2083,7 +2082,7 @@ private func preferCursorPrefixBoundary(
     )
 }
 
-@MainActor func cursorPrefixCandidateDisplayResults(
+func cursorPrefixCandidateDisplayResults(
     mainResults: [Candidate],
     firstClauseResults: [Candidate],
     exactClauseResults: [Candidate] = [],
@@ -2147,7 +2146,7 @@ private func preferCursorPrefixBoundary(
     return results
 }
 
-@MainActor func cursorPrefixFirstClauseCorrespondingCount(
+func cursorPrefixFirstClauseCorrespondingCount(
     firstClauseResults: [Candidate],
     originalComposingText: ComposingText,
     previewComposingText: ComposingText
@@ -2161,7 +2160,7 @@ private func preferCursorPrefixBoundary(
     )
 }
 
-@MainActor func cursorPrefixFirstClauseCorrespondingCount(
+func cursorPrefixFirstClauseCorrespondingCount(
     firstClauseResults: [Candidate],
     originalComposingText: ComposingText,
     previewComposingText: ComposingText,
@@ -2209,7 +2208,7 @@ private func preferCursorPrefixBoundary(
     return splitBoundary?.correspondingCount ?? fallbackBoundary?.correspondingCount
 }
 
-@MainActor func makeCursorPrefixExactClauseComposingText(
+func makeCursorPrefixExactClauseComposingText(
     prefixComposingText: ComposingText,
     correspondingCount: Int
 ) -> ComposingText {
@@ -2224,7 +2223,7 @@ private func preferCursorPrefixBoundary(
     return clauseComposingText
 }
 
-@MainActor func getOptions(context: String = "") -> ConvertRequestOptions {
+func getOptions(context: String = "") -> ConvertRequestOptions {
     getOptions(
         context: context,
         zenzaiEnabled: effectiveZenzaiRuntimeEnabled(
@@ -2235,7 +2234,7 @@ private func preferCursorPrefixBoundary(
     )
 }
 
-@MainActor func getOptions(
+func getOptions(
     context: String = "",
     zenzaiEnabled: Bool
 ) -> ConvertRequestOptions {
@@ -2266,7 +2265,7 @@ private func preferCursorPrefixBoundary(
     )
 }
 
-@MainActor private func currentRuntimeZenzaiEnabled() -> Bool {
+private func currentRuntimeZenzaiEnabled() -> Bool {
     effectiveZenzaiRuntimeEnabled(
         isConfigured: (config["enable"] as? Bool) ?? false,
         backend: config["backend"] as? String,
@@ -2293,6 +2292,24 @@ func optionsForNormalNBestSupplement(from options: ConvertRequestOptions) -> Con
     return supplementOptions
 }
 
+func optionsForZenzaiConversion(from options: ConvertRequestOptions) -> ConvertRequestOptions {
+    var zenzaiOptions = options
+    zenzaiOptions.requireJapanesePrediction = .disabled
+    zenzaiOptions.requireEnglishPrediction = .disabled
+    return zenzaiOptions
+}
+
+func optionsForNormalNBestSupplementWithPrediction(from options: ConvertRequestOptions) -> ConvertRequestOptions {
+    var supplementOptions = options
+    if supplementOptions.requireJapanesePrediction == .autoMix {
+        supplementOptions.requireJapanesePrediction = .manualMix
+    }
+    if supplementOptions.requireEnglishPrediction == .autoMix {
+        supplementOptions.requireEnglishPrediction = .manualMix
+    }
+    return supplementOptions
+}
+
 private struct ZenzaiDiagnosticSnapshot {
     let configuredEnabled: Bool
     let backend: String
@@ -2302,7 +2319,7 @@ private struct ZenzaiDiagnosticSnapshot {
     let runtimeEnabled: Bool
 }
 
-@MainActor private func zenzaiDiagnosticSnapshot() -> ZenzaiDiagnosticSnapshot {
+private func zenzaiDiagnosticSnapshot() -> ZenzaiDiagnosticSnapshot {
     let configuredEnabled = (config["enable"] as? Bool) ?? false
     let backend = (config["backend"] as? String) ?? "cpu"
     let profile = (config["profile"] as? String) ?? ""
@@ -2336,7 +2353,7 @@ private func sanitizeDiagnosticField(_ value: String, maxLength: Int = 80) -> St
     return String(text.prefix(maxLength))
 }
 
-@MainActor private func zenzaiDiagnosticDetails(
+private func zenzaiDiagnosticDetails(
     snapshot: ZenzaiDiagnosticSnapshot,
     contextLength: Int,
     inputCount: Int,
@@ -2374,7 +2391,13 @@ private func sanitizeDiagnosticField(_ value: String, maxLength: Int = 80) -> St
     return fields.joined(separator: ";")
 }
 
-@MainActor private func makeWarmupComposingText(
+private func zenzaiDiagnosticsEnabled(useZenzai: Bool) -> Bool {
+    serverLogCallbacks.isLogEnabled(level: "DEBUG")
+        || serverLogCallbacks.isPerformanceLogEnabled()
+        || (useZenzai && serverLogCallbacks.isCrashTraceEnabled())
+}
+
+private func makeWarmupComposingText(
     input: String,
     inputStyle: InputStyle
 ) -> ComposingText {
@@ -2383,7 +2406,7 @@ private func sanitizeDiagnosticField(_ value: String, maxLength: Int = 80) -> St
     return warmupComposingText
 }
 
-@MainActor func makeWarmupComposingText(
+func makeWarmupComposingText(
     zenzaiRuntimeEnabled: Bool? = nil,
     inputStyle: InputStyle? = nil
 ) -> ComposingText {
@@ -2396,197 +2419,14 @@ private func sanitizeDiagnosticField(_ value: String, maxLength: Int = 80) -> St
     return makeWarmupComposingText(input: zenzaiWarmupRomanInput, inputStyle: .roman2kana)
 }
 
-private struct WarmupExecutionSnapshot: Sendable {
-    let requestId: UInt64
-    let dictionaryURL: URL
-    let preloadDictionary: Bool
-    let runtimeDirectoryURL: URL
-    let emojiDictionaryURL: URL
-    let zenzaiWeightURL: URL
-    let profile: String
-    let context: String
-    let input: String
-    let useZenzai: Bool
-    let learningCacheBatchCount: Int
-    let learningCacheSlotCount: Int
-    let learningCacheProtectedSlotCount: Int
-    let diagnosticDetails: String
-}
-
-private struct WarmupConverterKey: Equatable {
-    let dictionaryURL: URL
-    let preloadDictionary: Bool
-}
-
-private final class BackgroundWarmupRunner: @unchecked Sendable {
-    private let lock = NSLock()
-    private let queue = DispatchQueue(label: "azookey.server.warmup", qos: .utility)
-    private var isRunning = false
-    private var converterKey: WarmupConverterKey?
-    private var converter: KanaKanjiConverter?
-
-    func schedule(_ snapshot: WarmupExecutionSnapshot) -> Bool {
-        lock.lock()
-        guard !isRunning else {
-            lock.unlock()
-            return false
-        }
-        isRunning = true
-        lock.unlock()
-
-        queue.async { [self, snapshot] in
-            defer {
-                self.lock.lock()
-                self.isRunning = false
-                self.lock.unlock()
-            }
-            self.run(snapshot)
-        }
-        return true
-    }
-
-    private func run(_ snapshot: WarmupExecutionSnapshot) {
-        var warmupComposingText = ComposingText()
-        warmupComposingText.insertAtCursorPosition(
-            snapshot.input,
-            inputStyle: .direct
-        )
-        let options = makeConvertRequestOptions(
-            context: snapshot.context,
-            zenzaiEnabled: snapshot.useZenzai,
-            runtimeDirectoryURL: snapshot.runtimeDirectoryURL,
-            emojiDictionaryURL: snapshot.emojiDictionaryURL,
-            zenzaiWeightURL: snapshot.zenzaiWeightURL,
-            profile: snapshot.profile
-        )
-
-        crashTrace(
-            requestId: snapshot.requestId,
-            operation: "Warmup",
-            stage: "requestCandidates",
-            state: "begin",
-            details: snapshot.diagnosticDetails
-        )
-        serverLog(
-            requestId: snapshot.requestId,
-            "DEBUG",
-            "Warmup: requestCandidates begin \(snapshot.diagnosticDetails)",
-            flush: true
-        )
-
-        let key = WarmupConverterKey(
-            dictionaryURL: snapshot.dictionaryURL,
-            preloadDictionary: snapshot.preloadDictionary
-        )
-        let reusedConverter = converterKey == key && converter != nil
-        performanceLog(
-            requestId: snapshot.requestId,
-            operation: "warmup_resources",
-            stage: "before_request_candidates",
-            elapsedMs: 0,
-            details: "foreground_converter_count=2;background_converter_count=\(converter == nil ? 0 : 1);background_converter_reused=\(reusedConverter);background_preload_dictionary=\(snapshot.preloadDictionary);background_use_zenzai=\(snapshot.useZenzai);learning_cache_batches=\(snapshot.learningCacheBatchCount);learning_cache_slots=\(snapshot.learningCacheSlotCount);learning_cache_protected_slots=\(snapshot.learningCacheProtectedSlotCount)"
-        )
-        if converterKey != key || converter == nil {
-            converter = KanaKanjiConverter(
-                dictionaryURL: snapshot.dictionaryURL,
-                preloadDictionary: snapshot.preloadDictionary
-            )
-            converterKey = key
-        }
-
-        let requestStart = ProcessInfo.processInfo.systemUptime
-        let converted = converter!.requestCandidates(
-            warmupComposingText,
-            options: options
-        )
-        let requestMs = Int((ProcessInfo.processInfo.systemUptime - requestStart) * 1000)
-        if requestMs >= warmupRequestCandidatesWarningMs {
-            serverLog(
-                requestId: snapshot.requestId,
-                "WARN",
-                "Warmup: requestCandidates slow elapsed_ms=\(requestMs);threshold_ms=\(warmupRequestCandidatesWarningMs) \(snapshot.diagnosticDetails)",
-                flush: true
-            )
-        }
-        performanceLog(
-            requestId: snapshot.requestId,
-            operation: "warmup",
-            stage: "request_candidates",
-            elapsedMs: requestMs,
-            details: "candidate_count=\(converted.mainResults.count);foreground_converter_count=2;background_converter_count=1;background_converter_reused=\(reusedConverter);learning_cache_batches=\(snapshot.learningCacheBatchCount);learning_cache_slots=\(snapshot.learningCacheSlotCount);learning_cache_protected_slots=\(snapshot.learningCacheProtectedSlotCount);\(snapshot.diagnosticDetails)"
-        )
-        crashTrace(
-            requestId: snapshot.requestId,
-            operation: "Warmup",
-            stage: "requestCandidates",
-            state: "completed",
-            details: "candidate_count=\(converted.mainResults.count);\(snapshot.diagnosticDetails)"
-        )
-        serverLog(
-            requestId: snapshot.requestId,
-            "DEBUG",
-            "Warmup: requestCandidates returned candidateCount=\(converted.mainResults.count) \(snapshot.diagnosticDetails)"
-        )
-        serverLog(
-            requestId: snapshot.requestId,
-            "DEBUG",
-            "Warmup: completed \(snapshot.diagnosticDetails)"
-        )
-    }
-}
-
-private let backgroundWarmupRunner = BackgroundWarmupRunner()
-
 // InputStyleManager stores custom tables in an unsynchronized process-wide
-// dictionary. Background work must use direct input so it never reads that
-// registry concurrently with a foreground config reload.
-@MainActor func makeBackgroundWarmupComposingText(
+// dictionary. Warmup uses direct input to avoid touching the romaji table registry.
+func makeBackgroundWarmupComposingText(
     zenzaiRuntimeEnabled: Bool
 ) -> ComposingText {
     makeWarmupComposingText(
         input: zenzaiRuntimeEnabled ? "にほんご" : "あ",
         inputStyle: .direct
-    )
-}
-
-@MainActor private func makeBackgroundWarmupSnapshot() -> WarmupExecutionSnapshot {
-    let contextString = (config["context"] as? String) ?? ""
-    let diagnosticSnapshot = zenzaiDiagnosticSnapshot()
-    let warmupComposingText = makeBackgroundWarmupComposingText(
-        zenzaiRuntimeEnabled: diagnosticSnapshot.runtimeEnabled
-    )
-    let input = warmupComposingText.convertTarget
-    let useZenzai = effectiveZenzaiEnabledForCandidates(
-        isConfigured: diagnosticSnapshot.runtimeEnabled,
-        inputCount: warmupComposingText.input.count,
-        hiraganaCount: warmupComposingText.convertTarget.count
-    )
-    configureEngineRuntime(zenzaiEnabled: useZenzai)
-    let diagnosticDetails = zenzaiDiagnosticDetails(
-        snapshot: diagnosticSnapshot,
-        contextLength: contextString.count,
-        inputCount: warmupComposingText.input.count,
-        hiraganaLength: warmupComposingText.convertTarget.count,
-        useZenzai: useZenzai
-    ) + ";warmup_input_style=direct;background=true"
-
-    return WarmupExecutionSnapshot(
-        requestId: currentRequestId,
-        dictionaryURL: converterDictionaryURL,
-        preloadDictionary: backgroundWarmupPreloadsDictionary,
-        runtimeDirectoryURL: converterRuntimeDirectoryURL(),
-        emojiDictionaryURL: execURL
-            .appendingPathComponent("EmojiDictionary")
-            .appendingPathComponent("emoji_all_E15.1.txt"),
-        zenzaiWeightURL: converterModelURL(),
-        profile: (config["profile"] as? String) ?? "",
-        context: contextString,
-        input: input,
-        useZenzai: useZenzai,
-        learningCacheBatchCount: learningCandidateCache.batchCount,
-        learningCacheSlotCount: learningCandidateCache.slotCount,
-        learningCacheProtectedSlotCount: learningCandidateCache.protectedSlotCount,
-        diagnosticDetails: diagnosticDetails
     )
 }
 
@@ -2829,6 +2669,53 @@ func mergeZenzaiMainResultsWithNormalNBest(
     return results
 }
 
+func mergePredictiveSupplementCandidates(
+    exactMerged: [Candidate],
+    predictionResults: [Candidate],
+    hiragana: String,
+    maxPredictions: Int = 3
+) -> [Candidate] {
+    guard maxPredictions > 0, !predictionResults.isEmpty else {
+        return exactMerged
+    }
+    let katakanaHiragana = hiraganaToKatakana(hiragana)
+    var seenTexts = Set(
+        exactMerged.map {
+            constructCandidateString(candidate: $0, hiragana: hiragana)
+        }
+    )
+    var filteredPredictions: [Candidate] = []
+    filteredPredictions.reserveCapacity(min(maxPredictions, predictionResults.count))
+    for candidate in predictionResults {
+        let text = constructCandidateString(candidate: candidate, hiragana: hiragana)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != hiragana, text != katakanaHiragana else {
+            continue
+        }
+        guard seenTexts.insert(text).inserted else {
+            continue
+        }
+        filteredPredictions.append(candidate)
+        if filteredPredictions.count >= maxPredictions {
+            break
+        }
+    }
+    guard !filteredPredictions.isEmpty else {
+        return exactMerged
+    }
+    // Keep all full-span exact conversions (and at least Top1) ahead of predictive
+    // completions, while surfacing predictions before partial sub-clause fragments.
+    let splitIndex = exactMerged.indices.dropFirst().first { index in
+        exactMerged[index].rubyCount < hiragana.count
+    } ?? exactMerged.endIndex
+    var combined: [Candidate] = []
+    combined.reserveCapacity(exactMerged.count + filteredPredictions.count)
+    combined.append(contentsOf: exactMerged[..<splitIndex])
+    combined.append(contentsOf: filteredPredictions)
+    combined.append(contentsOf: exactMerged[splitIndex...])
+    return combined
+}
+
 func cursorPrefixBoundaryFirstClauseResults(
     zenzaiFirstClauseResults: [Candidate],
     mergedFirstClauseResults: [Candidate]
@@ -2836,7 +2723,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     zenzaiFirstClauseResults.isEmpty ? mergedFirstClauseResults : zenzaiFirstClauseResults
 }
 
-@MainActor private func requestNormalNBestSupplementCandidates(
+private func requestNormalNBestSupplementCandidates(
     inputData: ComposingText,
     options: ConvertRequestOptions,
     operation: String,
@@ -2863,7 +2750,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("LoadConfig")
-@MainActor public func load_config() {
+public func load_config() {
     let loadedSettingsPath = settingsPath()
     var loadedSettings: AppSettings?
     var settingsLoadError: Error?
@@ -3037,7 +2924,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("Initialize")
-@MainActor public func initialize(
+public func initialize(
     path: UnsafePointer<CChar>,
     use_zenzai: Bool
 ) {
@@ -3065,23 +2952,23 @@ func cursorPrefixBoundaryFirstClauseResults(
 
     load_config()
 
-    let diagnosticSnapshot = zenzaiDiagnosticSnapshot()
+    // Warm dictionary tables quickly without blocking Initialize on cold Zenzai GGUF load;
+    // startup warmup() warms the foreground converter once after the IPC pipe is open.
     composingText = makeWarmupComposingText(
-        zenzaiRuntimeEnabled: diagnosticSnapshot.runtimeEnabled
+        zenzaiRuntimeEnabled: false
     )
-    let useZenzaiForWarmup = effectiveZenzaiEnabledForCandidates(
-        isConfigured: diagnosticSnapshot.runtimeEnabled,
-        inputCount: composingText.input.count,
-        hiraganaCount: composingText.convertTarget.count
-    )
-    let diagnosticDetails = zenzaiDiagnosticDetails(
-        snapshot: diagnosticSnapshot,
-        contextLength: 0,
-        inputCount: composingText.input.count,
-        hiraganaLength: composingText.convertTarget.count,
-        useZenzai: useZenzaiForWarmup
-    )
-    let options = getOptions(zenzaiEnabled: useZenzaiForWarmup)
+    let diagnosticDetails = (serverLogCallbacks.isLogEnabled(level: "DEBUG")
+        || serverLogCallbacks.isLogEnabled(level: "INFO")
+        || serverLogCallbacks.isCrashTraceEnabled())
+        ? zenzaiDiagnosticDetails(
+            snapshot: zenzaiDiagnosticSnapshot(),
+            contextLength: 0,
+            inputCount: composingText.input.count,
+            hiraganaLength: composingText.convertTarget.count,
+            useZenzai: false
+        )
+        : ""
+    let options = getOptions(zenzaiEnabled: false)
     crashTrace(operation: "Initialize", stage: "requestCandidates", state: "begin", details: diagnosticDetails)
     serverLog("DEBUG", "Initialize: requestCandidates begin \(diagnosticDetails)", flush: true)
     let converted = converter.requestCandidates(
@@ -3099,37 +2986,82 @@ func cursorPrefixBoundaryFirstClauseResults(
     composingTextSnapshots.removeAll()
     serverLog(
         "INFO",
-        "Initialize: completed inputStyle=\(String(describing: currentInputStyle)) warmupUseZenzai=\(useZenzaiForWarmup) \(diagnosticDetails)"
+        "Initialize: completed inputStyle=\(String(describing: currentInputStyle)) warmupUseZenzai=false \(diagnosticDetails)"
     )
 }
 
 @_silgen_name("SetRequestId")
-@MainActor public func set_request_id(_ requestID: UInt64) {
+public func set_request_id(_ requestID: UInt64) {
     currentRequestId = requestID
 }
 
 @_silgen_name("Warmup")
-@MainActor public func warmup() -> Bool {
-    let snapshot = makeBackgroundWarmupSnapshot()
-    let scheduled = backgroundWarmupRunner.schedule(snapshot)
-    if scheduled {
-        serverLog("DEBUG", "Warmup: scheduled \(snapshot.diagnosticDetails)")
-    } else {
+public func warmup() -> Bool {
+    guard composingText.input.isEmpty else {
+        serverLog("DEBUG", "Warmup: skipped reason=active_composition")
+        return false
+    }
+    let diagnosticSnapshot = zenzaiDiagnosticSnapshot()
+    let warmupComposing = makeBackgroundWarmupComposingText(
+        zenzaiRuntimeEnabled: diagnosticSnapshot.runtimeEnabled
+    )
+    let useZenzai = effectiveZenzaiEnabledForCandidates(
+        isConfigured: diagnosticSnapshot.runtimeEnabled,
+        inputCount: warmupComposing.input.count,
+        hiraganaCount: warmupComposing.convertTarget.count
+    )
+    configureEngineRuntime(zenzaiEnabled: useZenzai)
+    let contextString = (config["context"] as? String) ?? ""
+    let options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
+    var cachedDetails: String?
+    let details: () -> String = {
+        if let cachedDetails {
+            return cachedDetails
+        }
+        let built = zenzaiDiagnosticDetails(
+            snapshot: diagnosticSnapshot,
+            contextLength: contextString.count,
+            inputCount: warmupComposing.input.count,
+            hiraganaLength: warmupComposing.convertTarget.count,
+            useZenzai: useZenzai
+        ) + ";warmup_input_style=direct"
+        cachedDetails = built
+        return built
+    }
+    serverLog("DEBUG", "Warmup: requestCandidates begin \(details())", flush: true)
+    let requestStart = performanceNow()
+    let converted = converter.requestCandidates(
+        warmupComposing,
+        options: options
+    )
+    let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
+    if requestMs >= warmupRequestCandidatesWarningMs {
         serverLog(
-            "DEBUG",
-            "Warmup: skipped reason=background_warmup_in_progress \(snapshot.diagnosticDetails)"
+            "WARN",
+            "Warmup: requestCandidates slow elapsed_ms=\(requestMs);threshold_ms=\(warmupRequestCandidatesWarningMs) \(details())",
+            flush: true
         )
     }
-    return scheduled
+    performanceLog(
+        operation: "warmup",
+        stage: "request_candidates",
+        elapsedMs: requestMs,
+        details: "candidate_count=\(converted.mainResults.count);\(details())"
+    )
+    serverLog(
+        "DEBUG",
+        "Warmup: completed candidateCount=\(converted.mainResults.count) \(details())"
+    )
+    return true
 }
 
 @_silgen_name("HasActiveComposition")
-@MainActor public func has_active_composition() -> Bool {
+public func has_active_composition() -> Bool {
     !composingText.input.isEmpty
 }
 
 @_silgen_name("InferReconversionReadings")
-@MainActor public func infer_reconversion_readings(
+public func infer_reconversion_readings(
     surface: UnsafePointer<CChar>
 ) -> UnsafeMutablePointer<CChar>? {
     let surfaceString = String(cString: surface)
@@ -3152,7 +3084,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("AppendText")
-@MainActor public func append_text(
+public func append_text(
     input: UnsafePointer<CChar>,
     cursorPtr: UnsafeMutablePointer<CInt>
 ) -> UnsafeMutablePointer<CChar> {
@@ -3170,7 +3102,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("AppendTextDirect")
-@MainActor public func append_text_direct(
+public func append_text_direct(
     input: UnsafePointer<CChar>,
     cursorPtr: UnsafeMutablePointer<CInt>
 ) -> UnsafeMutablePointer<CChar> {
@@ -3188,7 +3120,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("RemoveText")
-@MainActor public func remove_text(
+public func remove_text(
     cursorPtr: UnsafeMutablePointer<CInt>
 ) -> UnsafeMutablePointer<CChar> {
     discardPinnedLearningCandidatesBeforeCompositionEdit()
@@ -3204,7 +3136,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("MoveCursor")
-@MainActor public func move_cursor(
+public func move_cursor(
     offset: Int32,
     cursorPtr: UnsafeMutablePointer<CInt>
 ) -> UnsafeMutablePointer<CChar> {
@@ -3218,12 +3150,12 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("GetCursorPosition")
-@MainActor public func get_cursor_position() -> CInt {
+public func get_cursor_position() -> CInt {
     CInt(clamping: composingText.convertTargetCursorPosition)
 }
 
 @_silgen_name("GetRawInput")
-@MainActor public func get_raw_input() -> UnsafeMutablePointer<CChar>? {
+public func get_raw_input() -> UnsafeMutablePointer<CChar>? {
     let characters = composingText.input.compactMap(inputCharacter)
     guard characters.count == composingText.input.count else {
         serverLog(
@@ -3235,7 +3167,7 @@ func cursorPrefixBoundaryFirstClauseResults(
     return _strdup(String(characters))
 }
 
-@MainActor private func clauseAdjustmentBoundaryMap(
+private func clauseAdjustmentBoundaryMap(
     composingText: ComposingText
 ) -> [Int: Int] {
     var boundaries = composingText.inputIndexToSurfaceIndexMap()
@@ -3284,7 +3216,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("AdjustClauseBoundary")
-@MainActor public func adjust_clause_boundary(
+public func adjust_clause_boundary(
     currentInputCount: Int32,
     direction: Int32,
     expectedRawInput: UnsafePointer<CChar>? = nil,
@@ -3379,14 +3311,14 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("ClearComposingTextSnapshots")
-@MainActor public func clear_composing_text_snapshots() {
+public func clear_composing_text_snapshots() {
     composingTextSnapshots.removeAll()
     learningCandidateCache.removeAllPins()
     serverLog("DEBUG", "ClearComposingTextSnapshots: completed")
 }
 
 @_silgen_name("PushComposingTextSnapshot")
-@MainActor public func push_composing_text_snapshot(selectedCandidateId: UInt64) {
+public func push_composing_text_snapshot(selectedCandidateId: UInt64) {
     if selectedCandidateId != 0 && !pin_learning_candidate(candidateId: selectedCandidateId) {
         serverLog(
             "DEBUG",
@@ -3401,7 +3333,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("PopComposingTextSnapshot")
-@MainActor public func pop_composing_text_snapshot(selectedCandidateId: UInt64) {
+public func pop_composing_text_snapshot(selectedCandidateId: UInt64) {
     if selectedCandidateId != 0 && !pin_learning_candidate(candidateId: selectedCandidateId) {
         serverLog(
             "DEBUG",
@@ -3418,7 +3350,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("ClearText")
-@MainActor public func clear_text() {
+public func clear_text() {
     serverLog("DEBUG", "ClearText: start")
     converter.stopComposition()
     normalNBestSupplementConverter.stopComposition()
@@ -3430,7 +3362,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("CommitLearningCandidate")
-@MainActor public func commit_learning_candidate(
+public func commit_learning_candidate(
     candidateId: UInt64,
     commitKind: Int32
 ) -> Bool {
@@ -3463,7 +3395,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("CommitLearningCandidates")
-@MainActor public func commit_learning_candidates(
+public func commit_learning_candidates(
     candidateIds: UnsafePointer<UInt64>?,
     commitKinds: UnsafePointer<Int32>?,
     count: Int32
@@ -3521,7 +3453,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 }
 
 @_silgen_name("ResetLearningMemory")
-@MainActor public func reset_learning_memory() -> Bool {
+public func reset_learning_memory() -> Bool {
     let resetDirectory = resetLearningMemoryDirectory()
     converter.resetMemory()
     normalNBestSupplementConverter.resetMemory()
@@ -3538,7 +3470,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 /// Returns false when the id is unknown, was not a learning target, or the word
 /// was absent from both stores.
 @_silgen_name("ForgetLearningCandidate")
-@MainActor public func forget_learning_candidate(candidateId: UInt64) -> Bool {
+public func forget_learning_candidate(candidateId: UInt64) -> Bool {
     // Validate before consuming. Consuming marks the id used for both commit and
     // pin, so a refusal must not happen after it: a candidate that is skipped
     // because of its flags or the current learning mode has to stay selectable.
@@ -3586,7 +3518,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 /// This applies the same guards and consumes the id in the in-memory cache, then
 /// returns before any store is written.
 @_silgen_name("ValidateLearningCandidateDeletion")
-@MainActor public func validate_learning_candidate_deletion(candidateId: UInt64) -> Bool {
+public func validate_learning_candidate_deletion(candidateId: UInt64) -> Bool {
     guard let candidate = learningCandidate(candidateId) else {
         serverLog("DEBUG", "ValidateLearningCandidateDeletion: unknown candidateId=\(candidateId)")
         return false
@@ -3610,7 +3542,7 @@ func cursorPrefixBoundaryFirstClauseResults(
 
 /// Per-store learning counts so a host can confirm a reset instead of trusting a bool.
 @_silgen_name("GetLearningStats")
-@MainActor public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
+public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
     let memoryURL = currentLearningMemoryDirectoryURL
     // A `.pause` marker means the long-term trie failed its atomic update and the
     // engine fell back to the `.2` copy; learning stays off until it is cleared.
@@ -3711,16 +3643,16 @@ public func free_candidate_list(
 }
 
 @_silgen_name("GetComposedText")
-@MainActor public func get_composed_text(lengthPtr: UnsafeMutablePointer<CInt>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+public func get_composed_text(lengthPtr: UnsafeMutablePointer<CInt>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
     get_composed_text_impl(lengthPtr: lengthPtr, allowZenzai: true)
 }
 
 @_silgen_name("GetComposedTextForReconversion")
-@MainActor public func get_composed_text_for_reconversion(lengthPtr: UnsafeMutablePointer<CInt>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+public func get_composed_text_for_reconversion(lengthPtr: UnsafeMutablePointer<CInt>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
     get_composed_text_impl(lengthPtr: lengthPtr, allowZenzai: false)
 }
 
-@MainActor private func get_composed_text_impl(
+private func get_composed_text_impl(
     lengthPtr: UnsafeMutablePointer<CInt>,
     allowZenzai: Bool
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
@@ -3779,18 +3711,21 @@ public func free_candidate_list(
             hiraganaCount: originalHiragana.count
         )
     }
-    var diagnosticDetails = zenzaiDiagnosticDetails(
-        snapshot: diagnosticSnapshot,
-        contextLength: contextString.count,
-        inputCount: composingText.input.count,
-        hiraganaLength: originalHiragana.count,
-        previewHiraganaLength: previewHiragana.count,
-        useZenzai: useZenzai,
-        syntheticEndOfText: previewState.syntheticEndOfText,
-        continuation: continuationRequest?.continuation,
-        combinedHiraganaLength: continuationRequest?.combinedComposingText.convertTarget.count
-    )
-    if automaticContinuation != nil {
+    let diagnosticsEnabled = zenzaiDiagnosticsEnabled(useZenzai: useZenzai)
+    var diagnosticDetails = diagnosticsEnabled
+        ? zenzaiDiagnosticDetails(
+            snapshot: diagnosticSnapshot,
+            contextLength: contextString.count,
+            inputCount: composingText.input.count,
+            hiraganaLength: originalHiragana.count,
+            previewHiraganaLength: previewHiragana.count,
+            useZenzai: useZenzai,
+            syntheticEndOfText: previewState.syntheticEndOfText,
+            continuation: continuationRequest?.continuation,
+            combinedHiraganaLength: continuationRequest?.combinedComposingText.convertTarget.count
+        )
+        : ""
+    if diagnosticsEnabled && automaticContinuation != nil {
         diagnosticDetails += ";continuation_auto=true"
     }
     serverLog(
@@ -3817,9 +3752,10 @@ public func free_candidate_list(
             details: diagnosticDetails
         )
     }
+    let zenzaiOptions = useZenzai ? optionsForZenzaiConversion(from: options) : options
     let normalNBestConverted: ConversionResult?
     if useZenzai {
-        let supplementOptions = optionsForNormalNBestSupplement(from: options)
+        let supplementOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
         normalNBestConverted = requestNormalNBestSupplementCandidates(
             inputData: previewComposingText,
             options: supplementOptions,
@@ -3830,7 +3766,7 @@ public func free_candidate_list(
         normalNBestConverted = nil
     }
     let requestStart = performanceNow()
-    let converted = converter.requestCandidates(requestComposingText, options: options)
+    let converted = converter.requestCandidates(requestComposingText, options: zenzaiOptions)
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: "get_composed_text",
@@ -3870,13 +3806,16 @@ public func free_candidate_list(
             if hasTrailingUncompletedRoman(in: previewComposingText) {
                 fallbackOptions.requireJapanesePrediction = .disabled
             }
+            if useZenzai {
+                fallbackOptions = optionsForZenzaiConversion(from: fallbackOptions)
+            }
             let fallbackStart = performanceNow()
             let fallbackConverted = converter.requestCandidates(
                 previewComposingText,
                 options: fallbackOptions
             )
             let fallbackMs = elapsedPerformanceMilliseconds(since: fallbackStart)
-            let fallbackDetails = "\(diagnosticDetails);continuation_fallback_context=raw"
+            let fallbackDetails = diagnosticsEnabled ? "\(diagnosticDetails);continuation_fallback_context=raw" : ""
             performanceLog(
                 operation: "get_composed_text",
                 stage: "request_continuation_fallback",
@@ -3897,15 +3836,24 @@ public func free_candidate_list(
             elapsedMs: sliceMs,
             details: "zenzai_raw_candidate_count=\(rawZenzaiCandidateCount);continuation_sliced_count=\(continuationSlicedCount);continuation_fallback=\(continuationFallback);\(diagnosticDetails)"
         )
-        diagnosticDetails += ";zenzai_raw_candidate_count=\(rawZenzaiCandidateCount);continuation_sliced_count=\(continuationSlicedCount);continuation_fallback=\(continuationFallback)"
+        if diagnosticsEnabled {
+            diagnosticDetails += ";zenzai_raw_candidate_count=\(rawZenzaiCandidateCount);continuation_sliced_count=\(continuationSlicedCount);continuation_fallback=\(continuationFallback)"
+        }
     }
-    let mergedMainResults = normalNBestConverted.map {
+    let mergedExactResults = normalNBestConverted.map {
         mergeZenzaiMainResultsWithNormalNBest(
             zenzaiResults: zenzaiMainResults,
             normalNBestResults: $0.mainResults,
             hiragana: previewHiragana
         )
     } ?? zenzaiMainResults
+    let mergedMainResults = normalNBestConverted.map {
+        mergePredictiveSupplementCandidates(
+            exactMerged: mergedExactResults,
+            predictionResults: $0.predictionResults,
+            hiragana: previewHiragana
+        )
+    } ?? mergedExactResults
     let rawMainResults = prioritizeLearningSelectionOverrides(
         mergedMainResults,
         ruby: previewHiragana,
@@ -4024,7 +3972,7 @@ public func free_candidate_list(
 }
 
 @_silgen_name("GetComposedTextForCursorPrefix")
-@MainActor public func get_composed_text_for_cursor_prefix(
+public func get_composed_text_for_cursor_prefix(
     requiredInputCount: Int32,
     lengthPtr: UnsafeMutablePointer<CInt>
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
@@ -4057,15 +4005,18 @@ public func free_candidate_list(
         inputCount: prefixComposingText.input.count,
         hiraganaCount: prefixHiragana.count
     )
-    let diagnosticDetails = zenzaiDiagnosticDetails(
-        snapshot: diagnosticSnapshot,
-        contextLength: contextString.count,
-        inputCount: prefixComposingText.input.count,
-        hiraganaLength: prefixHiragana.count,
-        previewHiraganaLength: previewPrefixHiragana.count,
-        useZenzai: useZenzai,
-        syntheticEndOfText: previewState.syntheticEndOfText
-    )
+    let diagnosticsEnabled = zenzaiDiagnosticsEnabled(useZenzai: useZenzai)
+    let diagnosticDetails = diagnosticsEnabled
+        ? zenzaiDiagnosticDetails(
+            snapshot: diagnosticSnapshot,
+            contextLength: contextString.count,
+            inputCount: prefixComposingText.input.count,
+            hiraganaLength: prefixHiragana.count,
+            previewHiraganaLength: previewPrefixHiragana.count,
+            useZenzai: useZenzai,
+            syntheticEndOfText: previewState.syntheticEndOfText
+        )
+        : ""
     serverLog(
         "DEBUG",
         "GetComposedTextForCursorPrefix: start suffix_len=\(suffixAfterCursor.count);\(diagnosticDetails)"
@@ -4091,12 +4042,13 @@ public func free_candidate_list(
         )
     }
     let totalStart = performanceNow()
+    let cursorPrefixZenzaiOptions = useZenzai ? optionsForZenzaiConversion(from: options) : options
+    let cursorPrefixSupplementOptions = optionsForNormalNBestSupplement(from: options)
     let normalNBestConverted: ConversionResult?
     if useZenzai {
-        let supplementOptions = optionsForNormalNBestSupplement(from: options)
         normalNBestConverted = requestNormalNBestSupplementCandidates(
             inputData: previewPrefixComposingText,
-            options: supplementOptions,
+            options: cursorPrefixSupplementOptions,
             operation: "get_composed_text_for_cursor_prefix",
             diagnosticDetails: "suffix_len=\(suffixAfterCursor.count);\(diagnosticDetails)"
         )
@@ -4104,7 +4056,7 @@ public func free_candidate_list(
         normalNBestConverted = nil
     }
     let requestStart = performanceNow()
-    let converted = converter.requestCandidates(previewPrefixComposingText, options: options)
+    let converted = converter.requestCandidates(previewPrefixComposingText, options: cursorPrefixZenzaiOptions)
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: "get_composed_text_for_cursor_prefix",
@@ -4179,15 +4131,17 @@ public func free_candidate_list(
         let exactClausePreviewState = makeCandidatePreviewComposingText(
             from: exactClauseComposingText
         )
-        let exactClauseDiagnosticDetails = zenzaiDiagnosticDetails(
-            snapshot: diagnosticSnapshot,
-            contextLength: contextString.count,
-            inputCount: exactClauseComposingText.input.count,
-            hiraganaLength: exactClauseComposingText.convertTarget.count,
-            previewHiraganaLength: exactClausePreviewState.composingText.convertTarget.count,
-            useZenzai: useZenzai,
-            syntheticEndOfText: exactClausePreviewState.syntheticEndOfText
-        )
+        let exactClauseDiagnosticDetails = diagnosticsEnabled
+            ? zenzaiDiagnosticDetails(
+                snapshot: diagnosticSnapshot,
+                contextLength: contextString.count,
+                inputCount: exactClauseComposingText.input.count,
+                hiraganaLength: exactClauseComposingText.convertTarget.count,
+                previewHiraganaLength: exactClausePreviewState.composingText.convertTarget.count,
+                useZenzai: useZenzai,
+                syntheticEndOfText: exactClausePreviewState.syntheticEndOfText
+            )
+            : ""
         candidateCrashTrace(
             useZenzai: useZenzai,
             operation: "GetComposedTextForCursorPrefix",
@@ -4203,7 +4157,7 @@ public func free_candidate_list(
         if useZenzai {
             exactClauseNormalNBestConverted = requestNormalNBestSupplementCandidates(
                 inputData: exactClausePreviewState.composingText,
-                options: options,
+                options: cursorPrefixSupplementOptions,
                 operation: "get_composed_text_for_cursor_prefix_exact_clause",
                 diagnosticDetails: "corresponding_count=\(firstClauseCorrespondingCount);\(exactClauseDiagnosticDetails)"
             )
@@ -4213,7 +4167,7 @@ public func free_candidate_list(
         let exactClauseRequestStart = performanceNow()
         let exactClauseConverted = converter.requestCandidates(
             exactClausePreviewState.composingText,
-            options: options
+            options: cursorPrefixZenzaiOptions
         )
         exactClauseResults = exactClauseNormalNBestConverted.map {
             mergeZenzaiMainResultsWithNormalNBest(
@@ -4373,7 +4327,7 @@ public func free_candidate_list(
 }
 
 @_silgen_name("ShrinkText")
-@MainActor public func shrink_text(
+public func shrink_text(
     offset: Int32
 ) -> UnsafeMutablePointer<CChar>  {
     discardPinnedLearningCandidatesBeforeCompositionEdit()
@@ -4388,7 +4342,7 @@ public func free_candidate_list(
 }
 
 @_silgen_name("SetContext")
-@MainActor public func set_context(
+public func set_context(
     context: UnsafePointer<CChar>
 ) {
     let contextString = String(cString: context)

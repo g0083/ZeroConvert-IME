@@ -570,10 +570,12 @@ pub fn create_clipboard_webview(
     window: &Window,
     web_context: &mut WebContext,
     proxy: EventLoopProxy<UserEvent>,
+    theme_script: &str,
 ) -> Result<WebView> {
     let html = clipboard_html();
     let webview = WebViewBuilder::with_web_context(web_context)
         .with_transparent(true)
+        .with_initialization_script(theme_script)
         .with_html(html)
         .with_ipc_handler(move |message| {
             let msg = message.body();
@@ -649,7 +651,7 @@ pub fn start_clipboard_listener(
 
         let _ = AddClipboardFormatListener(hwnd);
 
-        let config = shared::AppConfig::read().unwrap_or_default();
+        let config = shared::AppConfig::read_cached().unwrap_or_default();
         let retention_hours = config.clipboard.retention_hours;
         {
             let mut s = state.lock().unwrap();
@@ -673,8 +675,10 @@ pub fn start_clipboard_listener(
                 }
                 // Copy-translation candidate handling (best-effort, bounded).
                 if !is_self_clipboard_write(0) {
-                    let config = shared::AppConfig::read().unwrap_or_default();
-                    if config.general.experimental_translation {
+                    let config = shared::AppConfig::read_cached().unwrap_or_default();
+                    if config.general.experimental_translation
+                        && config.general.copy_translation_popup
+                    {
                         if let Some(text) = read_clipboard_text() {
                             if !text.trim().is_empty() {
                                 let fg = GetForegroundWindow();
@@ -757,24 +761,43 @@ html, body {
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: #FFFFFF;
-    border: 1px solid rgba(0, 0, 0, 0.12);
+    background: var(--ime-surface, #FFFFFF);
+    border: 1px solid var(--ime-border, rgba(0, 0, 0, 0.12));
     border-radius: 12px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
     overflow: hidden;
-    color: #1E293B;
+    color: var(--ime-text, #1E293B);
 }
 .header {
-    padding: 10px 14px;
+    padding: 8px 12px;
     font-weight: 600;
     font-size: 12px;
     letter-spacing: 0.02em;
-    color: #64748B;
-    background: #F8FAFC;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    color: var(--ime-muted, #64748B);
+    background: var(--ime-background, #F8FAFC);
+    border-bottom: 1px solid var(--ime-border, rgba(0, 0, 0, 0.08));
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 8px;
+}
+.search-input {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--ime-border, rgba(0, 0, 0, 0.14));
+    background: var(--ime-surface, #FFFFFF);
+    color: var(--ime-text, #1E293B);
+    font-size: 12px;
+    outline: none;
+    user-select: text;
+}
+.search-input:focus {
+    border-color: var(--ime-accent, #2563EB);
+}
+.search-input::placeholder {
+    color: var(--ime-muted, #94A3B8);
 }
 .list {
     flex: 1;
@@ -788,13 +811,13 @@ html, body {
     width: 5px;
 }
 .list::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.16);
+    background: var(--ime-border, rgba(0, 0, 0, 0.16));
     border-radius: 4px;
 }
 .section-title {
     font-size: 11px;
     font-weight: 700;
-    color: #94A3B8;
+    color: var(--ime-muted, #94A3B8);
     padding: 6px 8px 3px 8px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -810,12 +833,13 @@ html, body {
     font-size: 13px;
 }
 .item:hover {
-    background: #F1F5F9;
+    background: var(--ime-selection, #F1F5F9);
 }
 .item.selected {
-    background: #E2E8F0;
-    color: #0F172A;
+    background: var(--ime-selection, #E2E8F0);
+    color: var(--ime-text, #0F172A);
     font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--ime-border, rgba(0, 0, 0, 0.08));
 }
 .badge {
     font-size: 11px;
@@ -832,16 +856,51 @@ html, body {
     background: #E0E7FF;
     color: #4338CA;
 }
+.item-meta {
+    font-size: 10px;
+    color: var(--ime-muted, #94A3B8);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.preview-pane {
+    padding: 7px 12px;
+    background: var(--ime-background, #F8FAFC);
+    border-top: 1px solid var(--ime-border, rgba(0, 0, 0, 0.08));
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 76px;
+}
+.preview-pane[hidden] {
+    display: none;
+}
+.preview-text {
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: var(--ime-text, #1E293B);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
+}
+.preview-meta {
+    font-size: 10px;
+    color: var(--ime-muted, #64748B);
+    display: flex;
+    justify-content: space-between;
+}
 .index-num {
     font-size: 11px;
     font-weight: 600;
-    color: #64748B;
+    color: var(--ime-muted, #64748B);
     width: 16px;
     text-align: center;
     flex-shrink: 0;
 }
 .item.selected .index-num {
-    color: #0F172A;
+    color: var(--ime-accent, #0F172A);
 }
 .content {
     flex: 1;
@@ -919,11 +978,11 @@ html, body {
     cursor: pointer;
 }
 .footer {
-    padding: 8px 12px;
-    background: #F8FAFC;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 7px 12px;
+    background: var(--ime-background, #F8FAFC);
+    border-top: 1px solid var(--ime-border, rgba(0, 0, 0, 0.08));
     font-size: 11px;
-    color: #64748B;
+    color: var(--ime-muted, #64748B);
     display: flex;
     justify-content: space-between;
 }
@@ -933,36 +992,15 @@ html, body {
 }
 .key {
     font-weight: 600;
-    color: #475569;
+    color: var(--ime-text, #475569);
 }
 .empty-msg {
     padding: 30px 10px;
     text-align: center;
-    color: #94A3B8;
+    color: var(--ime-muted, #94A3B8);
 }
 
 @media (prefers-color-scheme: dark) {
-    .container {
-        background: #181A20;
-        border-color: rgba(255, 255, 255, 0.12);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-        color: #F1F5F9;
-    }
-    .header {
-        background: #13151B;
-        border-color: rgba(255, 255, 255, 0.08);
-        color: #94A3B8;
-    }
-    .list::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.16);
-    }
-    .item:hover {
-        background: #262A34;
-    }
-    .item.selected {
-        background: #333846;
-        color: #FFFFFF;
-    }
     .badge-pin {
         background: #78350F;
         color: #FDE68A;
@@ -972,32 +1010,24 @@ html, body {
         color: #C7D2FE;
     }
     .btn-icon {
-        color: #94A3B8;
+        color: var(--ime-muted, #94A3B8);
     }
     .btn-icon:hover {
         background: rgba(255, 255, 255, 0.12);
-        color: #FFFFFF;
+        color: var(--ime-text, #FFFFFF);
     }
     .edit-input-row {
-        background: #1E2129;
-        border-color: #60A5FA;
+        background: var(--ime-background, #1E2129);
+        border-color: var(--ime-accent, #60A5FA);
     }
     .edit-input {
-        background: #13151B;
-        border-color: #475569;
-        color: #FFFFFF;
+        background: var(--ime-surface, #13151B);
+        border-color: var(--ime-border, #475569);
+        color: var(--ime-text, #FFFFFF);
     }
     .btn-cancel {
-        background: #334155;
-        color: #E2E8F0;
-    }
-    .footer {
-        background: #13151B;
-        border-color: rgba(255, 255, 255, 0.08);
-        color: #94A3B8;
-    }
-    .key {
-        color: #CBD5E1;
+        background: var(--ime-selection, #334155);
+        color: var(--ime-text, #E2E8F0);
     }
 }
 </style>
@@ -1005,15 +1035,21 @@ html, body {
 <body>
 <div class="container">
     <div class="header">
-        <span>クリップボード履歴</span>
-        <span id="item-count" style="font-weight: normal; font-size: 11px;">0件</span>
+        <span>履歴</span>
+        <input id="search-input" class="search-input" type="search" placeholder="検索 (/)..." autocomplete="off">
+        <span id="item-count" style="font-weight: normal; font-size: 11px; white-space: nowrap;">0件</span>
     </div>
     <div class="list" id="item-list">
         <div class="empty-msg">履歴はありません</div>
     </div>
+    <div class="preview-pane" id="preview-pane" hidden>
+        <div class="preview-text" id="preview-text"></div>
+        <div class="preview-meta" id="preview-meta"></div>
+    </div>
     <div class="footer">
         <div class="key-guide">
-            <span><span class="key">Space / ↓</span> 次</span>
+            <span><span class="key">/</span> 検索</span>
+            <span><span class="key">↓↑</span> 選択</span>
             <span><span class="key">Enter</span> 貼付</span>
             <span><span class="key">E</span> 編集</span>
             <span><span class="key">P</span> 固定</span>
@@ -1027,6 +1063,7 @@ html, body {
 
 <script>
 let items = [];
+let searchQuery = "";
 let selectedIndex = 0;
 let editingId = null;
 
@@ -1034,24 +1071,72 @@ const pinIconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" 
 const editIconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 const trashIconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 
+function visibleItems() {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((item) => {
+        if (item.text) return item.text.toLowerCase().includes(q);
+        return "画像 image".includes(q);
+    });
+}
+
+function formatRelativeTime(ts) {
+    if (!ts) return "";
+    const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (diffSec < 60) return "たった今";
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + "分前";
+    return Math.floor(diffSec / 3600) + "時間前";
+}
+
+function updatePreview(filtered) {
+    const pane = document.getElementById("preview-pane");
+    const textEl = document.getElementById("preview-text");
+    const metaEl = document.getElementById("preview-meta");
+    if (!pane || !textEl || !metaEl) return;
+    if (editingId !== null || filtered.length === 0 || selectedIndex < 0 || selectedIndex >= filtered.length) {
+        pane.hidden = true;
+        return;
+    }
+    const item = filtered[selectedIndex];
+    if (item.text) {
+        const chars = Array.from(item.text).length;
+        const lines = item.text.split(/\r?\n/).length;
+        textEl.textContent = item.text;
+        metaEl.innerHTML = `<span>${chars} 文字 · ${lines} 行</span><span>${escapeHtml(formatRelativeTime(item.timestamp))}</span>`;
+        pane.hidden = false;
+    } else if (item.image_dims) {
+        textEl.textContent = `画像 (${item.image_dims[0]} × ${item.image_dims[1]} px)`;
+        metaEl.innerHTML = `<span>画像データ</span><span>${escapeHtml(formatRelativeTime(item.timestamp))}</span>`;
+        pane.hidden = false;
+    } else {
+        pane.hidden = true;
+    }
+}
+
 function render() {
     const listEl = document.getElementById("item-list");
     const countEl = document.getElementById("item-count");
-    countEl.textContent = items.length + "件";
+    const filtered = visibleItems();
+    countEl.textContent = searchQuery.trim()
+        ? `${filtered.length}/${items.length}件`
+        : `${items.length}件`;
 
-    if (items.length === 0) {
-        listEl.innerHTML = '<div class="empty-msg">履歴はありません</div>';
+    if (filtered.length === 0) {
+        listEl.innerHTML = searchQuery.trim()
+            ? '<div class="empty-msg">一致する履歴はありません</div>'
+            : '<div class="empty-msg">履歴はありません</div>';
+        updatePreview(filtered);
         return;
     }
 
     if (selectedIndex < 0) selectedIndex = 0;
-    if (selectedIndex >= items.length) selectedIndex = items.length - 1;
+    if (selectedIndex >= filtered.length) selectedIndex = filtered.length - 1;
 
     let html = "";
     let inPinned = false;
     let inRecent = false;
 
-    items.forEach((item, idx) => {
+    filtered.forEach((item, idx) => {
         if (item.pinned && !inPinned) {
             html += '<div class="section-title">固定</div>';
             inPinned = true;
@@ -1077,6 +1162,7 @@ function render() {
 
         const numDisplay = (idx < 9) ? (idx + 1) : "";
         let contentHtml = "";
+        let metaHtml = "";
 
         if (item.image_bmp_base64) {
             const dims = item.image_dims ? `${item.image_dims[0]}×${item.image_dims[1]}` : "";
@@ -1086,8 +1172,11 @@ function render() {
                 <span class="content">${dims}</span>
             `;
         } else {
-            const preview = (item.text || "").replace(/\r?\n/g, " ");
+            const rawText = item.text || "";
+            const preview = rawText.replace(/\r?\n/g, " ");
+            const chars = Array.from(rawText).length;
             contentHtml = `<span class="content">${escapeHtml(preview)}</span>`;
+            metaHtml = `<span class="item-meta">${chars}文字</span>`;
         }
 
         const pinBadge = item.pinned ? '<span class="badge badge-pin">[固定]</span>' : "";
@@ -1098,6 +1187,7 @@ function render() {
             <span class="index-num">${numDisplay}</span>
             ${pinBadge}
             ${contentHtml}
+            ${metaHtml}
             <div class="actions">
                 ${editBtn}
                 <button class="btn-icon" title="固定切替 (P)" onclick="togglePin(${item.id}, event)">${pinIconSvg}</button>
@@ -1107,6 +1197,7 @@ function render() {
     });
 
     listEl.innerHTML = html;
+    updatePreview(filtered);
 
     if (editingId !== null) {
         const input = document.getElementById("edit-field");
@@ -1134,14 +1225,16 @@ function selectItem(idx) {
 
 function updateItems(newItems) {
     items = newItems;
-    if (selectedIndex >= items.length) selectedIndex = Math.max(0, items.length - 1);
+    const filtered = visibleItems();
+    if (selectedIndex >= filtered.length) selectedIndex = Math.max(0, filtered.length - 1);
     render();
 }
 
 function pasteCurrent() {
     if (editingId !== null) return;
-    if (selectedIndex >= 0 && selectedIndex < items.length) {
-        const item = items[selectedIndex];
+    const filtered = visibleItems();
+    if (selectedIndex >= 0 && selectedIndex < filtered.length) {
+        const item = filtered[selectedIndex];
         window.ipc.postMessage(JSON.stringify({ action: "paste", id: item.id }));
     }
 }
@@ -1179,7 +1272,17 @@ function deleteItem(id, event) {
     window.ipc.postMessage(JSON.stringify({ action: "delete", id: id }));
 }
 
+const searchInput = document.getElementById("search-input");
+if (searchInput) {
+    searchInput.addEventListener("input", () => {
+        searchQuery = searchInput.value;
+        selectedIndex = 0;
+        render();
+    });
+}
+
 window.addEventListener("keydown", (e) => {
+    const filtered = visibleItems();
     if (editingId !== null) {
         if (e.key === "Enter") {
             e.preventDefault();
@@ -1191,41 +1294,56 @@ window.addEventListener("keydown", (e) => {
         return;
     }
 
-    if (e.key === "ArrowDown" || (e.key === " " && !e.shiftKey)) {
+    const searchFocused = document.activeElement === searchInput;
+
+    if (e.key === "ArrowDown" || (!searchFocused && e.key === " " && !e.shiftKey)) {
         e.preventDefault();
-        selectedIndex = (selectedIndex + 1) % Math.max(1, items.length);
+        selectedIndex = (selectedIndex + 1) % Math.max(1, filtered.length);
         render();
-    } else if (e.key === "ArrowUp" || (e.key === " " && e.shiftKey)) {
+    } else if (e.key === "ArrowUp" || (!searchFocused && e.key === " " && e.shiftKey)) {
         e.preventDefault();
-        selectedIndex = (selectedIndex - 1 + items.length) % Math.max(1, items.length);
+        selectedIndex = (selectedIndex - 1 + Math.max(1, filtered.length)) % Math.max(1, filtered.length);
         render();
     } else if (e.key === "Enter") {
         e.preventDefault();
         pasteCurrent();
     } else if (e.key === "Escape") {
         e.preventDefault();
-        window.ipc.postMessage(JSON.stringify({ action: "close" }));
-    } else if (e.key === "e" || e.key === "E") {
-        if (selectedIndex >= 0 && selectedIndex < items.length) {
-            const it = items[selectedIndex];
+        if (searchQuery) {
+            searchQuery = "";
+            if (searchInput) {
+                searchInput.value = "";
+                searchInput.blur();
+            }
+            selectedIndex = 0;
+            render();
+        } else {
+            window.ipc.postMessage(JSON.stringify({ action: "close" }));
+        }
+    } else if (!searchFocused && e.key === "/") {
+        e.preventDefault();
+        if (searchInput) searchInput.focus();
+    } else if (!searchFocused && (e.key === "e" || e.key === "E")) {
+        if (selectedIndex >= 0 && selectedIndex < filtered.length) {
+            const it = filtered[selectedIndex];
             if (it.text) {
                 e.preventDefault();
                 startEdit(it.id);
             }
         }
-    } else if (e.key === "p" || e.key === "P") {
-        if (selectedIndex >= 0 && selectedIndex < items.length) {
+    } else if (!searchFocused && (e.key === "p" || e.key === "P")) {
+        if (selectedIndex >= 0 && selectedIndex < filtered.length) {
             e.preventDefault();
-            togglePin(items[selectedIndex].id);
+            togglePin(filtered[selectedIndex].id);
         }
-    } else if (e.key === "Delete") {
-        if (selectedIndex >= 0 && selectedIndex < items.length) {
+    } else if (!searchFocused && e.key === "Delete") {
+        if (selectedIndex >= 0 && selectedIndex < filtered.length) {
             e.preventDefault();
-            deleteItem(items[selectedIndex].id);
+            deleteItem(filtered[selectedIndex].id);
         }
-    } else if (e.key >= "1" && e.key <= "9") {
+    } else if (!searchFocused && e.key >= "1" && e.key <= "9") {
         const num = parseInt(e.key, 10) - 1;
-        if (num < items.length) {
+        if (num < filtered.length) {
             e.preventDefault();
             selectedIndex = num;
             pasteCurrent();

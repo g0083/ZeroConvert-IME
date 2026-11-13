@@ -251,6 +251,14 @@ fn default_auto_commit_live_conversion() -> bool {
     true
 }
 
+fn default_copy_translation_popup() -> bool {
+    true
+}
+
+fn default_selection_popup_auto_dismiss_secs() -> u32 {
+    4
+}
+
 #[cfg(windows)]
 pub mod jev_credentials;
 
@@ -690,6 +698,10 @@ pub struct GeneralConfig {
     /// Follow the focused field's InputScope when input starts.
     #[serde(default)]
     pub follow_input_scope_mode: bool,
+    #[serde(default = "default_copy_translation_popup")]
+    pub copy_translation_popup: bool,
+    #[serde(default = "default_selection_popup_auto_dismiss_secs")]
+    pub selection_popup_auto_dismiss_secs: u32,
 }
 
 impl Default for GeneralConfig {
@@ -721,6 +733,8 @@ impl Default for GeneralConfig {
             auto_commit_rewind_on_backspace: false,
             theme_color: default_theme_color(),
             follow_input_scope_mode: false,
+            copy_translation_popup: default_copy_translation_popup(),
+            selection_popup_auto_dismiss_secs: default_selection_popup_auto_dismiss_secs(),
         }
     }
 }
@@ -891,9 +905,9 @@ mod tests {
     #[cfg(windows)]
     use super::ConfigWriteGuard;
     use super::{
-        AppConfig, ConfigError, DebugConfig, GeneralConfig, LearningConfig, LearningMode,
-        NumpadInputMode, ReconversionKey, ShortcutConfig, WidthMode, CONFIG_VERSION,
-        LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT, SETTINGS_FILENAME,
+        AppConfig, AppConfigCache, ConfigError, ConfigFileStamp, DebugConfig, GeneralConfig,
+        LearningConfig, LearningMode, NumpadInputMode, ReconversionKey, ShortcutConfig, WidthMode,
+        CONFIG_VERSION, LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT, SETTINGS_FILENAME,
     };
     use std::{
         env,
@@ -1090,6 +1104,24 @@ mod tests {
         assert!(deserialized.punctuation_commit_punctuation);
         assert!(deserialized.punctuation_commit_exclamation);
         assert!(deserialized.punctuation_commit_question);
+    }
+
+    #[test]
+    fn copy_selection_popup_defaults_and_roundtrip() {
+        let default_config = GeneralConfig::default();
+        assert!(default_config.copy_translation_popup);
+        assert_eq!(default_config.selection_popup_auto_dismiss_secs, 4);
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert!(deserialized.copy_translation_popup);
+        assert_eq!(deserialized.selection_popup_auto_dismiss_secs, 4);
+
+        let custom: GeneralConfig = serde_json::from_str(
+            r#"{"copy_translation_popup":false,"selection_popup_auto_dismiss_secs":8}"#,
+        )
+        .unwrap();
+        assert!(!custom.copy_translation_popup);
+        assert_eq!(custom.selection_popup_auto_dismiss_secs, 8);
     }
 
     #[test]
@@ -1470,6 +1502,53 @@ mod tests {
 
         assert!(matches!(error, ConfigError::MissingAppData));
     }
+
+    #[test]
+    fn config_cache_skips_reread_until_file_stamp_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let _appdata = AppDataGuard::set(temp.path());
+        let mut initial = AppConfig::default();
+        initial.zenzai.enable = true;
+        initial.zenzai.profile = "profAAA".to_string();
+        initial.write().unwrap();
+
+        let mut cache = AppConfigCache::new();
+        let first = cache.read().unwrap();
+        assert!(first.zenzai.enable);
+        assert_eq!(first.zenzai.profile, "profAAA");
+
+        let config_path = temp.path().join("Azookey").join(SETTINGS_FILENAME);
+        let original_modified = fs::metadata(&config_path).unwrap().modified().unwrap();
+        let original_bytes = fs::read_to_string(&config_path).unwrap();
+        let original_stamp = ConfigFileStamp::for_path(&config_path).unwrap();
+        let modified_same_len = original_bytes.replacen("profAAA", "profBBB", 1);
+        assert_eq!(modified_same_len.len(), original_bytes.len());
+
+        // Overwrite with identical byte length and restore original mtime:
+        // stamp matches, so cache hit must return the previous value without re-reading disk.
+        fs::write(&config_path, modified_same_len.as_bytes()).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&config_path)
+            .unwrap()
+            .set_modified(original_modified)
+            .unwrap();
+        assert_eq!(
+            ConfigFileStamp::for_path(&config_path).unwrap(),
+            original_stamp
+        );
+        assert_eq!(cache.read().unwrap().zenzai.profile, "profAAA");
+
+        let mut updated = AppConfig::default();
+        updated.zenzai.enable = false;
+        updated.zenzai.profile = "profCCCC".to_string();
+        updated.write().unwrap();
+
+        let reread = cache.read().unwrap();
+        assert!(!reread.zenzai.enable);
+        assert_eq!(reread.zenzai.profile, "profCCCC");
+        assert!(!AppConfig::read_cached().unwrap().zenzai.enable);
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -1843,6 +1922,76 @@ impl AppConfig {
 #[derive(Deserialize)]
 struct ConfigVersionHeader {
     version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigFileStamp {
+    exists: bool,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl ConfigFileStamp {
+    fn for_path(path: &Path) -> io::Result<Self> {
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(Self {
+                exists: true,
+                len: metadata.len(),
+                modified: metadata.modified().ok(),
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self {
+                exists: false,
+                len: 0,
+                modified: None,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// Caches the most recently loaded [`AppConfig`] and only re-reads `settings.json`
+/// when the resolved path, file existence, byte length, or modification timestamp changes.
+#[derive(Debug, Default)]
+pub struct AppConfigCache {
+    cached: Option<(PathBuf, ConfigFileStamp, AppConfig)>,
+}
+
+impl AppConfigCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn read(&mut self) -> Result<&AppConfig, ConfigError> {
+        let config_path = AppConfig::settings_path()?;
+        let stamp =
+            ConfigFileStamp::for_path(&config_path).map_err(|source| ConfigError::Read {
+                path: config_path.clone(),
+                source,
+            })?;
+        let unchanged = self
+            .cached
+            .as_ref()
+            .is_some_and(|(path, prev, _)| path == &config_path && prev == &stamp);
+        if !unchanged {
+            let config = AppConfig::read()?;
+            let updated_stamp = ConfigFileStamp::for_path(&config_path).unwrap_or(stamp);
+            self.cached = Some((config_path, updated_stamp, config));
+        }
+        Ok(&self.cached.as_ref().expect("config cache populated").2)
+    }
+}
+
+impl AppConfig {
+    /// Returns the latest [`AppConfig`] using a process-local metadata-stamped cache.
+    pub fn read_cached() -> Result<Self, ConfigError> {
+        static CACHE: std::sync::OnceLock<std::sync::Mutex<AppConfigCache>> =
+            std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(|| std::sync::Mutex::new(AppConfigCache::new()));
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.read().cloned()
+    }
 }
 
 struct ConfigVersionComparison {

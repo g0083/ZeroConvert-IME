@@ -261,7 +261,6 @@ const SERVER_PERFORMANCE_LOG_HEADER: &str =
 const LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 const LOG_FLUSH_ACK_TIMEOUT: Duration = Duration::from_secs(2);
-const WARMUP_INTERVAL_SECS: u64 = 30;
 const WARMUP_RECENT_INPUT_SKIP_MS: u64 = 2_000;
 const MAX_RECONVERSION_SURFACE_COUNT: usize = 128;
 const MAX_RECONVERSION_READINGS: usize = 4;
@@ -1435,14 +1434,6 @@ fn retained_prepared_snapshot_count(
     }
 }
 
-fn initialize(path: &str) -> Result<(), String> {
-    let path = cstring_from_input("Initialize.path", path)?;
-    unsafe {
-        Initialize(path.as_ptr(), USE_ZENZAI);
-    }
-    Ok(())
-}
-
 fn add_text(input: &str) -> Result<RawComposingText, String> {
     let input = cstring_from_input("AppendText.input", input)?;
 
@@ -1950,6 +1941,100 @@ pub struct MyAzookeyService {
     mutation_lock: Arc<tokio::sync::Mutex<CompositionOwner>>,
 }
 
+type FfiTask = Box<dyn FnOnce() + Send + 'static>;
+
+enum FfiMessage {
+    Task(FfiTask),
+    Shutdown,
+}
+
+struct FfiExecutor {
+    sender: std::sync::mpsc::Sender<FfiMessage>,
+}
+
+impl FfiExecutor {
+    fn install_main() -> std::sync::mpsc::Receiver<FfiMessage> {
+        let (sender, receiver) = std::sync::mpsc::channel::<FfiMessage>();
+        assert!(
+            FFI_EXECUTOR.set(Self { sender }).is_ok(),
+            "main FFI executor must be initialized before FFI work is queued"
+        );
+        receiver
+    }
+
+    fn spawn() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<FfiMessage>();
+        std::thread::Builder::new()
+            .name("azookey-ffi".to_owned())
+            .spawn(move || run_ffi_loop(receiver))
+            .expect("failed to spawn azookey FFI worker");
+        Self { sender }
+    }
+}
+
+fn run_ffi_loop(receiver: std::sync::mpsc::Receiver<FfiMessage>) {
+    while let Ok(message) = receiver.recv() {
+        match message {
+            FfiMessage::Task(task) => task(),
+            FfiMessage::Shutdown => break,
+        }
+    }
+}
+
+fn shutdown_main_ffi() {
+    if let Some(executor) = FFI_EXECUTOR.get() {
+        let _ = executor.sender.send(FfiMessage::Shutdown);
+    }
+}
+
+static FFI_EXECUTOR: OnceLock<FfiExecutor> = OnceLock::new();
+
+fn enqueue_ffi<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let executor = FFI_EXECUTOR.get_or_init(FfiExecutor::spawn);
+    let _ = executor.sender.send(FfiMessage::Task(Box::new(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    })));
+}
+
+async fn run_ffi<F, T>(f: F) -> Result<T, Status>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let executor = FFI_EXECUTOR.get_or_init(FfiExecutor::spawn);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    executor
+        .sender
+        .send(FfiMessage::Task(Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            let _ = tx.send(result);
+        })))
+        .map_err(|_| Status::internal("azookey FFI worker stopped"))?;
+    match rx.await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_panic)) => Err(Status::internal("azookey FFI task panicked")),
+        Err(_) => Err(Status::internal("azookey FFI worker dropped response")),
+    }
+}
+
+async fn authorize_composition<T>(
+    mutation_guard: &mut tokio::sync::MutexGuard<'_, CompositionOwner>,
+    request: &Request<T>,
+    auto_claim: bool,
+) -> Result<(), Status> {
+    let mut released = false;
+    mutation_guard.authorize(request, auto_claim, || {
+        released = true;
+    })?;
+    if released {
+        run_ffi(release_composition_state).await?;
+    }
+    Ok(())
+}
+
 fn conversion_continuation_kana_like(reading: &str) -> bool {
     !reading.is_empty()
         && reading
@@ -2242,61 +2327,65 @@ impl AzookeyService for MyAzookeyService {
             }));
         }
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let conversion_continuation_reading = request.conversion_continuation_reading;
         let conversion_continuation_surface = request.conversion_continuation_surface;
-        match (
-            conversion_continuation_reading.is_empty(),
-            conversion_continuation_surface.is_empty(),
-        ) {
-            (false, false) => {
-                install_conversion_continuation(
-                    &conversion_continuation_reading,
-                    &conversion_continuation_surface,
-                );
-            }
-            (true, true) => {}
-            _ => clear_conversion_continuation(),
-        }
         let input_style = request.input_style;
         let input = request.text_to_append;
-        let input_len = input.chars().count();
-        let append_start = Instant::now();
-        let composing_text = if input_style == INPUT_STYLE_DIRECT {
-            add_text_direct(&input).map_err(|error| status_from_error("append_text", error))?
-        } else {
-            add_text(&input).map_err(|error| status_from_error("append_text", error))?
-        };
-        performance_event_lazy!(
-            request_id,
-            "append_text",
-            "swift_append_text",
-            elapsed_ms(append_start),
-            "input_len={input_len};input_style={input_style}"
-        );
-        let get_composed_start = Instant::now();
-        let composed_text = get_composed_text(false, None, request_id)
-            .map_err(|error| status_from_error("append_text", error))?;
-        performance_event_lazy!(
-            request_id,
-            "append_text",
-            "swift_get_composed_text",
-            elapsed_ms(get_composed_start),
-            "suggestions={};hiragana_len={}",
-            composed_text.suggestions.len(),
-            composed_text
-                .hiragana
-                .as_ref()
-                .unwrap_or(&composing_text.text)
-                .chars()
-                .count()
-        );
-        update_active_composition_state(&composing_text.text);
+        let (composing_text, composed_text) = run_ffi(move || {
+            set_request_id(request_id);
+            let input_len = input.chars().count();
+            match (
+                conversion_continuation_reading.is_empty(),
+                conversion_continuation_surface.is_empty(),
+            ) {
+                (false, false) => {
+                    install_conversion_continuation(
+                        &conversion_continuation_reading,
+                        &conversion_continuation_surface,
+                    );
+                }
+                (true, true) => {}
+                _ => clear_conversion_continuation(),
+            }
+            let append_start = Instant::now();
+            let composing_text = if input_style == INPUT_STYLE_DIRECT {
+                add_text_direct(&input).map_err(|error| status_from_error("append_text", error))?
+            } else {
+                add_text(&input).map_err(|error| status_from_error("append_text", error))?
+            };
+            performance_event_lazy!(
+                request_id,
+                "append_text",
+                "swift_append_text",
+                elapsed_ms(append_start),
+                "input_len={input_len};input_style={input_style}"
+            );
+            let get_composed_start = Instant::now();
+            let composed_text = get_composed_text(false, None, request_id)
+                .map_err(|error| status_from_error("append_text", error))?;
+            performance_event_lazy!(
+                request_id,
+                "append_text",
+                "swift_get_composed_text",
+                elapsed_ms(get_composed_start),
+                "suggestions={};hiragana_len={}",
+                composed_text.suggestions.len(),
+                composed_text
+                    .hiragana
+                    .as_ref()
+                    .unwrap_or(&composing_text.text)
+                    .chars()
+                    .count()
+            );
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((composing_text, composed_text))
+        })
+        .await??;
         performance_event_lazy!(
             request_id,
             "append_text",
@@ -2340,62 +2429,68 @@ impl AzookeyService for MyAzookeyService {
         request: Request<ReplaceCompositionRequest>,
     ) -> Result<Response<ReplaceCompositionResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
+        let operations = request.operations;
+        let operation_count = operations.len();
 
-        // This is an absolute-state operation: clear the old converter state and
-        // replay the complete client-observed mutation log. It is safe to repeat after a
-        // timeout whose server-side completion is unknown.
-        clear_text();
-        let mut composing_text = RawComposingText {
-            text: String::new(),
-            cursor: 0,
-        };
-        for operation in &request.operations {
-            match CompositionOperationKind::try_from(operation.kind)
-                .map_err(|_| Status::invalid_argument("unknown composition operation"))?
-            {
-                CompositionOperationKind::Append => {
-                    composing_text = if operation.input_style == INPUT_STYLE_DIRECT {
-                        add_text_direct(&operation.text)
-                            .map_err(|error| status_from_error("replace_composition", error))?
-                    } else {
-                        add_text(&operation.text)
-                            .map_err(|error| status_from_error("replace_composition", error))?
-                    };
-                }
-                CompositionOperationKind::Remove => {
-                    composing_text = remove_text()
-                        .map_err(|error| status_from_error("replace_composition", error))?;
-                }
-                CompositionOperationKind::MoveCursor => {
-                    composing_text = move_cursor(operation.cursor_offset)
-                        .map_err(|error| status_from_error("replace_composition", error))?;
+        let (composing_text, composed_text) = run_ffi(move || {
+            set_request_id(request_id);
+            // This is an absolute-state operation: clear the old converter state and
+            // replay the complete client-observed mutation log. It is safe to repeat after a
+            // timeout whose server-side completion is unknown.
+            clear_text();
+            let mut composing_text = RawComposingText {
+                text: String::new(),
+                cursor: 0,
+            };
+            for operation in &operations {
+                match CompositionOperationKind::try_from(operation.kind)
+                    .map_err(|_| Status::invalid_argument("unknown composition operation"))?
+                {
+                    CompositionOperationKind::Append => {
+                        composing_text = if operation.input_style == INPUT_STYLE_DIRECT {
+                            add_text_direct(&operation.text)
+                                .map_err(|error| status_from_error("replace_composition", error))?
+                        } else {
+                            add_text(&operation.text)
+                                .map_err(|error| status_from_error("replace_composition", error))?
+                        };
+                    }
+                    CompositionOperationKind::Remove => {
+                        composing_text = remove_text()
+                            .map_err(|error| status_from_error("replace_composition", error))?;
+                    }
+                    CompositionOperationKind::MoveCursor => {
+                        composing_text = move_cursor(operation.cursor_offset)
+                            .map_err(|error| status_from_error("replace_composition", error))?;
+                    }
                 }
             }
-        }
 
-        let composed_text = if composing_text.text.is_empty() {
-            ComposedText {
-                hiragana: Some(String::new()),
-                suggestions: Vec::new(),
-            }
-        } else {
-            get_composed_text(false, None, request_id)
-                .map_err(|error| status_from_error("replace_composition", error))?
-        };
-        update_active_composition_state(&composing_text.text);
+            let composed_text = if composing_text.text.is_empty() {
+                ComposedText {
+                    hiragana: Some(String::new()),
+                    suggestions: Vec::new(),
+                }
+            } else {
+                get_composed_text(false, None, request_id)
+                    .map_err(|error| status_from_error("replace_composition", error))?
+            };
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((composing_text, composed_text))
+        })
+        .await??;
         performance_event_lazy!(
             request_id,
             "replace_composition",
             "total",
             elapsed_ms(handler_start),
             "status=success;operations={};hiragana_len={};suggestions={}",
-            request.operations.len(),
+            operation_count,
             composing_text.text.chars().count(),
             composed_text.suggestions.len()
         );
@@ -2432,17 +2527,20 @@ impl AzookeyService for MyAzookeyService {
         request: Request<StartReconversionRequest>,
     ) -> Result<Response<StartReconversionResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, false, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, false).await?;
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.get_ref().request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
-        clear_conversion_continuation();
-        let surface = &request.get_ref().surface;
-        let surface_len = validate_reconversion_surface(surface)?;
+        let surface_len = validate_reconversion_surface(&request.get_ref().surface)?;
+        let surface_for_infer = request.get_ref().surface.clone();
 
-        let mut readings = infer_reconversion_readings(surface)
-            .map_err(|error| status_from_error("start_reconversion", error))?;
+        let mut readings = run_ffi(move || {
+            set_request_id(request_id);
+            clear_conversion_continuation();
+            infer_reconversion_readings(&surface_for_infer)
+                .map_err(|error| status_from_error("start_reconversion", error))
+        })
+        .await??;
         readings.truncate(MAX_RECONVERSION_READINGS);
         if readings.is_empty() {
             performance_event_lazy!(
@@ -2462,93 +2560,98 @@ impl AzookeyService for MyAzookeyService {
 
         // Reading inference is non-mutating. Only replace the converter state after it
         // succeeds, so unsupported text cannot disturb an existing composition.
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let surface = request.into_inner().surface;
-        let mut chosen_index = 0;
-        let mut best_surface_rank = usize::MAX;
-        let mut conversions = Vec::with_capacity(readings.len());
-        let mut last_composing_text = None;
-        for (reading_index, reading) in readings.iter().enumerate() {
-            clear_text();
-            let composing = match add_text_direct(reading) {
-                Ok(text) => text,
-                Err(error) => {
-                    clear_text();
-                    update_active_composition_state("");
-                    return Err(status_from_error("start_reconversion", error));
+        let reading_count = readings.len();
+        let (hiragana, suggestions, chosen_reading, best_surface_rank) = run_ffi(move || {
+            let mut chosen_index = 0;
+            let mut best_surface_rank = usize::MAX;
+            let mut conversions = Vec::with_capacity(readings.len());
+            let mut last_composing_text = None;
+            for (reading_index, reading) in readings.iter().enumerate() {
+                clear_text();
+                let composing = match add_text_direct(reading) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        clear_text();
+                        update_active_composition_state("");
+                        return Err(status_from_error("start_reconversion", error));
+                    }
+                };
+                let composed = match get_reconversion_composed_text(request_id) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        clear_text();
+                        update_active_composition_state("");
+                        return Err(status_from_error("start_reconversion", error));
+                    }
+                };
+                let surface_rank = reconversion_surface_rank(&composed.suggestions, &surface)
+                    .unwrap_or(usize::MAX);
+                if surface_rank < best_surface_rank {
+                    best_surface_rank = surface_rank;
+                    chosen_index = reading_index;
                 }
-            };
-            let composed = match get_reconversion_composed_text(request_id) {
-                Ok(text) => text,
-                Err(error) => {
-                    clear_text();
-                    update_active_composition_state("");
-                    return Err(status_from_error("start_reconversion", error));
-                }
-            };
-            let surface_rank =
-                reconversion_surface_rank(&composed.suggestions, &surface).unwrap_or(usize::MAX);
-            if surface_rank < best_surface_rank {
-                best_surface_rank = surface_rank;
-                chosen_index = reading_index;
+                last_composing_text = Some(composing);
+                conversions.push((reading.clone(), composed));
             }
-            last_composing_text = Some(composing);
-            conversions.push((reading.clone(), composed));
-        }
 
-        let chosen_reading = readings[chosen_index].clone();
-        let last_index = conversions.len() - 1;
-        let (composing_text, mut composed_text) = if chosen_index == last_index {
-            let (_, composed) = conversions.pop().expect("readings are non-empty");
-            (
-                last_composing_text.expect("readings are non-empty"),
-                composed,
-            )
-        } else {
-            clear_text();
-            let composing = add_text_direct(&chosen_reading).map_err(|error| {
+            let chosen_reading = readings[chosen_index].clone();
+            let last_index = conversions.len() - 1;
+            let (composing_text, mut composed_text) = if chosen_index == last_index {
+                let (_, composed) = conversions.pop().expect("readings are non-empty");
+                (
+                    last_composing_text.expect("readings are non-empty"),
+                    composed,
+                )
+            } else {
                 clear_text();
-                update_active_composition_state("");
-                status_from_error("start_reconversion", error)
-            })?;
-            let composed = get_reconversion_composed_text(request_id).map_err(|error| {
-                clear_text();
-                update_active_composition_state("");
-                status_from_error("start_reconversion", error)
-            })?;
-            (composing, composed)
-        };
-        let hiragana = composed_text
-            .hiragana
-            .clone()
-            .unwrap_or_else(|| composing_text.text.clone());
-        let mut suggestion_groups = vec![std::mem::take(&mut composed_text.suggestions)];
-        suggestion_groups.extend(
-            conversions
-                .into_iter()
-                .enumerate()
-                .filter(|(index, _)| *index != chosen_index)
-                .map(|(_, (_, composed))| composed.suggestions),
-        );
-        composed_text.suggestions =
-            merge_reconversion_suggestions(&surface, &hiragana, &suggestion_groups);
+                let composing = add_text_direct(&chosen_reading).map_err(|error| {
+                    clear_text();
+                    update_active_composition_state("");
+                    status_from_error("start_reconversion", error)
+                })?;
+                let composed = get_reconversion_composed_text(request_id).map_err(|error| {
+                    clear_text();
+                    update_active_composition_state("");
+                    status_from_error("start_reconversion", error)
+                })?;
+                (composing, composed)
+            };
+            let hiragana = composed_text
+                .hiragana
+                .clone()
+                .unwrap_or_else(|| composing_text.text.clone());
+            let mut suggestion_groups = vec![std::mem::take(&mut composed_text.suggestions)];
+            suggestion_groups.extend(
+                conversions
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != chosen_index)
+                    .map(|(_, (_, composed))| composed.suggestions),
+            );
+            let suggestions =
+                merge_reconversion_suggestions(&surface, &hiragana, &suggestion_groups);
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((hiragana, suggestions, chosen_reading, best_surface_rank))
+        })
+        .await??;
         let selection_index = 0;
-        update_active_composition_state(&composing_text.text);
         performance_event_lazy!(
             request_id,
             "start_reconversion",
             "total",
             elapsed_ms(handler_start),
             "status=success;surface_len={surface_len};reading_count={};chosen_reading_len={};surface_rank={best_surface_rank};suggestions={};selection_index={selection_index}",
-            readings.len(),
+            reading_count,
             chosen_reading.chars().count(),
-            composed_text.suggestions.len()
+            suggestions.len()
         );
 
         Ok(Response::new(StartReconversionResponse {
             composing_text: Some(ComposingText {
                 hiragana,
-                suggestions: composed_text.suggestions,
+                suggestions,
             }),
             server_session_id: server_session_id(),
             selection_index,
@@ -2561,40 +2664,45 @@ impl AzookeyService for MyAzookeyService {
         request: Request<RemoveTextRequest>,
     ) -> Result<Response<RemoveTextResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
 
-        let remove_start = Instant::now();
-        let composing_text =
-            remove_text().map_err(|error| status_from_error("remove_text", error))?;
-        let raw_input = get_raw_input().map_err(|error| status_from_error("remove_text", error))?;
-        if composing_text.text.is_empty() {
-            clear_conversion_continuation();
-        }
-        performance_event_lazy!(
-            request_id,
-            "remove_text",
-            "swift_remove_text",
-            elapsed_ms(remove_start),
-            "hiragana_len={}",
-            composing_text.text.chars().count()
-        );
-        let get_composed_start = Instant::now();
-        let composed_text = get_composed_text(false, None, request_id)
-            .map_err(|error| status_from_error("remove_text", error))?;
-        performance_event_lazy!(
-            request_id,
-            "remove_text",
-            "swift_get_composed_text",
-            elapsed_ms(get_composed_start),
-            "suggestions={}",
-            composed_text.suggestions.len()
-        );
-        update_active_composition_state(&composing_text.text);
+        let (composing_text, raw_input, composed_text) = run_ffi(move || {
+            set_request_id(request_id);
+            let remove_start = Instant::now();
+            let composing_text =
+                remove_text().map_err(|error| status_from_error("remove_text", error))?;
+            let raw_input =
+                get_raw_input().map_err(|error| status_from_error("remove_text", error))?;
+            if composing_text.text.is_empty() {
+                clear_conversion_continuation();
+            }
+            performance_event_lazy!(
+                request_id,
+                "remove_text",
+                "swift_remove_text",
+                elapsed_ms(remove_start),
+                "hiragana_len={}",
+                composing_text.text.chars().count()
+            );
+            let get_composed_start = Instant::now();
+            let composed_text = get_composed_text(false, None, request_id)
+                .map_err(|error| status_from_error("remove_text", error))?;
+            performance_event_lazy!(
+                request_id,
+                "remove_text",
+                "swift_get_composed_text",
+                elapsed_ms(get_composed_start),
+                "suggestions={}",
+                composed_text.suggestions.len()
+            );
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((composing_text, raw_input, composed_text))
+        })
+        .await??;
         performance_event_lazy!(
             request_id,
             "remove_text",
@@ -2621,43 +2729,47 @@ impl AzookeyService for MyAzookeyService {
         request: Request<MoveCursorRequest>,
     ) -> Result<Response<MoveCursorResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
-        clear_conversion_continuation();
         let raw_offset = request.offset;
-
         let use_cursor_prefix = raw_offset == 0;
-        let move_start = Instant::now();
-        let composing_text =
-            move_cursor(raw_offset).map_err(|error| status_from_error("move_cursor", error))?;
-        performance_event_lazy!(
-            request_id,
-            "move_cursor",
-            "swift_move_cursor",
-            elapsed_ms(move_start),
-            "offset={raw_offset};hiragana_len={}",
-            composing_text.text.chars().count()
-        );
-        let get_composed_start = Instant::now();
-        let composed_text = get_composed_text(use_cursor_prefix, None, request_id)
-            .map_err(|error| status_from_error("move_cursor", error))?;
-        let raw_input = use_cursor_prefix
-            .then(get_raw_input)
-            .transpose()
-            .map_err(|error| status_from_error("move_cursor", error))?;
-        performance_event_lazy!(
-            request_id,
-            "move_cursor",
-            "swift_get_composed_text",
-            elapsed_ms(get_composed_start),
-            "use_cursor_prefix={use_cursor_prefix};suggestions={}",
-            composed_text.suggestions.len()
-        );
-        update_active_composition_state(&composing_text.text);
+
+        let (composing_text, composed_text, raw_input) = run_ffi(move || {
+            set_request_id(request_id);
+            clear_conversion_continuation();
+            let move_start = Instant::now();
+            let composing_text =
+                move_cursor(raw_offset).map_err(|error| status_from_error("move_cursor", error))?;
+            performance_event_lazy!(
+                request_id,
+                "move_cursor",
+                "swift_move_cursor",
+                elapsed_ms(move_start),
+                "offset={raw_offset};hiragana_len={}",
+                composing_text.text.chars().count()
+            );
+            let get_composed_start = Instant::now();
+            let composed_text = get_composed_text(use_cursor_prefix, None, request_id)
+                .map_err(|error| status_from_error("move_cursor", error))?;
+            let raw_input = use_cursor_prefix
+                .then(get_raw_input)
+                .transpose()
+                .map_err(|error| status_from_error("move_cursor", error))?;
+            performance_event_lazy!(
+                request_id,
+                "move_cursor",
+                "swift_get_composed_text",
+                elapsed_ms(get_composed_start),
+                "use_cursor_prefix={use_cursor_prefix};suggestions={}",
+                composed_text.suggestions.len()
+            );
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((composing_text, composed_text, raw_input))
+        })
+        .await??;
         performance_event_lazy!(
             request_id,
             "move_cursor",
@@ -2684,13 +2796,11 @@ impl AzookeyService for MyAzookeyService {
         request: Request<AdjustClauseBoundaryRequest>,
     ) -> Result<Response<AdjustClauseBoundaryResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
-        clear_conversion_continuation();
         let current_input_count = validate_shrink_offset(request.current_input_count)?;
         let expected_raw_input = request.expected_raw_input;
         let expected_input_count = expected_raw_input.chars().count();
@@ -2708,126 +2818,132 @@ impl AzookeyService for MyAzookeyService {
             }
         };
 
-        let adjust_start = Instant::now();
-        let adjustment =
-            adjust_clause_boundary(current_input_count, direction, &expected_raw_input)
-                .map_err(|error| status_from_error("adjust_clause_boundary", error))?;
-        performance_event_lazy!(
-            request_id,
-            "adjust_clause_boundary",
-            "swift_adjust_boundary",
-            elapsed_ms(adjust_start),
-            "current_input_count={current_input_count};expected_input_count={};direction={direction};applied={};adjusted_input_count={};cursor_offset={}",
-            expected_input_count,
-            adjustment.applied,
-            adjustment.adjusted_input_count,
-            adjustment.cursor_offset
-        );
-
-        if !adjustment.applied {
+        let response = run_ffi(move || {
+            set_request_id(request_id);
+            clear_conversion_continuation();
+            let adjust_start = Instant::now();
+            let adjustment =
+                adjust_clause_boundary(current_input_count, direction, &expected_raw_input)
+                    .map_err(|error| status_from_error("adjust_clause_boundary", error))?;
             performance_event_lazy!(
                 request_id,
                 "adjust_clause_boundary",
-                "total",
-                elapsed_ms(handler_start),
-                "status=skipped;current_input_count={current_input_count};expected_input_count={};direction={direction}",
-                expected_input_count
+                "swift_adjust_boundary",
+                elapsed_ms(adjust_start),
+                "current_input_count={current_input_count};expected_input_count={};direction={direction};applied={};adjusted_input_count={};cursor_offset={}",
+                expected_input_count,
+                adjustment.applied,
+                adjustment.adjusted_input_count,
+                adjustment.cursor_offset
             );
-            return Ok(Response::new(AdjustClauseBoundaryResponse {
-                composing_text: None,
-                applied: false,
-                adjusted_input_count: current_input_count,
-                cursor_offset: 0,
-                server_session_id: server_session_id(),
-            }));
-        }
 
-        let get_composed_start = Instant::now();
-        let mut composed_text =
-            match get_composed_text(true, Some(adjustment.adjusted_input_count), request_id) {
-                Ok(composed_text) => composed_text,
-                Err(error) => {
+            if !adjustment.applied {
+                performance_event_lazy!(
+                    request_id,
+                    "adjust_clause_boundary",
+                    "total",
+                    elapsed_ms(handler_start),
+                    "status=skipped;current_input_count={current_input_count};expected_input_count={};direction={direction}",
+                    expected_input_count
+                );
+                return Ok(AdjustClauseBoundaryResponse {
+                    composing_text: None,
+                    applied: false,
+                    adjusted_input_count: current_input_count,
+                    cursor_offset: 0,
+                    server_session_id: server_session_id(),
+                });
+            }
+
+            let get_composed_start = Instant::now();
+            let mut composed_text =
+                match get_composed_text(true, Some(adjustment.adjusted_input_count), request_id) {
+                    Ok(composed_text) => composed_text,
+                    Err(error) => {
+                        rollback_clause_boundary(
+                            adjustment.adjusted_input_count,
+                            current_input_count,
+                            direction,
+                            &expected_raw_input,
+                        )
+                        .map_err(|rollback_error| {
+                            status_from_error(
+                                "adjust_clause_boundary",
+                                format!("{error}; {rollback_error}"),
+                            )
+                        })?;
+                        return Err(status_from_error("adjust_clause_boundary", error));
+                    }
+                };
+            performance_event_lazy!(
+                request_id,
+                "adjust_clause_boundary",
+                "swift_get_composed_text",
+                elapsed_ms(get_composed_start),
+                "suggestions={}",
+                composed_text.suggestions.len()
+            );
+
+            if !composed_text
+                .suggestions
+                .iter()
+                .any(|candidate| candidate.corresponding_count == adjustment.adjusted_input_count)
+            {
+                let cursor = get_cursor_position();
+                if let Some(fallback) = hiragana_boundary_fallback(
+                    &adjustment.text,
+                    cursor,
+                    adjustment.adjusted_input_count,
+                ) {
+                    composed_text = fallback;
+                    performance_event_lazy!(
+                        request_id,
+                        "adjust_clause_boundary",
+                        "candidate_fallback",
+                        0,
+                        "status=hiragana;current_input_count={current_input_count};expected_input_count={};direction={direction};adjusted_input_count={};cursor={cursor}",
+                        expected_input_count,
+                        adjustment.adjusted_input_count
+                    );
+                } else {
                     rollback_clause_boundary(
                         adjustment.adjusted_input_count,
                         current_input_count,
                         direction,
                         &expected_raw_input,
                     )
-                    .map_err(|rollback_error| {
-                        status_from_error(
-                            "adjust_clause_boundary",
-                            format!("{error}; {rollback_error}"),
-                        )
-                    })?;
-                    return Err(status_from_error("adjust_clause_boundary", error));
+                    .map_err(|error| status_from_error("adjust_clause_boundary", error))?;
+                    return Err(Status::internal(
+                        "adjust_clause_boundary could not materialize the adjusted boundary",
+                    ));
                 }
-            };
-        performance_event_lazy!(
-            request_id,
-            "adjust_clause_boundary",
-            "swift_get_composed_text",
-            elapsed_ms(get_composed_start),
-            "suggestions={}",
-            composed_text.suggestions.len()
-        );
-
-        if !composed_text
-            .suggestions
-            .iter()
-            .any(|candidate| candidate.corresponding_count == adjustment.adjusted_input_count)
-        {
-            let cursor = get_cursor_position();
-            if let Some(fallback) = hiragana_boundary_fallback(
-                &adjustment.text,
-                cursor,
-                adjustment.adjusted_input_count,
-            ) {
-                composed_text = fallback;
-                performance_event_lazy!(
-                    request_id,
-                    "adjust_clause_boundary",
-                    "candidate_fallback",
-                    0,
-                    "status=hiragana;current_input_count={current_input_count};expected_input_count={};direction={direction};adjusted_input_count={};cursor={cursor}",
-                    expected_input_count,
-                    adjustment.adjusted_input_count
-                );
-            } else {
-                rollback_clause_boundary(
-                    adjustment.adjusted_input_count,
-                    current_input_count,
-                    direction,
-                    &expected_raw_input,
-                )
-                .map_err(|error| status_from_error("adjust_clause_boundary", error))?;
-                return Err(Status::internal(
-                    "adjust_clause_boundary could not materialize the adjusted boundary",
-                ));
             }
-        }
 
-        update_active_composition_state(&adjustment.text);
-        performance_event_lazy!(
-            request_id,
-            "adjust_clause_boundary",
-            "total",
-            elapsed_ms(handler_start),
-            "status=success;current_input_count={current_input_count};expected_input_count={};direction={direction};adjusted_input_count={};cursor_offset={};suggestions={}",
-            expected_input_count,
-            adjustment.adjusted_input_count,
-            adjustment.cursor_offset,
-            composed_text.suggestions.len()
-        );
-        Ok(Response::new(AdjustClauseBoundaryResponse {
-            composing_text: Some(ComposingText {
-                hiragana: composed_text.hiragana.unwrap_or(adjustment.text),
-                suggestions: composed_text.suggestions,
-            }),
-            applied: true,
-            adjusted_input_count: adjustment.adjusted_input_count,
-            cursor_offset: adjustment.cursor_offset,
-            server_session_id: server_session_id(),
-        }))
+            update_active_composition_state(&adjustment.text);
+            performance_event_lazy!(
+                request_id,
+                "adjust_clause_boundary",
+                "total",
+                elapsed_ms(handler_start),
+                "status=success;current_input_count={current_input_count};expected_input_count={};direction={direction};adjusted_input_count={};cursor_offset={};suggestions={}",
+                expected_input_count,
+                adjustment.adjusted_input_count,
+                adjustment.cursor_offset,
+                composed_text.suggestions.len()
+            );
+            Ok(AdjustClauseBoundaryResponse {
+                composing_text: Some(ComposingText {
+                    hiragana: composed_text.hiragana.unwrap_or(adjustment.text),
+                    suggestions: composed_text.suggestions,
+                }),
+                applied: true,
+                adjusted_input_count: adjustment.adjusted_input_count,
+                cursor_offset: adjustment.cursor_offset,
+                server_session_id: server_session_id(),
+            })
+        })
+        .await??;
+        Ok(Response::new(response))
     }
 
     async fn update_composition_snapshot(
@@ -2835,31 +2951,36 @@ impl AzookeyService for MyAzookeyService {
         request: Request<UpdateCompositionSnapshotRequest>,
     ) -> Result<Response<UpdateCompositionSnapshotResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let operation = CompositionSnapshotOperation::try_from(request.operation)
             .map_err(|_| Status::invalid_argument("unknown composition snapshot operation"))?;
+        if operation == CompositionSnapshotOperation::Unspecified {
+            return Err(Status::invalid_argument(
+                "composition snapshot operation is required",
+            ));
+        }
+        let selected_candidate_id = request.selected_candidate_id;
 
-        unsafe {
-            match operation {
-                CompositionSnapshotOperation::Unspecified => {
-                    return Err(Status::invalid_argument(
-                        "composition snapshot operation is required",
-                    ));
-                }
-                CompositionSnapshotOperation::Clear => ClearComposingTextSnapshots(),
-                CompositionSnapshotOperation::Push => {
-                    PushComposingTextSnapshot(request.selected_candidate_id)
-                }
-                CompositionSnapshotOperation::Pop => {
-                    PopComposingTextSnapshot(request.selected_candidate_id)
+        run_ffi(move || {
+            set_request_id(request_id);
+            unsafe {
+                match operation {
+                    CompositionSnapshotOperation::Unspecified => {}
+                    CompositionSnapshotOperation::Clear => ClearComposingTextSnapshots(),
+                    CompositionSnapshotOperation::Push => {
+                        PushComposingTextSnapshot(selected_candidate_id)
+                    }
+                    CompositionSnapshotOperation::Pop => {
+                        PopComposingTextSnapshot(selected_candidate_id)
+                    }
                 }
             }
-        }
+        })
+        .await?;
         performance_event_lazy!(
             request_id,
             "update_composition_snapshot",
@@ -2878,15 +2999,18 @@ impl AzookeyService for MyAzookeyService {
         request: Request<ClearTextRequest>,
     ) -> Result<Response<ClearTextResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, false, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, false).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let clear_start = Instant::now();
-        release_composition_state();
-        clear_conversion_continuation();
+        run_ffi(move || {
+            set_request_id(request_id);
+            release_composition_state();
+            clear_conversion_continuation();
+        })
+        .await?;
         mutation_guard.release();
         performance_event_lazy!(
             request_id,
@@ -2913,37 +3037,41 @@ impl AzookeyService for MyAzookeyService {
         request: Request<ShrinkTextRequest>,
     ) -> Result<Response<ShrinkTextResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let raw_offset = validate_shrink_offset(request.offset)?;
 
-        let shrink_start = Instant::now();
-        let composing_text =
-            shrink_text(raw_offset).map_err(|error| status_from_error("shrink_text", error))?;
-        performance_event_lazy!(
-            request_id,
-            "shrink_text",
-            "swift_shrink_text",
-            elapsed_ms(shrink_start),
-            "offset={raw_offset};hiragana_len={}",
-            composing_text.text.chars().count()
-        );
-        let get_composed_start = Instant::now();
-        let composed_text = get_composed_text(false, None, request_id)
-            .map_err(|error| status_from_error("shrink_text", error))?;
-        performance_event_lazy!(
-            request_id,
-            "shrink_text",
-            "swift_get_composed_text",
-            elapsed_ms(get_composed_start),
-            "suggestions={}",
-            composed_text.suggestions.len()
-        );
-        update_active_composition_state(&composing_text.text);
+        let (composing_text, composed_text) = run_ffi(move || {
+            set_request_id(request_id);
+            let shrink_start = Instant::now();
+            let composing_text =
+                shrink_text(raw_offset).map_err(|error| status_from_error("shrink_text", error))?;
+            performance_event_lazy!(
+                request_id,
+                "shrink_text",
+                "swift_shrink_text",
+                elapsed_ms(shrink_start),
+                "offset={raw_offset};hiragana_len={}",
+                composing_text.text.chars().count()
+            );
+            let get_composed_start = Instant::now();
+            let composed_text = get_composed_text(false, None, request_id)
+                .map_err(|error| status_from_error("shrink_text", error))?;
+            performance_event_lazy!(
+                request_id,
+                "shrink_text",
+                "swift_get_composed_text",
+                elapsed_ms(get_composed_start),
+                "suggestions={}",
+                composed_text.suggestions.len()
+            );
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((composing_text, composed_text))
+        })
+        .await??;
         performance_event_lazy!(
             request_id,
             "shrink_text",
@@ -2968,59 +3096,65 @@ impl AzookeyService for MyAzookeyService {
         request: Request<AdvanceClauseRequest>,
     ) -> Result<Response<AdvanceClauseResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let raw_offset = validate_shrink_offset(request.offset)?;
+        let selected_candidate_id = request.selected_candidate_id;
 
-        let snapshot_rollback = CompositionSnapshotRollback::push(request.selected_candidate_id);
+        let (shrunk_text, navigation_composing_text, raw_input) = run_ffi(move || {
+            set_request_id(request_id);
+            let snapshot_rollback = CompositionSnapshotRollback::push(selected_candidate_id);
 
-        let shrink_start = Instant::now();
-        let shrunk_text =
-            shrink_text(raw_offset).map_err(|error| status_from_error("advance_clause", error))?;
-        let raw_input =
-            get_raw_input().map_err(|error| status_from_error("advance_clause", error))?;
-        performance_event_lazy!(
-            request_id,
-            "advance_clause",
-            "swift_shrink_text",
-            elapsed_ms(shrink_start),
-            "offset={raw_offset};candidate_generation=deferred"
-        );
+            let shrink_start = Instant::now();
+            let shrunk_text = shrink_text(raw_offset)
+                .map_err(|error| status_from_error("advance_clause", error))?;
+            let raw_input =
+                get_raw_input().map_err(|error| status_from_error("advance_clause", error))?;
+            performance_event_lazy!(
+                request_id,
+                "advance_clause",
+                "swift_shrink_text",
+                elapsed_ms(shrink_start),
+                "offset={raw_offset};candidate_generation=deferred"
+            );
 
-        let move_start = Instant::now();
-        let navigation_text =
-            move_cursor(0).map_err(|error| status_from_error("advance_clause", error))?;
-        let navigation_composed = get_composed_text(true, None, request_id)
-            .map_err(|error| status_from_error("advance_clause", error))?;
-        performance_event_lazy!(
-            request_id,
-            "advance_clause",
-            "swift_move_cursor",
-            elapsed_ms(move_start),
-            "hiragana_len={};suggestions={}",
-            navigation_text.text.chars().count(),
-            navigation_composed.suggestions.len()
-        );
+            let move_start = Instant::now();
+            let navigation_text =
+                move_cursor(0).map_err(|error| status_from_error("advance_clause", error))?;
+            let navigation_composed = get_composed_text(true, None, request_id)
+                .map_err(|error| status_from_error("advance_clause", error))?;
+            performance_event_lazy!(
+                request_id,
+                "advance_clause",
+                "swift_move_cursor",
+                elapsed_ms(move_start),
+                "hiragana_len={};suggestions={}",
+                navigation_text.text.chars().count(),
+                navigation_composed.suggestions.len()
+            );
 
-        update_active_composition_state(&navigation_text.text);
-        performance_event_lazy!(
-            request_id,
-            "advance_clause",
-            "total",
-            elapsed_ms(handler_start),
-            "status=success;offset={raw_offset};navigation_suggestions={}",
-            navigation_composed.suggestions.len()
-        );
+            update_active_composition_state(&navigation_text.text);
+            let nav_len = navigation_composed.suggestions.len();
+            let navigation_composing_text = ComposingText {
+                hiragana: navigation_composed.hiragana.unwrap_or(navigation_text.text),
+                suggestions: navigation_composed.suggestions,
+            };
+            snapshot_rollback.commit();
+            performance_event_lazy!(
+                request_id,
+                "advance_clause",
+                "total",
+                elapsed_ms(handler_start),
+                "status=success;offset={raw_offset};navigation_suggestions={}",
+                nav_len
+            );
+            Ok::<_, Status>((shrunk_text, navigation_composing_text, raw_input))
+        })
+        .await??;
 
-        let navigation_composing_text = ComposingText {
-            hiragana: navigation_composed.hiragana.unwrap_or(navigation_text.text),
-            suggestions: navigation_composed.suggestions,
-        };
-        snapshot_rollback.commit();
         Ok(Response::new(AdvanceClauseResponse {
             shrunk_text: Some(ComposingText {
                 hiragana: shrunk_text.text,
@@ -3037,100 +3171,107 @@ impl AzookeyService for MyAzookeyService {
         request: Request<PrepareFutureClausesRequest>,
     ) -> Result<Response<PrepareFutureClausesResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let mut offset = validate_shrink_offset(request.initial_offset)?;
         let leave_at_last = request.leave_at_last;
-        let mut advances = Vec::new();
-        let mut snapshot_count = 0usize;
-        let mut last_signature = None;
-        let mut completed = false;
-        let mut selected_candidate_id = request.initial_selected_candidate_id;
+        let initial_selected_candidate_id = request.initial_selected_candidate_id;
 
-        let result = (|| -> Result<(), Box<Status>> {
-            for _ in 0..shared::MAX_PREPARED_CLAUSE_ADVANCES {
-                unsafe {
-                    PushComposingTextSnapshot(selected_candidate_id);
-                }
-                snapshot_count += 1;
+        let (advances, completed) = run_ffi(move || {
+            set_request_id(request_id);
+            let mut advances = Vec::new();
+            let mut snapshot_count = 0usize;
+            let mut last_signature = None;
+            let mut completed = false;
+            let mut selected_candidate_id = initial_selected_candidate_id;
 
-                let shrunk_text = shrink_text(offset).map_err(|error| {
-                    Box::new(status_from_error("prepare_future_clauses", error))
-                })?;
-                let navigation_text = move_cursor(0).map_err(|error| {
-                    Box::new(status_from_error("prepare_future_clauses", error))
-                })?;
-                let navigation_composed =
-                    get_composed_text(true, None, request_id).map_err(|error| {
+            let result = (|| -> Result<(), Box<Status>> {
+                for _ in 0..shared::MAX_PREPARED_CLAUSE_ADVANCES {
+                    unsafe {
+                        PushComposingTextSnapshot(selected_candidate_id);
+                    }
+                    snapshot_count += 1;
+
+                    let shrunk_text = shrink_text(offset).map_err(|error| {
                         Box::new(status_from_error("prepare_future_clauses", error))
                     })?;
+                    let navigation_text = move_cursor(0).map_err(|error| {
+                        Box::new(status_from_error("prepare_future_clauses", error))
+                    })?;
+                    let navigation_composed =
+                        get_composed_text(true, None, request_id).map_err(|error| {
+                            Box::new(status_from_error("prepare_future_clauses", error))
+                        })?;
 
-                let Some(selected) = navigation_composed.suggestions.first() else {
-                    break;
-                };
-                selected_candidate_id = selected.candidate_id;
+                    let Some(selected) = navigation_composed.suggestions.first() else {
+                        break;
+                    };
+                    selected_candidate_id = selected.candidate_id;
+                    unsafe {
+                        PinLearningCandidate(selected_candidate_id);
+                    }
+                    let is_last = selected.subtext.is_empty();
+                    let signature = (
+                        navigation_composed
+                            .hiragana
+                            .as_deref()
+                            .unwrap_or(&navigation_text.text)
+                            .to_string(),
+                        selected.corresponding_count,
+                        selected.subtext.clone(),
+                    );
+                    if last_signature.as_ref() == Some(&signature) {
+                        break;
+                    }
+                    last_signature = Some(signature);
+                    offset =
+                        validate_shrink_offset(selected.corresponding_count).map_err(Box::new)?;
+                    let navigation_composing_text = ComposingText {
+                        hiragana: navigation_composed.hiragana.unwrap_or(navigation_text.text),
+                        suggestions: navigation_composed.suggestions,
+                    };
+                    advances.push(PreparedClauseAdvance {
+                        shrunk_text: Some(ComposingText {
+                            hiragana: shrunk_text.text,
+                            suggestions: Vec::new(),
+                        }),
+                        navigation_text: Some(navigation_composing_text),
+                    });
+                    if is_last {
+                        completed = true;
+                        break;
+                    }
+                }
+                Ok(())
+            })();
+
+            let retained_snapshot_count = retained_prepared_snapshot_count(
+                result.is_ok(),
+                leave_at_last,
+                completed,
+                advances.len(),
+            );
+            for _ in retained_snapshot_count..snapshot_count {
                 unsafe {
-                    PinLearningCandidate(selected_candidate_id);
-                }
-                let is_last = selected.subtext.is_empty();
-                let signature = (
-                    navigation_composed
-                        .hiragana
-                        .as_deref()
-                        .unwrap_or(&navigation_text.text)
-                        .to_string(),
-                    selected.corresponding_count,
-                    selected.subtext.clone(),
-                );
-                if last_signature.as_ref() == Some(&signature) {
-                    break;
-                }
-                last_signature = Some(signature);
-                offset = validate_shrink_offset(selected.corresponding_count).map_err(Box::new)?;
-                let navigation_composing_text = ComposingText {
-                    hiragana: navigation_composed.hiragana.unwrap_or(navigation_text.text),
-                    suggestions: navigation_composed.suggestions,
-                };
-                advances.push(PreparedClauseAdvance {
-                    shrunk_text: Some(ComposingText {
-                        hiragana: shrunk_text.text,
-                        suggestions: Vec::new(),
-                    }),
-                    navigation_text: Some(navigation_composing_text),
-                });
-                if is_last {
-                    completed = true;
-                    break;
+                    PopComposingTextSnapshot(0);
                 }
             }
-            Ok(())
-        })();
+            result.map_err(|status| *status)?;
 
-        let retained_snapshot_count = retained_prepared_snapshot_count(
-            result.is_ok(),
-            leave_at_last,
-            completed,
-            advances.len(),
-        );
-        for _ in retained_snapshot_count..snapshot_count {
-            unsafe {
-                PopComposingTextSnapshot(0);
+            if leave_at_last && completed {
+                if let Some(final_text) = advances
+                    .last()
+                    .and_then(|advance| advance.navigation_text.as_ref())
+                {
+                    update_active_composition_state(&final_text.hiragana);
+                }
             }
-        }
-        result.map_err(|status| *status)?;
-
-        if leave_at_last && completed {
-            if let Some(final_text) = advances
-                .last()
-                .and_then(|advance| advance.navigation_text.as_ref())
-            {
-                update_active_composition_state(&final_text.hiragana);
-            }
-        }
+            Ok::<_, Status>((advances, completed))
+        })
+        .await??;
 
         performance_event_lazy!(
             request_id,
@@ -3152,47 +3293,50 @@ impl AzookeyService for MyAzookeyService {
         request: Request<shared::proto::SetContextRequest>,
     ) -> Result<Response<shared::proto::SetContextResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let context = request.context;
         let trimmed_context = context
             .split('\r')
             .rfind(|s| !s.is_empty())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_string();
         let original_len = context.chars().count();
         let trimmed_len = trimmed_context.chars().count();
-
-        let context = cstring_from_input("SetContext.context", trimmed_context)
+        let context_cstring = cstring_from_input("SetContext.context", &trimmed_context)
             .map_err(|error| status_from_error("set_context", error))?;
 
-        if let Ok(mut lock) = LAST_CONTEXT.write() {
-            *lock = trimmed_context.to_string();
-        }
-        let continuation_context_matches = CONVERSION_CONTINUATION
-            .read()
-            .map(|continuation| {
-                continuation.as_ref().map_or(true, |continuation| {
-                    trimmed_context.is_empty()
-                        || trimmed_context.ends_with(continuation.surface.as_str())
+        run_ffi(move || {
+            set_request_id(request_id);
+            if let Ok(mut lock) = LAST_CONTEXT.write() {
+                *lock = trimmed_context.clone();
+            }
+            let continuation_context_matches = CONVERSION_CONTINUATION
+                .read()
+                .map(|continuation| {
+                    continuation.as_ref().map_or(true, |continuation| {
+                        trimmed_context.is_empty()
+                            || trimmed_context.ends_with(continuation.surface.as_str())
+                    })
                 })
-            })
-            .unwrap_or(false);
-        if !continuation_context_matches {
-            clear_conversion_continuation();
-        }
-        let set_context_start = Instant::now();
-        unsafe { SetContext(context.as_ptr()) };
-        performance_event_lazy!(
-            request_id,
-            "set_context",
-            "swift_set_context",
-            elapsed_ms(set_context_start),
-            "original_len={original_len};trimmed_len={trimmed_len}"
-        );
+                .unwrap_or(false);
+            if !continuation_context_matches {
+                clear_conversion_continuation();
+            }
+            let set_context_start = Instant::now();
+            unsafe { SetContext(context_cstring.as_ptr()) };
+            performance_event_lazy!(
+                request_id,
+                "set_context",
+                "swift_set_context",
+                elapsed_ms(set_context_start),
+                "original_len={original_len};trimmed_len={trimmed_len}"
+            );
+        })
+        .await?;
         performance_event_lazy!(
             request_id,
             "set_context",
@@ -3214,20 +3358,24 @@ impl AzookeyService for MyAzookeyService {
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
-        let _log_paths = reload_server_logging_from_settings();
-        set_request_id(request_id);
         let handler_start = Instant::now();
-        let load_config_start = Instant::now();
-        unsafe { LoadConfig() };
-        let has_active_composition = query_active_composition_state();
-        performance_event_lazy!(
-            request_id,
-            "update_config",
-            "swift_load_config",
-            elapsed_ms(load_config_start),
-            "active_composition={has_active_composition}"
-        );
-        HAS_ACTIVE_COMPOSITION.store(has_active_composition, Ordering::Relaxed);
+        let has_active_composition = run_ffi(move || {
+            let _log_paths = reload_server_logging_from_settings();
+            set_request_id(request_id);
+            let load_config_start = Instant::now();
+            unsafe { LoadConfig() };
+            let has_active_composition = query_active_composition_state();
+            performance_event_lazy!(
+                request_id,
+                "update_config",
+                "swift_load_config",
+                elapsed_ms(load_config_start),
+                "active_composition={has_active_composition}"
+            );
+            HAS_ACTIVE_COMPOSITION.store(has_active_composition, Ordering::Relaxed);
+            has_active_composition
+        })
+        .await?;
         performance_event_lazy!(
             request_id,
             "update_config",
@@ -3286,19 +3434,23 @@ impl AzookeyService for MyAzookeyService {
             ));
         }
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let candidate_id = request.candidate_id;
         let commit_kind = request.commit_kind;
+        let surface = request.surface;
 
         // AI アシスト候補は変換エンジンの学習キャッシュに存在しないため、
         // エンジンへは渡さず AI 学習経路で処理する。
         if shared::ai_candidate::is_ai_assist_candidate(candidate_id) {
-            let committed = handle_ai_assist_learning_commit(candidate_id, &request.surface);
+            let committed = tokio::task::spawn_blocking(move || {
+                handle_ai_assist_learning_commit(candidate_id, &surface)
+            })
+            .await
+            .unwrap_or(false);
             performance_event_lazy!(
                 request_id,
                 "commit_learning_candidate",
@@ -3313,23 +3465,28 @@ impl AzookeyService for MyAzookeyService {
             ));
         }
 
-        let commit_start = Instant::now();
-        let committed = swift_commit_learning_candidate(candidate_id, commit_kind);
-        if !committed {
-            log_event(
-                ServerLogLevel::Warn,
-                &format!(
-                    "[commit_learning_candidate] candidate not learned candidate_id={candidate_id};commit_kind={commit_kind}"
-                ),
+        let committed = run_ffi(move || {
+            set_request_id(request_id);
+            let commit_start = Instant::now();
+            let committed = swift_commit_learning_candidate(candidate_id, commit_kind);
+            if !committed {
+                log_event(
+                    ServerLogLevel::Warn,
+                    &format!(
+                        "[commit_learning_candidate] candidate not learned candidate_id={candidate_id};commit_kind={commit_kind}"
+                    ),
+                );
+            }
+            performance_event_lazy!(
+                request_id,
+                "commit_learning_candidate",
+                "swift_commit_learning_candidate",
+                elapsed_ms(commit_start),
+                "candidate_id={candidate_id};commit_kind={commit_kind};committed={committed}"
             );
-        }
-        performance_event_lazy!(
-            request_id,
-            "commit_learning_candidate",
-            "swift_commit_learning_candidate",
-            elapsed_ms(commit_start),
-            "candidate_id={candidate_id};commit_kind={commit_kind};committed={committed}"
-        );
+            committed
+        })
+        .await?;
         performance_event_lazy!(
             request_id,
             "commit_learning_candidate",
@@ -3350,11 +3507,10 @@ impl AzookeyService for MyAzookeyService {
         request: Request<shared::proto::CommitLearningCandidatesRequest>,
     ) -> Result<Response<shared::proto::CommitLearningCandidatesResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
-        mutation_guard.authorize(&request, true, release_composition_state)?;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
         let requested_count = request.commits.len();
 
@@ -3369,24 +3525,29 @@ impl AzookeyService for MyAzookeyService {
             }
         }
 
-        let mut committed_count = 0usize;
-        for commit in &ai_commits {
-            if handle_ai_assist_learning_commit(commit.candidate_id, &commit.surface) {
-                committed_count += 1;
+        let committed_count = run_ffi(move || {
+            set_request_id(request_id);
+            let mut committed_count = 0usize;
+            for commit in &ai_commits {
+                if handle_ai_assist_learning_commit(commit.candidate_id, &commit.surface) {
+                    committed_count += 1;
+                }
             }
-        }
 
-        let commit_start = Instant::now();
-        if !engine_commits.is_empty() {
-            committed_count += swift_commit_learning_candidates(&engine_commits);
-        }
-        performance_event_lazy!(
-            request_id,
-            "commit_learning_candidates",
-            "swift_commit_learning_candidates",
-            elapsed_ms(commit_start),
-            "requested_count={requested_count};committed_count={committed_count}"
-        );
+            let commit_start = Instant::now();
+            if !engine_commits.is_empty() {
+                committed_count += swift_commit_learning_candidates(&engine_commits);
+            }
+            performance_event_lazy!(
+                request_id,
+                "commit_learning_candidates",
+                "swift_commit_learning_candidates",
+                elapsed_ms(commit_start),
+                "requested_count={requested_count};committed_count={committed_count}"
+            );
+            committed_count
+        })
+        .await?;
         performance_event_lazy!(
             request_id,
             "commit_learning_candidates",
@@ -3412,7 +3573,6 @@ impl AzookeyService for MyAzookeyService {
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
 
         // An unspecified scope keeps the historical behaviour: everything.
@@ -3434,7 +3594,11 @@ impl AzookeyService for MyAzookeyService {
 
         if wants_conversion {
             let reset_start = Instant::now();
-            let reset_conversion = swift_reset_learning_memory();
+            let reset_conversion = run_ffi(move || {
+                set_request_id(request_id);
+                swift_reset_learning_memory()
+            })
+            .await?;
             performance_event_lazy!(
                 request_id,
                 "reset_learning_memory",
@@ -3468,7 +3632,7 @@ impl AzookeyService for MyAzookeyService {
             }
         }
 
-        let stats = swift_get_learning_stats();
+        let stats = run_ffi(swift_get_learning_stats).await?;
         performance_event_lazy!(
             request_id,
             "reset_learning_memory",
@@ -3495,7 +3659,6 @@ impl AzookeyService for MyAzookeyService {
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
         let handler_start = Instant::now();
 
         // Deleting an AI assist typo is a separate store with its own key.
@@ -3538,7 +3701,11 @@ impl AzookeyService for MyAzookeyService {
         }
 
         let candidate_id = request.candidate_id;
-        let forgot = swift_forget_learning_candidate(candidate_id);
+        let forgot = run_ffi(move || {
+            set_request_id(request_id);
+            swift_forget_learning_candidate(candidate_id)
+        })
+        .await?;
         if !forgot {
             log_event(
                 ServerLogLevel::Warn,
@@ -3568,16 +3735,19 @@ impl AzookeyService for MyAzookeyService {
         let _request_guard = ServerRequestGuard::begin(false);
         let request = request.into_inner();
         let request_id = request_id_or_next(request.request_id);
-        set_request_id(request_id);
-        let stats =
-            swift_get_learning_stats().unwrap_or_else(|| shared::proto::LearningStatsResponse {
-                server_session_id: server_session_id(),
-                selection_count: 0,
-                history_present: false,
-                history_paused: false,
-                learning_mode: String::new(),
-                typo_count: ai_assist::learning::learned_typo_count() as u32,
-            });
+        let stats = run_ffi(move || {
+            set_request_id(request_id);
+            swift_get_learning_stats()
+        })
+        .await?
+        .unwrap_or_else(|| shared::proto::LearningStatsResponse {
+            server_session_id: server_session_id(),
+            selection_count: 0,
+            history_present: false,
+            history_paused: false,
+            learning_mode: String::new(),
+            typo_count: ai_assist::learning::learned_typo_count() as u32,
+        });
         Ok(Response::new(stats))
     }
 
@@ -3600,8 +3770,15 @@ impl AzookeyService for MyAzookeyService {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+struct MainFfiShutdownGuard;
+
+impl Drop for MainFfiShutdownGuard {
+    fn drop(&mut self) {
+        shutdown_main_ffi();
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     ai_assist::runtime::configure_settings_resolver(|| AppConfig::settings_path().ok());
     // Child loader failures must exit instead of opening an invisible modal
     // entry-point dialog. Workers inherit this process error mode.
@@ -3651,64 +3828,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| std::io::Error::other("failed to get executable parent directory"))?;
     let parent_dir_str = parent_dir
         .to_str()
-        .ok_or_else(|| std::io::Error::other("executable path is not valid UTF-8"))?;
-    initialize(parent_dir_str).map_err(std::io::Error::other)?;
+        .ok_or_else(|| std::io::Error::other("executable path is not valid UTF-8"))?
+        .to_string();
+    let init_path =
+        cstring_from_input("Initialize.path", &parent_dir_str).map_err(std::io::Error::other)?;
 
+    // Run Swift/Zenzai FFI sequentially on the OS main thread while Tokio drives
+    // named-pipe IPC and AI assist on its multi-thread runtime.
+    let ffi_receiver = FfiExecutor::install_main();
+    enqueue_ffi(move || unsafe {
+        Initialize(init_path.as_ptr(), USE_ZENZAI);
+    });
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    let server_handle = std::thread::Builder::new()
+        .name("azookey-tokio".to_owned())
+        .spawn(move || -> std::io::Result<()> {
+            let _shutdown_guard = MainFfiShutdownGuard;
+            let result = runtime.block_on(run_server());
+            drop(runtime);
+            result
+        })?;
+
+    run_ffi_loop(ffi_receiver);
+
+    match server_handle.join() {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(std::io::Error::other("azookey server runtime panicked").into()),
+    }
+}
+
+async fn run_server() -> std::io::Result<()> {
     let service = MyAzookeyService::default();
 
-    tokio::spawn(async {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(WARMUP_INTERVAL_SECS));
-        interval.tick().await;
-
-        loop {
-            interval.tick().await;
-            tokio::task::yield_now().await;
-
-            let request_id = next_request_id();
-            if let Some(reason) = warmup_skip_reason() {
-                let details = reason.details();
-                log_event_lazy!(
-                    ServerLogLevel::Debug,
-                    "request_id={request_id} [warmup] skipped {details}"
-                );
-                performance_event_lazy!(request_id, "warmup", "skip", 0, "{details}");
-                continue;
-            }
-
+    let warmup_service = service.clone();
+    tokio::spawn(async move {
+        // Yield briefly after opening the pipe so initial focus handshakes finish first,
+        // then warm up the foreground converter once if the user is not yet typing.
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        let request_id = next_request_id();
+        if let Some(reason) = warmup_skip_reason() {
+            let details = reason.details();
             log_event_lazy!(
                 ServerLogLevel::Debug,
-                "request_id={request_id} [warmup] schedule_start interval_secs={WARMUP_INTERVAL_SECS};recent_input_skip_ms={WARMUP_RECENT_INPUT_SKIP_MS}"
+                "request_id={request_id} [warmup] skipped {details}"
             );
+            performance_event_lazy!(request_id, "warmup", "skip", 0, "{details}");
+            return;
+        }
+        let Ok(_guard) = warmup_service.mutation_lock.try_lock() else {
+            performance_event_lazy!(
+                request_id,
+                "warmup",
+                "skip",
+                0,
+                "reason=composition_lock_busy"
+            );
+            return;
+        };
+        if let Some(reason) = warmup_skip_reason() {
+            let details = reason.details();
+            performance_event_lazy!(request_id, "warmup", "skip", 0, "{details}");
+            return;
+        }
+        let schedule_start = Instant::now();
+        let Ok(scheduled) = run_ffi(move || {
             set_request_id(request_id);
-            let schedule_start = Instant::now();
-            let scheduled = warmup();
-            let schedule_elapsed_ms = elapsed_ms(schedule_start);
-            if scheduled {
-                performance_event_lazy!(
-                    request_id,
-                    "warmup",
-                    "schedule",
-                    schedule_elapsed_ms,
-                    "status=scheduled"
-                );
-                log_event_lazy!(
-                    ServerLogLevel::Debug,
-                    "request_id={request_id} [warmup] scheduled elapsed_ms={schedule_elapsed_ms}"
-                );
-            } else {
-                performance_event_lazy!(
-                    request_id,
-                    "warmup",
-                    "skip",
-                    schedule_elapsed_ms,
-                    "reason=warmup_in_progress"
-                );
-                log_event_lazy!(
-                    ServerLogLevel::Debug,
-                    "request_id={request_id} [warmup] skipped reason=warmup_in_progress elapsed_ms={schedule_elapsed_ms}"
-                );
-            }
+            warmup()
+        })
+        .await
+        else {
+            return;
+        };
+        let schedule_elapsed_ms = elapsed_ms(schedule_start);
+        if scheduled {
+            performance_event_lazy!(
+                request_id,
+                "warmup",
+                "schedule",
+                schedule_elapsed_ms,
+                "status=scheduled"
+            );
+        } else {
+            performance_event_lazy!(
+                request_id,
+                "warmup",
+                "skip",
+                schedule_elapsed_ms,
+                "reason=active_composition"
+            );
         }
     });
 
@@ -3717,7 +3928,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_v1()
         .map_err(std::io::Error::other)?;
 
-    let pipe_path = server_pipe_path()?;
+    let pipe_path = server_pipe_path().map_err(std::io::Error::other)?;
     let incoming = TonicNamedPipeServer::new_with_first_pipe_callback(pipe_path, move || {
         log_event_lazy!(ServerLogLevel::Info, "AzookeyServer listening");
         write_server_crash_trace(
@@ -3735,7 +3946,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "completed",
             &format!("server_pid={};pipe={pipe_path}", std::process::id()),
         );
-    })?;
+    })
+    .map_err(std::io::Error::other)?;
 
     Server::builder()
         .add_service(AzookeyServiceServer::new(service))

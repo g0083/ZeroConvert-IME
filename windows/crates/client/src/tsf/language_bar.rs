@@ -30,8 +30,8 @@ use windows::{
                 AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
                 DestroyWindow, LoadImageW, PostMessageW, RegisterClassW, SetForegroundWindow,
                 TrackPopupMenu, UnregisterClassW, HICON, HMENU, IMAGE_ICON, LR_DEFAULTCOLOR,
-                MF_STRING, SW_SHOWNORMAL, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
-                WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+                MF_SEPARATOR, MF_STRING, SW_SHOWNORMAL, TPM_NONOTIFY, TPM_RETURNCMD,
+                TPM_RIGHTBUTTON, WM_NULL, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -58,6 +58,8 @@ const INFO: TF_LANGBARITEMINFO = TF_LANGBARITEMINFO {
 
 const SETTINGS_MENU_ID: usize = 1;
 const RESTART_SERVER_MENU_ID: usize = 2;
+const TOGGLE_MODE_MENU_ID: usize = 3;
+const OPEN_DATA_DIR_MENU_ID: usize = 4;
 const SETTINGS_APP_DIRNAME: &str = "Azookey";
 const SETTINGS_APP_FILENAME: &str = "frontend.exe";
 const SETTINGS_APP_INNO_UNINSTALL_SUBKEY: PCWSTR = w!(
@@ -116,8 +118,16 @@ impl TextServiceFactory_Impl {
 
     fn handle_right_click(&self, pt: &POINT) -> Result<()> {
         match show_settings_menu(pt) {
+            Ok(Some(command)) if command == TOGGLE_MODE_MENU_ID as u32 => {
+                if let Err(error) = self.toggle_input_mode() {
+                    tracing::warn!(?error, "Failed to toggle input mode from language bar menu");
+                }
+            }
             Ok(Some(command)) if command == SETTINGS_MENU_ID as u32 => {
                 launch_settings_app_with_logging();
+            }
+            Ok(Some(command)) if command == OPEN_DATA_DIR_MENU_ID as u32 => {
+                open_data_dir_with_logging();
             }
             Ok(Some(command)) if command == RESTART_SERVER_MENU_ID as u32 => {
                 restart_server_with_logging();
@@ -158,7 +168,9 @@ impl ITfLangBarItem_Impl for TextServiceFactory_Impl {
     // this will be shown as a tooltip when you hover the language bar item
     #[macros::anyhow]
     fn GetTooltipString(&self) -> Result<BSTR> {
-        Ok(BSTR::default())
+        Ok(BSTR::from(
+            "ZeroCon IME (左クリック: かな/英数切替, 右クリック: メニュー)",
+        ))
     }
 }
 
@@ -247,6 +259,21 @@ fn launch_settings_app_with_logging() {
     }
 }
 
+fn open_data_dir_with_logging() {
+    let Some(appdata) = env::var_os("APPDATA") else {
+        tracing::warn!("APPDATA is not set; cannot open data directory");
+        return;
+    };
+    let data_dir = PathBuf::from(appdata).join(SETTINGS_APP_DIRNAME);
+    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        tracing::warn!(?error, "Failed to ensure data directory before opening");
+        return;
+    }
+    if let Err(error) = shell_execute_open(&data_dir, &data_dir) {
+        tracing::warn!(?error, "Failed to open data directory");
+    }
+}
+
 struct MenuOwnerWindow {
     hwnd: HWND,
     class_name: Vec<u16>,
@@ -276,7 +303,20 @@ fn show_settings_menu(pt: &POINT) -> Result<Option<u32>> {
     unsafe {
         let owner = create_menu_owner_window()?;
         let menu = PopupMenu(CreatePopupMenu()?);
-        AppendMenuW(menu.0, MF_STRING, SETTINGS_MENU_ID, w!("設定"))?;
+        AppendMenuW(
+            menu.0,
+            MF_STRING,
+            TOGGLE_MODE_MENU_ID,
+            w!("入力モード切替 (かな / 英数)"),
+        )?;
+        AppendMenuW(menu.0, MF_STRING, SETTINGS_MENU_ID, w!("設定を開く"))?;
+        AppendMenuW(
+            menu.0,
+            MF_STRING,
+            OPEN_DATA_DIR_MENU_ID,
+            w!("設定・辞書フォルダを開く"),
+        )?;
+        AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
             menu.0,
             MF_STRING,

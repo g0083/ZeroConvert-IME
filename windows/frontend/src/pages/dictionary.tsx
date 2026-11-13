@@ -1,8 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Save, Trash2 } from "lucide-react";
+import { Copy, FileUp, Plus, Save, Search, Trash2 } from "lucide-react";
 
 import { UnsavedChangesGuard } from "@/components/unsaved-changes-guard";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config";
@@ -23,6 +28,9 @@ export const Dictionary = () => {
     const [isSaving, setIsSaving] = useState(false);
     const savingRef = useRef(false);
     const [validationAttempted, setValidationAttempted] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [importOpen, setImportOpen] = useState(false);
+    const [importText, setImportText] = useState("");
     const [pendingFocus, setPendingFocus] = useState<{
         index: number;
         field: keyof DictionaryEntry;
@@ -40,6 +48,14 @@ export const Dictionary = () => {
     const validation = validateDictionaryEntries(entries);
     const dirty = isDictionaryDirty(entries, persisted);
     const disabled = isLoading || loadFailed || persisted === null || isSaving;
+    const filteredRows = useMemo(() => {
+        const query = searchQuery.trim().toLowerCase();
+        const indexed = entries.map((entry, index) => ({ entry, index }));
+        if (!query) return indexed;
+        return indexed.filter(({ entry }) =>
+            entry.reading.toLowerCase().includes(query) || entry.word.toLowerCase().includes(query)
+        );
+    }, [entries, searchQuery]);
 
     useEffect(() => {
         let active = true;
@@ -107,8 +123,63 @@ export const Dictionary = () => {
 
     const addEntry = () => {
         if (disabled || savingRef.current || entries.length >= MAX_ENTRIES) return;
+        setSearchQuery("");
         setEntries((prev) => [...prev, { reading: "", word: "" }]);
         setPendingFocus({ index: entries.length, field: "reading", end: true });
+    };
+
+    const copyAsTsv = async () => {
+        const lines = entries
+            .filter((entry) => entry.reading.trim() || entry.word.trim())
+            .map((entry) => `${entry.reading}\t${entry.word}`);
+        if (lines.length === 0) {
+            toast("コピーできる登録語がありません");
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(lines.join("\n"));
+            toast(`${lines.length}件をTSV形式でコピーしました`);
+        } catch {
+            toast("クリップボードへのコピーに失敗しました");
+        }
+    };
+
+    const applyTsvImport = () => {
+        const parsed = importText
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
+            .map((line) => {
+                const tabParts = line.split("\t");
+                if (tabParts.length >= 2) {
+                    return { reading: tabParts[0].trim(), word: tabParts[1].trim() };
+                }
+                const spaceMatch = line.match(/^(\S+)\s+(.+)$/);
+                if (spaceMatch) {
+                    return { reading: spaceMatch[1].trim(), word: spaceMatch[2].trim() };
+                }
+                return null;
+            })
+            .filter((item): item is DictionaryEntry => Boolean(item && item.reading && item.word));
+
+        if (parsed.length === 0) {
+            toast("取り込める「読み<Tab>単語」の行が見つかりませんでした");
+            return;
+        }
+        const existingKeys = new Set(entries.map((entry) => `${entry.reading}\t${entry.word}`));
+        const additions = parsed.filter((entry) => !existingKeys.has(`${entry.reading}\t${entry.word}`));
+        const available = Math.max(0, MAX_ENTRIES - entries.length);
+        const accepted = additions.slice(0, available);
+        if (accepted.length === 0) {
+            toast(available === 0 ? `上限（${MAX_ENTRIES}件）に達しています` : "すべて登録済みです");
+            setImportOpen(false);
+            return;
+        }
+        setEntries((prev) => [...prev, ...accepted]);
+        setSearchQuery("");
+        setImportText("");
+        setImportOpen(false);
+        toast(`${accepted.length}件を追加しました（「保存」で反映されます）`);
     };
 
     const removeEntry = (index: number) => {
@@ -160,6 +231,43 @@ export const Dictionary = () => {
     return (
         <div className="h-full min-h-0 flex flex-col">
             <UnsavedChangesGuard dirty={dirty} />
+            <div className="mb-2 flex shrink-0 items-center gap-1.5">
+                <div className="relative min-w-0 flex-1">
+                    <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                    <Input
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        placeholder="読み・単語を検索…"
+                        aria-label="辞書を検索"
+                        className="h-8 pl-8 text-xs"
+                        disabled={isLoading || loadFailed}
+                    />
+                </div>
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 px-2 text-xs"
+                    disabled={disabled || entries.length === 0}
+                    onClick={() => void copyAsTsv()}
+                    title="TSV形式でクリップボードにコピー"
+                >
+                    <Copy className="h-3.5 w-3.5" />
+                    TSV出力
+                </Button>
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 px-2 text-xs"
+                    disabled={disabled || entries.length >= MAX_ENTRIES}
+                    onClick={() => setImportOpen(true)}
+                    title="TSVテキストから一括追加"
+                >
+                    <FileUp className="h-3.5 w-3.5" />
+                    TSV取込
+                </Button>
+            </div>
             <div ref={listRef} className="min-h-0 flex-1 overflow-auto rounded-md border">
                 {isLoading ? (
                     <p className="settings-description p-4" role="status">読み込み中…</p>
@@ -170,6 +278,8 @@ export const Dictionary = () => {
                     </div>
                 ) : entries.length === 0 ? (
                     <p className="settings-description p-4">登録がありません。「行を追加」から登録できます。</p>
+                ) : filteredRows.length === 0 ? (
+                    <p className="settings-description p-4">「{searchQuery}」に一致する登録はありません。</p>
                 ) : (
                     <table className="w-full table-fixed text-sm">
                         <colgroup>
@@ -185,7 +295,7 @@ export const Dictionary = () => {
                             </tr>
                         </thead>
                         <tbody>
-                            {entries.map((entry, index) => (
+                            {filteredRows.map(({ entry, index }) => (
                                 <tr key={`row-${index}`} className="border-t">
                                     {(["reading", "word"] as const).map((field) => {
                                         const error = validationAttempted ? validation.errors[index][field] : undefined;
@@ -241,6 +351,44 @@ export const Dictionary = () => {
                     </Button>
                 </div>
             </div>
+            <AlertDialog open={importOpen} onOpenChange={setImportOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>TSV形式で単語を取り込む</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            1行に1件ずつ「読み（Tabまたはスペース）単語」の形式で貼り付けてください。重複しない項目のみ追加されます。
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <div className="space-y-2 py-1">
+                        <textarea
+                            value={importText}
+                            onChange={(event) => setImportText(event.target.value)}
+                            placeholder={"ぜろこん\tZeroCon\nめーるあどれす\texample@example.com"}
+                            rows={6}
+                            className="w-full rounded-md border bg-background p-2 font-mono text-xs outline-none focus:border-ring"
+                            aria-label="TSV取り込み入力欄"
+                        />
+                        <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                            <span>またはファイル (.tsv / .txt) を選択…</span>
+                            <input
+                                type="file"
+                                accept=".tsv,.txt,text/tab-separated-values,text/plain"
+                                className="hidden"
+                                onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    if (!file) return;
+                                    void file.text().then((content) => setImportText(content));
+                                    event.target.value = "";
+                                }}
+                            />
+                        </label>
+                    </div>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>キャンセル</AlertDialogCancel>
+                        <AlertDialogAction onClick={applyTsvImport}>追加</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 };

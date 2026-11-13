@@ -388,6 +388,7 @@ class QwertyTouchTracker {
     }
 
     fun upsertTarget(target: QwertyKeyTarget) {
+        if (targetsById[target.id] == target) return
         val existingIndex = orderedTargets.indexOfFirst { it.id == target.id }
         if (existingIndex >= 0) {
             orderedTargets[existingIndex] = target

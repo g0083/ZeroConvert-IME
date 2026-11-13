@@ -45,6 +45,8 @@
     "follow_input_scope_mode": false,
     "experimental_ai_assist": true,
     "experimental_translation": false,
+    "copy_translation_popup": true,
+    "selection_popup_auto_dismiss_secs": 4,
     "translation_model": "0.8b",
     "translation_target": "auto",
     "translation_keep_alive": false,

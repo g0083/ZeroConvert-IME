@@ -274,4 +274,59 @@ class ComposingEditorStateTest {
         assertEquals(2, editor.cursor)
         assertEquals(2, state.cursor)
     }
+
+    @Test fun moveByCodePointRecoversFromOutOfBoundsAndMidSurrogateCursor() {
+        val text = "a\uD842\uDFB7b" // "a𠮷b", length = 4, 𠮷 at 1..3
+        // Mid-surrogate offset 2 must recover cleanly without throwing IllegalArgumentException.
+        assertEquals(1, ComposingEditorState.moveByCodePoint(text, 2, -1))
+        assertEquals(3, ComposingEditorState.moveByCodePoint(text, 2, 1))
+        // Out-of-bounds cursors clamp safely before moving.
+        assertEquals(0, ComposingEditorState.moveByCodePoint(text, -5, -1))
+        assertEquals(1, ComposingEditorState.moveByCodePoint(text, -5, 1))
+        assertEquals(3, ComposingEditorState.moveByCodePoint(text, 99, -1))
+        assertEquals(4, ComposingEditorState.moveByCodePoint(text, 99, 1))
+        assertEquals(1, ComposingEditorState.snapBoundary(text, 2))
+        assertEquals(3, ComposingEditorState.snapBoundary(text, 2, preferForward = true))
+    }
+
+    @Test fun adoptCursorSnapsMidSurrogateAndExposesPreviewCursorAndStartHint() {
+        val state = ComposingEditorState()
+        val text = "a\uD842\uDFB7b"
+        state.recordPreview(text)
+        state.observeRange(10, 14)
+        assertEquals(10, state.composingStartHint)
+        assertTrue(state.adoptCursor(2))
+        assertEquals(1, state.cursor)
+        assertEquals(ComposingEditorState.PreviewCursor(text, 1), state.previewCursor)
+    }
+
+    @Test fun composingTextArrowMoveAndPrefixCompleteNeverSplitSurrogates() {
+        val input = ComposingText().apply { insertAtCursorPosition("a\uD842\uDFB7b", InputStyle.DIRECT) }
+        assertEquals(4, input.convertTargetCursorPosition)
+        assertEquals(-1, input.moveCursorFromCursorPosition(-1))
+        assertEquals(3, input.convertTargetCursorPosition)
+        // Moving left by 1 UTF-16 unit from right of 𠮷 steps across the entire surrogate pair.
+        assertEquals(-2, input.moveCursorFromCursorPosition(-1))
+        assertEquals(1, input.convertTargetCursorPosition)
+        // Moving right by 1 UTF-16 unit from left of 𠮷 steps forward across 𠮷.
+        assertEquals(2, input.moveCursorFromCursorPosition(1))
+        assertEquals(3, input.convertTargetCursorPosition)
+
+        // A prefix length splitting the surrogate pair snaps to the whole preceding character.
+        input.prefixComplete(2)
+        assertEquals("\uD842\uDFB7b", input.convertTarget)
+        assertTrue(ComposingEditorState.isBoundary(input.convertTarget, input.convertTargetCursorPosition))
+    }
+
+    @Test fun conversionRangeSessionHandlesSurrogatesSafely() {
+        val input = ComposingText().apply { insertAtCursorPosition("a\uD842\uDFB7b", InputStyle.DIRECT) }
+        val range = ConversionRangeSession()
+        assertTrue(range.begin(input, "a\uD842\uDFB7b"))
+        assertEquals(3, input.convertTargetCursorPosition)
+        assertTrue(range.adjust(input, -1))
+        assertEquals(1, input.convertTargetCursorPosition)
+        assertFalse(range.canAdjust(input, -1))
+        assertTrue(range.adjust(input, 1))
+        assertEquals(3, input.convertTargetCursorPosition)
+    }
 }

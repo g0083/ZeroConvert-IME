@@ -4,6 +4,7 @@
 #include <string>
 #include "assist_jni.h"
 #include "inference_control.h"
+#include "keyboard_assist.h"
 #include "ggml-backend.h"
 
 extern "C" {
@@ -28,6 +29,10 @@ Java_com_zeroconvert_ime_engine_WindowsEngine_nativeAbortConversion(JNIEnv *, jo
 }
 
 static char *complete(void *context, bool prediction, const char *payload, unsigned long long timeout) {
+    // Keyboard repair is scored natively on the loaded model; it never reaches Kotlin.
+    if (payload && std::strstr(payload, "\"keyboard_repair\":\"")) {
+        return strdup(keyboard_assist_request(payload, timeout).c_str());
+    }
     auto *host = static_cast<CompletionHost *>(context);
     auto input = assist_to_java(host->env, payload);
     auto output = static_cast<jstring>(host->env->CallObjectMethod(host->host, host->complete, prediction, input, static_cast<jlong>(timeout)));

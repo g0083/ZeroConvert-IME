@@ -76,11 +76,11 @@ val LocalKeyboardKeyHeight = staticCompositionLocalOf { 46.dp }
 @Composable
 fun KeyboardRootView(
     imeService: ZeroConvertInputMethodService,
-    currentSurface: String,
-    predictedCandidate: String,
-    candidates: List<Candidate>,
-    clipboardHistory: List<ClipboardEntry>,
-    isRealtimeInline: Boolean = false,
+    currentSurface: String? = null,
+    @Suppress("UNUSED_PARAMETER") predictedCandidate: String? = null,
+    candidates: List<Candidate>? = null,
+    clipboardHistory: List<ClipboardEntry>? = null,
+    isRealtimeInline: Boolean? = null,
     aiAssistResult: com.zeroconvert.ime.assist.AiAssistResult? = null,
     onAdoptAiAssist: () -> Unit = {},
     themeMode: String = "system",
@@ -106,10 +106,6 @@ fun KeyboardRootView(
     }
     var isCandidatesExpanded by remember { mutableStateOf(false) }
 
-    LaunchedEffect(candidates.isEmpty()) {
-        if (candidates.isEmpty()) isCandidatesExpanded = false
-    }
-
     val palette = rememberZeroConPalette(themeMode)
     val bgColor = palette.canvas
     val surfaceColor = palette.surface
@@ -117,13 +113,6 @@ fun KeyboardRootView(
     val actionKeyBg = palette.keyModifier
     val accentColor = palette.primaryAccent
     val textColor = palette.textPrimary
-    val selectionCount = imeService.selectedCharacterCountState.value
-    val translation = imeService.translationState.value
-    val selectionTranslation = imeService.selectionTranslationState.value
-
-    // Read the composing state from the service so that the QWERTY emoji key can be
-    // swapped for the "?" key while the user is typing.
-    val isComposing = currentSurface.isNotEmpty() || imeService.currentComposingSurface.value.isNotEmpty()
 
     // The reading and candidate bars follow the key height setting, so publish it for the whole view.
     val keyHeight = imeService.keyboardKeyHeightState.value.dp
@@ -149,339 +138,27 @@ fun KeyboardRootView(
             if (activeTab != KeyboardTab.EMOJI && activeTab != KeyboardTab.SYMBOLS &&
                 activeTab != KeyboardTab.CLIPBOARD
             ) {
-                KeyboardAssistBar(
-                    reading = currentSurface,
-                    assist = aiAssistResult.takeIf { keyboardMode != KeyboardMode.ENGLISH && !translation.active },
-                    correctionApplied = imeService.aiAssistAdoptedState.value,
+                KeyboardTopBars(
+                    imeService = imeService,
+                    currentSurfaceOverride = currentSurface,
+                    candidatesOverride = candidates,
+                    clipboardHistoryOverride = clipboardHistory,
+                    aiAssistResultOverride = aiAssistResult,
+                    activeTab = activeTab,
+                    onActiveTabChange = { activeTab = it },
+                    keyboardMode = keyboardMode,
+                    oneHandedMode = oneHandedMode,
                     palette = palette,
-                    onAdopt = onAdoptAiAssist,
-                    onUndo = { imeService.revertAiAssist() }
+                    surfaceColor = surfaceColor,
+                    actionKeyBg = actionKeyBg,
+                    accentColor = accentColor,
+                    textColor = textColor,
+                    isCandidatesExpanded = isCandidatesExpanded,
+                    onToggleCandidatesExpanded = { isCandidatesExpanded = !isCandidatesExpanded },
+                    onCollapseCandidates = { isCandidatesExpanded = false },
+                    onAdoptAiAssist = onAdoptAiAssist,
+                    onClipboardPaste = onClipboardPaste
                 )
-
-                // --- 1. Candidate Bar & Toolbar (with Clipboard Toggle & ∨ Expand) ---
-                val recentClipboard = rememberClipboardSuggestion(clipboardHistory, imeService.clipboardSuggestionMinutesState.value)
-                val suggestion = if (selectionCount == null && candidates.isEmpty() && !imeService.isClipboardSuggestionDismissed.value) {
-                    recentClipboard
-                } else {
-                    null
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(KeyboardBarHeight)
-                        .background(surfaceColor)
-                ) {
-                    if (translation.active) {
-                        TranslationStatusBar(
-                            state = translation,
-                            palette = palette,
-                            onCommit = { imeService.commitTranslationFromUi() },
-                            onClose = { imeService.exitTranslationMode(revert = true) }
-                        )
-                    } else if (selectionTranslation != null) {
-                        SelectionTranslationStatusBar(
-                            state = selectionTranslation,
-                            palette = palette,
-                            onInsert = { imeService.commitSelectionTranslation() },
-                            onCopy = { imeService.copySelectionTranslation() },
-                            onClose = { imeService.dismissSelectionTranslation() }
-                        )
-                    } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (selectionCount != null) {
-                            SelectionCountLabel(selectionCount, palette, Modifier.weight(1f).fillMaxHeight())
-                        } else if (candidates.isNotEmpty()) {
-                            HorizontalCandidateStrip(
-                                reading = currentSurface,
-                                candidates = candidates,
-                                palette = palette,
-                                onSelect = { imeService.selectCandidate(it) },
-                                onForget = { imeService.forgetCandidateLearning(it) },
-                                modifier = Modifier.weight(1f).fillMaxHeight()
-                            )
-                        } else {
-                            // Empty state: the clipboard suggestion (if any) or the settings
-                            // button takes the left area; the toolbar on the right stays visible.
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .padding(start = 4.dp),
-                                horizontalArrangement = Arrangement.Start,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (suggestion != null) {
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = actionKeyBg.copy(alpha = 0.9f),
-                                        modifier = Modifier.pointerDownHaptic().clickable { onClipboardPaste(suggestion, true) }
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(
-                                                painter = painterResource(R.drawable.ic_clipboard),
-                                                contentDescription = "Clipboard",
-                                                tint = textColor,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            if (suggestion.isImage) {
-                                                ClipboardImageThumbnail(
-                                                    uri = suggestion.imageUri!!,
-                                                    contentDescription = "Image",
-                                                    modifier = Modifier.size(32.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                            }
-                                            Text(
-                                                text = suggestion.preview,
-                                                color = textColor,
-                                                fontSize = 11.5.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = actionKeyBg.copy(alpha = 0.6f),
-                                        modifier = Modifier.pointerDownHaptic().clickable { imeService.openSettings() }
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Settings,
-                                                contentDescription = "Settings",
-                                                tint = palette.primaryAccentSoft,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "ZeroCon AI",
-                                                color = palette.textSecondary,
-                                                fontSize = 11.5.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // When NOT converting (candidates is empty), show layout switcher and clipboard button
-                        if (selectionCount != null) {
-                            if (imeService.canReconvertSelection()) {
-                                Box(
-                                    Modifier.fillMaxHeight().widthIn(min = 64.dp)
-                                        .pointerDownHaptic()
-                                        .clickable { imeService.reconvertSelection() },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
-                                }
-                            }
-
-                            if (imeService.translationEnabledState.value) {
-                                Box(
-                                    Modifier.fillMaxHeight().widthIn(min = 56.dp)
-                                        .pointerDownHaptic()
-                                        .clickable { imeService.translateSelectedText() },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("翻訳", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
-                                }
-                            }
-                        } else if (candidates.isEmpty()) {
-                            if (imeService.canReconvertSelection()) {
-                                Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp,
-                                    modifier = Modifier.pointerDownHaptic().clickable { imeService.reconvertSelection() }.padding(horizontal = 8.dp))
-                            }
-                            // Japanese & English Layout Switcher (12キー <-> QWERTY)
-                            if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
-                                val currentLayout = imeService.japaneseLayoutState.value
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = actionKeyBg,
-                                    modifier = Modifier
-                                        .padding(end = 4.dp)
-                                        .pointerDownHaptic()
-                                        .clickable {
-                                            val next = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) {
-                                                JapaneseInputLayout.QWERTY
-                                            } else {
-                                                JapaneseInputLayout.FLICK_12KEY
-                                            }
-                                            imeService.setJapaneseLayout(next)
-                                        }
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Sync,
-                                            contentDescription = "Switch layout",
-                                            tint = palette.primaryAccentSoft,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        // While a clipboard suggestion is visible the label is
-                                        // dropped so the suggestion keeps room for its preview.
-                                        if (suggestion == null) {
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) "QWERTY" else "12キー",
-                                                color = palette.textSecondary,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (oneHandedMode != OneHandedMode.OFF) {
-                                        accentColor.copy(alpha = 0.22f)
-                                    } else {
-                                        Color.Transparent
-                                    },
-                                    modifier = Modifier
-                                        .padding(end = 2.dp)
-                                        .semantics(mergeDescendants = true) {
-                                            role = Role.Button
-                                            contentDescription = when (oneHandedMode) {
-                                                OneHandedMode.OFF -> "片手モードに切り替え"
-                                                OneHandedMode.RIGHT -> "片手モード（右寄せ）"
-                                                OneHandedMode.LEFT -> "片手モード（左寄せ）"
-                                            }
-                                        }
-                                        .pointerDownHaptic()
-                                        .clickable {
-                                            val next = when (oneHandedMode) {
-                                                OneHandedMode.OFF -> OneHandedMode.RIGHT
-                                                OneHandedMode.RIGHT -> OneHandedMode.LEFT
-                                                OneHandedMode.LEFT -> OneHandedMode.OFF
-                                            }
-                                            imeService.setOneHandedMode(next)
-                                        }
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Smartphone,
-                                            contentDescription = null,
-                                            tint = if (oneHandedMode != OneHandedMode.OFF) accentColor else palette.textSecondary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        if (oneHandedMode != OneHandedMode.OFF && suggestion == null) {
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Text(
-                                                text = if (oneHandedMode == OneHandedMode.LEFT) "左" else "右",
-                                                color = accentColor,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (imeService.translationEnabledState.value) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .pointerDownHaptic()
-                                        .clickable { imeService.toggleTranslationMode() },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Translate,
-                                        contentDescription = "Translate",
-                                        tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-
-                            // Clipboard toggle button
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
-                                    .pointerDownHaptic()
-                                    .clickable {
-                                        activeTab = if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_clipboard),
-                                    contentDescription = "Clipboard",
-                                    tint = if (activeTab == KeyboardTab.CLIPBOARD) accentColor else palette.textSecondary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        } else {
-                        // While converting (candidates are displayed), hide layout switcher & clipboard to maximize candidate space!
-                        // Keep only the translation toggle and the Down chevron.
-                        if (imeService.translationEnabledState.value) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .pointerDownHaptic()
-                                    .clickable { imeService.toggleTranslationMode() },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Translate,
-                                    contentDescription = "Translate",
-                                    tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .semantics { contentDescription = if (isCandidatesExpanded) "候補一覧を閉じる" else "候補一覧を開く" }
-                                .pointerDownHaptic()
-                                .clickable { isCandidatesExpanded = !isCandidatesExpanded },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (isCandidatesExpanded) "∧" else "∨",
-                                color = palette.textSecondary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                    }
-
-                    // The clipboard suggestion now lives inside the empty-state row, so the
-                    // layout switcher, translation toggle, and clipboard button stay visible
-                    // and clickable while the suggestion is shown.
-                    }
-                }
             }
 
             val onLongPressSpace: () -> Unit = {
@@ -519,7 +196,11 @@ fun KeyboardRootView(
             } else {
                 0.dp
             }
-            val isCandidatesPanelExpanded = isCandidatesExpanded && candidates.isNotEmpty()
+            val isCandidatesPanelExpanded by remember(imeService, candidates) {
+                derivedStateOf {
+                    isCandidatesExpanded && (candidates ?: imeService.candidatesList).isNotEmpty()
+                }
+            }
             val isOneHandedLayout = oneHandedMode != OneHandedMode.OFF && !isCandidatesPanelExpanded
             val contentAreaBlock: @Composable () -> Unit = {
                 KeyboardContentArea(
@@ -531,8 +212,8 @@ fun KeyboardRootView(
                     extraHeight = contentExtraHeight,
                     expandedContent = {
                         ExpandedCandidatePanel(
-                            candidates = candidates,
-                            isRealtimeInline = isRealtimeInline,
+                            candidates = candidates ?: imeService.candidatesList,
+                            isRealtimeInline = isRealtimeInline ?: imeService.isRealtimeInlineState.value,
                             palette = palette,
                             onToggleRealtimeInline = onToggleRealtimeInline,
                             onSelect = { item ->
@@ -542,6 +223,11 @@ fun KeyboardRootView(
                         )
                     },
                     keyboardContent = {
+                    val isComposing by remember(imeService, currentSurface) {
+                        derivedStateOf {
+                            (currentSurface ?: imeService.currentComposingSurface.value).isNotEmpty()
+                        }
+                    }
                     when (activeTab) {
                     KeyboardTab.MAIN -> {
                         when (keyboardMode) {
@@ -605,10 +291,12 @@ fun KeyboardRootView(
                                         onCursorLeft = { imeService.handleCursorLeft() },
                                         onCursorRight = { imeService.handleCursorRight() },
                                         showNumberRow = imeService.isQwertyNumberRowState.value,
-                                        nextKeyWeights = imeService.nextKeyWeightsForCurrentInput(KeyboardMode.JAPANESE),
                                         onKeyPressWithBias = { ch, touchBias ->
                                             imeService.handleChar(shiftState.characterFor(ch), touchBias)
                                             shiftState = shiftState.afterCharacter()
+                                        },
+                                        nextKeyWeightsProvider = {
+                                            imeService.nextKeyWeightsForCurrentInput(KeyboardMode.JAPANESE)
                                         }
                                     )
                                 }
@@ -671,10 +359,12 @@ fun KeyboardRootView(
                                         onCursorLeft = { imeService.handleCursorLeft() },
                                         onCursorRight = { imeService.handleCursorRight() },
                                         showNumberRow = imeService.isQwertyNumberRowState.value,
-                                        nextKeyWeights = imeService.nextKeyWeightsForCurrentInput(KeyboardMode.ENGLISH),
                                         onCommitCharWithBias = { ch, touchBias ->
                                             imeService.handleEnglishChar(shiftState.characterFor(ch), touchBias)
                                             shiftState = shiftState.afterCharacter()
+                                        },
+                                        nextKeyWeightsProvider = {
+                                            imeService.nextKeyWeightsForCurrentInput(KeyboardMode.ENGLISH)
                                         }
                                     )
                                 }
@@ -706,7 +396,7 @@ fun KeyboardRootView(
                     }
                     KeyboardTab.CLIPBOARD -> {
                         ClipboardPanel(
-                            history = clipboardHistory,
+                            history = clipboardHistory ?: imeService.clipboardHistory,
                             textColor = textColor,
                             itemBgColor = keyBgColor,
                             actionKeyBg = actionKeyBg,
@@ -822,6 +512,375 @@ fun KeyboardRootView(
             }
         }
     }
+    }
+}
+
+@Composable
+private fun KeyboardTopBars(
+    imeService: ZeroConvertInputMethodService,
+    currentSurfaceOverride: String?,
+    candidatesOverride: List<Candidate>?,
+    clipboardHistoryOverride: List<ClipboardEntry>?,
+    aiAssistResultOverride: com.zeroconvert.ime.assist.AiAssistResult?,
+    activeTab: KeyboardTab,
+    onActiveTabChange: (KeyboardTab) -> Unit,
+    keyboardMode: KeyboardMode,
+    oneHandedMode: OneHandedMode,
+    palette: ZeroConPalette,
+    surfaceColor: Color,
+    actionKeyBg: Color,
+    accentColor: Color,
+    textColor: Color,
+    isCandidatesExpanded: Boolean,
+    onToggleCandidatesExpanded: () -> Unit,
+    onCollapseCandidates: () -> Unit,
+    onAdoptAiAssist: () -> Unit,
+    onClipboardPaste: (ClipboardEntry, Boolean) -> Unit
+) {
+    val currentSurface = currentSurfaceOverride ?: imeService.currentComposingSurface.value
+    val candidates = candidatesOverride ?: imeService.candidatesList
+    val clipboardHistory = clipboardHistoryOverride ?: imeService.clipboardHistory
+    val aiAssistResult = aiAssistResultOverride ?: imeService.aiAssistResultState.value
+    val selectionCount = imeService.selectedCharacterCountState.value
+    val translation = imeService.translationState.value
+    val selectionTranslation = imeService.selectionTranslationState.value
+
+    LaunchedEffect(candidates.isEmpty()) {
+        if (candidates.isEmpty()) onCollapseCandidates()
+    }
+
+    KeyboardAssistBar(
+        reading = currentSurface,
+        assist = aiAssistResult.takeIf { keyboardMode != KeyboardMode.ENGLISH && !translation.active },
+        correctionApplied = imeService.aiAssistAdoptedState.value,
+        palette = palette,
+        onAdopt = onAdoptAiAssist,
+        onUndo = { imeService.revertAiAssist() }
+    )
+
+    // --- 1. Candidate Bar & Toolbar (with Clipboard Toggle & ∨ Expand) ---
+    val canShowClipboardSuggestion = selectionCount == null &&
+        candidates.isEmpty() &&
+        !translation.active &&
+        selectionTranslation == null &&
+        !imeService.isClipboardSuggestionDismissed.value
+    val suggestion = rememberClipboardSuggestion(
+        history = clipboardHistory,
+        minutes = imeService.clipboardSuggestionMinutesState.value,
+        enabled = canShowClipboardSuggestion
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(KeyboardBarHeight)
+            .background(surfaceColor)
+    ) {
+        if (translation.active) {
+            TranslationStatusBar(
+                state = translation,
+                palette = palette,
+                onCommit = { imeService.commitTranslationFromUi() },
+                onClose = { imeService.exitTranslationMode(revert = true) }
+            )
+        } else if (selectionTranslation != null) {
+            SelectionTranslationStatusBar(
+                state = selectionTranslation,
+                palette = palette,
+                onInsert = { imeService.commitSelectionTranslation() },
+                onCopy = { imeService.copySelectionTranslation() },
+                onClose = { imeService.dismissSelectionTranslation() }
+            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (selectionCount != null) {
+                    SelectionCountLabel(selectionCount, palette, Modifier.weight(1f).fillMaxHeight())
+                } else if (candidates.isNotEmpty()) {
+                    HorizontalCandidateStrip(
+                        reading = currentSurface,
+                        candidates = candidates,
+                        palette = palette,
+                        onSelect = { imeService.selectCandidate(it) },
+                        onForget = { imeService.forgetCandidateLearning(it) },
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+                } else {
+                    // Empty state: the clipboard suggestion (if any) or the settings
+                    // button takes the left area; the toolbar on the right stays visible.
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .padding(start = 4.dp),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (suggestion != null) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = actionKeyBg.copy(alpha = 0.9f),
+                                modifier = Modifier.pointerDownHaptic().clickable { onClipboardPaste(suggestion, true) }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_clipboard),
+                                        contentDescription = "Clipboard",
+                                        tint = textColor,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    if (suggestion.isImage) {
+                                        ClipboardImageThumbnail(
+                                            uri = suggestion.imageUri!!,
+                                            contentDescription = "Image",
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        text = suggestion.preview,
+                                        color = textColor,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        } else {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = actionKeyBg.copy(alpha = 0.6f),
+                                modifier = Modifier.pointerDownHaptic().clickable { imeService.openSettings() }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = "Settings",
+                                        tint = palette.primaryAccentSoft,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "ZeroCon AI",
+                                        color = palette.textSecondary,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // When NOT converting (candidates is empty), show layout switcher and clipboard button
+                if (selectionCount != null) {
+                    if (imeService.canReconvertSelection()) {
+                        Box(
+                            Modifier.fillMaxHeight().widthIn(min = 64.dp)
+                                .pointerDownHaptic()
+                                .clickable { imeService.reconvertSelection() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
+                        }
+                    }
+
+                    if (imeService.translationEnabledState.value) {
+                        Box(
+                            Modifier.fillMaxHeight().widthIn(min = 56.dp)
+                                .pointerDownHaptic()
+                                .clickable { imeService.translateSelectedText() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("翻訳", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
+                        }
+                    }
+                } else if (candidates.isEmpty()) {
+                    if (imeService.canReconvertSelection()) {
+                        Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp,
+                            modifier = Modifier.pointerDownHaptic().clickable { imeService.reconvertSelection() }.padding(horizontal = 8.dp))
+                    }
+                    // Japanese & English Layout Switcher (12キー <-> QWERTY)
+                    if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
+                        val currentLayout = imeService.japaneseLayoutState.value
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = actionKeyBg,
+                            modifier = Modifier
+                                .padding(end = 4.dp)
+                                .pointerDownHaptic()
+                                .clickable {
+                                    val next = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) {
+                                        JapaneseInputLayout.QWERTY
+                                    } else {
+                                        JapaneseInputLayout.FLICK_12KEY
+                                    }
+                                    imeService.setJapaneseLayout(next)
+                                }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = "Switch layout",
+                                    tint = palette.primaryAccentSoft,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                // While a clipboard suggestion is visible the label is
+                                // dropped so the suggestion keeps room for its preview.
+                                if (suggestion == null) {
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) "QWERTY" else "12キー",
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (oneHandedMode != OneHandedMode.OFF) {
+                                accentColor.copy(alpha = 0.22f)
+                            } else {
+                                Color.Transparent
+                            },
+                            modifier = Modifier
+                                .padding(end = 2.dp)
+                                .semantics(mergeDescendants = true) {
+                                    role = Role.Button
+                                    contentDescription = when (oneHandedMode) {
+                                        OneHandedMode.OFF -> "片手モードに切り替え"
+                                        OneHandedMode.RIGHT -> "片手モード（右寄せ）"
+                                        OneHandedMode.LEFT -> "片手モード（左寄せ）"
+                                    }
+                                }
+                                .pointerDownHaptic()
+                                .clickable {
+                                    val next = when (oneHandedMode) {
+                                        OneHandedMode.OFF -> OneHandedMode.RIGHT
+                                        OneHandedMode.RIGHT -> OneHandedMode.LEFT
+                                        OneHandedMode.LEFT -> OneHandedMode.OFF
+                                    }
+                                    imeService.setOneHandedMode(next)
+                                }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Smartphone,
+                                    contentDescription = null,
+                                    tint = if (oneHandedMode != OneHandedMode.OFF) accentColor else palette.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                if (oneHandedMode != OneHandedMode.OFF && suggestion == null) {
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        text = if (oneHandedMode == OneHandedMode.LEFT) "左" else "右",
+                                        color = accentColor,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (imeService.translationEnabledState.value) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .pointerDownHaptic()
+                                .clickable { imeService.toggleTranslationMode() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Translate,
+                                contentDescription = "Translate",
+                                tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // Clipboard toggle button
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
+                            .pointerDownHaptic()
+                            .clickable {
+                                onActiveTabChange(if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_clipboard),
+                            contentDescription = "Clipboard",
+                            tint = if (activeTab == KeyboardTab.CLIPBOARD) accentColor else palette.textSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else {
+                    // While converting (candidates are displayed), hide layout switcher & clipboard to maximize candidate space!
+                    // Keep only the translation toggle and the Down chevron.
+                    if (imeService.translationEnabledState.value) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .pointerDownHaptic()
+                                .clickable { imeService.toggleTranslationMode() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Translate,
+                                contentDescription = "Translate",
+                                tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = if (isCandidatesExpanded) "候補一覧を閉じる" else "候補一覧を開く" }
+                            .pointerDownHaptic()
+                            .clickable { onToggleCandidatesExpanded() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (isCandidatesExpanded) "∧" else "∨",
+                            color = palette.textSecondary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1251,6 +1310,8 @@ private class QwertyTouchHost(
     val hitRects = HashMap<String, KeyRect>()
     val visualRects = mutableStateMapOf<String, KeyRect>()
     val longPressJobs = HashMap<Long, Job>()
+    private data class QwertyTargetMeta(val rect: KeyRect, val supportsUpFlick: Boolean, val primaryChar: Char?)
+    private val targetMetaById = HashMap<String, QwertyTargetMeta>()
 
     fun registerHitCoords(spec: QwertyCharKeySpec, supportsUpFlick: Boolean, coords: LayoutCoordinates) {
         specsById[spec.id] = spec
@@ -1270,15 +1331,16 @@ private class QwertyTouchHost(
         hitCoordsById.remove(specId)
         visualCoordsById.remove(specId)
         hitRects.remove(specId)
+        targetMetaById.remove(specId)
         visualRects.remove(specId)
         tracker.removeTarget(specId)
     }
 
     fun recomputeAll() {
-        for (id in hitCoordsById.keys) {
+        for (id in hitCoordsById.keys.toList()) {
             recomputeTarget(id)
         }
-        for (id in visualCoordsById.keys) {
+        for (id in visualCoordsById.keys.toList()) {
             recomputeVisualRect(id)
         }
     }
@@ -1287,15 +1349,20 @@ private class QwertyTouchHost(
         val root = rootCoordinates ?: return
         val coords = hitCoordsById[specId] ?: return
         if (!root.isAttached || !coords.isAttached) return
-        val tl = root.localPositionOf(coords, Offset.Zero)
+        val tl = try { root.localPositionOf(coords, Offset.Zero) } catch (_: IllegalStateException) { return }
         val rect = KeyRect(tl.x, tl.y, tl.x + coords.size.width, tl.y + coords.size.height)
+        val supportsFlick = supportsUpFlickById[specId] == true
+        val primary = specsById[specId]?.normalChar
+        val meta = QwertyTargetMeta(rect, supportsFlick, primary)
+        if (targetMetaById[specId] == meta) return
+        targetMetaById[specId] = meta
         hitRects[specId] = rect
         tracker.upsertTarget(
             QwertyKeyTarget(
                 id = specId,
                 hitRect = rect,
-                supportsUpFlick = supportsUpFlickById[specId] == true,
-                primaryChar = specsById[specId]?.normalChar
+                supportsUpFlick = supportsFlick,
+                primaryChar = primary
             )
         )
     }
@@ -1304,8 +1371,11 @@ private class QwertyTouchHost(
         val root = rootCoordinates ?: return
         val coords = visualCoordsById[specId] ?: return
         if (!root.isAttached || !coords.isAttached) return
-        val tl = root.localPositionOf(coords, Offset.Zero)
-        visualRects[specId] = KeyRect(tl.x, tl.y, tl.x + coords.size.width, tl.y + coords.size.height)
+        val tl = try { root.localPositionOf(coords, Offset.Zero) } catch (_: IllegalStateException) { return }
+        val rect = KeyRect(tl.x, tl.y, tl.x + coords.size.width, tl.y + coords.size.height)
+        if (visualRects[specId] != rect) {
+            visualRects[specId] = rect
+        }
     }
 
     fun cancelLongPressJob(pointerId: Long) {
@@ -1481,7 +1551,8 @@ private fun SharedQwertyLayout(
     onCursorRight: () -> Unit,
     showNumberRow: Boolean,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
-    onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+    onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+    nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null
 ) {
     val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
     val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
@@ -1505,10 +1576,9 @@ private fun SharedQwertyLayout(
     val currentOnCommitWithBias by rememberUpdatedState(onCommitCharWithBias)
     val currentThresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
     val currentHaptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
-    val dynamicTouchAssistEnabled = LocalDynamicTouchAssistEnabled.current
-    val currentNextKeyWeights by rememberUpdatedState(
-        if (dynamicTouchAssistEnabled) nextKeyWeights else emptyMap()
-    )
+    val currentDynamicTouchAssistEnabled by rememberUpdatedState(LocalDynamicTouchAssistEnabled.current)
+    val currentNextKeyWeights by rememberUpdatedState(nextKeyWeights)
+    val currentNextKeyWeightsProvider by rememberUpdatedState(nextKeyWeightsProvider)
     val keyPreviewEnabled = LocalKeyPreviewEnabled.current
 
     DisposableEffect(Unit) {
@@ -1567,16 +1637,21 @@ private fun SharedQwertyLayout(
 
                             for (change in event.changes) {
                                 val pointerId = change.id.value
-                                val maxExpandPx = if (currentNextKeyWeights.isEmpty()) 0f else with(density) { 7.dp.toPx() }
                                 if (change.changedToDown() && !change.isConsumed) {
                                     change.consume()
+                                    val activeWeights = if (currentDynamicTouchAssistEnabled) {
+                                        currentNextKeyWeightsProvider?.invoke() ?: currentNextKeyWeights
+                                    } else {
+                                        emptyMap()
+                                    }
+                                    val maxExpandPx = if (activeWeights.isEmpty()) 0f else with(density) { 7.dp.toPx() }
                                     val effects = host.tracker.onPointerDown(
                                         pointerId = pointerId,
                                         x = change.position.x,
                                         y = change.position.y,
                                         shiftState = shiftSnapshot,
                                         maxSnapDistancePx = maxSnapPx,
-                                        nextCharWeights = currentNextKeyWeights,
+                                        nextCharWeights = activeWeights,
                                         maxExpandPx = maxExpandPx
                                     )
                                     for (effect in effects) {
@@ -1962,7 +2037,8 @@ fun JapaneseQwertyLayout(
     isShiftLocked: Boolean = false,
     showNumberRow: Boolean = true,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
-    onKeyPressWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+    onKeyPressWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+    nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null
 ) {
     SharedQwertyLayout(
         isJapanese = true,
@@ -1985,7 +2061,8 @@ fun JapaneseQwertyLayout(
         onCursorRight = onCursorRight,
         showNumberRow = showNumberRow,
         nextKeyWeights = nextKeyWeights,
-        onCommitCharWithBias = onKeyPressWithBias
+        onCommitCharWithBias = onKeyPressWithBias,
+        nextKeyWeightsProvider = nextKeyWeightsProvider
     )
 }
 
@@ -2010,7 +2087,8 @@ fun EnglishQwertyLayout(
     isShiftLocked: Boolean = false,
     showNumberRow: Boolean = true,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
-    onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+    onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+    nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null
 ) {
     SharedQwertyLayout(
         isJapanese = false,
@@ -2033,7 +2111,8 @@ fun EnglishQwertyLayout(
         onCursorRight = onCursorRight,
         showNumberRow = showNumberRow,
         nextKeyWeights = nextKeyWeights,
-        onCommitCharWithBias = onCommitCharWithBias
+        onCommitCharWithBias = onCommitCharWithBias,
+        nextKeyWeightsProvider = nextKeyWeightsProvider
     )
 }
 

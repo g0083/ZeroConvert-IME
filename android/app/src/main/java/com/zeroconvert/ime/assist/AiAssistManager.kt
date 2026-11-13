@@ -73,17 +73,17 @@ object AiAssistManager {
                 null
             } else {
                 val primary = ModelCorrector(inference).suggest(context, reading, baseline)
-                when {
-                    primary != null -> primary
-                    enableDynamicTouchAssist && touchBiases.isNotEmpty() ->
-                        TouchBiasTypoResolver.suggestCorrection(
-                            rawInput = rawInput,
-                            reading = reading,
-                            baseline = baseline,
-                            touchBiases = touchBiases
-                        )
-                    else -> null
+                val touch = if (enableDynamicTouchAssist && touchBiases.isNotEmpty()) {
+                    TouchBiasTypoResolver.suggestCorrection(
+                        rawInput = rawInput,
+                        reading = reading,
+                        baseline = baseline,
+                        touchBiases = touchBiases
+                    )
+                } else {
+                    null
                 }
+                selectCorrectionResult(primary, touch)
             }
         }
         worker(AiAssistType.PREDICTION) { ModelPredictor(inference).suggest(context, reading, baseline) }
@@ -94,5 +94,15 @@ object AiAssistManager {
                 onUpdate(presentation.complete(type, result))
             }
         } finally { results.cancel() }
+    }
+
+    internal fun selectCorrectionResult(
+        primary: AiAssistResult?,
+        touch: AiAssistResult?
+    ): AiAssistResult? = when {
+        primary == null -> touch
+        touch == null -> primary
+        touch.relevance > primary.relevance && !primary.autoApply -> touch
+        else -> primary
     }
 }

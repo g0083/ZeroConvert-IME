@@ -222,7 +222,6 @@ struct DictionaryPath {
   std::string surface;
 };
 class ChannelDictionary {
-  std::map<std::u32string, DictionaryPath> entries;
   struct TrieNode {
     bool has_word = false;
     double best_score = -std::numeric_limits<double>::infinity();
@@ -230,6 +229,21 @@ class ChannelDictionary {
     std::vector<std::pair<char32_t, uint32_t>> children;
   };
   std::vector<TrieNode> trie;
+
+  uint32_t find_child(uint32_t node, char32_t ch) const {
+    const auto &children = trie[node].children;
+    if (children.size() <= 8) {
+      for (const auto &edge : children) {
+        if (edge.first == ch)
+          return edge.second;
+      }
+      return 0;
+    }
+    const auto it = std::lower_bound(
+        children.begin(), children.end(), ch,
+        [](const auto &edge, char32_t target) { return edge.first < target; });
+    return (it != children.end() && it->first == ch) ? it->second : 0;
+  }
 
 public:
   explicit ChannelDictionary(const std::string &path) {
@@ -255,6 +269,7 @@ public:
     if (count > (bytes.size() - 12) / 4 || u32(8) != 8 + 4 * (count + 1) ||
         u32(8 + 4 * count) != bytes.size())
       throw std::runtime_error("invalid dictionary header");
+    trie.push_back(TrieNode{});
     for (uint32_t i = 0; i < count; ++i) {
       const size_t start = u32(8 + 4 * i), end = u32(12 + 4 * i);
       if (start < 8 + 4 * (count + 1) || end < start + 8 || end > bytes.size())
@@ -272,15 +287,8 @@ public:
       if (!kana(reading) || reading.size() > 40 || surface.empty() ||
           surface.find_first_of("\r\n\t") != std::string::npos)
         continue;
-      auto at = entries.find(reading);
-      if (at == entries.end() || score > at->second.score ||
-          (score == at->second.score && surface > at->second.surface))
-        entries[reading] = {score, surface};
-    }
-    trie.push_back(TrieNode{});
-    for (const auto &entry : entries) {
       uint32_t node = 0;
-      for (char32_t ch : entry.first) {
+      for (char32_t ch : reading) {
         uint32_t next = 0;
         for (const auto &edge : trie[node].children) {
           if (edge.first == ch) {
@@ -295,12 +303,21 @@ public:
         }
         node = next;
       }
-      if (!trie[node].has_word || entry.second.score > trie[node].best_score ||
-          (entry.second.score == trie[node].best_score &&
-           entry.second.surface > trie[node].best_surface)) {
+      const double score_d = score;
+      if (!trie[node].has_word || score_d > trie[node].best_score ||
+          (score_d == trie[node].best_score &&
+           surface > trie[node].best_surface)) {
         trie[node].has_word = true;
-        trie[node].best_score = entry.second.score;
-        trie[node].best_surface = entry.second.surface;
+        trie[node].best_score = score_d;
+        trie[node].best_surface = surface;
+      }
+    }
+    for (auto &node : trie) {
+      if (node.children.size() > 1) {
+        std::sort(node.children.begin(), node.children.end(),
+                  [](const auto &a, const auto &b) {
+                    return a.first < b.first;
+                  });
       }
     }
   }
@@ -328,13 +345,7 @@ public:
       }
       uint32_t node = 0;
       for (size_t end = start; end < std::min(reading.size(), start + 40); ++end) {
-        uint32_t next = 0;
-        for (const auto &edge : trie[node].children) {
-          if (edge.first == reading[end]) {
-            next = edge.second;
-            break;
-          }
-        }
+        const uint32_t next = find_child(node, reading[end]);
         if (next == 0)
           break;
         node = next;
@@ -380,22 +391,36 @@ public:
     for (size_t start = 0; start < reading.size(); ++start) {
       if (!std::isfinite(paths[start].score))
         continue;
-      for (size_t end = start + 1; end <= std::min(reading.size(), start + 40);
-           ++end) {
-        const auto piece = reading.substr(start, end - start);
-        const auto at = entries.find(piece);
-        if (at == entries.end() && end != start + 1)
+      const size_t max_end = std::min(reading.size(), start + 40);
+      uint32_t node = 0;
+      bool in_trie = true;
+      for (size_t end = start + 1; end <= max_end; ++end) {
+        if (in_trie) {
+          node = find_child(node, reading[end - 1]);
+          if (node == 0)
+            in_trie = false;
+        }
+        const bool has_word = in_trie && trie[node].has_word;
+        if (!has_word && end != start + 1) {
+          if (!in_trie)
+            break;
           continue;
-        const DictionaryPath word =
-            at != entries.end()
-                ? at->second
-                : DictionaryPath{kana(piece) ? -24. : -40., encode_utf8(piece)};
+        }
+        DictionaryPath word;
+        if (has_word) {
+          word = {trie[node].best_score, trie[node].best_surface};
+        } else {
+          const auto piece = reading.substr(start, 1);
+          word = {kana(piece) ? -24. : -40., encode_utf8(piece)};
+        }
         const DictionaryPath next{paths[start].score + word.score,
                                   paths[start].surface + word.surface};
         if (next.score > paths[end].score ||
             (next.score == paths[end].score &&
              next.surface > paths[end].surface))
           paths[end] = next;
+        if (!in_trie)
+          break;
       }
     }
     return paths.back();

@@ -545,4 +545,15 @@ class KeyboardTouchLogicTest {
         )
         assertEquals(390f, midBounds.leftPx, 0.01f)
     }
+
+    @Test
+    fun effectiveKeyCapCornerRadiusPx_clampsPillAndPreservesStandardKeys() {
+        // Circular/pill keys (e.g. cornerRadius = 22dp on ~42dp height) clamp to half shorter edge.
+        assertEquals(63f, effectiveKeyCapCornerRadiusPx(widthPx = 150f, heightPx = 126f, requestedRadiusPx = 66f), 0.01f)
+        // Standard rectangular keys keep their requested corner radius unchanged.
+        assertEquals(21f, effectiveKeyCapCornerRadiusPx(widthPx = 100f, heightPx = 126f, requestedRadiusPx = 21f), 0.01f)
+        // Negative or zero inputs stay clamped at 0.
+        assertEquals(0f, effectiveKeyCapCornerRadiusPx(widthPx = 0f, heightPx = 100f, requestedRadiusPx = 20f), 0.01f)
+        assertEquals(0f, effectiveKeyCapCornerRadiusPx(widthPx = 100f, heightPx = 100f, requestedRadiusPx = -5f), 0.01f)
+    }
 }

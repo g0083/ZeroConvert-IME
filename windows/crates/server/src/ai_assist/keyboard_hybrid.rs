@@ -303,7 +303,15 @@ pub fn repair_readings(
     } else {
         ""
     };
-    let response = if wait_for_worker {
+    let response = if let Some(hosted) = runtime::keyboard_repair_override(
+        valid_raw,
+        &norm,
+        context,
+        if wait_for_worker { 30000 } else { 350 },
+    ) {
+        // The host scores on its own loaded model; no child process exists here.
+        hosted?
+    } else if wait_for_worker {
         let mut slot = WORKER.lock().ok()?;
         if slot.is_none() {
             if let (Some(dictionary), Some(root)) = (

@@ -7,6 +7,7 @@
 #include <vector>
 #include "llama.h"
 #include "assist_jni.h"
+#include "keyboard_assist.h"
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -139,6 +140,7 @@ jstring assist_to_java(JNIEnv * env, const std::string & text) { return utf16(en
 void assist_close() {
     assist_abort();
     translation_epoch.fetch_add(1);
+    keyboard_assist_detach();
     { std::lock_guard<std::mutex> lock(prediction.mutex); prediction.clear(); }
     { std::lock_guard<std::mutex> lock(corrector.mutex); corrector.clear(); }
     { std::lock_guard<std::mutex> lock(translation.mutex); translation.clear(); }
@@ -148,7 +150,12 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeInitAssist(JNIEnv * env, jobject, jstring converter, jstring repair) {
     assist_abort();
     int ready = 0;
-    { std::lock_guard<std::mutex> lock(prediction.mutex); if (prediction.load(utf8(env, converter))) ready |= 1; }
+    // The repair scorer borrows the converter model, so release it before a reload.
+    keyboard_assist_detach();
+    {
+        std::lock_guard<std::mutex> lock(prediction.mutex);
+        if (prediction.load(utf8(env, converter))) { ready |= 1; keyboard_assist_attach(prediction.model); }
+    }
     { std::lock_guard<std::mutex> lock(corrector.mutex); if (corrector.load(utf8(env, repair))) ready |= 2; }
     return ready;
 }

@@ -14,9 +14,9 @@ let maxConversionContinuationSurfaceCount = 128
 let maxCombinedConversionContinuationReadingCount = 48
 let maxConversionContinuationCurrentReadingCount = 16
 
-@MainActor var conversionContinuation: ConversionContinuation?
+// Serialized by the single-threaded FFI executor in Rust and @MainActor in tests.
+nonisolated(unsafe) var conversionContinuation: ConversionContinuation?
 
-@MainActor
 func clearConversionContinuation() {
     conversionContinuation = nil
 }
@@ -235,7 +235,7 @@ func sliceConversionContinuationCandidate(
 }
 
 @_silgen_name("SetConversionContinuation")
-@MainActor public func set_conversion_continuation(
+public func set_conversion_continuation(
     reading: UnsafePointer<CChar>,
     surface: UnsafePointer<CChar>
 ) -> Bool {
@@ -245,7 +245,6 @@ func sliceConversionContinuationCandidate(
     )
 }
 
-@MainActor
 @discardableResult
 func setConversionContinuation(reading: String, surface: String) -> Bool {
     if reading.isEmpty && surface.isEmpty {

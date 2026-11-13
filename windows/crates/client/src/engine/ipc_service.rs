@@ -9,6 +9,7 @@ use shared::{
 };
 use std::{
     cell::Cell,
+    collections::VecDeque,
     error::Error as StdError,
     fmt,
     future::Future,
@@ -43,10 +44,35 @@ const STATE_RPC_DEADLINE: Duration = Duration::from_secs(1);
 const LEARNING_RPC_DEADLINE: Duration = Duration::from_secs(1);
 const UI_RPC_DEADLINE: Duration = Duration::from_millis(250);
 const PERFORMANCE_RPC_DEADLINE: Duration = Duration::from_millis(100);
+const WINDOW_RPC_QUEUE_LIMIT: usize = 16;
+const WINDOW_RECONNECT_COOLDOWN: Duration = Duration::from_millis(250);
 
 static CLIENT_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static IPC_CONNECTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CLIENT_LOG_CONFIG_CACHE: OnceLock<Mutex<ClientLogConfigCache>> = OnceLock::new();
+static SHARED_IPC_RUNTIME: OnceLock<Arc<tokio::runtime::Runtime>> = OnceLock::new();
+
+pub(crate) fn shared_ipc_runtime() -> anyhow::Result<Arc<tokio::runtime::Runtime>> {
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
+    if let Some(runtime) = SHARED_IPC_RUNTIME.get() {
+        return Ok(Arc::clone(runtime));
+    }
+    let _guard = INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(runtime) = SHARED_IPC_RUNTIME.get() {
+        return Ok(Arc::clone(runtime));
+    }
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("azookey-ipc")
+            .enable_all()
+            .build()?,
+    );
+    let _ = SHARED_IPC_RUNTIME.set(Arc::clone(&runtime));
+    Ok(runtime)
+}
 
 thread_local! {
     static CLIENT_INPUT_TRACE_REQUEST_ID: Cell<Option<u64>> = const { Cell::new(None) };
@@ -69,8 +95,8 @@ pub struct IPCService {
     connection_id: u64,
     // kkc server client
     azookey_client: AzookeyServiceClient<Channel>,
-    // candidate window server client
-    window_client: Option<WindowServiceClient<Channel>>,
+    // candidate window async dispatcher
+    window_dispatcher: Arc<WindowRpcDispatcher>,
     runtime: Arc<tokio::runtime::Runtime>,
     performance_log_tx: tokio::sync::mpsc::Sender<PerformanceLogRequest>,
     server_session_id: Option<u64>,
@@ -82,6 +108,178 @@ pub struct IPCService {
     recovery_error_for_test: bool,
     #[cfg(test)]
     reconnect_channel_for_test: Option<Channel>,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+enum WindowRpcCommand {
+    Show,
+    Hide,
+    SetPosition(shared::proto::SetPositionRequest),
+    SetCandidates(shared::proto::SetCandidateRequest),
+    SetSelection(shared::proto::SetSelectionRequest),
+    SetInputMode(shared::proto::SetInputModeRequest),
+    UpdateCandidateWindow(shared::proto::UpdateCandidateWindowRequest),
+}
+
+impl WindowRpcCommand {
+    fn operation_name(&self) -> &'static str {
+        match self {
+            Self::Show => "ui_show_window",
+            Self::Hide => "ui_hide_window",
+            Self::SetPosition(_) => "ui_set_window_position",
+            Self::SetCandidates(_) => "ui_set_candidates",
+            Self::SetSelection(_) => "ui_set_selection",
+            Self::SetInputMode(_) => "ui_set_input_mode",
+            Self::UpdateCandidateWindow(_) => "ui_update_candidate_window",
+        }
+    }
+}
+
+fn merge_update_candidate_window_request(
+    target: &mut shared::proto::UpdateCandidateWindowRequest,
+    newer: shared::proto::UpdateCandidateWindowRequest,
+) {
+    if newer.visible.is_some() {
+        target.visible = newer.visible;
+    }
+    if newer.position.is_some() {
+        target.position = newer.position;
+    }
+    if newer.candidates.is_some() {
+        target.candidates = newer.candidates;
+    }
+    if newer.selected_index.is_some() {
+        target.selected_index = newer.selected_index;
+    }
+    if newer.input_mode.is_some() {
+        target.input_mode = newer.input_mode;
+    }
+    if newer.reading.is_some() {
+        target.reading = newer.reading;
+    }
+    if newer.candidate_list_visible.is_some() {
+        target.candidate_list_visible = newer.candidate_list_visible;
+    }
+    if newer.reading_vertical_adjustment.is_some() {
+        target.reading_vertical_adjustment = newer.reading_vertical_adjustment;
+    }
+    if newer.engine_hwnd.is_some() {
+        target.engine_hwnd = newer.engine_hwnd;
+    }
+}
+
+#[derive(Debug, Default)]
+struct WindowRpcQueue {
+    commands: VecDeque<WindowRpcCommand>,
+    closed: bool,
+}
+
+impl WindowRpcQueue {
+    fn push_coalesced(&mut self, command: WindowRpcCommand) {
+        if self.closed {
+            return;
+        }
+        if let (
+            Some(WindowRpcCommand::UpdateCandidateWindow(previous)),
+            WindowRpcCommand::UpdateCandidateWindow(newer),
+        ) = (self.commands.back_mut(), &command)
+        {
+            merge_update_candidate_window_request(previous, newer.clone());
+            return;
+        }
+        if self.commands.len() >= WINDOW_RPC_QUEUE_LIMIT {
+            self.commands.pop_front();
+        }
+        self.commands.push_back(command);
+    }
+}
+
+#[derive(Debug)]
+struct WindowRpcDispatcher {
+    queue: Mutex<WindowRpcQueue>,
+    notify: tokio::sync::Notify,
+    unavailable_until: Mutex<Option<Instant>>,
+    enabled: AtomicBool,
+}
+
+impl WindowRpcDispatcher {
+    #[cfg(test)]
+    fn disabled() -> Arc<Self> {
+        Arc::new(Self {
+            queue: Mutex::new(WindowRpcQueue::default()),
+            notify: tokio::sync::Notify::new(),
+            unavailable_until: Mutex::new(None),
+            enabled: AtomicBool::new(false),
+        })
+    }
+
+    fn spawn(runtime: &tokio::runtime::Runtime) -> Arc<Self> {
+        let dispatcher = Arc::new(Self {
+            queue: Mutex::new(WindowRpcQueue::default()),
+            notify: tokio::sync::Notify::new(),
+            unavailable_until: Mutex::new(None),
+            enabled: AtomicBool::new(true),
+        });
+        let worker = Arc::clone(&dispatcher);
+        runtime.spawn(async move {
+            IPCService::run_window_rpc_worker(worker).await;
+        });
+        dispatcher
+    }
+
+    fn mark_unavailable_for(&self, cooldown: Duration) {
+        let mut unavailable_until = self
+            .unavailable_until
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *unavailable_until = Some(Instant::now() + cooldown);
+    }
+
+    fn clear_unavailable(&self) {
+        let mut unavailable_until = self
+            .unavailable_until
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *unavailable_until = None;
+    }
+
+    fn is_in_cooldown(&self) -> bool {
+        let unavailable_until = self
+            .unavailable_until
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        unavailable_until.is_some_and(|until| Instant::now() < until)
+    }
+
+    fn enqueue(&self, command: WindowRpcCommand) -> WindowRpcDelivery {
+        if !self.enabled.load(Ordering::Acquire) {
+            return WindowRpcDelivery::SkippedUnavailable;
+        }
+        {
+            let mut unavailable_until = self
+                .unavailable_until
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(until) = *unavailable_until {
+                if Instant::now() < until {
+                    return WindowRpcDelivery::SkippedUnavailable;
+                }
+                *unavailable_until = None;
+            }
+        }
+        let mut queue = self
+            .queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if queue.closed {
+            return WindowRpcDelivery::SkippedUnavailable;
+        }
+        queue.push_coalesced(command);
+        drop(queue);
+        self.notify.notify_one();
+        WindowRpcDelivery::Sent
+    }
 }
 
 #[derive(Debug, Default)]
@@ -489,7 +687,7 @@ pub(crate) fn client_performance_log_enabled() -> bool {
         .map(|last_checked| last_checked.elapsed() >= CLIENT_LOG_CONFIG_REFRESH_INTERVAL)
         .unwrap_or(true);
     if should_refresh {
-        cache.enabled = AppConfig::read()
+        cache.enabled = AppConfig::read_cached()
             .map(|config| {
                 config.debug.server_log_enabled
                     && config.debug.server_log_level.eq_ignore_ascii_case("debug")
@@ -671,7 +869,7 @@ impl IPCService {
 
     #[cfg(test)]
     pub(crate) fn recovery_for_test(pending: bool) -> Self {
-        let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let runtime = shared_ipc_runtime().unwrap();
         let channel = {
             let _entered = runtime.enter();
             Endpoint::from_static("http://127.0.0.1:1").connect_lazy()
@@ -680,7 +878,7 @@ impl IPCService {
         Self {
             connection_id: 0,
             azookey_client: AzookeyServiceClient::new(channel),
-            window_client: None,
+            window_dispatcher: WindowRpcDispatcher::disabled(),
             runtime,
             performance_log_tx,
             server_session_id: None,
@@ -707,39 +905,12 @@ impl IPCService {
         );
     }
 
-    pub fn new() -> Result<Self> {
-        let runtime = Arc::new(tokio::runtime::Runtime::new()?);
-        let connection_id = IPC_CONNECTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let transport = Arc::new(TransportLifecycle::default());
-
-        let server_channel = Self::connect_named_pipe_channel(
-            &runtime,
-            "http://[::]:50051",
-            shared::server_pipe_path()?,
-            SERVER_PIPE_BUSY_TIMEOUT,
-            Some(transport.clone()),
-        )?;
-        let window_client = match Self::connect_named_pipe_channel(
-            &runtime,
-            "http://[::]:50052",
-            shared::ui_pipe_path()?,
-            UI_PIPE_BUSY_TIMEOUT,
-            None,
-        ) {
-            Ok(ui_channel) => Some(WindowServiceClient::new(ui_channel)),
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    "Candidate window IPC is unavailable; continuing without UI connection"
-                );
-                None
-            }
-        };
-
-        let azookey_client = AzookeyServiceClient::new(server_channel);
+    fn spawn_performance_log_worker(
+        runtime: &tokio::runtime::Runtime,
+        mut performance_log_client: AzookeyServiceClient<Channel>,
+    ) -> tokio::sync::mpsc::Sender<PerformanceLogRequest> {
         let (performance_log_tx, mut performance_log_rx) =
             tokio::sync::mpsc::channel::<PerformanceLogRequest>(64);
-        let mut performance_log_client = azookey_client.clone();
         runtime.spawn(async move {
             while let Some(request) = performance_log_rx.recv().await {
                 let mut request = tonic::Request::new(request);
@@ -755,12 +926,32 @@ impl IPCService {
                 }
             }
         });
+        performance_log_tx
+    }
+
+    pub fn new() -> Result<Self> {
+        let runtime = shared_ipc_runtime()?;
+        let connection_id = IPC_CONNECTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let transport = Arc::new(TransportLifecycle::default());
+
+        let server_channel = Self::connect_named_pipe_channel(
+            &runtime,
+            "http://[::]:50051",
+            shared::server_pipe_path()?,
+            SERVER_PIPE_BUSY_TIMEOUT,
+            Some(transport.clone()),
+        )?;
+        let window_dispatcher = WindowRpcDispatcher::spawn(&runtime);
+
+        let azookey_client = AzookeyServiceClient::new(server_channel);
+        let performance_log_tx =
+            Self::spawn_performance_log_worker(&runtime, azookey_client.clone());
         tracing::debug!("Connected to server: {:?}", azookey_client);
 
         Ok(Self {
             connection_id,
             azookey_client,
-            window_client,
+            window_dispatcher,
             runtime,
             performance_log_tx,
             server_session_id: None,
@@ -775,8 +966,7 @@ impl IPCService {
         })
     }
 
-    fn connect_named_pipe_channel(
-        runtime: &tokio::runtime::Runtime,
+    async fn connect_named_pipe_channel_async(
         endpoint: &'static str,
         pipe_name: &'static str,
         busy_timeout: Duration,
@@ -828,17 +1018,30 @@ impl IPCService {
                 Ok::<_, std::io::Error>(TokioIo::new(RetirableIo::new(client, lifecycle)))
             }
         }));
-        let channel = runtime.block_on(async {
-            time::timeout(IPC_CONNECT_DEADLINE, connect)
-                .await
-                .map_err(|_| IpcDeadlineExceeded {
-                    operation: "connect_named_pipe",
-                    deadline: IPC_CONNECT_DEADLINE,
-                })?
-                .map_err(anyhow::Error::from)
-        })?;
+        let channel = time::timeout(IPC_CONNECT_DEADLINE, connect)
+            .await
+            .map_err(|_| IpcDeadlineExceeded {
+                operation: "connect_named_pipe",
+                deadline: IPC_CONNECT_DEADLINE,
+            })?
+            .map_err(anyhow::Error::from)?;
 
         Ok(channel)
+    }
+
+    fn connect_named_pipe_channel(
+        runtime: &tokio::runtime::Runtime,
+        endpoint: &'static str,
+        pipe_name: &'static str,
+        busy_timeout: Duration,
+        lifecycle: Option<Arc<TransportLifecycle>>,
+    ) -> Result<Channel> {
+        runtime.block_on(Self::connect_named_pipe_channel_async(
+            endpoint,
+            pipe_name,
+            busy_timeout,
+            lifecycle,
+        ))
     }
 }
 
@@ -906,13 +1109,22 @@ impl IPCService {
         if self.recovery_error_for_test {
             return Err(self.recovery_pending_error());
         }
-        let refreshed = Self::new()?;
-        self.connection_id = refreshed.connection_id;
-        self.azookey_client = refreshed.azookey_client;
-        self.window_client = refreshed.window_client;
-        self.runtime = refreshed.runtime;
-        self.performance_log_tx = refreshed.performance_log_tx;
-        self.transport = refreshed.transport;
+        let connection_id = IPC_CONNECTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let transport = Arc::new(TransportLifecycle::default());
+        let server_channel = Self::connect_named_pipe_channel(
+            &self.runtime,
+            "http://[::]:50051",
+            shared::server_pipe_path()?,
+            SERVER_PIPE_BUSY_TIMEOUT,
+            Some(transport.clone()),
+        )?;
+        let azookey_client = AzookeyServiceClient::new(server_channel);
+        let performance_log_tx =
+            Self::spawn_performance_log_worker(&self.runtime, azookey_client.clone());
+        self.connection_id = connection_id;
+        self.azookey_client = azookey_client;
+        self.performance_log_tx = performance_log_tx;
+        self.transport = transport;
         Ok(())
     }
 
@@ -1085,17 +1297,6 @@ impl IPCService {
             Self::mark_server_recovery_required(recovery, operation);
         }
         result
-    }
-
-    fn block_on_window_rpc<T, F>(
-        runtime: &tokio::runtime::Runtime,
-        operation: &'static str,
-        future: F,
-    ) -> anyhow::Result<T>
-    where
-        F: Future<Output = Result<T, tonic::Status>>,
-    {
-        runtime.block_on(await_rpc_with_deadline(operation, UI_RPC_DEADLINE, future))
     }
 
     fn observe_server_session(&mut self, operation: &str, server_session_id: u64) {
@@ -2475,96 +2676,160 @@ impl IPCService {
 
 // implement methods to interact with candidate window server
 impl IPCService {
-    fn ensure_window_client(
-        &mut self,
-        operation: &str,
-    ) -> Option<&mut WindowServiceClient<Channel>> {
-        if self.window_client.is_none() {
-            match Self::connect_named_pipe_channel(
-                self.runtime.as_ref(),
-                "http://[::]:50052",
-                shared::ui_pipe_path().ok()?,
-                UI_PIPE_BUSY_TIMEOUT,
-                None,
-            ) {
-                Ok(ui_channel) => {
-                    tracing::info!(
-                        operation,
-                        "Candidate window IPC connected after deferred retry"
-                    );
-                    self.window_client = Some(WindowServiceClient::new(ui_channel));
-                }
-                Err(error) => {
-                    tracing::debug!(
-                        ?error,
-                        operation,
-                        "Candidate window IPC remains unavailable"
-                    );
-                    return None;
-                }
+    async fn try_connect_window_client(
+        dispatcher: &WindowRpcDispatcher,
+    ) -> Option<WindowServiceClient<Channel>> {
+        let Ok(pipe_name) = shared::ui_pipe_path() else {
+            dispatcher.mark_unavailable_for(WINDOW_RECONNECT_COOLDOWN);
+            return None;
+        };
+        match Self::connect_named_pipe_channel_async(
+            "http://[::]:50052",
+            pipe_name,
+            UI_PIPE_BUSY_TIMEOUT,
+            None,
+        )
+        .await
+        {
+            Ok(ui_channel) => {
+                dispatcher.clear_unavailable();
+                Some(WindowServiceClient::new(ui_channel))
+            }
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Candidate window IPC is unavailable; continuing without UI connection"
+                );
+                dispatcher.mark_unavailable_for(WINDOW_RECONNECT_COOLDOWN);
+                None
             }
         }
-
-        self.window_client.as_mut()
     }
 
-    fn with_window_client_delivery(
-        &mut self,
-        operation: &str,
-        send: impl FnOnce(
-            &tokio::runtime::Runtime,
-            &mut WindowServiceClient<Channel>,
-        ) -> anyhow::Result<()>,
-    ) -> anyhow::Result<WindowRpcDelivery> {
-        let runtime = self.runtime.clone();
-        let Some(window_client) = self.ensure_window_client(operation) else {
-            return Ok(WindowRpcDelivery::SkippedUnavailable);
-        };
-
-        let result = send(runtime.as_ref(), window_client);
-        if result.is_err() {
-            self.window_client = None;
-        }
-        result.map(|()| WindowRpcDelivery::Sent)
-    }
-
-    fn with_window_client(
-        &mut self,
-        operation: &str,
-        send: impl FnOnce(
-            &tokio::runtime::Runtime,
-            &mut WindowServiceClient<Channel>,
-        ) -> anyhow::Result<()>,
+    async fn send_window_rpc_command(
+        window_client: &mut WindowServiceClient<Channel>,
+        command: WindowRpcCommand,
     ) -> anyhow::Result<()> {
-        self.with_window_client_delivery(operation, send)
-            .map(|_| ())
-    }
-
-    fn ignore_window_rpc_error(operation: &str, result: anyhow::Result<()>) -> anyhow::Result<()> {
-        if let Err(error) = result {
-            tracing::warn!(
-                ?error,
-                operation,
-                "Candidate window IPC request failed; continuing without UI connection"
-            );
+        let operation = command.operation_name();
+        match command {
+            WindowRpcCommand::Show => {
+                let mut request = tonic::Request::new(shared::proto::EmptyResponse {});
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.show_window(request),
+                )
+                .await?;
+            }
+            WindowRpcCommand::Hide => {
+                let mut request = tonic::Request::new(shared::proto::EmptyResponse {});
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.hide_window(request),
+                )
+                .await?;
+            }
+            WindowRpcCommand::SetPosition(payload) => {
+                let mut request = tonic::Request::new(payload);
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.set_window_position(request),
+                )
+                .await?;
+            }
+            WindowRpcCommand::SetCandidates(payload) => {
+                let mut request = tonic::Request::new(payload);
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.set_candidate(request),
+                )
+                .await?;
+            }
+            WindowRpcCommand::SetSelection(payload) => {
+                let mut request = tonic::Request::new(payload);
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.set_selection(request),
+                )
+                .await?;
+            }
+            WindowRpcCommand::SetInputMode(payload) => {
+                let mut request = tonic::Request::new(payload);
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.set_input_mode(request),
+                )
+                .await?;
+            }
+            WindowRpcCommand::UpdateCandidateWindow(payload) => {
+                let mut request = tonic::Request::new(payload);
+                request.set_timeout(UI_RPC_DEADLINE);
+                await_rpc_with_deadline(
+                    operation,
+                    UI_RPC_DEADLINE,
+                    window_client.update_candidate_window(request),
+                )
+                .await?;
+            }
         }
-
         Ok(())
     }
 
-    fn ignore_window_rpc_delivery_error(
-        operation: &str,
-        result: anyhow::Result<WindowRpcDelivery>,
-    ) -> anyhow::Result<WindowRpcDelivery> {
-        match result {
-            Ok(delivery) => Ok(delivery),
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    operation,
-                    "Candidate window IPC request failed; continuing without UI connection"
-                );
-                Ok(WindowRpcDelivery::SkippedUnavailable)
+    async fn run_window_rpc_worker(dispatcher: Arc<WindowRpcDispatcher>) {
+        let mut client = Self::try_connect_window_client(&dispatcher).await;
+        loop {
+            let command = {
+                let mut queue = dispatcher
+                    .queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if queue.closed {
+                    return;
+                }
+                queue.commands.pop_front()
+            };
+
+            let Some(command) = command else {
+                dispatcher.notify.notified().await;
+                continue;
+            };
+
+            if client.is_none() {
+                if !dispatcher.is_in_cooldown() {
+                    client = Self::try_connect_window_client(&dispatcher).await;
+                }
+                if client.is_none() {
+                    let mut queue = dispatcher
+                        .queue
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    queue.commands.clear();
+                    continue;
+                }
+            }
+
+            let operation = command.operation_name();
+            if let Some(window_client) = client.as_mut() {
+                if let Err(error) = Self::send_window_rpc_command(window_client, command).await {
+                    tracing::warn!(
+                        ?error,
+                        operation,
+                        "Candidate window IPC request failed; continuing without UI connection"
+                    );
+                    client = None;
+                    dispatcher.mark_unavailable_for(WINDOW_RECONNECT_COOLDOWN);
+                }
             }
         }
     }
@@ -2573,58 +2838,30 @@ impl IPCService {
     pub fn show_window(&mut self) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
-        let result: anyhow::Result<()> = {
-            let mut request = tonic::Request::new(shared::proto::EmptyResponse {});
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client("ui_show_window", |runtime, window_client| {
-                Self::block_on_window_rpc(
-                    runtime,
-                    "ui_show_window",
-                    window_client.show_window(request),
-                )?;
-                Ok(())
-            })
-        };
+        let delivery = self.window_dispatcher.enqueue(WindowRpcCommand::Show);
         self.log_client_performance_from_start(
             performance_start,
             request_id,
             "ui_show_window",
             "rpc_total",
-            || match &result {
-                Ok(()) => "status=success".to_string(),
-                Err(error) => format!("status=error;error={error:?}"),
-            },
+            || format!("status={}", delivery.log_status()),
         );
-        Self::ignore_window_rpc_error("ui_show_window", result)
+        Ok(())
     }
 
     #[tracing::instrument]
     pub fn hide_window(&mut self) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
-        let result: anyhow::Result<()> = {
-            let mut request = tonic::Request::new(shared::proto::EmptyResponse {});
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client("ui_hide_window", |runtime, window_client| {
-                Self::block_on_window_rpc(
-                    runtime,
-                    "ui_hide_window",
-                    window_client.hide_window(request),
-                )?;
-                Ok(())
-            })
-        };
+        let delivery = self.window_dispatcher.enqueue(WindowRpcCommand::Hide);
         self.log_client_performance_from_start(
             performance_start,
             request_id,
             "ui_hide_window",
             "rpc_total",
-            || match &result {
-                Ok(()) => "status=success".to_string(),
-                Err(error) => format!("status=error;error={error:?}"),
-            },
+            || format!("status={}", delivery.log_status()),
         );
-        Self::ignore_window_rpc_error("ui_hide_window", result)
+        Ok(())
     }
 
     #[tracing::instrument]
@@ -2637,40 +2874,31 @@ impl IPCService {
     ) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
-        let result: anyhow::Result<()> = {
-            let mut request = tonic::Request::new(shared::proto::SetPositionRequest {
-                position: Some(shared::proto::WindowPosition {
-                    top,
-                    left,
-                    bottom,
-                    right,
-                }),
-            });
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client("ui_set_window_position", |runtime, window_client| {
-                Self::block_on_window_rpc(
-                    runtime,
-                    "ui_set_window_position",
-                    window_client.set_window_position(request),
-                )?;
-                Ok(())
-            })
-        };
+        let delivery = self
+            .window_dispatcher
+            .enqueue(WindowRpcCommand::SetPosition(
+                shared::proto::SetPositionRequest {
+                    position: Some(shared::proto::WindowPosition {
+                        top,
+                        left,
+                        bottom,
+                        right,
+                    }),
+                },
+            ));
         self.log_client_performance_from_start(
             performance_start,
             request_id,
             "ui_set_window_position",
             "rpc_total",
-            || match &result {
-                Ok(()) => {
-                    format!("status=success;top={top};left={left};bottom={bottom};right={right}")
-                }
-                Err(error) => format!(
-                    "status=error;top={top};left={left};bottom={bottom};right={right};error={error:?}"
-                ),
+            || {
+                format!(
+                    "status={};top={top};left={left};bottom={bottom};right={right}",
+                    delivery.log_status()
+                )
             },
         );
-        Self::ignore_window_rpc_error("ui_set_window_position", result)
+        Ok(())
     }
 
     #[tracing::instrument]
@@ -2678,19 +2906,11 @@ impl IPCService {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
         let candidate_count = performance_start.map(|_| candidates.len());
-        let result: anyhow::Result<()> = {
-            let mut request =
-                tonic::Request::new(shared::proto::SetCandidateRequest { candidates });
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client("ui_set_candidates", |runtime, window_client| {
-                Self::block_on_window_rpc(
-                    runtime,
-                    "ui_set_candidates",
-                    window_client.set_candidate(request),
-                )?;
-                Ok(())
-            })
-        };
+        let delivery = self
+            .window_dispatcher
+            .enqueue(WindowRpcCommand::SetCandidates(
+                shared::proto::SetCandidateRequest { candidates },
+            ));
         self.log_client_performance_from_start(
             performance_start,
             request_id,
@@ -2698,75 +2918,53 @@ impl IPCService {
             "rpc_total",
             || {
                 let candidate_count = candidate_count.unwrap_or_default();
-                match &result {
-                    Ok(()) => format!("status=success;candidate_count={candidate_count}"),
-                    Err(error) => {
-                        format!("status=error;candidate_count={candidate_count};error={error:?}")
-                    }
-                }
+                format!(
+                    "status={};candidate_count={candidate_count}",
+                    delivery.log_status()
+                )
             },
         );
-        Self::ignore_window_rpc_error("ui_set_candidates", result)
+        Ok(())
     }
 
     #[tracing::instrument]
     pub fn set_selection(&mut self, index: i32) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
-        let result: anyhow::Result<()> = {
-            let mut request = tonic::Request::new(shared::proto::SetSelectionRequest { index });
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client("ui_set_selection", |runtime, window_client| {
-                Self::block_on_window_rpc(
-                    runtime,
-                    "ui_set_selection",
-                    window_client.set_selection(request),
-                )?;
-                Ok(())
-            })
-        };
+        let delivery = self
+            .window_dispatcher
+            .enqueue(WindowRpcCommand::SetSelection(
+                shared::proto::SetSelectionRequest { index },
+            ));
         self.log_client_performance_from_start(
             performance_start,
             request_id,
             "ui_set_selection",
             "rpc_total",
-            || match &result {
-                Ok(()) => format!("status=success;index={index}"),
-                Err(error) => format!("status=error;index={index};error={error:?}"),
-            },
+            || format!("status={};index={index}", delivery.log_status()),
         );
-        Self::ignore_window_rpc_error("ui_set_selection", result)
+        Ok(())
     }
 
     #[tracing::instrument]
     pub fn set_input_mode(&mut self, mode: &str) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
-        let result: anyhow::Result<()> = {
-            let mut request = tonic::Request::new(shared::proto::SetInputModeRequest {
-                mode: mode.to_string(),
-            });
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client("ui_set_input_mode", |runtime, window_client| {
-                Self::block_on_window_rpc(
-                    runtime,
-                    "ui_set_input_mode",
-                    window_client.set_input_mode(request),
-                )?;
-                Ok(())
-            })
-        };
+        let delivery = self
+            .window_dispatcher
+            .enqueue(WindowRpcCommand::SetInputMode(
+                shared::proto::SetInputModeRequest {
+                    mode: mode.to_string(),
+                },
+            ));
         self.log_client_performance_from_start(
             performance_start,
             request_id,
             "ui_set_input_mode",
             "rpc_total",
-            || match &result {
-                Ok(()) => format!("status=success;mode={mode}"),
-                Err(error) => format!("status=error;mode={mode};error={error:?}"),
-            },
+            || format!("status={};mode={mode}", delivery.log_status()),
         );
-        Self::ignore_window_rpc_error("ui_set_input_mode", result)
+        Ok(())
     }
 
     #[tracing::instrument(skip(candidates))]
@@ -2811,32 +3009,20 @@ impl IPCService {
         let input_mode_present = performance_start.map(|_| input_mode.is_some());
         let reading_present =
             performance_start.map(|_| reading.is_some_and(|value| !value.is_empty()));
-        let result: anyhow::Result<WindowRpcDelivery> = {
-            let mut request = tonic::Request::new(shared::proto::UpdateCandidateWindowRequest {
-                visible,
-                position,
-                candidates: candidates
-                    .map(|candidates| shared::proto::CandidateList { candidates }),
-                selected_index,
-                input_mode: input_mode.map(ToString::to_string),
-                reading: reading.map(ToString::to_string),
-                candidate_list_visible,
-                reading_vertical_adjustment,
-                engine_hwnd: crate::tsf::engine_message_window::current_thread_engine_hwnd(),
-            });
-            request.set_timeout(UI_RPC_DEADLINE);
-            self.with_window_client_delivery(
-                "ui_update_candidate_window",
-                |runtime, window_client| {
-                    Self::block_on_window_rpc(
-                        runtime,
-                        "ui_update_candidate_window",
-                        window_client.update_candidate_window(request),
-                    )?;
-                    Ok(())
-                },
-            )
+        let request = shared::proto::UpdateCandidateWindowRequest {
+            visible,
+            position,
+            candidates: candidates.map(|candidates| shared::proto::CandidateList { candidates }),
+            selected_index,
+            input_mode: input_mode.map(ToString::to_string),
+            reading: reading.map(ToString::to_string),
+            candidate_list_visible,
+            reading_vertical_adjustment,
+            engine_hwnd: crate::tsf::engine_message_window::current_thread_engine_hwnd(),
         };
+        let delivery = self
+            .window_dispatcher
+            .enqueue(WindowRpcCommand::UpdateCandidateWindow(request));
         self.log_client_performance_from_start(
             performance_start,
             request_id,
@@ -2847,18 +3033,13 @@ impl IPCService {
                 let candidate_count = candidate_count.unwrap_or_default();
                 let input_mode_present = input_mode_present.unwrap_or_default();
                 let reading_present = reading_present.unwrap_or_default();
-                match &result {
-                    Ok(delivery) => format!(
-                        "status={};visible={visible:?};position_present={position_present};candidate_count={candidate_count:?};selected_index={selected_index:?};input_mode_present={input_mode_present};reading_present={reading_present};candidate_list_visible={candidate_list_visible:?};reading_vertical_adjustment={reading_vertical_adjustment:?}",
-                        delivery.log_status()
-                    ),
-                    Err(error) => format!(
-                        "status=error;visible={visible:?};position_present={position_present};candidate_count={candidate_count:?};selected_index={selected_index:?};input_mode_present={input_mode_present};reading_present={reading_present};candidate_list_visible={candidate_list_visible:?};reading_vertical_adjustment={reading_vertical_adjustment:?};error={error:?}"
-                    ),
-                }
+                format!(
+                    "status={};visible={visible:?};position_present={position_present};candidate_count={candidate_count:?};selected_index={selected_index:?};input_mode_present={input_mode_present};reading_present={reading_present};candidate_list_visible={candidate_list_visible:?};reading_vertical_adjustment={reading_vertical_adjustment:?}",
+                    delivery.log_status()
+                )
             },
         );
-        Self::ignore_window_rpc_delivery_error("ui_update_candidate_window", result)
+        Ok(delivery)
     }
 }
 
@@ -4041,5 +4222,103 @@ mod tests {
             }]
         );
         assert!(ledger.complete);
+    }
+
+    #[test]
+    fn shared_ipc_runtime_reuses_same_runtime_instance() {
+        let first = super::shared_ipc_runtime().expect("shared runtime");
+        let second = super::shared_ipc_runtime().expect("shared runtime");
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn window_rpc_queue_coalesces_consecutive_updates_while_preserving_order() {
+        let mut queue = super::WindowRpcQueue::default();
+        queue.push_coalesced(super::WindowRpcCommand::UpdateCandidateWindow(
+            shared::proto::UpdateCandidateWindowRequest {
+                visible: Some(true),
+                position: Some(shared::proto::WindowPosition {
+                    top: 10,
+                    left: 20,
+                    bottom: 30,
+                    right: 40,
+                }),
+                candidates: Some(shared::proto::CandidateList {
+                    candidates: vec!["あ".to_string()],
+                }),
+                selected_index: Some(0),
+                reading: Some("a".to_string()),
+                engine_hwnd: Some(123),
+                ..Default::default()
+            },
+        ));
+        // Second UpdateCandidateWindow merges onto the first, keeping earlier Some fields.
+        queue.push_coalesced(super::WindowRpcCommand::UpdateCandidateWindow(
+            shared::proto::UpdateCandidateWindowRequest {
+                visible: None,
+                position: None,
+                candidates: Some(shared::proto::CandidateList {
+                    candidates: vec!["あい".to_string()],
+                }),
+                selected_index: Some(1),
+                reading: Some("ai".to_string()),
+                candidate_list_visible: Some(true),
+                ..Default::default()
+            },
+        ));
+        assert_eq!(queue.commands.len(), 1);
+        match queue.commands.back().expect("merged update") {
+            super::WindowRpcCommand::UpdateCandidateWindow(merged) => {
+                assert_eq!(merged.visible, Some(true));
+                assert!(merged.position.is_some());
+                assert_eq!(
+                    merged.candidates.as_ref().map(|c| &c.candidates),
+                    Some(&vec!["あい".to_string()])
+                );
+                assert_eq!(merged.selected_index, Some(1));
+                assert_eq!(merged.reading.as_deref(), Some("ai"));
+                assert_eq!(merged.candidate_list_visible, Some(true));
+                assert_eq!(merged.engine_hwnd, Some(123));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        // Different command boundaries preserve ordering.
+        queue.push_coalesced(super::WindowRpcCommand::Hide);
+        queue.push_coalesced(super::WindowRpcCommand::UpdateCandidateWindow(
+            shared::proto::UpdateCandidateWindowRequest {
+                visible: Some(true),
+                ..Default::default()
+            },
+        ));
+        assert_eq!(queue.commands.len(), 3);
+        assert!(matches!(queue.commands[1], super::WindowRpcCommand::Hide));
+
+        // Queue capacity stays bounded.
+        for index in 0..(super::WINDOW_RPC_QUEUE_LIMIT + 4) {
+            queue.push_coalesced(super::WindowRpcCommand::SetSelection(
+                shared::proto::SetSelectionRequest {
+                    index: index as i32,
+                },
+            ));
+        }
+        assert_eq!(queue.commands.len(), super::WINDOW_RPC_QUEUE_LIMIT);
+    }
+
+    #[test]
+    fn disabled_and_cooldown_window_dispatcher_skip_without_blocking() {
+        let disabled = super::WindowRpcDispatcher::disabled();
+        assert_eq!(
+            disabled.enqueue(super::WindowRpcCommand::Hide),
+            super::WindowRpcDelivery::SkippedUnavailable
+        );
+
+        let mut service = IPCService::recovery_for_test(false);
+        assert_eq!(
+            service
+                .update_candidate_window(Some(false), None, Some(vec![]), Some(0), None)
+                .unwrap(),
+            super::WindowRpcDelivery::SkippedUnavailable
+        );
     }
 }

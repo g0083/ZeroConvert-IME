@@ -29,6 +29,10 @@ class KanaKanjiConverter {
 
         @Volatile
         private var isUserDataLoaded = false
+        val isInitialized: Boolean get() = isUserDataLoaded
+        @Volatile
+        internal var userDictRevision: Int = 0
+            private set
         private val userDictEntries = mutableListOf<UserDictEntry>()
 
         /** Bumped by a history reset so commits queued before it are dropped. */
@@ -91,6 +95,7 @@ class KanaKanjiConverter {
                 }
             }
 
+            userDictRevision++
             publishAssistVocabulary()
         }
 
@@ -127,6 +132,7 @@ class KanaKanjiConverter {
             if (normReading.isEmpty() || normWord.isEmpty()) return false
             if (userDictEntries.any { it.reading == normReading && it.word == normWord }) return false
             userDictEntries.add(0, UserDictEntry(normReading, normWord))
+            userDictRevision++
             saveUserDict(context)
             return true
         }
@@ -134,8 +140,10 @@ class KanaKanjiConverter {
         @Synchronized
         fun removeUserDictEntry(context: Context, entry: UserDictEntry) {
             ensureInitialized(context)
-            userDictEntries.removeAll { it.reading == entry.reading && it.word == entry.word }
-            saveUserDict(context)
+            if (userDictEntries.removeAll { it.reading == entry.reading && it.word == entry.word }) {
+                userDictRevision++
+                saveUserDict(context)
+            }
         }
 
         /** Learned readings currently held by the shared engine's selection overrides. */

@@ -43,6 +43,17 @@ object WindowsEngine {
     private lateinit var root: File
     private var modelPath = ""
     private var lastSettings = ""
+    private data class ConfigureKey(
+        val ai: Boolean,
+        val profile: String,
+        val personalize: Boolean,
+        val dictionaryCorrection: Boolean,
+        val predictiveConversion: Boolean,
+        val learningMode: LearningMode?,
+        val userDictRevision: Int,
+        val modelPath: String
+    )
+    private var lastConfigureKey: ConfigureKey? = null
     private var backendsLoaded = false // confined to dispatcher; llama_backend_free does not unload backends
     @Volatile private var ready = false
 
@@ -200,6 +211,10 @@ object WindowsEngine {
 
     private fun configure(ai: Boolean, profile: String, personalize: Boolean, dictionaryCorrection: Boolean,
                           predictiveConversion: Boolean = true) {
+        val effectiveLearning = if (personalize) LearningPolicy.mode else null
+        val dictRevision = if (personalize) KanaKanjiConverter.userDictRevision else -1
+        val key = ConfigureKey(ai, profile, personalize, dictionaryCorrection, predictiveConversion, effectiveLearning, dictRevision, modelPath)
+        if (lastSettings.isNotEmpty() && key == lastConfigureKey) return
         val users = JSONArray()
         if (personalize) KanaKanjiConverter.getUserDictionary(application).forEach {
             users.put(JSONObject().put("reading", it.reading).put("word", it.word))
@@ -211,13 +226,15 @@ object WindowsEngine {
             .put("learning", JSONObject().put("mode", if (!personalize) "disabled" else when (LearningPolicy.mode) {
                 LearningMode.DISABLED -> "disabled"; LearningMode.READ_ONLY -> "read_only"; else -> "enabled"
             })).put("user_dictionary", JSONObject().put("entries", users)).toString()
-        if (settings == lastSettings) return
-        val settingsFile = File(application.filesDir, "windows-engine/Azookey/settings.json")
-        settingsFile.parentFile?.mkdirs()
-        atomicWrite(settingsFile, settings)
-        assistRequest(JSONObject().put("op", "setVocabulary").put("entries", users))
-        checkedSwift(JSONObject().put("op", "configure").put("root", root.absolutePath).put("modelPath", modelPath))
-        lastSettings = settings
+        if (settings != lastSettings) {
+            val settingsFile = File(application.filesDir, "windows-engine/Azookey/settings.json")
+            settingsFile.parentFile?.mkdirs()
+            atomicWrite(settingsFile, settings)
+            assistRequest(JSONObject().put("op", "setVocabulary").put("entries", users))
+            checkedSwift(JSONObject().put("op", "configure").put("root", root.absolutePath).put("modelPath", modelPath))
+            lastSettings = settings
+        }
+        lastConfigureKey = key
     }
 
     /**
@@ -283,6 +300,7 @@ object WindowsEngine {
                            personalize: Boolean, dictionaryCorrection: Boolean,
                            predictiveConversion: Boolean = true,
                            continuation: ConversionContinuation? = null): List<Candidate> {
+        if (input.convertTargetCursorPosition <= 0) return emptyList()
         val queued = System.nanoTime()
         val epoch = nativeConversionEpoch()
         return withContext(dispatcher) {
@@ -318,10 +336,19 @@ object WindowsEngine {
                 (System.nanoTime() - configured) / 1e6, timing.getLong("decodeNs") / 1e6, timing.getLong("decodeCount"),
                 stages.keys().asSequence().associateWith { stages.getLong(it) })
             val candidates = result.getJSONArray("candidates")
-            val converted = (0 until candidates.length()).map { index ->
+            val converted = (0 until candidates.length()).mapNotNull { index ->
                 val candidate = candidates.getJSONObject(index)
-                val consumed = candidate.getInt("consumedReadingUtf16")
-                check(consumed in 1..input.convertTargetCursorPosition)
+                val consumed = safeConsumedReading(
+                    reading = input.convertTarget,
+                    rawConsumed = candidate.getInt("consumedReadingUtf16"),
+                    cursor = input.convertTargetCursorPosition,
+                ) ?: run {
+                    android.util.Log.w(
+                        TAG,
+                        "Ignoring out-of-bounds candidate consumedReadingUtf16=${candidate.optInt("consumedReadingUtf16")} cursor=${input.convertTargetCursorPosition}"
+                    )
+                    return@mapNotNull null
+                }
                 Candidate(candidate.getString("text"), KanaKanjiConverter.toKatakana(input.convertTarget.take(consumed)),
                     isAI = neuralAllowed, learningAllowed = candidate.getBoolean("learningAllowed"),
                     engineCandidateId = candidate.getString("candidateId").takeUnless { it == "0" }.orEmpty(),
@@ -403,9 +430,22 @@ object WindowsEngine {
         val result = assistReply(JSONObject().put("op", "autoCommit").put("raw", raw).put("input", reading)
             .put("baseline", history.lastOrNull()?.aiSurface.orEmpty()).put("history", entries)) ?: return null
         val candidate = runCatching { JSONObject(result) }.getOrNull() ?: return null
-        val length = reading.offsetByCodePoints(0, candidate.optInt("readingLength", -1).coerceAtLeast(0))
+        val length = safeAutoCommitLength(reading, candidate.optInt("readingLength", -1))
         if (length <= 0 || !safeBoundary(length)) return null
         return AutoCommitCandidate(length, reading.take(length), candidate.optString("surface"))
+    }
+
+    internal fun safeConsumedReading(reading: String, rawConsumed: Int, cursor: Int): Int? {
+        if (cursor <= 0 || rawConsumed !in 1..cursor || rawConsumed > reading.length) return null
+        val snapped = ComposingEditorState.snapBoundary(reading, rawConsumed)
+        return snapped.takeIf { it in 1..cursor }
+    }
+
+    internal fun safeAutoCommitLength(reading: String, readingLength: Int): Int {
+        if (readingLength <= 0 || reading.isEmpty()) return 0
+        val count = reading.codePointCount(0, reading.length)
+        val clamped = readingLength.coerceIn(0, count)
+        return reading.offsetByCodePoints(0, clamped)
     }
 
     /**

@@ -42,4 +42,18 @@ class SharedEngineInputTest {
         assertEquals(input.input.mapNotNull { (it.piece as? InputPiece.CharPiece)?.char }.joinToString(""),
             encoded.joinToString("") { it.text })
     }
+
+    @Test fun windowsEngineSafeBoundsNeverCrashOnOutOfRangeOrMidSurrogateValues() {
+        val reading = "a\uD842\uDFB7b" // length 4, codePointCount 3
+        assertEquals(1, com.zeroconvert.ime.engine.WindowsEngine.safeConsumedReading(reading, 2, 4))
+        assertNull(com.zeroconvert.ime.engine.WindowsEngine.safeConsumedReading("\uD842\uDFB7a", 1, 3))
+        assertNull(com.zeroconvert.ime.engine.WindowsEngine.safeConsumedReading("あいう", 0, 3))
+        assertNull(com.zeroconvert.ime.engine.WindowsEngine.safeConsumedReading("あいう", 5, 3))
+        assertNull(com.zeroconvert.ime.engine.WindowsEngine.safeConsumedReading("あいう", 1, 0))
+
+        assertEquals(0, com.zeroconvert.ime.engine.WindowsEngine.safeAutoCommitLength(reading, -1))
+        assertEquals(0, com.zeroconvert.ime.engine.WindowsEngine.safeAutoCommitLength(reading, 0))
+        assertEquals(3, com.zeroconvert.ime.engine.WindowsEngine.safeAutoCommitLength(reading, 2))
+        assertEquals(4, com.zeroconvert.ime.engine.WindowsEngine.safeAutoCommitLength(reading, 99))
+    }
 }

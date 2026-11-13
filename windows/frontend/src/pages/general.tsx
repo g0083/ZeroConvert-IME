@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -52,8 +53,11 @@ type GeneralConfigState = {
     live_conversion_reading_vertical_adjustment: number;
     jev_conversion: boolean;
     predictive_conversion: boolean;
+    experimental_typo_correction: boolean;
     experimental_ai_assist: boolean;
     experimental_translation: boolean;
+    copy_translation_popup: boolean;
+    selection_popup_auto_dismiss_secs: number;
     translation_model: string;
     translation_target: string;
     translation_keep_alive: boolean;
@@ -82,8 +86,11 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     live_conversion_reading_vertical_adjustment: 4,
     jev_conversion: false,
     predictive_conversion: false,
+    experimental_typo_correction: false,
     experimental_ai_assist: true,
     experimental_translation: false,
+    copy_translation_popup: true,
+    selection_popup_auto_dismiss_secs: 4,
     translation_model: "0.8b",
     translation_target: "auto",
     translation_keep_alive: false,
@@ -199,6 +206,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
     const [romajiRows, setRomajiRows] = useState<RomajiRow[]>([]);
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
+    const [sandboxText, setSandboxText] = useState("");
     const [translationInstall, setTranslationInstall] = useState<{ modelId: string; sizeBytes: number | null } | null>(null);
     const [translationProgress, setTranslationProgress] = useState<number | null>(null);
     const translationConfirmResolve = useRef<((ok: boolean) => void) | null>(null);
@@ -273,6 +281,16 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             config.character_width = config.character_width ?? {};
             config.character_width.groups = config.character_width.groups ?? {};
             config.character_width.groups[key] = nextValue;
+        });
+        if (data) setWidthGroups(normalizeWidthGroups(data.character_width?.groups));
+    };
+    const updateWidthGroupsBatch = async (patch: Partial<CharacterWidthGroupsState>) => {
+        const data = await saveConfigWithToast((config) => {
+            config.character_width = config.character_width ?? {};
+            config.character_width.groups = {
+                ...(config.character_width.groups ?? {}),
+                ...patch,
+            };
         });
         if (data) setWidthGroups(normalizeWidthGroups(data.character_width?.groups));
     };
@@ -408,6 +426,58 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     ))}
                 </SettingsSection>
                 <SettingsSection title="半角・全角">
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5">
+                        <span className="text-xs text-muted-foreground">一括プリセット</span>
+                        <div className="flex flex-wrap gap-1.5">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() => void updateWidthGroupsBatch(DEFAULT_WIDTH_GROUPS)}
+                            >
+                                標準に戻す
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() => void updateWidthGroupsBatch({
+                                    bracket: "half",
+                                    comma_period: "half",
+                                    middle_dot_corner_bracket: "half",
+                                    quote: "half",
+                                    colon_semicolon: "half",
+                                    hash_group: "half",
+                                    tilde: "half",
+                                    math_symbol: "half",
+                                    question_exclamation: "half",
+                                })}
+                            >
+                                記号・括弧を半角に統一
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() => void updateWidthGroupsBatch({
+                                    bracket: "full",
+                                    comma_period: "full",
+                                    middle_dot_corner_bracket: "full",
+                                    quote: "full",
+                                    colon_semicolon: "full",
+                                    hash_group: "full",
+                                    tilde: "full",
+                                    math_symbol: "full",
+                                    question_exclamation: "full",
+                                })}
+                            >
+                                記号・括弧を全角に統一
+                            </Button>
+                        </div>
+                    </div>
                     {WIDTH_ROWS.map(({ key, label }) => (
                         <SettingsRow key={key} label={label} htmlFor={`width-${key}`}>
                             <Select value={widthGroups[key]} onValueChange={(value: WidthMode) => void updateWidthGroup(key, value)}>
@@ -416,6 +486,28 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                             </Select>
                         </SettingsRow>
                     ))}
+                </SettingsSection>
+                <SettingsSection title="試し打ち（入力テスト）">
+                    <div className="space-y-2 px-3.5 py-3">
+                        <p className="text-xs text-muted-foreground">設定した句読点・全角半角・ライブ変換の動作をこの場で確認できます。</p>
+                        <div className="flex items-center gap-2">
+                            <Input
+                                value={sandboxText}
+                                onChange={(event) => setSandboxText(event.target.value)}
+                                placeholder="ここに入力して変換・句読点・全角半角をテスト…"
+                                aria-label="試し打ち入力欄"
+                            />
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={!sandboxText}
+                                onClick={() => setSandboxText("")}
+                            >
+                                クリア
+                            </Button>
+                        </div>
+                    </div>
                 </SettingsSection>
             </>}
             {page === "conversion" && <>
@@ -481,6 +573,9 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     </div>}
                 </SettingsSection>
                 <SettingsSection title="タイポ補正と先読み">
+                    <SettingsRow label="ローマ字入力の辞書補正" description="促音・撥音の重複や登録済みの誤入力に対する補正候補を通常候補に加えます（既定: オフ）。AIアシストとは個別に切り替えられます。" htmlFor="dictionary-typo-correction">
+                        <Switch id="dictionary-typo-correction" checked={generalValue.experimental_typo_correction} onCheckedChange={(value) => void updateGeneralConfig("experimental_typo_correction", value)} />
+                    </SettingsRow>
                     <SettingsRow label="タイポ補正モデル" description="Nano v4 メインモデルに統合。読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で高速処理します。">
                         <span className="text-sm font-medium">ZeroCon Model Nano v4（メインモデル統合）</span>
                     </SettingsRow>
@@ -633,6 +728,20 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                                 void updateGeneralConfig("experimental_translation", false);
                             }
                         }} />
+                    </SettingsRow>
+                    <SettingsRow label="コピー時に文字数・翻訳バーを表示" description="閲覧専用画面などでテキストをコピーした際、文字数と翻訳ボタンをカーソル付近に表示します。" htmlFor="copy-translation-popup">
+                        <Switch id="copy-translation-popup" checked={generalValue.copy_translation_popup} onCheckedChange={(value) => void updateGeneralConfig("copy_translation_popup", value)} />
+                    </SettingsRow>
+                    <SettingsRow label="文字数・翻訳バーの自動消去" description="操作しないときに文字数・翻訳バーを自動で閉じるまでの時間です（ホバー中は消えません）。" htmlFor="selection-popup-dismiss">
+                        <Select value={String(generalValue.selection_popup_auto_dismiss_secs)} onValueChange={(value) => void updateGeneralConfig("selection_popup_auto_dismiss_secs", Number(value))}>
+                            <SelectTrigger id="selection-popup-dismiss" className="w-72"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="2">2秒</SelectItem>
+                                <SelectItem value="4">4秒（標準）</SelectItem>
+                                <SelectItem value="8">8秒</SelectItem>
+                                <SelectItem value="0">自動で消さない</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </SettingsRow>
                     {generalValue.experimental_translation && (
                         <>

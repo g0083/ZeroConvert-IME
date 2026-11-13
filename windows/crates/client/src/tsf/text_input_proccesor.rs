@@ -133,19 +133,7 @@ impl ITfTextInputProcessor_Impl for TextServiceFactory_Impl {
 
         drop(text_service);
         self.set_keyboard_disabled_for_document_mgr(doc_mgr.as_ref())?;
-        match IMEState::ensure_ipc_service() {
-            Ok(true) => tracing::debug!("Initialized IPC service during Activate"),
-            Ok(false) => {}
-            Err(error) => {
-                // Activate() should not return an error for a transient IPC startup race:
-                // Windows may keep showing the previously active IME icon even though TSF
-                // considers this text service activated.
-                tracing::warn!(
-                    ?error,
-                    "Failed to initialize IPC service during Activate; continuing TSF activation"
-                );
-            }
-        }
+        IMEState::prewarm_ipc_service_in_background();
 
         tracing::debug!("Activate success");
 

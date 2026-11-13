@@ -123,5 +123,93 @@ class TouchBiasTypoResolverTest {
         assertEquals("the", recovered.firstOrNull())
         assertTrue(recovered.containsAll(listOf("the", "they", "there")))
     }
+
+    @Test
+    fun selectCorrectionResult_prefersTouchOverWeakNonAutoPrimaryButPreservesAutoPrimary() {
+        val weakPrimary = com.zeroconvert.ime.assist.AiAssistResult(
+            type = AiAssistType.TYPO_CORRECTION,
+            text = "別の候補",
+            label = "💡 別の候補",
+            relevance = 30,
+            sourceReading = "きんにちは",
+            autoApply = false
+        )
+        val autoPrimary = com.zeroconvert.ime.assist.AiAssistResult(
+            type = AiAssistType.TYPO_CORRECTION,
+            text = "こんにちは",
+            label = "💡 こんにちは",
+            relevance = 90,
+            sourceReading = "きんにちは",
+            autoApply = true
+        )
+        val touchStrong = com.zeroconvert.ime.assist.AiAssistResult(
+            type = AiAssistType.TYPO_CORRECTION,
+            text = "こんにちは",
+            label = "💡 こんにちは",
+            relevance = 95,
+            sourceReading = "きんにちは",
+            autoApply = true
+        )
+        val touchMedium = touchStrong.copy(relevance = 60, autoApply = false)
+
+        assertEquals(
+            touchMedium,
+            com.zeroconvert.ime.assist.AiAssistManager.selectCorrectionResult(weakPrimary, touchMedium)
+        )
+        assertEquals(
+            touchStrong,
+            com.zeroconvert.ime.assist.AiAssistManager.selectCorrectionResult(weakPrimary, touchStrong)
+        )
+        assertEquals(
+            autoPrimary,
+            com.zeroconvert.ime.assist.AiAssistManager.selectCorrectionResult(autoPrimary, touchStrong)
+        )
+        assertEquals(
+            weakPrimary,
+            com.zeroconvert.ime.assist.AiAssistManager.selectCorrectionResult(weakPrimary, null)
+        )
+    }
+
+    @Test
+    fun streamAiAssist_resolvesTouchBiasCorrectionWhenEnabled() = kotlinx.coroutines.runBlocking {
+        val biases = listOf(
+            TouchKeyBias('k'),
+            TouchKeyBias('i', listOf('o' to 0.85f)),
+            TouchKeyBias('n'),
+            TouchKeyBias('n'),
+            TouchKeyBias('i'),
+            TouchKeyBias('c'),
+            TouchKeyBias('h'),
+            TouchKeyBias('i'),
+            TouchKeyBias('h'),
+            TouchKeyBias('a')
+        )
+        val inference = object : com.zeroconvert.ime.assist.AssistInference {
+            override val revision: Long = 1L
+            override fun complete(
+                model: com.zeroconvert.ime.assist.AssistModel,
+                prompt: String,
+                maxTokens: Int,
+                timeoutMs: Int
+            ) = com.zeroconvert.ime.assist.ModelCompletion("", "eos")
+        }
+        val updates = mutableListOf<com.zeroconvert.ime.assist.AssistUpdate>()
+        com.zeroconvert.ime.assist.AiAssistManager.streamAiAssist(
+            reading = "きんにちは",
+            baseline = "きんにちは",
+            context = "",
+            allowCorrection = true,
+            inference = inference,
+            rawInput = "kinnichiha",
+            touchBiases = biases,
+            enableDynamicTouchAssist = true
+        ) { update ->
+            updates.add(update)
+        }
+        val chosen = updates.lastOrNull()?.selected
+        assertNotNull(chosen)
+        assertEquals(AiAssistType.TYPO_CORRECTION, chosen?.type)
+        assertEquals("こんにちは", chosen?.text)
+    }
 }
 

@@ -55,6 +55,31 @@ pub trait CompletionBackend {
         false
     }
     fn complete(&self, port: u16, path: &str, body: &Value, timeout_ms: u64) -> Option<Value>;
+    /// In-process keyboard repair (Android). `None` means this backend has no
+    /// such channel and the Windows worker process must be used instead;
+    /// `Some(None)` means the channel exists but produced no answer.
+    fn keyboard_repair(
+        &self,
+        _raw: &str,
+        _input: &str,
+        _context: &str,
+        _timeout_ms: u64,
+    ) -> Option<Option<Value>> {
+        None
+    }
+}
+
+pub(super) fn keyboard_repair_override(
+    raw: &str,
+    input: &str,
+    context: &str,
+    timeout_ms: u64,
+) -> Option<Option<Value>> {
+    BACKEND.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|backend| backend.keyboard_repair(raw, input, context, timeout_ms))
+    })
 }
 
 pub(super) fn read_learning() -> bool {

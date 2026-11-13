@@ -21,6 +21,36 @@ impl runtime::CompletionBackend for Host {
     fn read_learning(&self) -> bool {
         self.read_learning
     }
+    // Repair runs in-process on the loaded model, so the native-worker gate is open.
+    fn allow_native_worker(&self) -> bool {
+        true
+    }
+    fn keyboard_repair(
+        &self,
+        raw: &str,
+        input: &str,
+        context: &str,
+        timeout_ms: u64,
+    ) -> Option<Option<Value>> {
+        // Values must survive as bare JSON text for the C++ side: drop controls,
+        // quotes and backslashes instead of escaping them.
+        let clean = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
+                .collect()
+        };
+        let dictionary = runtime::reverse_dictionary_path()
+            .map(|p| clean(&p.to_string_lossy()))
+            .unwrap_or_default();
+        let body = json!({
+            "keyboard_repair": "1", "raw": clean(raw), "input": clean(input),
+            "context": clean(context), "dictionary": dictionary,
+        });
+        Some(
+            self.complete(runtime::PREDICTION_SERVER_PORT, "", &body, timeout_ms)
+                .filter(|value| !value.is_null()),
+        )
+    }
     fn complete(&self, port: u16, _path: &str, body: &Value, timeout_ms: u64) -> Option<Value> {
         let payload = CString::new(body.to_string()).ok()?;
         // The host returns real UTF-8 with an explicit release function.
@@ -141,6 +171,9 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
     }
     let config = AiAssistConfig {
         enabled: true,
+        // Corrections convert through the same loaded model, as on Windows
+        // (corrector port == main conversion port); the APK has no second model.
+        corrector_port: runtime::PREDICTION_SERVER_PORT,
         ..AiAssistConfig::default()
     };
     match request.op.as_str() {
@@ -290,6 +323,51 @@ mod tests {
             .find(|entry| entry["symbol"] == "@")
             .unwrap();
         assert_eq!(at["fullwidth"], false);
+    }
+
+    struct HostedRepair(Value, Value);
+    impl runtime::CompletionBackend for HostedRepair {
+        fn read_learning(&self) -> bool {
+            false
+        }
+        fn allow_native_worker(&self) -> bool {
+            true
+        }
+        fn keyboard_repair(&self, _: &str, input: &str, _: &str, _: u64) -> Option<Option<Value>> {
+            assert_eq!(input, "ああた");
+            Some(Some(self.0.clone()))
+        }
+        fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+            Some(self.1.clone())
+        }
+    }
+
+    #[test]
+    fn hosted_keyboard_repair_replaces_the_worker_process() {
+        // Reading validation needs no dictionary; a hosted answer is gated by the
+        // same observed-input and gain >= 37 rules as the Windows worker.
+        let strong =
+            json!({"observed":"ああた","reading":"あした","alt_reading":"あさた","gain":40.0});
+        let ask = |reply: Value| {
+            runtime::with_backend(Box::new(HostedRepair(reply, Value::Null)), || {
+                ai_assist::keyboard_hybrid::repair_readings("", "ああた", "", false)
+            })
+        };
+        assert_eq!(
+            ask(strong),
+            Some(vec!["あした".to_string(), "あさた".to_string()])
+        );
+        for weak in [
+            json!({"observed":"ああた"}),
+            json!({"observed":"ああた","reading":"あした","gain":36.0}),
+        ] {
+            assert_eq!(ask(weak.clone()), Some(vec![]), "{weak}");
+        }
+        // An answer for a different observed input is stale and discarded.
+        assert_eq!(
+            ask(json!({"observed":"あした","reading":"あしだ","gain":50.0})),
+            None
+        );
     }
 
     #[test]

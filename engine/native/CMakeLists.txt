@@ -39,6 +39,8 @@ add_library(zenz_jni SHARED
   "${ANDROID_SOURCES}/zenz_jni.cpp"
   "${ANDROID_SOURCES}/assist_jni.cpp"
   "${ANDROID_SOURCES}/azookey_louds.cpp"
-  shared_jni.cpp)
-target_include_directories(zenz_jni PRIVATE "${ANDROID_SOURCES}" "${ANDROID_SOURCES}/llama.cpp/include" "${ANDROID_SOURCES}/llama.cpp/ggml/include")
+  shared_jni.cpp
+  keyboard_assist.cpp)
+# Phase 3-A compiles the Windows keyboard-prior candidate/dictionary header as-is.
+target_include_directories(zenz_jni PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${REPO_ROOT}/windows/native/keyboard-prior" "${ANDROID_SOURCES}" "${ANDROID_SOURCES}/llama.cpp/include" "${ANDROID_SOURCES}/llama.cpp/ggml/include")
 target_link_libraries(zenz_jni PRIVATE llama zerocon_rust zerocon_swift log android dl)
