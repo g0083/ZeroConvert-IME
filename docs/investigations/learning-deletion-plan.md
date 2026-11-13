@@ -64,7 +64,9 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 
 ### Windows候補ウィンドウ
 
-候補ウィンドウは `Vec<String>` しか持たないため、右クリックは表示indexだけを `ENGINE_CANDIDATE_FORGET_MESSAGE` でTSFへ送り、クライアントが `Composition.candidates.candidate_ids` でIDを解決する。IDが0（辞書補正・AI候補）なら何もしない。削除成功後は `UserAction::Space` 相当の再変換で候補順位を出し直す。
+候補ウィンドウは `Vec<String>` しか持たないため、右クリックは表示indexだけを `ENGINE_CANDIDATE_FORGET_MESSAGE` でTSFへ送り、クライアントが `Composition.candidates.candidate_ids` でIDを解決する。IDが0（辞書補正・AI候補）なら何もしない。削除成功後は `MoveCursor(0)` でサーバーに同じ読みの変換をやり直させる。
+
+`MoveCursor(0)` を選ぶのは、`Previewing` 状態の Space / Tab / Reconvert が `candidate_preview_actions`（`SetSelection(Down)`）へ解決され、候補一覧を再変換しないため。キー経路の計画に頼らず、再変換要求を直接組み立てる。あわせて `SetSelection(Number(0))` で再ランキング後の先頭を選択し直す。
 
 `ChangeWindowMessageFilterEx` で新メッセージも許可する。UIAccess を失った候補UIから昇格ウィンドウへ届かせるため。
 
@@ -127,7 +129,7 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 | Android lint | `:rebuilt:lintDebug` | エラー0 |
 | Android UI (エミュレータ) | `am instrument -e keyboardUiOnly true` | **22 passed / 0 failed** |
 | Android APK | `scripts/check-android-apk.py` | 両ABIでclosure・CPU backend・逆引き辞書・モデルハッシュ検証OK |
-| 実機（V2520A / Android） | `am instrument` 26 tests | **26 passed / 0 failed** |
+| 実機（V2520A / Android） | `am instrument` 27 tests | **27 passed / 0 failed** |
 
 ### 追加修正（2026-11-12）
 
@@ -155,10 +157,10 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 5. **無効ID**: `0` と `UInt64.max` は削除拒否。
 6. **回帰**: 既存25件（変換・カーソル・英語・辞書・Zenzai長文）は全てPASS。
 
-### 実機で確認できなかったこと
+### 実機で確認したこと（2026-11-12〜13）
 
-- 候補バーの長押しから開く確認 UI の**実機目視**。修正前は `AlertDialog` による `BadTokenException` でクラッシュしていた。修正後、エミュレータの UI フィクスチャ（`KeyboardUiRegression`）で長押し → インライン確認 → キャンセル／削除の一連が通ることを確認したが、実機の候補バー上での目視は未実施。
-- Windows実IMEでの右クリック削除。ビルドとテストは通ったが、TSFとして常駐させた状態での操作は未確認。
+- 候補バーの長押しから開く確認 UI: 実機の候補バー上で長押し → インライン確認 → キャンセル／削除の一連を目視確認した。修正前の `AlertDialog` による `BadTokenException` は再現しない。
+- Windows実IMEでの右クリック削除: 試験IMEを常駐させた状態で右クリック → 確認 → 削除 → 候補一覧の再変換まで動作を確認した。
 
 ### エミュレータで判明した環境制約
 
@@ -169,5 +171,17 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 ## 未対応
 
 - 英語学習（`zerocon_english_data`）と絵文字履歴は削除スコープに含めていない。
-- 削除後の再ランキングを検証する自動テスト（Windows）。`UserAction::Space` 相当の再変換を呼ぶ実装だが、順位変化そのものは未検証。
 - 上流 `forgetMemory` の表記単位照合により、同じ表記を別読みで学習していた場合も消える。仕様として許容。
+
+## 修正（2026-11-12・Windows右クリック削除の再変換）
+
+実機で右クリック削除を試すと、候補の選択が2番目へ移るだけで一覧が変わらなかった。`reconvert_after_learning_deletion` が `UserAction::Space` を計画していたのが原因で、`Previewing` ではこれが `SetSelection(Down)` になり再変換が走らない。`MoveCursor(0)` でサーバーの `GetComposedTextForCursorPrefix` を呼び直す実装へ変えた。
+
+| 検証 | 結果 |
+| --- | --- |
+| `cargo test -p azookey-windows` | 403 passed / 0 failed（追加2件を含む） |
+| `cargo fmt -p azookey-windows -- --check` | 差分なし |
+| `cargo clippy -p azookey-windows --all-targets` | 新規警告なし |
+| 実IME（メモ帳、`Build-Trial.bat` 適用後） | 右クリック1回目で「もう一度右クリックで削除」表示、2回目で候補が 日本語／にほんご／2本後／2本語／日本後 に入れ替わり、選択が先頭へ戻ることを確認 |
+
+再変換後の候補から `日本語で` が消えることを目視確認した。学習ストアへの書き込み時刻も更新されている（`selection-overrides.json`）。

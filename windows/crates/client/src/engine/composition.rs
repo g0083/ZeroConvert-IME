@@ -7478,6 +7478,10 @@ impl TextServiceFactory {
 
     /// Re-runs conversion for the current reading so the candidate list reflects
     /// the deletion instead of showing the previous order.
+    ///
+    /// This must ask the server again. Planning a preview key would not clear the
+    /// stale list: in `Previewing`, Space/Tab/Reconvert resolve to
+    /// `candidate_preview_actions`, which only moves the selection down.
     fn reconvert_after_learning_deletion(&self) -> Result<()> {
         let composition = {
             let text_service = self.borrow()?;
@@ -7487,22 +7491,22 @@ impl TextServiceFactory {
         if composition.state == CompositionState::None {
             return Ok(());
         }
-        let config_snapshot = self.input_config_snapshot()?;
-        let mode = IMEState::input_mode()?;
-        // Space in a composing state re-converts the current reading without
-        // committing it, which is exactly what a ranking change needs.
-        let Some((transition, actions)) = Self::plan_actions_for_user_action_with_lookup(
-            &composition,
-            &UserAction::Space,
-            &mode,
-            false,
-            config_snapshot.app_config(),
-            config_snapshot.romaji_lookup(),
-            false,
-        ) else {
-            return Ok(());
-        };
-        self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)
+        let actions = Self::learning_deletion_refresh_actions();
+        self.handle_action(&actions, composition.state)
+    }
+
+    /// Actions that ask the server to convert the current reading again.
+    ///
+    /// Kept separate from the key planner so the refresh cannot silently degrade
+    /// into a preview-only action: Space/Tab/Reconvert in `Previewing` only move
+    /// the selection and never clear a stale candidate list. The explicit zero
+    /// selection shows the re-ranked list from the top.
+    #[inline]
+    fn learning_deletion_refresh_actions() -> Vec<ClientAction> {
+        vec![
+            ClientAction::MoveCursor(0),
+            ClientAction::SetSelection(SetSelectionType::Number(0)),
+        ]
     }
 
     #[tracing::instrument]

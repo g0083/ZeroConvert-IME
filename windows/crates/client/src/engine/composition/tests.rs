@@ -1205,6 +1205,58 @@ fn delayed_candidate_window_shows_when_space_opens_preview() {
 }
 
 #[test]
+fn learning_deletion_refresh_reruns_conversion_instead_of_moving_selection() {
+    // Regression: the right-click deletion refresh planned UserAction::Space.
+    // In Previewing that resolves to candidate_preview_actions, so the list only
+    // moved the selection down and the deleted candidate stayed visible.
+    let actions = TextServiceFactory::learning_deletion_refresh_actions();
+
+    assert_eq!(
+        actions,
+        vec![
+            ClientAction::MoveCursor(0),
+            ClientAction::SetSelection(SetSelectionType::Number(0)),
+        ]
+    );
+    assert!(!actions
+        .iter()
+        .any(|action| matches!(action, ClientAction::ShowCandidateWindow)));
+}
+
+#[test]
+fn preview_space_resolves_to_selection_only_for_every_preset() {
+    // Pins why the deletion refresh must not be planned as Space: a preview key
+    // turns into a selection move and never asks the server to reconvert.
+    for show_window in [false, true] {
+        let mut app_config = AppConfig::default();
+        app_config.general.show_candidate_window_after_space = show_window;
+        let composition = Composition {
+            state: CompositionState::Previewing,
+            raw_input: "a".to_string(),
+            ..Composition::default()
+        };
+
+        let (_, actions) = TextServiceFactory::plan_actions_for_user_action(
+            &composition,
+            &UserAction::Space,
+            &InputMode::Kana,
+            false,
+            &app_config,
+            false,
+        )
+        .expect("space should stay in preview");
+
+        assert!(actions.iter().all(|action| matches!(
+            action,
+            ClientAction::SetSelection(_) | ClientAction::ShowCandidateWindow
+        )));
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ClientAction::SetSelection(_))));
+    }
+}
+
+#[test]
 fn space_preview_does_not_commit_learning() {
     let composition = Composition {
         state: CompositionState::Composing,
