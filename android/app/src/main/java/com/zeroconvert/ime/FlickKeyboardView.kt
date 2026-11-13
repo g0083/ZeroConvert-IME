@@ -1,10 +1,7 @@
 package com.zeroconvert.ime
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,27 +13,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private val nextFlickGestureId = AtomicLong(1L)
 
 enum class JapaneseInputLayout {
     FLICK_12KEY,
@@ -455,6 +453,258 @@ data class ActiveFlickPopupState(
 )
 
 @Composable
+private fun FlickKeyboardContainer(
+    palette: ZeroConPalette,
+    content: @Composable ColumnScope.(
+        getRootCoords: () -> LayoutCoordinates?,
+        onFlickUpdateById: (Long, ActiveFlickPopupState?) -> Unit
+    ) -> Unit
+) {
+    var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val activePopups = remember { mutableStateMapOf<Long, ActiveFlickPopupState>() }
+    DisposableEffect(Unit) {
+        onDispose { activePopups.clear() }
+    }
+    val onFlickUpdateById: (Long, ActiveFlickPopupState?) -> Unit = { gestureId, state ->
+        if (state == null) {
+            activePopups.remove(gestureId)
+        } else {
+            activePopups[gestureId] = state
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { rootCoordinates = it }
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            content({ rootCoordinates }, onFlickUpdateById)
+        }
+
+        // Overlay Flick Popup Guides keyed by gesture ID so multi-finger fast taps never erase another popup.
+        for (popup in activePopups.values) {
+            FlickPopupGuide(
+                popupState = popup,
+                palette = palette
+            )
+        }
+    }
+}
+
+private fun flickRowVisualPadding(
+    rowIndex: Int,
+    isFirstInRow: Boolean = false,
+    isLastInRow: Boolean = false
+): PaddingValues = keyRowVisualPadding(
+    isFirstInRow = isFirstInRow,
+    isLastInRow = isLastInRow,
+    baseHorizontal = 3.dp,
+    edgeExtraHorizontal = 3.dp,
+    top = if (rowIndex == 0) 6.dp else 2.5.dp,
+    bottom = if (rowIndex == 3) 7.5.dp else 2.5.dp
+)
+
+@Composable
+private fun ColumnScope.FlickGridRow(
+    rowIndex: Int,
+    keys: Triple<FlickKeyDef, FlickKeyDef, FlickKeyDef>,
+    keyBgColor: Color,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    getRootCoords: () -> LayoutCoordinates?,
+    onFlickUpdateById: (Long, ActiveFlickPopupState?) -> Unit,
+    onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
+    firstKeyBg: Color = keyBgColor,
+    firstKeyTextColor: Color = textColor,
+    firstIsActionKey: Boolean = false,
+    leftKey: @Composable RowScope.(Modifier, PaddingValues) -> Unit,
+    rightKey: @Composable RowScope.(Modifier, PaddingValues) -> Unit
+) {
+    val leftPadding = flickRowVisualPadding(rowIndex, isFirstInRow = true)
+    val midPadding = flickRowVisualPadding(rowIndex)
+    val rightPadding = flickRowVisualPadding(rowIndex, isLastInRow = true)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+    ) {
+        leftKey(Modifier.weight(1.05f).fillMaxHeight(), leftPadding)
+
+        FlickKeyCell(
+            keyDef = keys.first,
+            modifier = Modifier.weight(1.15f),
+            bgColor = firstKeyBg,
+            actionKeyBg = actionKeyBg,
+            textColor = firstKeyTextColor,
+            isActionKey = firstIsActionKey,
+            visualPadding = midPadding,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete
+        )
+        FlickKeyCell(
+            keyDef = keys.second,
+            modifier = Modifier.weight(1.15f),
+            bgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            visualPadding = midPadding,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete
+        )
+        FlickKeyCell(
+            keyDef = keys.third,
+            modifier = Modifier.weight(1.15f),
+            bgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            visualPadding = midPadding,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete
+        )
+
+        rightKey(Modifier.weight(1.05f).fillMaxHeight(), rightPadding)
+    }
+}
+
+@Composable
+private fun FlickSideSymbolsButton(
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    actionKeyBg: Color,
+    textColor: Color,
+    onOpenSymbols: () -> Unit
+) {
+    KeyboardActionKey(
+        modifier = modifier,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = actionKeyBg,
+        onClick = onOpenSymbols
+    ) {
+        Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun FlickSideEmojiButton(
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    actionKeyBg: Color,
+    textColor: Color,
+    onOpenEmoji: () -> Unit
+) {
+    KeyboardActionKey(
+        modifier = modifier,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = actionKeyBg,
+        onClick = onOpenEmoji
+    ) {
+        Icon(imageVector = Icons.Default.Mood, contentDescription = "Emoji", tint = textColor, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun FlickSideEnterButton(
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    palette: ZeroConPalette,
+    onEnter: () -> Unit
+) {
+    KeyboardActionKey(
+        modifier = modifier,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = palette.primaryAccent,
+        isAccent = true,
+        onClick = onEnter
+    ) {
+        Text(
+            text = "確定",
+            color = palette.onAccent,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun FlickSideSpaceButton(
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    actionKeyBg: Color,
+    textColor: Color,
+    onSpace: () -> Unit,
+    onLongPressSpace: () -> Unit
+) {
+    KeyboardActionKey(
+        modifier = modifier,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = actionKeyBg,
+        contentDescription = "空白",
+        onClick = onSpace,
+        onLongClick = onLongPressSpace
+    ) {
+        Text(text = "␣", color = textColor, fontSize = 20.sp)
+    }
+}
+
+@Composable
+private fun FlickSideBackspaceButton(
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    onDelete: () -> Unit
+) {
+    RepeatingIconButton(
+        onClick = onDelete,
+        modifier = modifier,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = actionKeyBg,
+        palette = palette
+    ) {
+        Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun FlickSideCursorButton(
+    text: String,
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    onClick: () -> Unit
+) {
+    RepeatingIconButton(
+        onClick = onClick,
+        modifier = modifier,
+        initialDelayMs = 300L,
+        repeatIntervalMs = 50L,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = actionKeyBg,
+        palette = palette
+    ) {
+        Text(text = text, color = textColor, fontSize = 14.sp)
+    }
+}
+
+@Suppress("UNUSED_PARAMETER")
+@Composable
 fun Japanese12KeyFlickLayout(
     keyBgColor: Color,
     actionKeyBg: Color,
@@ -476,9 +726,6 @@ fun Japanese12KeyFlickLayout(
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit
 ) {
-    var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var activePopupState by remember { mutableStateOf<ActiveFlickPopupState?>(null) }
-
     // State for toggle input (when isFlickOnly is false)
     var lastTappedKey by remember { mutableStateOf<String?>(null) }
     var currentCycleIndex by remember { mutableStateOf(0) }
@@ -525,303 +772,78 @@ fun Japanese12KeyFlickLayout(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { rootCoordinates = it }
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Row 0: [ !?# ] [ あ ] [ か ] [ さ ] [ ⌫ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .clickable(onClick = onOpenSymbols),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                }
+    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
+        FlickGridRow(
+            rowIndex = 0,
+            keys = Triple(FlickKeyDefinitions.keyA, FlickKeyDefinitions.keyKa, FlickKeyDefinitions.keySa),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, onOpenSymbols) },
+            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyA,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
+        FlickGridRow(
+            rowIndex = 1,
+            keys = Triple(FlickKeyDefinitions.keyTa, FlickKeyDefinitions.keyNa, FlickKeyDefinitions.keyHa),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
+            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyKa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
+        FlickGridRow(
+            rowIndex = 2,
+            keys = Triple(FlickKeyDefinitions.keyMa, FlickKeyDefinitions.keyYa, FlickKeyDefinitions.keyRa),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) },
+            rightKey = { mod, pad -> FlickSideEmojiButton(mod, pad, actionKeyBg, textColor, onOpenEmoji) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keySa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                RepeatingIconButton(
-                    onClick = onDelete,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                ) {
-                    Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
-                }
-            }
-
-            // Row 1: [ ◀ ] [ た ] [ な ] [ は ] [ ␣ (空白) ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                RepeatingIconButton(
-                    onClick = onCursorLeft,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "◀", color = textColor, fontSize = 14.sp)
-                }
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyTa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyNa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyHa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                val currentOnSpace by rememberUpdatedState(onSpace)
-                val currentOnLongPressSpace by rememberUpdatedState(onLongPressSpace)
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { currentOnSpace() },
-                                onLongPress = { currentOnLongPressSpace() }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "␣", color = textColor, fontSize = 20.sp)
-                }
-            }
-
-            // Row 2: [ ▶ ] [ ま ] [ や ] [ ら ] [ 😀 ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                RepeatingIconButton(
-                    onClick = onCursorRight,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "▶", color = textColor, fontSize = 14.sp)
-                }
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyMa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyYa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyRa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .clickable(onClick = onOpenEmoji),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(imageVector = Icons.Default.Mood, contentDescription = "Emoji", tint = textColor, modifier = Modifier.size(22.dp))
-                }
-            }
-
-            // Row 3: [ あa1 ] [ 小゛゜] [ わ ] [ 、。] [ ↩ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
+        FlickGridRow(
+            rowIndex = 3,
+            keys = Triple(FlickKeyDefinitions.keyMod, FlickKeyDefinitions.keyWa, FlickKeyDefinitions.keyPunc),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            firstKeyBg = actionKeyBg,
+            firstIsActionKey = true,
+            leftKey = { mod, pad ->
                 Aa1Button(
                     mode = KeyboardMode.JAPANESE,
-                    modifier = Modifier.weight(1.05f),
+                    modifier = mod,
                     actionKeyBg = actionKeyBg,
                     fillAvailableHeight = true,
+                    visualPadding = pad,
+                    palette = palette,
                     onClick = onCycleMode
                 )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyMod,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = actionKeyBg,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    isActionKey = true,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyWa,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickKeyDefinitions.keyPunc,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(palette.primaryAccent)
-                        .clickable(onClick = onEnter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "確定",
-                        color = palette.onAccent,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        // Overlay Flick Popup Guide
-        activePopupState?.let { popup ->
-            FlickPopupGuide(
-                popupState = popup,
-                palette = palette
-            )
-        }
+            },
+            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
+        )
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun English12KeyFlickLayout(
     keyBgColor: Color,
@@ -844,8 +866,6 @@ fun English12KeyFlickLayout(
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit
 ) {
-    var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var activePopupState by remember { mutableStateOf<ActiveFlickPopupState?>(null) }
     var isShifted by remember { mutableStateOf(false) }
 
     var lastTappedKey by remember { mutableStateOf<String?>(null) }
@@ -903,303 +923,99 @@ fun English12KeyFlickLayout(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { rootCoordinates = it }
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Row 0: [ !?# ] [ @#/ ] [ abc ] [ def ] [ ⌫ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .clickable(onClick = onOpenSymbols),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                }
+    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
+        FlickGridRow(
+            rowIndex = 0,
+            keys = Triple(
+                FlickEnglishKeyDefinitions.getKey1(),
+                FlickEnglishKeyDefinitions.getKey2(isShifted),
+                FlickEnglishKeyDefinitions.getKey3(isShifted)
+            ),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, onOpenSymbols) },
+            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey1(),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
+        FlickGridRow(
+            rowIndex = 1,
+            keys = Triple(
+                FlickEnglishKeyDefinitions.getKey4(isShifted),
+                FlickEnglishKeyDefinitions.getKey5(isShifted),
+                FlickEnglishKeyDefinitions.getKey6(isShifted)
+            ),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
+            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey2(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
+        FlickGridRow(
+            rowIndex = 2,
+            keys = Triple(
+                FlickEnglishKeyDefinitions.getKey7(isShifted),
+                FlickEnglishKeyDefinitions.getKey8(isShifted),
+                FlickEnglishKeyDefinitions.getKey9(isShifted)
+            ),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) },
+            rightKey = { mod, pad -> FlickSideEmojiButton(mod, pad, actionKeyBg, textColor, onOpenEmoji) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey3(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                RepeatingIconButton(
-                    onClick = onDelete,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                ) {
-                    Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
-                }
-            }
-
-            // Row 1: [ ◀ ] [ ghi ] [ jkl ] [ mno ] [ ␣ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                RepeatingIconButton(
-                    onClick = onCursorLeft,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "◀", color = textColor, fontSize = 14.sp)
-                }
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey4(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey5(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey6(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                val currentOnSpace by rememberUpdatedState(onSpace)
-                val currentOnLongPressSpace by rememberUpdatedState(onLongPressSpace)
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { currentOnSpace() },
-                                onLongPress = { currentOnLongPressSpace() }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "␣", color = textColor, fontSize = 20.sp)
-                }
-            }
-
-            // Row 2: [ ▶ ] [ pqrs ] [ tuv ] [ wxyz ] [ 😀 ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                RepeatingIconButton(
-                    onClick = onCursorRight,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "▶", color = textColor, fontSize = 14.sp)
-                }
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey7(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey8(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.getKey9(isShifted),
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .clickable(onClick = onOpenEmoji),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(imageVector = Icons.Default.Mood, contentDescription = "Emoji", tint = textColor, modifier = Modifier.size(22.dp))
-                }
-            }
-
-            // Row 3: [ あa1 ] [ a/A ] [ '(~) ] [ .,?! ] [ ↩ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
+        FlickGridRow(
+            rowIndex = 3,
+            keys = Triple(
+                FlickEnglishKeyDefinitions.keyCase,
+                FlickEnglishKeyDefinitions.key0,
+                FlickEnglishKeyDefinitions.keyPunc
+            ),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            firstKeyBg = if (isShifted) palette.primaryAccent.copy(alpha = 0.28f) else actionKeyBg,
+            firstKeyTextColor = if (isShifted) {
+                if (palette.isDark) palette.primaryAccentSoft else palette.primaryAccent
+            } else {
+                textColor
+            },
+            firstIsActionKey = true,
+            leftKey = { mod, pad ->
                 Aa1Button(
                     mode = KeyboardMode.ENGLISH,
-                    modifier = Modifier.weight(1.05f),
+                    modifier = mod,
                     actionKeyBg = actionKeyBg,
                     fillAvailableHeight = true,
+                    visualPadding = pad,
+                    palette = palette,
                     onClick = onCycleMode
                 )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.keyCase,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = if (isShifted) palette.primaryAccent.copy(alpha = 0.28f) else actionKeyBg,
-                    actionKeyBg = actionKeyBg,
-                    textColor = if (isShifted) palette.primaryAccentSoft else textColor,
-                    isActionKey = true,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.key0,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickEnglishKeyDefinitions.keyPunc,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(palette.primaryAccent)
-                        .clickable(onClick = onEnter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "確定",
-                        color = palette.onAccent,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        // Overlay Flick Popup Guide
-        activePopupState?.let { popup ->
-            FlickPopupGuide(
-                popupState = popup,
-                palette = palette
-            )
-        }
+            },
+            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
+        )
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun FlickNumericPadLayout(
     keyBgColor: Color,
@@ -1218,9 +1034,6 @@ fun FlickNumericPadLayout(
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit
 ) {
-    var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var activePopupState by remember { mutableStateOf<ActiveFlickPopupState?>(null) }
-
     var lastTappedKey by remember { mutableStateOf<String?>(null) }
     var currentCycleIndex by remember { mutableStateOf(0) }
     var lastTapTimestamp by remember { mutableStateOf(0L) }
@@ -1256,301 +1069,89 @@ fun FlickNumericPadLayout(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { rootCoordinates = it }
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Row 0: [ ↶ ] [ 1 (☆♪→) ] [ 2 (¥$€) ] [ 3 (%°#) ] [ ⌫ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
+    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
+        FlickGridRow(
+            rowIndex = 0,
+            keys = Triple(FlickNumericKeyDefinitions.key1, FlickNumericKeyDefinitions.key2, FlickNumericKeyDefinitions.key3),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad ->
                 RepeatingIconButton(
                     onClick = onDelete,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
+                    modifier = mod,
+                    visualPadding = pad,
+                    cornerRadius = 8.dp,
+                    baseColor = actionKeyBg,
+                    palette = palette
                 ) {
                     Text(text = "↶", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }
+            },
+            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key1,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
+        FlickGridRow(
+            rowIndex = 1,
+            keys = Triple(FlickNumericKeyDefinitions.key4, FlickNumericKeyDefinitions.key5, FlickNumericKeyDefinitions.key6),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
+            rightKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) }
+        )
 
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key2,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key3,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                RepeatingIconButton(
-                    onClick = onDelete,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                ) {
-                    Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
-                }
+        FlickGridRow(
+            rowIndex = 2,
+            keys = Triple(FlickNumericKeyDefinitions.key7, FlickNumericKeyDefinitions.key8, FlickNumericKeyDefinitions.key9),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad -> FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, onOpenSymbols) },
+            rightKey = { mod, pad ->
+                FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, { onCommitText(" ") }, onLongPressSpace)
             }
+        )
 
-            // Row 1: [ ◀ ] [ 4 (○*・) ] [ 5 (+×÷) ] [ 6 (<=>) ] [ ▶ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                RepeatingIconButton(
-                    onClick = onCursorLeft,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "◀", color = textColor, fontSize = 14.sp)
-                }
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key4,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key5,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key6,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                RepeatingIconButton(
-                    onClick = onCursorRight,
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "▶", color = textColor, fontSize = 14.sp)
-                }
-            }
-
-            // Row 2: [ !?# ] [ 7 (「」:) ] [ 8 (〒々〆) ] [ 9 (^\\) ] [ ␣ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .clickable(onClick = onOpenSymbols),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                }
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key7,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key8,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key9,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                val currentOnCommitText by rememberUpdatedState(onCommitText)
-                val currentOnLongPressSpace by rememberUpdatedState(onLongPressSpace)
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(actionKeyBg)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { currentOnCommitText(" ") },
-                                onLongPress = { currentOnLongPressSpace() }
-                            )
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = "␣", color = textColor, fontSize = 20.sp)
-                }
-            }
-
-            // Row 3: [ あa1 ] [ ()[] ] [ 0 (~...@) ] [ .,-/ ] [ ↩ ]
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
+        FlickGridRow(
+            rowIndex = 3,
+            keys = Triple(FlickNumericKeyDefinitions.keyBrackets, FlickNumericKeyDefinitions.key0, FlickNumericKeyDefinitions.keyPunc),
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = handleFlickResult,
+            leftKey = { mod, pad ->
                 Aa1Button(
                     mode = KeyboardMode.NUMERIC,
-                    modifier = Modifier.weight(1.05f),
+                    modifier = mod,
                     actionKeyBg = actionKeyBg,
                     fillAvailableHeight = true,
+                    visualPadding = pad,
+                    palette = palette,
                     onClick = onCycleMode
                 )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.keyBrackets,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.key0,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                FlickKeyCell(
-                    keyDef = FlickNumericKeyDefinitions.keyPunc,
-                    modifier = Modifier.weight(1.15f),
-                    bgColor = keyBgColor,
-                    actionKeyBg = actionKeyBg,
-                    textColor = textColor,
-                    getRootCoords = { rootCoordinates },
-                    onFlickUpdate = { state -> activePopupState = state },
-                    onFlickComplete = handleFlickResult
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.05f)
-                        .fillMaxHeight()
-                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(palette.primaryAccent)
-                        .clickable(onClick = onEnter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "確定",
-                        color = palette.onAccent,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        // Overlay Flick Popup Guide
-        activePopupState?.let { popup ->
-            FlickPopupGuide(
-                popupState = popup,
-                palette = palette
-            )
-        }
+            },
+            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
+        )
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun FlickKeyCell(
     keyDef: FlickKeyDef,
@@ -1559,38 +1160,48 @@ fun FlickKeyCell(
     actionKeyBg: Color,
     textColor: Color,
     isActionKey: Boolean = false,
+    visualPadding: PaddingValues = PaddingValues(horizontal = 3.dp, vertical = 2.5.dp),
+    palette: ZeroConPalette = LocalZeroConPalette.current,
     getRootCoords: () -> LayoutCoordinates?,
-    onFlickUpdate: (ActiveFlickPopupState?) -> Unit,
+    onFlickUpdate: (ActiveFlickPopupState?) -> Unit = {},
+    onFlickUpdateById: ((Long, ActiveFlickPopupState?) -> Unit)? = null,
     onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit
 ) {
+    val currentKeyDef by rememberUpdatedState(keyDef)
     val currentGetRootCoords by rememberUpdatedState(getRootCoords)
     val currentOnFlickUpdate by rememberUpdatedState(onFlickUpdate)
+    val currentOnFlickUpdateById by rememberUpdatedState(onFlickUpdateById)
     val currentOnFlickComplete by rememberUpdatedState(onFlickComplete)
+    val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
+    val thresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
 
     var cellCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var isPressed by remember { mutableStateOf(false) }
     val density = LocalDensity.current
 
-    BoxWithConstraints(
+    KeyCapFrame(
         modifier = modifier
             .fillMaxHeight()
-            .padding(horizontal = 3.dp, vertical = 2.5.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isActionKey) actionKeyBg else bgColor)
             .onGloballyPositioned { cellCoordinates = it }
             .semantics(mergeDescendants = true) {
                 contentDescription = "${keyDef.label}を入力"
                 role = Role.Button
                 onClick {
-                    currentOnFlickComplete(keyDef, FlickDirection.CENTER)
+                    currentOnFlickComplete(currentKeyDef, FlickDirection.CENTER)
                     true
                 }
             }
-            .pointerInput(keyDef) {
+            .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
+                    val gestureKeyDef = currentKeyDef
                     val startOffset = down.position
                     var currentDir = FlickDirection.CENTER
+                    val gestureId = nextFlickGestureId.incrementAndGet()
+
+                    haptic()
+                    isPressed = true
 
                     val rootCoords = currentGetRootCoords()
                     val myCoords = cellCoordinates
@@ -1605,64 +1216,82 @@ fun FlickKeyCell(
                         Offset.Zero
                     }
 
-                    currentOnFlickUpdate(ActiveFlickPopupState(keyDef, centerInRoot, currentDir, rootWidthPx, rootHeightPx))
+                    val initialPopup = ActiveFlickPopupState(gestureKeyDef, centerInRoot, currentDir, rootWidthPx, rootHeightPx)
+                    currentOnFlickUpdateById?.invoke(gestureId, initialPopup)
+                    currentOnFlickUpdate(initialPopup)
 
-                    val thresholdPx = with(density) { 18.dp.toPx() }
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id }
-                        if (change == null || !change.pressed) {
-                            // Touch released!
-                            currentOnFlickUpdate(null)
-                            currentOnFlickComplete(keyDef, currentDir)
-                            break
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null) break
+                            if (!change.pressed) {
+                                change.consume()
+                                currentOnFlickComplete(gestureKeyDef, currentDir)
+                                break
+                            }
+                            change.consume()
+                            val thresholdPx = with(density) { thresholdDp.toPx() }
+                            val pos = change.position
+                            val dx = pos.x - startOffset.x
+                            val dy = pos.y - startOffset.y
+                            val newDir = calculateFlickDirectionWithHysteresis(dx, dy, thresholdPx, currentDir)
+                            if (newDir != currentDir) {
+                                currentDir = newDir
+                                val updatedPopup = ActiveFlickPopupState(gestureKeyDef, centerInRoot, currentDir, rootWidthPx, rootHeightPx)
+                                currentOnFlickUpdateById?.invoke(gestureId, updatedPopup)
+                                currentOnFlickUpdate(updatedPopup)
+                            }
                         }
-                        change.consume()
-                        val pos = change.position
-                        val dx = pos.x - startOffset.x
-                        val dy = pos.y - startOffset.y
-                        val newDir = calculateFlickDirection(dx, dy, thresholdPx)
-                        if (newDir != currentDir) {
-                            currentDir = newDir
-                            currentOnFlickUpdate(ActiveFlickPopupState(keyDef, centerInRoot, currentDir, rootWidthPx, rootHeightPx))
-                        }
+                    } finally {
+                        isPressed = false
+                        currentOnFlickUpdateById?.invoke(gestureId, null)
+                        currentOnFlickUpdate(null)
                     }
                 }
             },
-        contentAlignment = Alignment.Center
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = bgColor,
+        isPressed = isPressed,
+        palette = palette
     ) {
-        // At the minimum user-selected height the original fixed text metrics no
-        // longer leave enough room for both lines.  Keep this decision inside the
-        // shared key component so the IME and the settings preview stay identical.
-        val isCompactKey = maxHeight < 44.dp
-        val mainTextSize = when {
-            keyDef.label.length > 2 && isCompactKey -> 12.sp
-            keyDef.label.length > 2 -> 14.sp
-            isCompactKey -> 17.sp
-            else -> 19.sp
-        }
-        val subTextSize = if (isCompactKey) 7.sp else 8.5.sp
-
-        Column(
+        BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = keyDef.label,
-                color = textColor,
-                fontSize = mainTextSize,
-                fontWeight = FontWeight.Bold
-            )
-            if (keyDef.subText.isNotEmpty()) {
+            // At the minimum user-selected height the original fixed text metrics no
+            // longer leave enough room for both lines.  Keep this decision inside the
+            // shared key component so the IME and the settings preview stay identical.
+            val isCompactKey = maxHeight < 44.dp
+            val mainTextSize = when {
+                keyDef.label.length > 2 && isCompactKey -> 12.sp
+                keyDef.label.length > 2 -> 14.sp
+                isCompactKey -> 17.sp
+                else -> 19.sp
+            }
+            val subTextSize = if (isCompactKey) 7.sp else 8.5.sp
+
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 Text(
-                    text = keyDef.subText,
-                    color = textColor.copy(alpha = 0.5f),
-                    fontSize = subTextSize,
-                    fontWeight = FontWeight.Normal,
-                    maxLines = 1
+                    text = keyDef.label,
+                    color = textColor,
+                    fontSize = mainTextSize,
+                    fontWeight = FontWeight.Bold
                 )
+                if (keyDef.subText.isNotEmpty()) {
+                    Text(
+                        text = keyDef.subText,
+                        color = textColor.copy(alpha = 0.5f),
+                        fontSize = subTextSize,
+                        fontWeight = FontWeight.Normal,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }

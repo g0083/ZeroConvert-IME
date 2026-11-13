@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -210,6 +211,28 @@ fun MainScreen(
     }
     var vibrationDuration by remember {
         mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_VIBRATION_DURATION, 15))
+    }
+    var isKeyPreviewEnabled by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_KEY_PREVIEW_ENABLED, true))
+    }
+    var flickSensitivityDp by remember {
+        mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_FLICK_SENSITIVITY_DP, 18).coerceIn(12, 28))
+    }
+    var isKeyBordersEnabled by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_KEY_BORDERS_ENABLED, true))
+    }
+    var oneHandedMode by remember {
+        mutableStateOf(
+            OneHandedMode.fromName(
+                imePrefs.getString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, OneHandedMode.OFF.name)
+            )
+        )
+    }
+    var keyboardBottomPaddingDp by remember {
+        mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32))
+    }
+    var isDynamicTouchAssistEnabled by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_DYNAMIC_TOUCH_ASSIST, true))
     }
     var isAutoCommitEnabled by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, true))
@@ -502,7 +525,8 @@ fun MainScreen(
                 ) 5 else 4
                 val previewBarHeight = (keyboardKeyHeight * 0.8f).dp
                 val realKeyboardHeight = previewBarHeight * 2 +
-                    keyboardContentHeight(keyboardKeyHeight.dp, previewRowCount)
+                    keyboardContentHeight(keyboardKeyHeight.dp, previewRowCount) +
+                    keyboardBottomPaddingDp.dp
                 val density = LocalDensity.current
                 Box(
                     modifier = Modifier
@@ -513,6 +537,14 @@ fun MainScreen(
                 ) {
                     Layout(
                         content = {
+                            ProvideKeyboardErgonomicsLocals(
+                                palette = palette,
+                                onKeyPressHaptic = {},
+                                keyPreviewEnabled = isKeyPreviewEnabled,
+                                flickThresholdDp = flickSensitivityDp.dp,
+                                keyBordersEnabled = isKeyBordersEnabled,
+                                dynamicTouchAssistEnabled = isDynamicTouchAssistEnabled
+                            ) {
                             CompositionLocalProvider(LocalKeyboardKeyHeight provides keyboardKeyHeight.dp) {
                                 Column(Modifier.requiredWidth(realKeyboardWidth).height(realKeyboardHeight)) {
                                     KeyboardAssistBar(
@@ -537,12 +569,7 @@ fun MainScreen(
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .weight(1f)
-                                            .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
-                                    ) {
+                                    val previewKeyboardBody: @Composable () -> Unit = {
                                         if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
                                             Japanese12KeyFlickLayout(
                                                 keyBgColor = palette.keyNormal,
@@ -588,7 +615,61 @@ fun MainScreen(
                                             )
                                         }
                                     }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)
+                                    ) {
+                                        if (oneHandedMode == OneHandedMode.OFF) {
+                                            previewKeyboardBody()
+                                        } else {
+                                            val saveOneHanded: (OneHandedMode) -> Unit = { next ->
+                                                oneHandedMode = next
+                                                imePrefs.edit()
+                                                    .putString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, next.name)
+                                                    .apply()
+                                            }
+                                            Row(modifier = Modifier.fillMaxSize()) {
+                                                if (oneHandedMode == OneHandedMode.RIGHT) {
+                                                    OneHandedSideRail(
+                                                        modifier = Modifier.weight(0.18f).fillMaxHeight(),
+                                                        actionKeyBg = palette.keyModifier,
+                                                        textColor = palette.textPrimary,
+                                                        palette = palette,
+                                                        isLeftAligned = false,
+                                                        onFlipSide = { saveOneHanded(OneHandedMode.LEFT) },
+                                                        onExitOneHanded = { saveOneHanded(OneHandedMode.OFF) }
+                                                    )
+                                                    Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
+                                                        previewKeyboardBody()
+                                                    }
+                                                } else {
+                                                    Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
+                                                        previewKeyboardBody()
+                                                    }
+                                                    OneHandedSideRail(
+                                                        modifier = Modifier.weight(0.18f).fillMaxHeight(),
+                                                        actionKeyBg = palette.keyModifier,
+                                                        textColor = palette.textPrimary,
+                                                        palette = palette,
+                                                        isLeftAligned = true,
+                                                        onFlipSide = { saveOneHanded(OneHandedMode.RIGHT) },
+                                                        onExitOneHanded = { saveOneHanded(OneHandedMode.OFF) }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (keyboardBottomPaddingDp > 0) {
+                                        Spacer(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(keyboardBottomPaddingDp.dp)
+                                                .background(palette.canvas)
+                                        )
+                                    }
                                 }
+                            }
                             }
                         }
                     ) { measurables, constraints ->
@@ -654,6 +735,84 @@ fun MainScreen(
                 )
             }
             SettingsDivider(palette)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "片手モード",
+                    color = palette.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                SettingsSegmented(
+                    options = listOf(
+                        OneHandedMode.OFF.name to "オフ",
+                        OneHandedMode.LEFT.name to "左寄せ",
+                        OneHandedMode.RIGHT.name to "右寄せ"
+                    ),
+                    selected = oneHandedMode.name,
+                    palette = palette,
+                    onSelected = { modeName ->
+                        val next = OneHandedMode.fromName(modeName)
+                        oneHandedMode = next
+                        imePrefs.edit()
+                            .putString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, next.name)
+                            .apply()
+                    }
+                )
+                Text(
+                    text = "キーボードの幅を約82%にして左右どちらかに寄せます。ツールバーや側面ボタンからいつでも解除できます。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp
+                )
+            }
+            SettingsDivider(palette)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "下部余白（底上げ）",
+                        color = palette.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "${keyboardBottomPaddingDp} dp",
+                        color = palette.primaryAccentSoft,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Slider(
+                    value = keyboardBottomPaddingDp.toFloat(),
+                    onValueChange = { value ->
+                        keyboardBottomPaddingDp = value.toInt().coerceIn(0, 32)
+                        imePrefs.edit()
+                            .putInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, keyboardBottomPaddingDp)
+                            .apply()
+                    },
+                    valueRange = 0f..32f,
+                    steps = 31,
+                    colors = SliderDefaults.colors(
+                        thumbColor = palette.primaryAccent,
+                        activeTrackColor = palette.primaryAccent,
+                        inactiveTrackColor = palette.surfaceElevated
+                    )
+                )
+                Text(
+                    text = "画面下端のベゼルやジェスチャーバーと最下段キーの間に余白を設け、指を届きやすくします（標準: 0 dp）。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp
+                )
+            }
+            SettingsDivider(palette)
             SettingsSwitchRow(
                 title = "上部の数字キー",
                 description = if (isQwertyNumberRow) {
@@ -697,12 +856,96 @@ fun MainScreen(
                         .apply()
                 }
             )
+            SettingsDivider(palette)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "フリック感度",
+                        color = palette.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "${flickSensitivityDp} dp",
+                        color = palette.primaryAccentSoft,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Slider(
+                    value = flickSensitivityDp.toFloat(),
+                    onValueChange = { value ->
+                        flickSensitivityDp = value.toInt().coerceIn(12, 28)
+                        imePrefs.edit()
+                            .putInt(ZeroConvertInputMethodService.KEY_FLICK_SENSITIVITY_DP, flickSensitivityDp)
+                            .apply()
+                    },
+                    valueRange = 12f..28f,
+                    steps = 15,
+                    colors = SliderDefaults.colors(
+                        thumbColor = palette.primaryAccent,
+                        activeTrackColor = palette.primaryAccent,
+                        inactiveTrackColor = palette.surfaceElevated
+                    )
+                )
+                Text(
+                    text = "値が小さいほど短い指の動きでフリックが反応し、大きいほど誤フリックを抑えます（標準: 18 dp）。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp
+                )
+            }
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "キー拡大プレビュー",
+                description = "QWERTYでキーに触れた瞬間に、押している文字をキー上に拡大表示します。",
+                checked = isKeyPreviewEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isKeyPreviewEnabled = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_KEY_PREVIEW_ENABLED, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "キー枠線と立体表示",
+                description = "キーの境界線と立体的な縁取りを表示し、明暗テーマでキー位置を見分けやすくします。",
+                checked = isKeyBordersEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isKeyBordersEnabled = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_KEY_BORDERS_ENABLED, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "予測タッチ補正（次打鍵拡大・誤タップ救済）",
+                description = "次の入力候補となるキーの当たり判定をわずかに広げ、境界付近の誤タップ時にも押下位置をもとに正しい文字を提案します。",
+                checked = isDynamicTouchAssistEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isDynamicTouchAssistEnabled = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_DYNAMIC_TOUCH_ASSIST, checked)
+                        .apply()
+                }
+            )
         }
 
         SettingsSection("操作フィードバック", palette) {
             SettingsSwitchRow(
                 title = "キー操作バイブレーション",
-                description = "キー入力やフリック、デリート操作時に触覚フィードバックを発生させます。",
+                description = "キーやボタンに触れた瞬間（押下時のみ）に触覚フィードバックを発生させます。",
                 checked = isVibrationEnabled,
                 palette = palette,
                 onCheckedChange = { checked ->

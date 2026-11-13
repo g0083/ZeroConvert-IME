@@ -1,5 +1,6 @@
 package com.zeroconvert.ime.assist
 
+import com.zeroconvert.ime.TouchKeyBias
 import com.zeroconvert.ime.ZenzNative
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -55,6 +56,9 @@ object AiAssistManager {
         context: String,
         allowCorrection: Boolean,
         inference: AssistInference = ZenzNative.assistSession(),
+        rawInput: String = "",
+        touchBiases: List<TouchKeyBias> = emptyList(),
+        enableDynamicTouchAssist: Boolean = true,
         onUpdate: suspend (AssistUpdate) -> Unit
     ) = coroutineScope {
         val results = Channel<Pair<AiAssistType, AiAssistResult?>>(2)
@@ -65,7 +69,22 @@ object AiAssistManager {
             results.send(type to result)
         }
         worker(AiAssistType.TYPO_CORRECTION) {
-            if (allowCorrection) ModelCorrector(inference).suggest(context, reading, baseline) else null
+            if (!allowCorrection) {
+                null
+            } else {
+                val primary = ModelCorrector(inference).suggest(context, reading, baseline)
+                when {
+                    primary != null -> primary
+                    enableDynamicTouchAssist && touchBiases.isNotEmpty() ->
+                        TouchBiasTypoResolver.suggestCorrection(
+                            rawInput = rawInput,
+                            reading = reading,
+                            baseline = baseline,
+                            touchBiases = touchBiases
+                        )
+                    else -> null
+                }
+            }
         }
         worker(AiAssistType.PREDICTION) { ModelPredictor(inference).suggest(context, reading, baseline) }
         val presentation = AssistPresentation()

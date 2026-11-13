@@ -245,6 +245,7 @@ fun KeyboardAssistBar(
                         .semantics(mergeDescendants = true) {
                             contentDescription = "$title ${assist.text} を採用"
                         }
+                        .pointerDownHaptic()
                         .clickable(onClick = onAdopt)
                 ) {
                     Row(
@@ -272,6 +273,7 @@ fun KeyboardAssistBar(
                     .width(80.dp)
                     .fillMaxHeight()
                     .semantics(mergeDescendants = true) { contentDescription = "補正を取り消す" }
+                    .pointerDownHaptic()
                     .clickable(onClick = onUndo),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
@@ -299,12 +301,23 @@ fun KeyboardContentArea(
     expandedContent: @Composable () -> Unit,
     keyboardContent: @Composable () -> Unit
 ) {
+    // Keep outer height strictly equal to keyboardContentHeight(keyHeight, rowCount) + extraHeight,
+    // while avoiding outer horizontal/vertical dead-zone padding around interactive key layouts.
     Box(
         modifier = Modifier.fillMaxWidth().height(keyboardContentHeight(keyHeight, rowCount) + extraHeight)
-            .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
     ) {
         CompositionLocalProvider(LocalKeyboardKeyHeight provides keyHeight) {
-            if (expanded) expandedContent() else keyboardContent()
+            if (expanded) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)
+                ) {
+                    expandedContent()
+                }
+            } else {
+                keyboardContent()
+            }
         }
     }
 }
@@ -328,7 +341,7 @@ fun ExpandedCandidatePanel(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = if (isRealtimeInline) palette.readyEmerald.copy(alpha = 0.2f) else palette.keyModifier,
-                modifier = Modifier.fillMaxHeight().clickable(onClick = onToggleRealtimeInline)
+                modifier = Modifier.fillMaxHeight().pointerDownHaptic().clickable(onClick = onToggleRealtimeInline)
             ) {
                 Box(Modifier.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
                     Text(

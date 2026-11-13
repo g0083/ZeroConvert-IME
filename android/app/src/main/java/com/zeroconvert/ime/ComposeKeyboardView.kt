@@ -23,11 +23,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -47,6 +51,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zeroconvert.ime.translation.TranslationText
@@ -122,6 +127,16 @@ fun KeyboardRootView(
 
     // The reading and candidate bars follow the key height setting, so publish it for the whole view.
     val keyHeight = imeService.keyboardKeyHeightState.value.dp
+    val oneHandedMode = imeService.oneHandedModeState.value
+    val bottomPaddingDp = imeService.keyboardBottomPaddingDpState.value.dp
+    ProvideKeyboardErgonomicsLocals(
+        palette = palette,
+        onKeyPressHaptic = { imeService.vibrateOnKeyPress() },
+        keyPreviewEnabled = imeService.isKeyPreviewEnabledState.value,
+        flickThresholdDp = imeService.flickSensitivityDpState.value.dp,
+        keyBordersEnabled = imeService.isKeyBordersEnabledState.value,
+        dynamicTouchAssistEnabled = imeService.isDynamicTouchAssistEnabledState.value
+    ) {
     CompositionLocalProvider(LocalKeyboardKeyHeight provides keyHeight) {
         Column(
             modifier = Modifier
@@ -204,7 +219,7 @@ fun KeyboardRootView(
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
                                         color = actionKeyBg.copy(alpha = 0.9f),
-                                        modifier = Modifier.clickable { onClipboardPaste(suggestion, true) }
+                                        modifier = Modifier.pointerDownHaptic().clickable { onClipboardPaste(suggestion, true) }
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -239,7 +254,7 @@ fun KeyboardRootView(
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
                                         color = actionKeyBg.copy(alpha = 0.6f),
-                                        modifier = Modifier.clickable { imeService.openSettings() }
+                                        modifier = Modifier.pointerDownHaptic().clickable { imeService.openSettings() }
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -269,15 +284,18 @@ fun KeyboardRootView(
                             if (imeService.canReconvertSelection()) {
                                 Box(
                                     Modifier.fillMaxHeight().widthIn(min = 64.dp)
+                                        .pointerDownHaptic()
                                         .clickable { imeService.reconvertSelection() },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp, maxLines = 1)
                                 }
                             }
+
                             if (imeService.translationEnabledState.value) {
                                 Box(
                                     Modifier.fillMaxHeight().widthIn(min = 56.dp)
+                                        .pointerDownHaptic()
                                         .clickable { imeService.translateSelectedText() },
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -287,7 +305,7 @@ fun KeyboardRootView(
                         } else if (candidates.isEmpty()) {
                             if (imeService.canReconvertSelection()) {
                                 Text("再変換", color = palette.primaryAccentSoft, fontSize = 12.sp,
-                                    modifier = Modifier.clickable { imeService.reconvertSelection() }.padding(horizontal = 8.dp))
+                                    modifier = Modifier.pointerDownHaptic().clickable { imeService.reconvertSelection() }.padding(horizontal = 8.dp))
                             }
                             // Japanese & English Layout Switcher (12キー <-> QWERTY)
                             if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
@@ -297,6 +315,7 @@ fun KeyboardRootView(
                                     color = actionKeyBg,
                                     modifier = Modifier
                                         .padding(end = 4.dp)
+                                        .pointerDownHaptic()
                                         .clickable {
                                             val next = if (currentLayout == JapaneseInputLayout.FLICK_12KEY) {
                                                 JapaneseInputLayout.QWERTY
@@ -331,11 +350,64 @@ fun KeyboardRootView(
                                 }
                             }
 
+                            if (keyboardMode == KeyboardMode.JAPANESE || keyboardMode == KeyboardMode.ENGLISH) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (oneHandedMode != OneHandedMode.OFF) {
+                                        accentColor.copy(alpha = 0.22f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                    modifier = Modifier
+                                        .padding(end = 2.dp)
+                                        .semantics(mergeDescendants = true) {
+                                            role = Role.Button
+                                            contentDescription = when (oneHandedMode) {
+                                                OneHandedMode.OFF -> "片手モードに切り替え"
+                                                OneHandedMode.RIGHT -> "片手モード（右寄せ）"
+                                                OneHandedMode.LEFT -> "片手モード（左寄せ）"
+                                            }
+                                        }
+                                        .pointerDownHaptic()
+                                        .clickable {
+                                            val next = when (oneHandedMode) {
+                                                OneHandedMode.OFF -> OneHandedMode.RIGHT
+                                                OneHandedMode.RIGHT -> OneHandedMode.LEFT
+                                                OneHandedMode.LEFT -> OneHandedMode.OFF
+                                            }
+                                            imeService.setOneHandedMode(next)
+                                        }
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Smartphone,
+                                            contentDescription = null,
+                                            tint = if (oneHandedMode != OneHandedMode.OFF) accentColor else palette.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        if (oneHandedMode != OneHandedMode.OFF && suggestion == null) {
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Text(
+                                                text = if (oneHandedMode == OneHandedMode.LEFT) "左" else "右",
+                                                color = accentColor,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             if (imeService.translationEnabledState.value) {
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
                                         .clip(RoundedCornerShape(6.dp))
+                                        .pointerDownHaptic()
                                         .clickable { imeService.toggleTranslationMode() },
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -354,6 +426,7 @@ fun KeyboardRootView(
                                     .size(36.dp)
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(if (activeTab == KeyboardTab.CLIPBOARD) accentColor.copy(alpha = 0.22f) else Color.Transparent)
+                                    .pointerDownHaptic()
                                     .clickable {
                                         activeTab = if (activeTab == KeyboardTab.CLIPBOARD) KeyboardTab.MAIN else KeyboardTab.CLIPBOARD
                                     },
@@ -374,6 +447,7 @@ fun KeyboardRootView(
                                 modifier = Modifier
                                     .size(36.dp)
                                     .clip(RoundedCornerShape(6.dp))
+                                    .pointerDownHaptic()
                                     .clickable { imeService.toggleTranslationMode() },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -389,6 +463,7 @@ fun KeyboardRootView(
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics { contentDescription = if (isCandidatesExpanded) "候補一覧を閉じる" else "候補一覧を開く" }
+                                .pointerDownHaptic()
                                 .clickable { isCandidatesExpanded = !isCandidatesExpanded },
                             contentAlignment = Alignment.Center
                         ) {
@@ -436,33 +511,37 @@ fun KeyboardRootView(
                 keyboardMode != KeyboardMode.NUMERIC &&
                 imeService.japaneseLayoutState.value == JapaneseInputLayout.QWERTY
             val keyRowCount = if (showsQwertyNumberRow) 5 else 4
-            KeyboardContentArea(
-                keyHeight = keyHeight,
-                expanded = isCandidatesExpanded && candidates.isNotEmpty(),
-                rowCount = keyRowCount,
-                // The emoji, symbol, and clipboard tabs hide the reading and candidate bars, so
-                // their height belongs to the panel instead of leaving an empty band.
-                extraHeight = if (
-                    activeTab == KeyboardTab.EMOJI || activeTab == KeyboardTab.SYMBOLS ||
-                    activeTab == KeyboardTab.CLIPBOARD
-                ) {
-                    KeyboardBarHeight * 2
-                } else {
-                    0.dp
-                },
-                expandedContent = {
-                    ExpandedCandidatePanel(
-                        candidates = candidates,
-                        isRealtimeInline = isRealtimeInline,
-                        palette = palette,
-                        onToggleRealtimeInline = onToggleRealtimeInline,
-                        onSelect = { item ->
-                            imeService.selectCandidate(item)
-                            isCandidatesExpanded = false
-                        }
-                    )
-                },
-                keyboardContent = {
+            val contentExtraHeight = if (
+                activeTab == KeyboardTab.EMOJI || activeTab == KeyboardTab.SYMBOLS ||
+                activeTab == KeyboardTab.CLIPBOARD
+            ) {
+                KeyboardBarHeight * 2
+            } else {
+                0.dp
+            }
+            val isCandidatesPanelExpanded = isCandidatesExpanded && candidates.isNotEmpty()
+            val isOneHandedLayout = oneHandedMode != OneHandedMode.OFF && !isCandidatesPanelExpanded
+            val contentAreaBlock: @Composable () -> Unit = {
+                KeyboardContentArea(
+                    keyHeight = keyHeight,
+                    expanded = isCandidatesPanelExpanded,
+                    rowCount = keyRowCount,
+                    // The emoji, symbol, and clipboard tabs hide the reading and candidate bars, so
+                    // their height belongs to the panel instead of leaving an empty band.
+                    extraHeight = contentExtraHeight,
+                    expandedContent = {
+                        ExpandedCandidatePanel(
+                            candidates = candidates,
+                            isRealtimeInline = isRealtimeInline,
+                            palette = palette,
+                            onToggleRealtimeInline = onToggleRealtimeInline,
+                            onSelect = { item ->
+                                imeService.selectCandidate(item)
+                                isCandidatesExpanded = false
+                            }
+                        )
+                    },
+                    keyboardContent = {
                     when (activeTab) {
                     KeyboardTab.MAIN -> {
                         when (keyboardMode) {
@@ -525,7 +604,12 @@ fun KeyboardRootView(
                                         isComposing = isComposing,
                                         onCursorLeft = { imeService.handleCursorLeft() },
                                         onCursorRight = { imeService.handleCursorRight() },
-                                        showNumberRow = imeService.isQwertyNumberRowState.value
+                                        showNumberRow = imeService.isQwertyNumberRowState.value,
+                                        nextKeyWeights = imeService.nextKeyWeightsForCurrentInput(KeyboardMode.JAPANESE),
+                                        onKeyPressWithBias = { ch, touchBias ->
+                                            imeService.handleChar(shiftState.characterFor(ch), touchBias)
+                                            shiftState = shiftState.afterCharacter()
+                                        }
                                     )
                                 }
                             }
@@ -586,7 +670,12 @@ fun KeyboardRootView(
                                         isComposing = isComposing,
                                         onCursorLeft = { imeService.handleCursorLeft() },
                                         onCursorRight = { imeService.handleCursorRight() },
-                                        showNumberRow = imeService.isQwertyNumberRowState.value
+                                        showNumberRow = imeService.isQwertyNumberRowState.value,
+                                        nextKeyWeights = imeService.nextKeyWeightsForCurrentInput(KeyboardMode.ENGLISH),
+                                        onCommitCharWithBias = { ch, touchBias ->
+                                            imeService.handleEnglishChar(shiftState.characterFor(ch), touchBias)
+                                            shiftState = shiftState.afterCharacter()
+                                        }
                                     )
                                 }
                             }
@@ -684,7 +773,141 @@ fun KeyboardRootView(
                     }
                 }
                 }
-            )
+                )
+            }
+            if (isOneHandedLayout) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(keyboardContentHeight(keyHeight, keyRowCount) + contentExtraHeight)
+                ) {
+                    if (oneHandedMode == OneHandedMode.RIGHT) {
+                        OneHandedSideRail(
+                            modifier = Modifier.weight(0.18f).fillMaxHeight(),
+                            actionKeyBg = actionKeyBg,
+                            textColor = textColor,
+                            palette = palette,
+                            isLeftAligned = false,
+                            onFlipSide = { imeService.setOneHandedMode(OneHandedMode.LEFT) },
+                            onExitOneHanded = { imeService.setOneHandedMode(OneHandedMode.OFF) }
+                        )
+                        Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
+                            contentAreaBlock()
+                        }
+                    } else {
+                        Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
+                            contentAreaBlock()
+                        }
+                        OneHandedSideRail(
+                            modifier = Modifier.weight(0.18f).fillMaxHeight(),
+                            actionKeyBg = actionKeyBg,
+                            textColor = textColor,
+                            palette = palette,
+                            isLeftAligned = true,
+                            onFlipSide = { imeService.setOneHandedMode(OneHandedMode.RIGHT) },
+                            onExitOneHanded = { imeService.setOneHandedMode(OneHandedMode.OFF) }
+                        )
+                    }
+                }
+            } else {
+                contentAreaBlock()
+            }
+            if (bottomPaddingDp > 0.dp) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(bottomPaddingDp)
+                        .background(bgColor)
+                )
+            }
+        }
+    }
+    }
+}
+
+@Composable
+fun OneHandedSideRail(
+    modifier: Modifier,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    isLeftAligned: Boolean,
+    onFlipSide: () -> Unit,
+    onExitOneHanded: () -> Unit
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        KeyCapFrame(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .semantics(mergeDescendants = true) {
+                    role = Role.Button
+                    contentDescription = "全幅に戻す"
+                }
+                .pointerDownHaptic()
+                .clickable(onClick = onExitOneHanded),
+            visualPadding = PaddingValues(0.dp),
+            cornerRadius = 10.dp,
+            baseColor = actionKeyBg,
+            isPressed = false,
+            palette = palette
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.OpenInFull,
+                    contentDescription = null,
+                    tint = textColor,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "全幅",
+                    color = textColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+        }
+        KeyCapFrame(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .semantics(mergeDescendants = true) {
+                    role = Role.Button
+                    contentDescription = if (isLeftAligned) "右寄せに切り替え" else "左寄せに切り替え"
+                }
+                .pointerDownHaptic()
+                .clickable(onClick = onFlipSide),
+            visualPadding = PaddingValues(0.dp),
+            cornerRadius = 10.dp,
+            baseColor = actionKeyBg,
+            isPressed = false,
+            palette = palette
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SwapHoriz,
+                    contentDescription = null,
+                    tint = palette.primaryAccentSoft,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = if (isLeftAligned) "右へ" else "左へ",
+                    color = textColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
         }
     }
 }
@@ -726,14 +949,14 @@ private fun TranslationStatusBar(
                 color = palette.primaryAccentSoft,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.clickable(onClick = onCommit).padding(horizontal = 8.dp)
+                modifier = Modifier.pointerDownHaptic().clickable(onClick = onCommit).padding(horizontal = 8.dp)
             )
         }
         Text(
             text = "×",
             color = palette.textSecondary,
             fontSize = 18.sp,
-            modifier = Modifier.clickable(onClick = onClose).padding(horizontal = 8.dp)
+            modifier = Modifier.pointerDownHaptic().clickable(onClick = onClose).padding(horizontal = 8.dp)
         )
     }
 }
@@ -776,20 +999,20 @@ private fun SelectionTranslationStatusBar(
                 color = palette.primaryAccentSoft,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.clickable(onClick = onInsert).padding(horizontal = 7.dp)
+                modifier = Modifier.pointerDownHaptic().clickable(onClick = onInsert).padding(horizontal = 7.dp)
             )
             Text(
                 text = "コピー",
                 color = palette.textSecondary,
                 fontSize = 12.sp,
-                modifier = Modifier.clickable(onClick = onCopy).padding(horizontal = 7.dp)
+                modifier = Modifier.pointerDownHaptic().clickable(onClick = onCopy).padding(horizontal = 7.dp)
             )
         }
         Text(
             text = "×",
             color = palette.textSecondary,
             fontSize = 18.sp,
-            modifier = Modifier.clickable(onClick = onClose).padding(horizontal = 8.dp)
+            modifier = Modifier.pointerDownHaptic().clickable(onClick = onClose).padding(horizontal = 8.dp)
         )
     }
 }
@@ -800,25 +1023,44 @@ fun ShiftKeyButton(
     isLocked: Boolean,
     bgColor: Color,
     modifier: Modifier = Modifier,
+    visualPadding: PaddingValues = PaddingValues(horizontal = 2.5.dp, vertical = 2.dp),
+    palette: ZeroConPalette = LocalZeroConPalette.current,
+    fillAvailableHeight: Boolean = false,
+    onBeforePress: () -> Unit = {},
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = modifier.height(LocalKeyboardKeyHeight.current)
-            .clip(RoundedCornerShape(6.dp)).background(bgColor)
+    val activeBg = when {
+        isLocked -> palette.primaryAccent
+        isShifted -> lerp(bgColor, palette.primaryAccent, if (palette.isDark) 0.44f else 0.28f)
+        else -> bgColor
+    }
+    val tint = when {
+        isLocked -> palette.onAccent
+        isShifted -> palette.textPrimary
+        else -> palette.textSecondary
+    }
+    val heightModifier = if (fillAvailableHeight) Modifier.fillMaxHeight() else Modifier.height(LocalKeyboardKeyHeight.current)
+    KeyboardActionKey(
+        modifier = modifier
+            .then(heightModifier)
             .semantics {
                 stateDescription = when {
                     isLocked -> "大文字固定"
                     isShifted -> "次の1文字だけ大文字"
                     else -> "小文字"
                 }
-            }
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+            },
+        visualPadding = visualPadding,
+        cornerRadius = 7.dp,
+        baseColor = activeBg,
+        isAccent = isLocked,
+        onBeforePress = onBeforePress,
+        onClick = onClick
     ) {
         Icon(
             imageVector = if (isLocked) Icons.Default.KeyboardCapslock else Icons.Default.ArrowUpward,
             contentDescription = "Shift",
-            tint = if (isShifted) Color.White else Color(0xFFD0D3DE),
+            tint = tint,
             modifier = Modifier.size(24.dp)
         )
     }
@@ -830,10 +1072,20 @@ fun RepeatingIconButton(
     modifier: Modifier = Modifier,
     initialDelayMs: Long = 350L,
     repeatIntervalMs: Long = 50L,
+    visualPadding: PaddingValues? = null,
+    cornerRadius: Dp = 7.dp,
+    baseColor: Color? = null,
+    palette: ZeroConPalette = LocalZeroConPalette.current,
+    onBeforePress: () -> Unit = {},
+    contentDescription: String? = null,
     content: @Composable () -> Unit
 ) {
     val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnBeforePress by rememberUpdatedState(onBeforePress)
+    val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
+    val bordersEnabled = LocalKeyBordersEnabled.current
     val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
     var isPressed by remember { mutableStateOf(false) }
 
     DisposableEffect(isPressed) {
@@ -842,9 +1094,11 @@ fun RepeatingIconButton(
             job = coroutineScope.launch {
                 currentOnClick()
                 delay(initialDelayMs)
+                var repeatCount = 0
                 while (isActive) {
                     currentOnClick()
-                    delay(repeatIntervalMs)
+                    delay(computeRepeatIntervalMs(repeatCount, repeatIntervalMs))
+                    repeatCount++
                 }
             }
         }
@@ -853,19 +1107,58 @@ fun RepeatingIconButton(
         }
     }
 
-    Box(
-        modifier = modifier
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    isPressed = true
-                    waitForUpOrCancellation()
+    val gestureAndSemanticsModifier = modifier
+        .semantics(mergeDescendants = true) {
+            role = Role.Button
+            if (contentDescription != null) {
+                this.contentDescription = contentDescription
+            }
+            onClick {
+                currentOnBeforePress()
+                currentOnClick()
+                true
+            }
+        }
+        .pointerInput(Unit) {
+            val forgivenessPx = with(density) { 12.dp.toPx() }
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                currentOnBeforePress()
+                haptic()
+                isPressed = true
+                try {
+                    awaitPointerReleaseInBounds(
+                        pointerId = down.id,
+                        widthPx = size.width.toFloat(),
+                        heightPx = size.height.toFloat(),
+                        slopForgivenessPx = forgivenessPx
+                    )
+                } finally {
                     isPressed = false
                 }
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        content()
+            }
+        }
+
+    if (baseColor != null) {
+        KeyCapFrame(
+            modifier = gestureAndSemanticsModifier,
+            visualPadding = visualPadding ?: PaddingValues(0.dp),
+            cornerRadius = cornerRadius,
+            baseColor = baseColor,
+            isPressed = isPressed,
+            bordersEnabled = bordersEnabled,
+            palette = palette
+        ) {
+            content()
+        }
+    } else {
+        Box(
+            modifier = gestureAndSemanticsModifier,
+            contentAlignment = Alignment.Center
+        ) {
+            content()
+        }
     }
 }
 
@@ -876,28 +1169,32 @@ fun Aa1Button(
     actionKeyBg: Color,
     fillAvailableHeight: Boolean = false,
     matchEnterStyle: Boolean = false,
+    visualPadding: PaddingValues? = null,
+    palette: ZeroConPalette = LocalZeroConPalette.current,
+    onBeforePress: () -> Unit = {},
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = modifier
-            .then(if (fillAvailableHeight) Modifier.fillMaxHeight() else Modifier.height(LocalKeyboardKeyHeight.current))
-            .then(
-                if (fillAvailableHeight) Modifier.padding(horizontal = 3.dp, vertical = 2.5.dp)
-                else Modifier
-            )
-            .clip(RoundedCornerShape(if (matchEnterStyle) 22.dp else if (fillAvailableHeight) 8.dp else 7.dp))
-            .background(actionKeyBg)
-            .semantics { contentDescription = "入力モード:" + when (mode) {
-                KeyboardMode.JAPANESE -> "日本語"
-                KeyboardMode.ENGLISH -> "英語"
-                KeyboardMode.NUMERIC -> "数字"
-            } }
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+    val activeColor = palette.textPrimary
+    val dimColor = palette.textMuted.copy(alpha = 0.72f)
+    val resolvedPadding = visualPadding ?: if (fillAvailableHeight) {
+        PaddingValues(horizontal = 3.dp, vertical = 2.5.dp)
+    } else {
+        PaddingValues(horizontal = 2.5.dp, vertical = 2.dp)
+    }
+    val heightModifier = if (fillAvailableHeight) Modifier.fillMaxHeight() else Modifier.height(LocalKeyboardKeyHeight.current)
+    KeyboardActionKey(
+        modifier = modifier.then(heightModifier),
+        visualPadding = resolvedPadding,
+        cornerRadius = if (matchEnterStyle) 22.dp else if (fillAvailableHeight) 8.dp else 7.dp,
+        baseColor = actionKeyBg,
+        contentDescription = "入力モード:" + when (mode) {
+            KeyboardMode.JAPANESE -> "日本語"
+            KeyboardMode.ENGLISH -> "英語"
+            KeyboardMode.NUMERIC -> "数字"
+        },
+        onBeforePress = onBeforePress,
+        onClick = onClick
     ) {
-        val activeColor = Color.White
-        val dimColor = Color(0xFF6E7282)
-
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
@@ -924,6 +1221,734 @@ fun Aa1Button(
     }
 }
 
+private data class QwertyCharKeySpec(
+    val id: String,
+    val normalChar: Char,
+    val shiftedChar: Char,
+    val normalUpFlickChar: Char? = null,
+    val shiftedUpFlickChar: Char? = null,
+    val keyWeight: Float = 1f,
+    val baseColor: Color,
+    val fontSize: androidx.compose.ui.unit.TextUnit = 18.sp,
+    val visualStartSpacerWeight: Float = 0f,
+    val visualEndSpacerWeight: Float = 0f
+) {
+    fun charFor(shifted: Boolean): Char = if (shifted) shiftedChar else normalChar
+    fun upFlickFor(shifted: Boolean): Char? = if (shifted) shiftedUpFlickChar else normalUpFlickChar
+}
+
+@Stable
+private class QwertyTouchHost(
+    val tracker: QwertyTouchTracker = QwertyTouchTracker()
+) {
+    var rootCoordinates by mutableStateOf<LayoutCoordinates?>(null)
+    var visualState by mutableStateOf(tracker.visualState)
+    val specsById = HashMap<String, QwertyCharKeySpec>()
+    val supportsUpFlickById = HashMap<String, Boolean>()
+    val hitCoordsById = HashMap<String, LayoutCoordinates>()
+    val visualCoordsById = HashMap<String, LayoutCoordinates>()
+    val hitRects = HashMap<String, KeyRect>()
+    val visualRects = mutableStateMapOf<String, KeyRect>()
+    val longPressJobs = HashMap<Long, Job>()
+
+    fun registerHitCoords(spec: QwertyCharKeySpec, supportsUpFlick: Boolean, coords: LayoutCoordinates) {
+        specsById[spec.id] = spec
+        supportsUpFlickById[spec.id] = supportsUpFlick
+        hitCoordsById[spec.id] = coords
+        recomputeTarget(spec.id)
+    }
+
+    fun registerVisualCoords(specId: String, coords: LayoutCoordinates) {
+        visualCoordsById[specId] = coords
+        recomputeVisualRect(specId)
+    }
+
+    fun unregister(specId: String) {
+        specsById.remove(specId)
+        supportsUpFlickById.remove(specId)
+        hitCoordsById.remove(specId)
+        visualCoordsById.remove(specId)
+        hitRects.remove(specId)
+        visualRects.remove(specId)
+        tracker.removeTarget(specId)
+    }
+
+    fun recomputeAll() {
+        for (id in hitCoordsById.keys) {
+            recomputeTarget(id)
+        }
+        for (id in visualCoordsById.keys) {
+            recomputeVisualRect(id)
+        }
+    }
+
+    private fun recomputeTarget(specId: String) {
+        val root = rootCoordinates ?: return
+        val coords = hitCoordsById[specId] ?: return
+        if (!root.isAttached || !coords.isAttached) return
+        val tl = root.localPositionOf(coords, Offset.Zero)
+        val rect = KeyRect(tl.x, tl.y, tl.x + coords.size.width, tl.y + coords.size.height)
+        hitRects[specId] = rect
+        tracker.upsertTarget(
+            QwertyKeyTarget(
+                id = specId,
+                hitRect = rect,
+                supportsUpFlick = supportsUpFlickById[specId] == true,
+                primaryChar = specsById[specId]?.normalChar
+            )
+        )
+    }
+
+    private fun recomputeVisualRect(specId: String) {
+        val root = rootCoordinates ?: return
+        val coords = visualCoordsById[specId] ?: return
+        if (!root.isAttached || !coords.isAttached) return
+        val tl = root.localPositionOf(coords, Offset.Zero)
+        visualRects[specId] = KeyRect(tl.x, tl.y, tl.x + coords.size.width, tl.y + coords.size.height)
+    }
+
+    fun cancelLongPressJob(pointerId: Long) {
+        longPressJobs.remove(pointerId)?.cancel()
+    }
+
+    fun cancelAllLongPressJobs() {
+        for (job in longPressJobs.values) {
+            job.cancel()
+        }
+        longPressJobs.clear()
+    }
+
+    fun clearAndCancelAll() {
+        cancelAllLongPressJobs()
+        tracker.reset()
+        visualState = tracker.visualState
+    }
+
+    fun flushAll(
+        onCommitChar: (Char) -> Unit,
+        onCommitWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+    ) {
+        val commits = tracker.flushAllPending()
+        if (commits.isNotEmpty()) {
+            cancelAllLongPressJobs()
+            for (commit in commits) {
+                dispatchCommit(commit, onCommitChar, onCommitWithBias)
+            }
+            visualState = tracker.visualState
+        }
+    }
+
+    fun dispatchCommit(
+        commit: QwertyTouchEffect.CommitKey,
+        onCommitChar: (Char) -> Unit,
+        onCommitWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+    ) {
+        val spec = specsById[commit.keyId] ?: return
+        val shifted = commit.shiftState.isShifted
+        val ch = if (commit.upFlick) {
+            spec.upFlickFor(shifted) ?: spec.charFor(shifted)
+        } else {
+            spec.charFor(shifted)
+        }
+        if (onCommitWithBias != null && !commit.upFlick && !commit.longPress) {
+            onCommitWithBias(ch, commit.touchBias)
+        } else {
+            onCommitChar(ch)
+        }
+    }
+}
+
+@Composable
+private fun RowScope.QwertyCharacterKeySlot(
+    spec: QwertyCharKeySpec,
+    isShifted: Boolean,
+    supportsUpFlick: Boolean,
+    visualPadding: PaddingValues,
+    textColor: Color,
+    palette: ZeroConPalette,
+    host: QwertyTouchHost,
+    onAccessibleCommit: (Char) -> Unit
+) {
+    val displayChar = spec.charFor(isShifted)
+    val upFlickChar = if (supportsUpFlick) spec.upFlickFor(isShifted) else null
+    val displayText = displayChar.toString()
+    val upFlickLabel = upFlickChar?.toString()
+    val currentDisplayChar by rememberUpdatedState(displayChar)
+    val isPressed = spec.id in host.visualState.pressedKeyIds
+
+    DisposableEffect(spec.id) {
+        onDispose { host.unregister(spec.id) }
+    }
+
+    val outerSemanticsModifier = Modifier
+        .weight(spec.keyWeight)
+        .fillMaxHeight()
+        .onGloballyPositioned { coords ->
+            host.registerHitCoords(spec, supportsUpFlick, coords)
+        }
+        .semantics(mergeDescendants = true) {
+            role = Role.Button
+            contentDescription = if (upFlickLabel != null) {
+                "${displayText}を入力、上フリックで${upFlickLabel}を入力"
+            } else {
+                "${displayText}を入力"
+            }
+            onClick {
+                onAccessibleCommit(currentDisplayChar)
+                true
+            }
+        }
+
+    val keyCapContent: @Composable BoxScope.() -> Unit = {
+        Text(
+            text = displayText,
+            color = textColor,
+            fontSize = spec.fontSize,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center
+        )
+        if (upFlickLabel != null) {
+            Text(
+                text = upFlickLabel,
+                color = textColor.copy(alpha = 0.45f),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 1.dp, end = 3.dp)
+            )
+        }
+    }
+
+    if (spec.visualStartSpacerWeight > 0f || spec.visualEndSpacerWeight > 0f) {
+        // Staggered rows (like English QWERTY Row 2) absorb side margins into the edge keys' hitboxes
+        // while indenting only the inner visual keycap, eliminating dead side zones without losing alignment.
+        Box(modifier = outerSemanticsModifier) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                if (spec.visualStartSpacerWeight > 0f) {
+                    Spacer(modifier = Modifier.weight(spec.visualStartSpacerWeight).fillMaxHeight())
+                }
+                KeyCapFrame(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .onGloballyPositioned { coords -> host.registerVisualCoords(spec.id, coords) },
+                    visualPadding = visualPadding,
+                    cornerRadius = 7.dp,
+                    baseColor = spec.baseColor,
+                    isPressed = isPressed,
+                    palette = palette,
+                    content = keyCapContent
+                )
+                if (spec.visualEndSpacerWeight > 0f) {
+                    Spacer(modifier = Modifier.weight(spec.visualEndSpacerWeight).fillMaxHeight())
+                }
+            }
+        }
+    } else {
+        KeyCapFrame(
+            modifier = outerSemanticsModifier.onGloballyPositioned { coords ->
+                host.registerVisualCoords(spec.id, coords)
+            },
+            visualPadding = visualPadding,
+            cornerRadius = 7.dp,
+            baseColor = spec.baseColor,
+            isPressed = isPressed,
+            palette = palette,
+            content = keyCapContent
+        )
+    }
+}
+
+@Composable
+private fun SharedQwertyLayout(
+    isJapanese: Boolean,
+    isShifted: Boolean,
+    isShiftLocked: Boolean,
+    keyBgColor: Color,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    onCommitChar: (Char) -> Unit,
+    onShiftToggle: () -> Unit,
+    onDelete: () -> Unit,
+    onSpace: () -> Unit,
+    onLongPressSpace: () -> Unit,
+    onEnter: () -> Unit,
+    onCycleMode: () -> Unit,
+    onOpenEmoji: () -> Unit,
+    isComposing: Boolean,
+    onCursorLeft: () -> Unit,
+    onCursorRight: () -> Unit,
+    showNumberRow: Boolean,
+    nextKeyWeights: Map<Char, Float> = emptyMap(),
+    onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+) {
+    val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
+    val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
+    val row1 = listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p')
+    val row2 = if (isJapanese) {
+        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'ー')
+    } else {
+        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l')
+    }
+    val row3 = listOf('z', 'x', 'c', 'v', 'b', 'n', 'm')
+
+    val host = remember { QwertyTouchHost() }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val longPressTimeoutMillis = LocalViewConfiguration.current.longPressTimeoutMillis
+
+    val currentIsShifted by rememberUpdatedState(isShifted)
+    val currentIsShiftLocked by rememberUpdatedState(isShiftLocked)
+    val currentShowNumberRow by rememberUpdatedState(showNumberRow)
+    val currentOnCommitChar by rememberUpdatedState(onCommitChar)
+    val currentOnCommitWithBias by rememberUpdatedState(onCommitCharWithBias)
+    val currentThresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
+    val currentHaptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
+    val dynamicTouchAssistEnabled = LocalDynamicTouchAssistEnabled.current
+    val currentNextKeyWeights by rememberUpdatedState(
+        if (dynamicTouchAssistEnabled) nextKeyWeights else emptyMap()
+    )
+    val keyPreviewEnabled = LocalKeyPreviewEnabled.current
+
+    DisposableEffect(Unit) {
+        onDispose { host.clearAndCancelAll() }
+    }
+
+    val flushBeforeAction = { host.flushAll(currentOnCommitChar, currentOnCommitWithBias) }
+
+    fun qwertyRowPadding(
+        isTopVisible: Boolean,
+        isBottom: Boolean,
+        isFirst: Boolean,
+        isLast: Boolean
+    ): PaddingValues = keyRowVisualPadding(
+        isFirstInRow = isFirst,
+        isLastInRow = isLast,
+        baseHorizontal = 2.5.dp,
+        edgeExtraHorizontal = 3.dp,
+        top = if (isTopVisible) 5.5.dp else 3.dp,
+        bottom = if (isBottom) 7.5.dp else 3.dp
+    )
+
+    fun startLongPressIfNeeded(pointerId: Long, keyId: String) {
+        host.cancelLongPressJob(pointerId)
+        val spec = host.specsById[keyId] ?: return
+        val supportsUpFlick = !currentShowNumberRow && spec.normalUpFlickChar != null
+        if (!supportsUpFlick) return
+        host.longPressJobs[pointerId] = scope.launch {
+            delay(longPressTimeoutMillis)
+            host.tracker.onLongPressTimeout(pointerId)
+            host.visualState = host.tracker.visualState
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coords ->
+                host.rootCoordinates = coords
+                host.recomputeAll()
+            }
+            .pointerInput(Unit) {
+                try {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Main)
+                            val thresholdPx = with(density) { currentThresholdDp.toPx() }
+                            val maxSnapPx = with(density) { 18.dp.toPx() }
+                            val shiftSnapshot = KeyboardShiftState(
+                                mode = when {
+                                    currentIsShiftLocked -> KeyboardShiftMode.LOCKED
+                                    currentIsShifted -> KeyboardShiftMode.ONCE
+                                    else -> KeyboardShiftMode.OFF
+                                }
+                            )
+
+                            for (change in event.changes) {
+                                val pointerId = change.id.value
+                                val maxExpandPx = if (currentNextKeyWeights.isEmpty()) 0f else with(density) { 7.dp.toPx() }
+                                if (change.changedToDown() && !change.isConsumed) {
+                                    change.consume()
+                                    val effects = host.tracker.onPointerDown(
+                                        pointerId = pointerId,
+                                        x = change.position.x,
+                                        y = change.position.y,
+                                        shiftState = shiftSnapshot,
+                                        maxSnapDistancePx = maxSnapPx,
+                                        nextCharWeights = currentNextKeyWeights,
+                                        maxExpandPx = maxExpandPx
+                                    )
+                                    for (effect in effects) {
+                                        when (effect) {
+                                            is QwertyTouchEffect.CommitKey -> {
+                                                host.cancelAllLongPressJobs()
+                                                host.dispatchCommit(effect, currentOnCommitChar, currentOnCommitWithBias)
+                                            }
+                                            is QwertyTouchEffect.HapticTick -> currentHaptic()
+                                        }
+                                    }
+                                    host.visualState = host.tracker.visualState
+                                    val preview = host.visualState.previews[pointerId]
+                                    if (preview != null) {
+                                        startLongPressIfNeeded(pointerId, preview.keyId)
+                                    }
+                                } else if (host.tracker.isTrackingPointer(pointerId)) {
+                                    if (!change.pressed) {
+                                        host.cancelLongPressJob(pointerId)
+                                        if (!change.isConsumed) {
+                                            change.consume()
+                                            val effects = host.tracker.onPointerUp(pointerId)
+                                            for (effect in effects) {
+                                                if (effect is QwertyTouchEffect.CommitKey) {
+                                                    host.dispatchCommit(effect, currentOnCommitChar, currentOnCommitWithBias)
+                                                }
+                                            }
+                                        } else {
+                                            host.tracker.onPointerCancel(pointerId)
+                                        }
+                                        host.visualState = host.tracker.visualState
+                                    } else {
+                                        change.consume()
+                                        val beforeKeyId = host.visualState.previews[pointerId]?.keyId
+                                        host.tracker.onPointerMove(
+                                            pointerId = pointerId,
+                                            x = change.position.x,
+                                            y = change.position.y,
+                                            thresholdPx = thresholdPx
+                                        )
+                                        val afterPreview = host.visualState.previews[pointerId]
+                                        if (afterPreview != null && afterPreview.keyId != beforeKeyId) {
+                                            startLongPressIfNeeded(pointerId, afterPreview.keyId)
+                                        } else if (afterPreview?.guideExpanded == true) {
+                                            host.cancelLongPressJob(pointerId)
+                                        }
+                                        host.visualState = host.tracker.visualState
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    host.clearAndCancelAll()
+                }
+            }
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Row 0: Numbers / Shift Symbols
+            if (showNumberRow) {
+                Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    for (i in row0Normal.indices) {
+                        val spec = QwertyCharKeySpec(
+                            id = "r0_$i",
+                            normalChar = row0Normal[i],
+                            shiftedChar = row0Shift[i],
+                            baseColor = keyBgColor
+                        )
+                        QwertyCharacterKeySlot(
+                            spec = spec,
+                            isShifted = isShifted,
+                            supportsUpFlick = false,
+                            visualPadding = qwertyRowPadding(true, false, i == 0, i == row0Normal.lastIndex),
+                            textColor = textColor,
+                            palette = palette,
+                            host = host,
+                            onAccessibleCommit = currentOnCommitChar
+                        )
+                    }
+                }
+            }
+
+            // Row 1: q - p
+            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                for (i in row1.indices) {
+                    val ch = row1[i]
+                    val spec = QwertyCharKeySpec(
+                        id = "r1_$ch",
+                        normalChar = ch,
+                        shiftedChar = ch.uppercaseChar(),
+                        normalUpFlickChar = QwertyNumberRow.digitFor(ch),
+                        shiftedUpFlickChar = QwertyNumberRow.shiftedSymbolFor(ch),
+                        baseColor = keyBgColor
+                    )
+                    QwertyCharacterKeySlot(
+                        spec = spec,
+                        isShifted = isShifted,
+                        supportsUpFlick = !showNumberRow,
+                        visualPadding = qwertyRowPadding(!showNumberRow, false, i == 0, i == row1.lastIndex),
+                        textColor = textColor,
+                        palette = palette,
+                        host = host,
+                        onAccessibleCommit = currentOnCommitChar
+                    )
+                }
+            }
+
+            // Row 2
+            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                for (i in row2.indices) {
+                    val ch = row2[i]
+                    val isStaggerLeft = !isJapanese && i == 0
+                    val isStaggerRight = !isJapanese && i == row2.lastIndex
+                    val spec = QwertyCharKeySpec(
+                        id = "r2_$ch",
+                        normalChar = ch,
+                        shiftedChar = if (ch == 'ー') 'ー' else ch.uppercaseChar(),
+                        keyWeight = if (isStaggerLeft || isStaggerRight) 1.5f else 1f,
+                        baseColor = keyBgColor,
+                        visualStartSpacerWeight = if (isStaggerLeft) 0.5f else 0f,
+                        visualEndSpacerWeight = if (isStaggerRight) 0.5f else 0f
+                    )
+                    val visualPad = if (isStaggerLeft || isStaggerRight) {
+                        qwertyRowPadding(false, false, isFirst = false, isLast = false)
+                    } else {
+                        qwertyRowPadding(false, false, i == 0, i == row2.lastIndex)
+                    }
+                    QwertyCharacterKeySlot(
+                        spec = spec,
+                        isShifted = isShifted,
+                        supportsUpFlick = false,
+                        visualPadding = visualPad,
+                        textColor = textColor,
+                        palette = palette,
+                        host = host,
+                        onAccessibleCommit = currentOnCommitChar
+                    )
+                }
+            }
+
+            // Row 3: Shift + z-m + Backspace
+            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                ShiftKeyButton(
+                    isShifted = isShifted,
+                    isLocked = isShiftLocked,
+                    bgColor = actionKeyBg,
+                    modifier = Modifier.weight(1.35f),
+                    visualPadding = qwertyRowPadding(false, false, isFirst = true, isLast = false),
+                    palette = palette,
+                    fillAvailableHeight = true,
+                    onBeforePress = flushBeforeAction,
+                    onClick = onShiftToggle
+                )
+
+                for (ch in row3) {
+                    val spec = QwertyCharKeySpec(
+                        id = "r3_$ch",
+                        normalChar = ch,
+                        shiftedChar = ch.uppercaseChar(),
+                        baseColor = keyBgColor
+                    )
+                    QwertyCharacterKeySlot(
+                        spec = spec,
+                        isShifted = isShifted,
+                        supportsUpFlick = false,
+                        visualPadding = qwertyRowPadding(false, false, isFirst = false, isLast = false),
+                        textColor = textColor,
+                        palette = palette,
+                        host = host,
+                        onAccessibleCommit = currentOnCommitChar
+                    )
+                }
+
+                RepeatingIconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.weight(1.35f).fillMaxHeight(),
+                    visualPadding = qwertyRowPadding(false, false, isFirst = false, isLast = true),
+                    cornerRadius = 7.dp,
+                    baseColor = actionKeyBg,
+                    palette = palette,
+                    onBeforePress = flushBeforeAction
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Backspace,
+                        contentDescription = "Backspace",
+                        tint = textColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            // Row 4
+            Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                Aa1Button(
+                    mode = if (isJapanese) KeyboardMode.JAPANESE else KeyboardMode.ENGLISH,
+                    modifier = Modifier.weight(1.35f),
+                    actionKeyBg = actionKeyBg,
+                    fillAvailableHeight = true,
+                    matchEnterStyle = true,
+                    visualPadding = qwertyRowPadding(false, true, isFirst = true, isLast = false),
+                    palette = palette,
+                    onBeforePress = flushBeforeAction,
+                    onClick = onCycleMode
+                )
+
+                if (isJapanese) {
+                    QwertyCharacterKeySlot(
+                        spec = QwertyCharKeySpec("r4_comma_jp", '、', '、', baseColor = actionKeyBg, keyWeight = 0.85f),
+                        isShifted = isShifted,
+                        supportsUpFlick = false,
+                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                        textColor = textColor,
+                        palette = palette,
+                        host = host,
+                        onAccessibleCommit = currentOnCommitChar
+                    )
+                }
+
+                if (isComposing) {
+                    val qChar = if (isJapanese) '？' else '?'
+                    QwertyCharacterKeySlot(
+                        spec = QwertyCharKeySpec("r4_question", qChar, qChar, baseColor = actionKeyBg, keyWeight = 0.85f),
+                        isShifted = isShifted,
+                        supportsUpFlick = false,
+                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                        textColor = textColor,
+                        palette = palette,
+                        host = host,
+                        onAccessibleCommit = currentOnCommitChar
+                    )
+                } else {
+                    KeyboardActionKey(
+                        modifier = Modifier.weight(0.85f).fillMaxHeight(),
+                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                        cornerRadius = 7.dp,
+                        baseColor = actionKeyBg,
+                        onBeforePress = flushBeforeAction,
+                        onClick = onOpenEmoji
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mood,
+                            contentDescription = "Emoji",
+                            tint = textColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
+                if (!isJapanese) {
+                    QwertyCharacterKeySlot(
+                        spec = QwertyCharKeySpec("r4_comma_en", ',', ',', baseColor = actionKeyBg, keyWeight = 0.85f),
+                        isShifted = isShifted,
+                        supportsUpFlick = false,
+                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                        textColor = textColor,
+                        palette = palette,
+                        host = host,
+                        onAccessibleCommit = currentOnCommitChar
+                    )
+                }
+
+                KeyboardActionKey(
+                    modifier = Modifier.weight(2.4f).fillMaxHeight(),
+                    visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                    cornerRadius = 7.dp,
+                    baseColor = keyBgColor,
+                    contentDescription = "日本語を入力",
+                    onBeforePress = flushBeforeAction,
+                    onClick = onSpace,
+                    onLongClick = onLongPressSpace
+                ) {
+                    Text(
+                        text = "日本語",
+                        color = textColor,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                val periodChar = if (isJapanese) '。' else '.'
+                QwertyCharacterKeySlot(
+                    spec = QwertyCharKeySpec("r4_period", periodChar, periodChar, baseColor = actionKeyBg, keyWeight = 0.85f),
+                    isShifted = isShifted,
+                    supportsUpFlick = false,
+                    visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                    textColor = textColor,
+                    palette = palette,
+                    host = host,
+                    onAccessibleCommit = currentOnCommitChar
+                )
+
+                RepeatingIconButton(
+                    onClick = onCursorLeft,
+                    modifier = Modifier.weight(0.85f).fillMaxHeight(),
+                    initialDelayMs = 300L,
+                    repeatIntervalMs = 50L,
+                    visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                    cornerRadius = 7.dp,
+                    baseColor = actionKeyBg,
+                    palette = palette,
+                    onBeforePress = flushBeforeAction
+                ) {
+                    Text(text = "◀", color = textColor, fontSize = 13.sp)
+                }
+
+                RepeatingIconButton(
+                    onClick = onCursorRight,
+                    modifier = Modifier.weight(0.85f).fillMaxHeight(),
+                    initialDelayMs = 300L,
+                    repeatIntervalMs = 50L,
+                    visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
+                    cornerRadius = 7.dp,
+                    baseColor = actionKeyBg,
+                    palette = palette,
+                    onBeforePress = flushBeforeAction
+                ) {
+                    Text(text = "▶", color = textColor, fontSize = 13.sp)
+                }
+
+                KeyboardActionKey(
+                    modifier = Modifier.weight(1.35f).fillMaxHeight(),
+                    visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = true),
+                    cornerRadius = 22.dp,
+                    baseColor = palette.primaryAccent,
+                    isAccent = true,
+                    onBeforePress = flushBeforeAction,
+                    onClick = onEnter
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardReturn,
+                        contentDescription = "Enter",
+                        tint = palette.onAccent,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+
+        // Floating key preview / up-flick guide overlay rendered inside the IME Box
+        // so it never overflows into an illegal window Popup token or moves rows.
+        val rootWidthPx = host.rootCoordinates?.size?.width?.toFloat() ?: 0f
+        val rootHeightPx = host.rootCoordinates?.size?.height?.toFloat() ?: 0f
+        for (preview in host.visualState.previews.values) {
+            val spec = host.specsById[preview.keyId] ?: continue
+            val rect = host.visualRects[preview.keyId] ?: host.hitRects[preview.keyId] ?: continue
+            val charLabel = spec.charFor(preview.isShifted).toString()
+            val upLabel = spec.upFlickFor(preview.isShifted)?.toString()
+            if (preview.guideExpanded && upLabel != null) {
+                val guideDef = FlickKeyDef(label = charLabel, center = charLabel, up = upLabel)
+                FlickPopupGuide(
+                    popupState = ActiveFlickPopupState(
+                        keyDef = guideDef,
+                        centerOffset = Offset(rect.centerX, rect.centerY),
+                        direction = preview.flickDirection,
+                        rootWidthPx = rootWidthPx,
+                        rootHeightPx = rootHeightPx
+                    ),
+                    palette = palette
+                )
+            } else if (keyPreviewEnabled) {
+                QwertyKeyPreviewBubble(
+                    label = charLabel,
+                    targetRect = rect,
+                    rootWidthPx = rootWidthPx,
+                    rootHeightPx = rootHeightPx,
+                    palette = palette
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun JapaneseQwertyLayout(
     isShifted: Boolean,
@@ -943,241 +1968,33 @@ fun JapaneseQwertyLayout(
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit,
     isShiftLocked: Boolean = false,
-    showNumberRow: Boolean = true
+    showNumberRow: Boolean = true,
+    nextKeyWeights: Map<Char, Float> = emptyMap(),
+    onKeyPressWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
 ) {
-    val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
-    val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
-    val row1 = listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p')
-    val row2 = listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'ー')
-    val row3 = listOf('z', 'x', 'c', 'v', 'b', 'n', 'm')
-
-    var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var activePopupState by remember { mutableStateOf<ActiveFlickPopupState?>(null) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { rootCoordinates = it }
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Row 0: Numbers / Shift Symbols. Hidden when the number row is turned off;
-            // the digits then stay reachable through the up-flick on q..p.
-            if (showNumberRow) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    val list = if (isShifted) row0Shift else row0Normal
-                    for (ch in list) {
-                        KeyButton(
-                            text = ch.toString(),
-                            modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                            bgColor = keyBgColor,
-                            textColor = textColor,
-                            onClick = { onKeyPress(ch) }
-                        )
-                    }
-                }
-            }
-
-            // Row 1: q - p
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                for (ch in row1) {
-                    val displayChar = if (isShifted) ch.uppercaseChar() else ch
-                    val flickChar = if (showNumberRow) null else {
-                        if (isShifted) QwertyNumberRow.shiftedSymbolFor(ch) else QwertyNumberRow.digitFor(ch)
-                    }
-                    KeyButton(
-                        text = displayChar.toString(),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = keyBgColor,
-                        textColor = textColor,
-                        onClick = { onKeyPress(displayChar) },
-                        upFlickLabel = flickChar?.toString(),
-                        onUpFlick = flickChar?.let { flick -> { onKeyPress(flick) } },
-                        getRootCoords = { rootCoordinates },
-                        onFlickGuide = { state -> activePopupState = state }
-                    )
-                }
-            }
-
-            // Row 2: a - l + ー (10 keys)
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                for (ch in row2) {
-                    val displayChar = if (isShifted && ch != 'ー') ch.uppercaseChar() else ch
-                    KeyButton(
-                        text = displayChar.toString(),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = keyBgColor,
-                        textColor = textColor,
-                        onClick = { onKeyPress(displayChar) }
-                    )
-                }
-            }
-
-            // Row 3: Shift + z-m + Backspace
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                ShiftKeyButton(
-                    isShifted = isShifted,
-                    isLocked = isShiftLocked,
-                    bgColor = actionKeyBg,
-                    modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    onClick = onShiftToggle
-                )
-
-                for (ch in row3) {
-                    val displayChar = if (isShifted) ch.uppercaseChar() else ch
-                    KeyButton(
-                        text = displayChar.toString(),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = keyBgColor,
-                        textColor = textColor,
-                        onClick = { onKeyPress(displayChar) }
-                    )
-                }
-
-                RepeatingIconButton(
-                    onClick = onDelete,
-                    modifier = Modifier
-                        .weight(1.35f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Backspace,
-                        contentDescription = "Backspace",
-                        tint = textColor,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-
-            // Row 4 (Image 1: [あa1] [、] [😀] [ 日本語 ] [。] [◀] [▶] [↩])
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Aa1Button(
-                    mode = KeyboardMode.JAPANESE,
-                    modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    actionKeyBg = actionKeyBg,
-                    matchEnterStyle = true,
-                    onClick = onCycleMode
-                )
-
-                KeyButton(
-                    text = "、",
-                    modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    bgColor = actionKeyBg,
-                    textColor = textColor,
-                    fontSize = 18.sp,
-                    onClick = { onKeyPress('、') }
-                )
-
-                if (isComposing) {
-                    KeyButton(
-                        text = "？",
-                        modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = actionKeyBg,
-                        textColor = textColor,
-                        fontSize = 18.sp,
-                        onClick = { onKeyPress('？') }
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .weight(0.85f)
-                            .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                            .height(LocalKeyboardKeyHeight.current)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(actionKeyBg)
-                            .clickable(onClick = onOpenEmoji),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Mood,
-                            contentDescription = "Emoji",
-                            tint = textColor,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-
-                KeyButton(
-                    text = "日本語",
-                    modifier = Modifier.weight(2.4f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    bgColor = keyBgColor,
-                    textColor = textColor,
-                    fontSize = 15.sp,
-                    onClick = onSpace,
-                    onLongClick = onLongPressSpace
-                )
-
-                KeyButton(
-                    text = "。",
-                    modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    bgColor = actionKeyBg,
-                    textColor = textColor,
-                    fontSize = 18.sp,
-                    onClick = { onKeyPress('。') }
-                )
-
-                // Repeating Arrow Left
-                RepeatingIconButton(
-                    onClick = onCursorLeft,
-                    modifier = Modifier
-                        .weight(0.85f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "◀", color = textColor, fontSize = 13.sp)
-                }
-
-                // Repeating Arrow Right
-                RepeatingIconButton(
-                    onClick = onCursorRight,
-                    modifier = Modifier
-                        .weight(0.85f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "▶", color = textColor, fontSize = 13.sp)
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.35f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0xFF3B82F6))
-                        .clickable(onClick = onEnter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardReturn,
-                        contentDescription = "Enter",
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-
-        // Same flick guide as the 12-key layout, so the hidden number row reads identically.
-        // It must stay a child of the Box: inside the Column it would be laid out as a
-        // fifth row and appear below the keyboard instead of over the pressed key.
-        activePopupState?.let { popup ->
-            FlickPopupGuide(popupState = popup, palette = palette)
-        }
-    }
+    SharedQwertyLayout(
+        isJapanese = true,
+        isShifted = isShifted,
+        isShiftLocked = isShiftLocked,
+        keyBgColor = keyBgColor,
+        actionKeyBg = actionKeyBg,
+        textColor = textColor,
+        palette = palette,
+        onCommitChar = onKeyPress,
+        onShiftToggle = onShiftToggle,
+        onDelete = onDelete,
+        onSpace = onSpace,
+        onLongPressSpace = onLongPressSpace,
+        onEnter = onEnter,
+        onCycleMode = onCycleMode,
+        onOpenEmoji = onOpenEmoji,
+        isComposing = isComposing,
+        onCursorLeft = onCursorLeft,
+        onCursorRight = onCursorRight,
+        showNumberRow = showNumberRow,
+        nextKeyWeights = nextKeyWeights,
+        onCommitCharWithBias = onKeyPressWithBias
+    )
 }
 
 @Composable
@@ -1199,241 +2016,33 @@ fun EnglishQwertyLayout(
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit,
     isShiftLocked: Boolean = false,
-    showNumberRow: Boolean = true
+    showNumberRow: Boolean = true,
+    nextKeyWeights: Map<Char, Float> = emptyMap(),
+    onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
 ) {
-    val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
-    val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
-    val row1 = listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p')
-    val row2 = listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l')
-    val row3 = listOf('z', 'x', 'c', 'v', 'b', 'n', 'm')
-
-    var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var activePopupState by remember { mutableStateOf<ActiveFlickPopupState?>(null) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onGloballyPositioned { rootCoordinates = it }
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Row 0. Hidden when the number row is turned off; the digits then stay
-            // reachable through the up-flick on q..p.
-            if (showNumberRow) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    val list = if (isShifted) row0Shift else row0Normal
-                    for (ch in list) {
-                        KeyButton(
-                            text = ch.toString(),
-                            modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                            bgColor = keyBgColor,
-                            textColor = textColor,
-                            onClick = { onCommitChar(ch) }
-                        )
-                    }
-                }
-            }
-
-            // Row 1
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                for (ch in row1) {
-                    val displayChar = if (isShifted) ch.uppercaseChar() else ch
-                    val flickChar = if (showNumberRow) null else {
-                        if (isShifted) QwertyNumberRow.shiftedSymbolFor(ch) else QwertyNumberRow.digitFor(ch)
-                    }
-                    KeyButton(
-                        text = displayChar.toString(),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = keyBgColor,
-                        textColor = textColor,
-                        onClick = { onCommitChar(displayChar) },
-                        upFlickLabel = flickChar?.toString(),
-                        onUpFlick = flickChar?.let { flick -> { onCommitChar(flick) } },
-                        getRootCoords = { rootCoordinates },
-                        onFlickGuide = { state -> activePopupState = state }
-                    )
-                }
-            }
-
-            // Row 2: 9 keys centered with 0.5f spacer on left & right
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Spacer(modifier = Modifier.weight(0.5f))
-                for (ch in row2) {
-                    val displayChar = if (isShifted) ch.uppercaseChar() else ch
-                    KeyButton(
-                        text = displayChar.toString(),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = keyBgColor,
-                        textColor = textColor,
-                        onClick = { onCommitChar(displayChar) }
-                    )
-                }
-                Spacer(modifier = Modifier.weight(0.5f))
-            }
-
-            // Row 3: Shift + z-m + Backspace
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                ShiftKeyButton(
-                    isShifted = isShifted,
-                    isLocked = isShiftLocked,
-                    bgColor = actionKeyBg,
-                    modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    onClick = onShiftToggle
-                )
-
-                for (ch in row3) {
-                    val displayChar = if (isShifted) ch.uppercaseChar() else ch
-                    KeyButton(
-                        text = displayChar.toString(),
-                        modifier = Modifier.weight(1f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = keyBgColor,
-                        textColor = textColor,
-                        onClick = { onCommitChar(displayChar) }
-                    )
-                }
-
-                RepeatingIconButton(
-                    onClick = onDelete,
-                    modifier = Modifier
-                        .weight(1.35f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Backspace,
-                        contentDescription = "Backspace",
-                        tint = textColor,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-
-            // Row 4 (Image 2: [あa1] [😀] [,] [ 日本語 ] [.] [◀] [▶] [↩])
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Aa1Button(
-                    mode = KeyboardMode.ENGLISH,
-                    modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    actionKeyBg = actionKeyBg,
-                    matchEnterStyle = true,
-                    onClick = onCycleMode
-                )
-
-                if (isComposing) {
-                    KeyButton(
-                        text = "?",
-                        modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                        bgColor = actionKeyBg,
-                        textColor = textColor,
-                        fontSize = 18.sp,
-                        onClick = { onCommitChar('?') }
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .weight(0.85f)
-                            .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                            .height(LocalKeyboardKeyHeight.current)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(actionKeyBg)
-                            .clickable(onClick = onOpenEmoji),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Mood,
-                            contentDescription = "Emoji",
-                            tint = textColor,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-
-                KeyButton(
-                    text = ",",
-                    modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    bgColor = actionKeyBg,
-                    textColor = textColor,
-                    fontSize = 18.sp,
-                    onClick = { onCommitChar(',') }
-                )
-
-                KeyButton(
-                    text = "日本語",
-                    modifier = Modifier.weight(2.4f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    bgColor = keyBgColor,
-                    textColor = textColor,
-                    fontSize = 15.sp,
-                    onClick = onSpace,
-                    onLongClick = onLongPressSpace
-                )
-
-                KeyButton(
-                    text = ".",
-                    modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
-                    bgColor = actionKeyBg,
-                    textColor = textColor,
-                    fontSize = 18.sp,
-                    onClick = { onCommitChar('.') }
-                )
-
-                RepeatingIconButton(
-                    onClick = onCursorLeft,
-                    modifier = Modifier
-                        .weight(0.85f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "◀", color = textColor, fontSize = 13.sp)
-                }
-
-                RepeatingIconButton(
-                    onClick = onCursorRight,
-                    modifier = Modifier
-                        .weight(0.85f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(actionKeyBg),
-                    initialDelayMs = 300L,
-                    repeatIntervalMs = 50L
-                ) {
-                    Text(text = "▶", color = textColor, fontSize = 13.sp)
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1.35f)
-                        .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                        .height(LocalKeyboardKeyHeight.current)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0xFF3B82F6))
-                        .clickable(onClick = onEnter),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardReturn,
-                        contentDescription = "Enter",
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-
-        // Same flick guide as the 12-key layout, so the hidden number row reads identically.
-        // It must stay a child of the Box: inside the Column it would be laid out as a
-        // fifth row and appear below the keyboard instead of over the pressed key.
-        activePopupState?.let { popup ->
-            FlickPopupGuide(popupState = popup, palette = palette)
-        }
-    }
+    SharedQwertyLayout(
+        isJapanese = false,
+        isShifted = isShifted,
+        isShiftLocked = isShiftLocked,
+        keyBgColor = keyBgColor,
+        actionKeyBg = actionKeyBg,
+        textColor = textColor,
+        palette = palette,
+        onCommitChar = onCommitChar,
+        onShiftToggle = onShiftToggle,
+        onDelete = onDelete,
+        onSpace = onSpace,
+        onLongPressSpace = onLongPressSpace,
+        onEnter = onEnter,
+        onCycleMode = onCycleMode,
+        onOpenEmoji = onOpenEmoji,
+        isComposing = isComposing,
+        onCursorLeft = onCursorLeft,
+        onCursorRight = onCursorRight,
+        showNumberRow = showNumberRow,
+        nextKeyWeights = nextKeyWeights,
+        onCommitCharWithBias = onCommitCharWithBias
+    )
 }
 
 @Composable
@@ -1449,46 +2058,68 @@ fun NumericPadLayout(
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit
 ) {
-    // Exact 5x4 layout from Image 3
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceEvenly
-    ) {
+    val palette = LocalZeroConPalette.current
+    fun padFor(rowIdx: Int, first: Boolean, last: Boolean): PaddingValues = keyRowVisualPadding(
+        isFirstInRow = first,
+        isLastInRow = last,
+        baseHorizontal = 2.5.dp,
+        edgeExtraHorizontal = 3.dp,
+        top = if (rowIdx == 0) 5.5.dp else 2.5.dp,
+        bottom = if (rowIdx == 3) 7.5.dp else 2.5.dp
+    )
+
+    Column(modifier = Modifier.fillMaxSize()) {
         // Row 0: [ ↶ ] [ 1 (☆♪→) ] [ 2 (¥$€) ] [ 3 (%°#) ] [ ⌫ ]
-        Row(modifier = Modifier.fillMaxWidth().height(52.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
             RepeatingIconButton(
                 onClick = onDelete,
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(actionKeyBg)
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(0, first = true, last = false),
+                cornerRadius = 7.dp,
+                baseColor = actionKeyBg,
+                palette = palette
             ) {
                 Text(text = "↶", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
-            NumericKeyButton(mainText = "1", subText = "☆♪→", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("1") }
-            NumericKeyButton(mainText = "2", subText = "¥$€", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("2") }
-            NumericKeyButton(mainText = "3", subText = "%°#", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("3") }
+            NumericKeyButton("1", "☆♪→", Modifier.weight(1.1f), padFor(0, false, false), keyBgColor, textColor, palette = palette) { onCommitText("1") }
+            NumericKeyButton("2", "¥$€", Modifier.weight(1.1f), padFor(0, false, false), keyBgColor, textColor, palette = palette) { onCommitText("2") }
+            NumericKeyButton("3", "%°#", Modifier.weight(1.1f), padFor(0, false, false), keyBgColor, textColor, palette = palette) { onCommitText("3") }
             RepeatingIconButton(
                 onClick = onDelete,
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(actionKeyBg)
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(0, first = false, last = true),
+                cornerRadius = 7.dp,
+                baseColor = actionKeyBg,
+                palette = palette
             ) {
                 Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
             }
         }
 
         // Row 1: [ ◀ ] [ 4 (○*・) ] [ 5 (+×÷) ] [ 6 (<=>) ] [ ▶ ]
-        Row(modifier = Modifier.fillMaxWidth().height(52.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
             RepeatingIconButton(
                 onClick = onCursorLeft,
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(actionKeyBg),
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(1, first = true, last = false),
+                cornerRadius = 7.dp,
+                baseColor = actionKeyBg,
+                palette = palette,
                 initialDelayMs = 300L,
                 repeatIntervalMs = 50L
             ) {
                 Text(text = "◀", color = textColor, fontSize = 14.sp)
             }
-            NumericKeyButton(mainText = "4", subText = "○*・", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("4") }
-            NumericKeyButton(mainText = "5", subText = "+×÷", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("5") }
-            NumericKeyButton(mainText = "6", subText = "<=>", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("6") }
+            NumericKeyButton("4", "○*・", Modifier.weight(1.1f), padFor(1, false, false), keyBgColor, textColor, palette = palette) { onCommitText("4") }
+            NumericKeyButton("5", "+×÷", Modifier.weight(1.1f), padFor(1, false, false), keyBgColor, textColor, palette = palette) { onCommitText("5") }
+            NumericKeyButton("6", "<=>", Modifier.weight(1.1f), padFor(1, false, false), keyBgColor, textColor, palette = palette) { onCommitText("6") }
             RepeatingIconButton(
                 onClick = onCursorRight,
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(actionKeyBg),
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(1, first = false, last = true),
+                cornerRadius = 7.dp,
+                baseColor = actionKeyBg,
+                palette = palette,
                 initialDelayMs = 300L,
                 repeatIntervalMs = 50L
             ) {
@@ -1497,50 +2128,69 @@ fun NumericPadLayout(
         }
 
         // Row 2: [ !?# ] [ 7 (「」:) ] [ 8 (〒々〆) ] [ 9 (^\\) ] [ ␣ ]
-        Row(modifier = Modifier.fillMaxWidth().height(52.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Box(
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(actionKeyBg).clickable(onClick = onOpenSymbols),
-                contentAlignment = Alignment.Center
+        Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(2, first = true, last = false),
+                cornerRadius = 7.dp,
+                baseColor = actionKeyBg,
+                onClick = onOpenSymbols
             ) {
                 Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
             }
-            NumericKeyButton(mainText = "7", subText = "「」:", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("7") }
-            NumericKeyButton(mainText = "8", subText = "〒々〆", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("8") }
-            NumericKeyButton(mainText = "9", subText = "^\\", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("9") }
-            Box(
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(actionKeyBg).clickable { onCommitText(" ") },
-                contentAlignment = Alignment.Center
+            NumericKeyButton("7", "「」:", Modifier.weight(1.1f), padFor(2, false, false), keyBgColor, textColor, palette = palette) { onCommitText("7") }
+            NumericKeyButton("8", "〒々〆", Modifier.weight(1.1f), padFor(2, false, false), keyBgColor, textColor, palette = palette) { onCommitText("8") }
+            NumericKeyButton("9", "^\\", Modifier.weight(1.1f), padFor(2, false, false), keyBgColor, textColor, palette = palette) { onCommitText("9") }
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(2, first = false, last = true),
+                cornerRadius = 7.dp,
+                baseColor = actionKeyBg,
+                onClick = { onCommitText(" ") }
             ) {
                 Text(text = "␣", color = textColor, fontSize = 20.sp)
             }
         }
 
         // Row 3: [ あa1 ] [ ()[] ] [ 0 (~...@) ] [ .,-/ ] [ ↩ ]
-        Row(modifier = Modifier.fillMaxWidth().height(52.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
             Aa1Button(
                 mode = KeyboardMode.NUMERIC,
                 modifier = Modifier.weight(1.1f),
                 actionKeyBg = actionKeyBg,
+                fillAvailableHeight = true,
+                visualPadding = padFor(3, first = true, last = false),
+                palette = palette,
                 onClick = onCycleMode
             )
-            Box(
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(keyBgColor).clickable { onCommitText("()") },
-                contentAlignment = Alignment.Center
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(3, first = false, last = false),
+                cornerRadius = 7.dp,
+                baseColor = keyBgColor,
+                onClick = { onCommitText("()") }
             ) {
                 Text(text = "()[]", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Normal)
             }
-            NumericKeyButton(mainText = "0", subText = "~...@ ", modifier = Modifier.weight(1.1f), bgColor = keyBgColor, textColor = textColor) { onCommitText("0") }
-            Box(
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(keyBgColor).clickable { onCommitText(".") },
-                contentAlignment = Alignment.Center
+            NumericKeyButton("0", "~...@ ", Modifier.weight(1.1f), padFor(3, false, false), keyBgColor, textColor, palette = palette) { onCommitText("0") }
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(3, first = false, last = false),
+                cornerRadius = 7.dp,
+                baseColor = keyBgColor,
+                onClick = { onCommitText(".") }
             ) {
                 Text(text = ".,-/", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Normal)
             }
-            Box(
-                modifier = Modifier.weight(1.1f).fillMaxHeight().padding(horizontal = 2.5.dp, vertical = 2.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFF3B82F6)).clickable(onClick = onEnter),
-                contentAlignment = Alignment.Center
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                visualPadding = padFor(3, first = false, last = true),
+                cornerRadius = 22.dp,
+                baseColor = palette.primaryAccent,
+                isAccent = true,
+                onClick = onEnter
             ) {
-                Icon(imageVector = Icons.Default.KeyboardReturn, contentDescription = "Enter", tint = Color.White, modifier = Modifier.size(22.dp))
+                Icon(imageVector = Icons.Default.KeyboardReturn, contentDescription = "Enter", tint = palette.onAccent, modifier = Modifier.size(22.dp))
             }
         }
     }
@@ -1551,19 +2201,20 @@ fun NumericKeyButton(
     mainText: String,
     subText: String = "",
     modifier: Modifier = Modifier,
+    visualPadding: PaddingValues = PaddingValues(horizontal = 2.5.dp, vertical = 2.dp),
     bgColor: Color,
     textColor: Color,
-    subTextColor: Color = Color(0xFF8E95AA),
+    subTextColor: Color = LocalZeroConPalette.current.textMuted,
+    palette: ZeroConPalette = LocalZeroConPalette.current,
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = modifier
-            .fillMaxHeight()
-            .padding(horizontal = 2.5.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(7.dp))
-            .background(bgColor)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+    KeyboardActionKey(
+        modifier = modifier.fillMaxHeight(),
+        visualPadding = visualPadding,
+        cornerRadius = 7.dp,
+        baseColor = bgColor,
+        palette = palette,
+        onClick = onClick
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1587,6 +2238,7 @@ fun NumericKeyButton(
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun KeyButton(
     text: String,
@@ -1594,6 +2246,9 @@ fun KeyButton(
     bgColor: Color,
     textColor: Color,
     fontSize: androidx.compose.ui.unit.TextUnit = 18.sp,
+    visualPadding: PaddingValues = PaddingValues(0.dp),
+    fillAvailableHeight: Boolean = false,
+    palette: ZeroConPalette = LocalZeroConPalette.current,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     upFlickLabel: String? = null,
@@ -1608,17 +2263,22 @@ fun KeyButton(
     val currentOnFlickGuide by rememberUpdatedState(onFlickGuide)
     val currentText by rememberUpdatedState(text)
     val currentUpFlickLabel by rememberUpdatedState(upFlickLabel)
+    val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
+    val thresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
+
     var cellCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var isPressed by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val longPressTimeoutMillis = LocalViewConfiguration.current.longPressTimeoutMillis
     val scope = rememberCoroutineScope()
-    Box(
+
+    val heightModifier = if (fillAvailableHeight) Modifier.fillMaxHeight() else Modifier.height(LocalKeyboardKeyHeight.current)
+    KeyCapFrame(
         modifier = modifier
-            .height(LocalKeyboardKeyHeight.current)
-            .clip(RoundedCornerShape(7.dp))
-            .background(bgColor)
+            .then(heightModifier)
             .onGloballyPositioned { cellCoordinates = it }
             .semantics(mergeDescendants = true) {
+                role = Role.Button
                 contentDescription = if (upFlickLabel != null) {
                     "${text}を入力、上フリックで${upFlickLabel}を入力"
                 } else {
@@ -1628,20 +2288,15 @@ fun KeyButton(
             }
             .then(
                 when {
-                    // The hidden number row keeps its digits on the up-flick of q..p.
-                    // The guide popup mirrors the 12-key flick so the gesture reads the same.
-                    // The labels are read when the gesture starts rather than used as
-                    // pointerInput keys: restarting the handler on a shift toggle drops the
-                    // touch that is already down, so the guide lagged one press behind.
                     currentOnUpFlick != null -> Modifier.pointerInput(Unit) {
-                        val thresholdPx = with(density) { 18.dp.toPx() }
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            haptic()
+                            isPressed = true
                             val start = down.position
                             var direction = FlickDirection.CENTER
                             var guideShown = false
-                            // Read once per gesture: the guide and the committed character must
-                            // come from the same shift state even if it changes mid-touch.
                             val upFlick = currentOnUpFlick
                             val guideDef = FlickKeyDef(
                                 label = currentText,
@@ -1670,8 +2325,6 @@ fun KeyButton(
                                 )
                             }
 
-                            // A plain tap must not flash the guide: it appears only after the
-                            // long-press timeout or once the finger actually slides.
                             val longPressJob = scope.launch {
                                 delay(longPressTimeoutMillis)
                                 if (direction == FlickDirection.CENTER) showGuide(FlickDirection.CENTER)
@@ -1681,6 +2334,7 @@ fun KeyButton(
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                     if (!change.pressed) {
+                                        change.consume()
                                         if (direction == FlickDirection.UP) {
                                             upFlick?.invoke()
                                         } else {
@@ -1688,10 +2342,13 @@ fun KeyButton(
                                         }
                                         break
                                     }
-                                    val newDirection = calculateFlickDirection(
-                                        change.position.x - start.x,
-                                        change.position.y - start.y,
-                                        thresholdPx
+                                    change.consume()
+                                    val thresholdPx = with(density) { thresholdDp.toPx() }
+                                    val newDirection = calculateQwertyUpFlickDirection(
+                                        dx = change.position.x - start.x,
+                                        dy = change.position.y - start.y,
+                                        thresholdPx = thresholdPx,
+                                        currentDirection = direction
                                     )
                                     if (newDirection != direction) {
                                         direction = newDirection
@@ -1700,21 +2357,51 @@ fun KeyButton(
                                 }
                             } finally {
                                 longPressJob.cancel()
-                                // Also covers cancellation, so the guide cannot stay on screen.
+                                isPressed = false
                                 if (guideShown) currentOnFlickGuide?.invoke(null)
                             }
                         }
                     }
-                    onLongClick != null -> Modifier.pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { currentOnClick() },
-                            onLongPress = { currentOnLongClick?.invoke() }
-                        )
+                    else -> Modifier.pointerInput(Unit) {
+                        val forgivenessPx = with(density) { 12.dp.toPx() }
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            haptic()
+                            isPressed = true
+                            var longPressTriggered = false
+                            var longPressJob: Job? = null
+                            val longHandler = currentOnLongClick
+                            if (longHandler != null) {
+                                longPressJob = scope.launch {
+                                    delay(longPressTimeoutMillis)
+                                    longPressTriggered = true
+                                    longHandler()
+                                }
+                            }
+                            val releasedInside = try {
+                                awaitPointerReleaseInBounds(
+                                    pointerId = down.id,
+                                    widthPx = size.width.toFloat(),
+                                    heightPx = size.height.toFloat(),
+                                    slopForgivenessPx = forgivenessPx
+                                )
+                            } finally {
+                                longPressJob?.cancel()
+                                isPressed = false
+                            }
+                            if (releasedInside && !longPressTriggered) {
+                                currentOnClick()
+                            }
+                        }
                     }
-                    else -> Modifier.clickable(onClick = onClick)
                 }
             ),
-        contentAlignment = Alignment.Center
+        visualPadding = visualPadding,
+        cornerRadius = 7.dp,
+        baseColor = bgColor,
+        isPressed = isPressed,
+        palette = palette
     ) {
         Text(
             text = text,
@@ -1789,6 +2476,7 @@ private fun ClipboardToolbarButton(
             .clip(RoundedCornerShape(6.dp))
             .background(background)
             .semantics { this.contentDescription = contentDescription }
+            .pointerDownHaptic()
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -1819,7 +2507,7 @@ fun ClipboardPanel(
     onRetentionChange: (Int) -> Unit = {},
     onBackToQwerty: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(KeyboardBarHeight).padding(horizontal = 2.dp)) {
             ClipboardToolbarActions(
                 textColor = textColor,
@@ -2053,7 +2741,7 @@ fun EmojiPanel(
     // first emoji of the newly selected category.
     LaunchedEffect(selectedTabId, query) { gridState.scrollToItem(0) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp)) {
         // 1. Search field. Typing here filters the catalog instead of the editor.
         Row(
             modifier = Modifier
@@ -2183,74 +2871,82 @@ fun EmojiPanel(
         }
 
         // 5. Bottom control row, mirroring the symbol panel so the layout height is stable.
+        val barPadding = PaddingValues(horizontal = 2.5.dp, vertical = 2.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+                .height(48.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1.15f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF4A4E62))
-                    .clickable(onClick = onBackToQwerty)
-                    .semantics { contentDescription = "かなキーボードに戻る" },
-                contentAlignment = Alignment.Center
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.15f).fillMaxHeight(),
+                visualPadding = barPadding,
+                cornerRadius = 6.dp,
+                baseColor = actionKeyBg,
+                contentDescription = "かなキーボードに戻る",
+                onClick = onBackToQwerty
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("あ", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text("a1", color = Color(0xFF8E95AA), fontSize = 12.sp, fontWeight = FontWeight.Normal)
+                    Text("あ", color = palette.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("a1", color = palette.textMuted.copy(alpha = 0.72f), fontSize = 12.sp, fontWeight = FontWeight.Normal)
                 }
             }
 
             KeyButton(
                 text = "、",
-                modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(0.85f),
                 bgColor = actionKeyBg,
                 textColor = textColor,
                 fontSize = 18.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = { onSelect("、") }
             )
 
             KeyButton(
                 text = "Space",
-                modifier = Modifier.weight(2.3f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(2.3f),
                 bgColor = keyBgColor,
                 textColor = textColor,
                 fontSize = 15.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = onSpace,
                 onLongClick = onLongPressSpace
             )
 
             KeyButton(
                 text = "。",
-                modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(0.85f),
                 bgColor = actionKeyBg,
                 textColor = textColor,
                 fontSize = 18.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = { onSelect("。") }
             )
 
             KeyButton(
                 text = "改行",
-                modifier = Modifier.weight(1.35f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(1.35f),
                 bgColor = actionKeyBg,
                 textColor = textColor,
                 fontSize = 13.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = onEnter
             )
 
             RepeatingIconButton(
                 onClick = onDelete,
-                modifier = Modifier
-                    .weight(1.35f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
+                modifier = Modifier.weight(1.35f).fillMaxHeight(),
+                visualPadding = barPadding,
+                cornerRadius = 6.dp,
+                baseColor = actionKeyBg,
+                palette = palette
             ) {
                 Icon(
                     imageVector = Icons.Default.Backspace,
@@ -2450,7 +3146,7 @@ fun SymbolsPanel(
     val currentSymbols = symbolCategories[selectedCategoryIndex].symbols
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().padding(top = 4.dp, bottom = 6.dp, start = 3.dp, end = 3.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         // 1. Top Category Bar (Gboard-style)
@@ -2509,33 +3205,30 @@ fun SymbolsPanel(
         }
 
         // 3. Bottom control row
+        val barPadding = PaddingValues(horizontal = 2.5.dp, vertical = 2.dp)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+                .height(48.dp)
         ) {
             // 1. あa1 (Returns to previous mode)
-            Box(
-                modifier = Modifier
-                    .weight(1.15f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF4A4E62))
-                    .clickable(onClick = onBackToQwerty),
-                contentAlignment = Alignment.Center
+            KeyboardActionKey(
+                modifier = Modifier.weight(1.15f).fillMaxHeight(),
+                visualPadding = barPadding,
+                cornerRadius = 6.dp,
+                baseColor = actionKeyBg,
+                onClick = onBackToQwerty
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = "あ",
-                        color = Color.White,
+                        color = palette.textPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "a1",
-                        color = Color(0xFF8E95AA),
+                        color = palette.textMuted.copy(alpha = 0.72f),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Normal
                     )
@@ -2545,30 +3238,39 @@ fun SymbolsPanel(
             // 2. 、
             KeyButton(
                 text = "、",
-                modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(0.85f),
                 bgColor = actionKeyBg,
                 textColor = textColor,
                 fontSize = 18.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = { onSelect("、") }
             )
 
             // 3. ?
             KeyButton(
                 text = "?",
-                modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(0.85f),
                 bgColor = actionKeyBg,
                 textColor = textColor,
                 fontSize = 18.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = { onSelect("?") }
             )
 
             // 4. Space (Tap -> Space, LongPress -> Change IME!)
             KeyButton(
                 text = "Space",
-                modifier = Modifier.weight(2.3f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(2.3f),
                 bgColor = keyBgColor,
                 textColor = textColor,
                 fontSize = 15.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = onSpace,
                 onLongClick = onLongPressSpace
             )
@@ -2576,22 +3278,24 @@ fun SymbolsPanel(
             // 5. 。
             KeyButton(
                 text = "。",
-                modifier = Modifier.weight(0.85f).padding(horizontal = 2.5.dp, vertical = 2.dp),
+                modifier = Modifier.weight(0.85f),
                 bgColor = actionKeyBg,
                 textColor = textColor,
                 fontSize = 18.sp,
+                visualPadding = barPadding,
+                fillAvailableHeight = true,
+                palette = palette,
                 onClick = { onSelect("。") }
             )
 
             // 6. ◀
             RepeatingIconButton(
                 onClick = onCursorLeft,
-                modifier = Modifier
-                    .weight(0.85f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg),
+                modifier = Modifier.weight(0.85f).fillMaxHeight(),
+                visualPadding = barPadding,
+                cornerRadius = 6.dp,
+                baseColor = actionKeyBg,
+                palette = palette,
                 initialDelayMs = 300L,
                 repeatIntervalMs = 50L
             ) {
@@ -2601,12 +3305,11 @@ fun SymbolsPanel(
             // 7. ▶
             RepeatingIconButton(
                 onClick = onCursorRight,
-                modifier = Modifier
-                    .weight(0.85f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg),
+                modifier = Modifier.weight(0.85f).fillMaxHeight(),
+                visualPadding = barPadding,
+                cornerRadius = 6.dp,
+                baseColor = actionKeyBg,
+                palette = palette,
                 initialDelayMs = 300L,
                 repeatIntervalMs = 50L
             ) {
@@ -2616,12 +3319,11 @@ fun SymbolsPanel(
             // 8. Backspace with hold-to-repeat
             RepeatingIconButton(
                 onClick = onDelete,
-                modifier = Modifier
-                    .weight(1.35f)
-                    .fillMaxHeight()
-                    .padding(horizontal = 2.5.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(actionKeyBg)
+                modifier = Modifier.weight(1.35f).fillMaxHeight(),
+                visualPadding = barPadding,
+                cornerRadius = 6.dp,
+                baseColor = actionKeyBg,
+                palette = palette
             ) {
                 Icon(
                     imageVector = Icons.Default.Backspace,

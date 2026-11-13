@@ -165,7 +165,7 @@ object RomajiDecoder {
         else -> ""
     }
 
-    private fun romajiToHiragana(romaji: String): String {
+    internal fun romajiToHiragana(romaji: String): String {
         val input = ComposingText()
         val elements = mutableListOf<ComposingText.InputElement>()
         for ((index, ch) in romaji.withIndex()) {

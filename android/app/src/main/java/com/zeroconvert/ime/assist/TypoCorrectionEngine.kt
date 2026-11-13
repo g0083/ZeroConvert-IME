@@ -1,6 +1,7 @@
 package com.zeroconvert.ime.assist
 
 import com.zeroconvert.ime.KanaKanjiConverter
+import com.zeroconvert.ime.TouchKeyBias
 import com.zeroconvert.ime.ZenzNative
 
 object TypoCorrectionEngine {
@@ -269,9 +270,13 @@ object TypoCorrectionEngine {
 
     /**
      * Finds the best typo correction surface for the given input.
-     * Checks against STANDARD_VOCAB, dictionary entries, and distance scoring.
+     * Checks against STANDARD_VOCAB, dictionary entries, and optional QWERTY touch-coordinate bias.
      */
-    fun findCorrection(rawInput: String, context: String = ""): String? {
+    fun findCorrection(
+        rawInput: String,
+        context: String = "",
+        touchBiases: List<TouchKeyBias> = emptyList()
+    ): String? {
         val hiraInput = KanaKanjiConverter.toHiragana(rawInput.trim())
         if (hiraInput.length !in 2..128) return null
 
@@ -283,6 +288,15 @@ object TypoCorrectionEngine {
         val learned = TypoLearning.lookupRule(hiraInput)
         if (learned != null) return hiraInput.removeSuffix(learned.reading) + learned.surface
         if (AssistVocabulary.isKnownCleanReading(hiraInput)) return null
+
+        if (touchBiases.isNotEmpty()) {
+            TouchBiasTypoResolver.suggestCorrection(
+                rawInput = rawInput,
+                reading = hiraInput,
+                baseline = "",
+                touchBiases = touchBiases
+            )?.text?.let { return it }
+        }
 
         // 0. Romaji floating consonant decoder
         val decoded = RomajiDecoder.decodeFloatingConsonantTypo(rawInput)
