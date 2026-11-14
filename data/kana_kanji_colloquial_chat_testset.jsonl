@@ -1,0 +1,100 @@
+{"id": 1, "category": "日常チャット・相づち・略語", "left_context": "なし", "target": "りょです", "expected": "りょです", "acceptable": [], "forbidden_examples": ["旅です", "料です", "領です"]}
+{"id": 2, "category": "日常チャット・相づち・略語", "left_context": "資料ありがとう", "target": "あざすたすかりました", "expected": "あざす助かりました", "acceptable": [], "forbidden_examples": ["字す"]}
+{"id": 3, "category": "日常チャット・相づち・略語", "left_context": "なし", "target": "どういたしましてきにしないで", "expected": "どういたしまして気にしないで", "acceptable": ["どういたしましてきにしないで"], "forbidden_examples": ["同意たしまして"]}
+{"id": 4, "category": "日常チャット・相づち・略語", "left_context": "なし", "target": "てかさっきのけんどうなった", "expected": "てかさっきの件どうなった", "acceptable": [], "forbidden_examples": ["剣道", "権道"]}
+{"id": 5, "category": "日常チャット・相づち・略語", "left_context": "今日も一日作業", "target": "おつかれさままたあした", "expected": "お疲れ様また明日", "acceptable": ["お疲れさままた明日"], "forbidden_examples": []}
+{"id": 6, "category": "日常チャット・相づち・略語", "left_context": "ミスしちゃってごめん", "target": "どんまいつぎいこ", "expected": "ドンマイ次行こ", "acceptable": ["ドンマイ次いこ"], "forbidden_examples": []}
+{"id": 7, "category": "日常チャット・相づち・略語", "left_context": "仕事から帰宅したんだね", "target": "おかえりつかれたでしょ", "expected": "おかえり疲れたでしょ", "acceptable": ["お帰り疲れたでしょ"], "forbidden_examples": []}
+{"id": 8, "category": "日常チャット・相づち・略語", "left_context": "重い荷物を持ってくれて", "target": "ありがとうーたすかる", "expected": "ありがとうー助かる", "acceptable": [], "forbidden_examples": []}
+{"id": 9, "category": "日常チャット・相づち・略語", "left_context": "今から駅を出るから", "target": "いってらっしゃいきをつけて", "expected": "行ってらっしゃい気をつけて", "acceptable": ["いってらっしゃい気をつけて", "行ってらっしゃい気を付けて", "いってらっしゃい気を付けて"], "forbidden_examples": []}
+{"id": 10, "category": "日常チャット・相づち・略語", "left_context": "急いで家を出る予定で", "target": "いくつもりだったよ", "expected": "行くつもりだったよ", "acceptable": [], "forbidden_examples": ["幾つもり", "行く積もり"]}
+{"id": 11, "category": "日常チャット・相づち・略語", "left_context": "電話に出られなくてごめん", "target": "いまかえりみちだよ", "expected": "今帰り道だよ", "acceptable": [], "forbidden_examples": []}
+{"id": 12, "category": "日常チャット・相づち・略語", "left_context": "もうすぐ家に着くけど", "target": "なにかかっていこうか", "expected": "何か買っていこうか", "acceptable": ["何か買って行こうか", "なにか買っていこうか"], "forbidden_examples": ["何か飼って"]}
+{"id": 13, "category": "日常チャット・相づち・略語", "left_context": "チャットで返事するなら", "target": "りょってかいていい", "expected": "りょって書いていい", "acceptable": ["りょって書いて良い"], "forbidden_examples": ["旅って", "料って"]}
+{"id": 14, "category": "日常チャット・相づち・略語", "left_context": "ごめん寝過ごして", "target": "いまおきたところ", "expected": "今起きたところ", "acceptable": ["今起きた所"], "forbidden_examples": []}
+{"id": 15, "category": "日常チャット・相づち・略語", "left_context": "待ち合わせの場所には", "target": "ちょうどいまついた", "expected": "ちょうど今着いた", "acceptable": ["丁度今着いた"], "forbidden_examples": []}
+{"id": 16, "category": "日常チャット・相づち・略語", "left_context": "この作業は明日じゃなくて", "target": "あとでやってもいい", "expected": "後でやってもいい", "acceptable": ["あとでやってもいい", "後でやっても良い"], "forbidden_examples": []}
+{"id": 17, "category": "日常チャット・相づち・略語", "left_context": "ちょっと相談したいんだけど", "target": "あのさいまひまかな", "expected": "あのさ今暇かな", "acceptable": [], "forbidden_examples": ["あの差"]}
+{"id": 18, "category": "日常チャット・相づち・略語", "left_context": "その話は初耳だし", "target": "まじでしらなかった", "expected": "マジで知らなかった", "acceptable": ["まじで知らなかった"], "forbidden_examples": ["真実で"]}
+{"id": 19, "category": "日常チャット・相づち・略語", "left_context": "今日のランチは時間もないので", "target": "さくっとすませよう", "expected": "サクッと済ませよう", "acceptable": ["さくっと済ませよう"], "forbidden_examples": []}
+{"id": 20, "category": "日常チャット・相づち・略語", "left_context": "そんな言い方しなくても", "target": "いいとおもうけどな", "expected": "いいと思うけどな", "acceptable": ["良いと思うけどな"], "forbidden_examples": []}
+{"id": 21, "category": "ネットスラング・カタカナ口語", "left_context": "その解説すごく共感できて", "target": "わかるみがふかい", "expected": "わかるみが深い", "acceptable": ["分かるみが深い"], "forbidden_examples": ["分かる味が深い", "わかる味が深い"]}
+{"id": 22, "category": "ネットスラング・カタカナ口語", "left_context": "セールで安くなってたから", "target": "さっきぽちったよ", "expected": "さっきポチったよ", "acceptable": [], "forbidden_examples": []}
+{"id": 23, "category": "ネットスラング・カタカナ口語", "left_context": "夕焼けの海がきれいで", "target": "えもいしゃしんだね", "expected": "エモい写真だね", "acceptable": [], "forbidden_examples": []}
+{"id": 24, "category": "ネットスラング・カタカナ口語", "left_context": "最後の逆転劇はほんと", "target": "えもすぎてなくよ", "expected": "エモすぎて泣くよ", "acceptable": ["エモ過ぎて泣くよ"], "forbidden_examples": []}
+{"id": 25, "category": "ネットスラング・カタカナ口語", "left_context": "今から急げば終電に", "target": "わんちゃんまにあう", "expected": "ワンチャン間に合う", "acceptable": [], "forbidden_examples": ["わんちゃん間に合う"]}
+{"id": 26, "category": "ネットスラング・カタカナ口語", "left_context": "友達の冗談がツボに入って", "target": "まじうけるんだけど", "expected": "マジウケるんだけど", "acceptable": ["まじウケるんだけど"], "forbidden_examples": ["まじ受ける", "マジ受ける", "真実"]}
+{"id": 27, "category": "ネットスラング・カタカナ口語", "left_context": "そんな天然ボケかますとか", "target": "うけるわそれ", "expected": "ウケるわそれ", "acceptable": [], "forbidden_examples": ["受けるわそれ"]}
+{"id": 28, "category": "ネットスラング・カタカナ口語", "left_context": "電車もバスも全部止まって", "target": "つんだわこれ", "expected": "詰んだわこれ", "acceptable": [], "forbidden_examples": ["積んだわこれ"]}
+{"id": 29, "category": "ネットスラング・カタカナ口語", "left_context": "あまりにも面白すぎて", "target": "くさすぎるわ", "expected": "草すぎるわ", "acceptable": ["草過ぎるわ"], "forbidden_examples": ["臭すぎるわ"]}
+{"id": 30, "category": "ネットスラング・カタカナ口語", "left_context": "このゲーム面白すぎて", "target": "かんぜんにぬまったわ", "expected": "完全に沼ったわ", "acceptable": [], "forbidden_examples": []}
+{"id": 31, "category": "ネットスラング・カタカナ口語", "left_context": "店員さんのフォローが完璧で", "target": "かみたいおうすぎる", "expected": "神対応すぎる", "acceptable": ["神対応過ぎる"], "forbidden_examples": []}
+{"id": 32, "category": "ネットスラング・カタカナ口語", "left_context": "深夜のラーメンおいしすぎて", "target": "はいとくかんがすごい", "expected": "背徳感がすごい", "acceptable": ["背徳感が凄い"], "forbidden_examples": []}
+{"id": 33, "category": "ネットスラング・カタカナ口語", "left_context": "せっかく書いたコードが消えて", "target": "めんたるやられた", "expected": "メンタルやられた", "acceptable": [], "forbidden_examples": []}
+{"id": 34, "category": "ネットスラング・カタカナ口語", "left_context": "投稿した動画が急に", "target": "ばずってびっくり", "expected": "バズってびっくり", "acceptable": ["バズってビックリ"], "forbidden_examples": []}
+{"id": 35, "category": "ネットスラング・カタカナ口語", "left_context": "分からない言葉はすぐ", "target": "ぐぐってみよう", "expected": "ググってみよう", "acceptable": [], "forbidden_examples": []}
+{"id": 36, "category": "ネットスラング・カタカナ口語", "left_context": "この設定ファイルなぜか", "target": "ばぐってるみたい", "expected": "バグってるみたい", "acceptable": [], "forbidden_examples": []}
+{"id": 37, "category": "ネットスラング・カタカナ口語", "left_context": "難易度が高すぎて", "target": "まじでえぐいわ", "expected": "マジでエグいわ", "acceptable": ["まじでエグいわ", "マジでえぐいわ"], "forbidden_examples": ["真実で"]}
+{"id": 38, "category": "ネットスラング・カタカナ口語", "left_context": "今の展開は熱すぎて", "target": "げきあつすぎるね", "expected": "激アツすぎるね", "acceptable": ["激アツ過ぎるね", "激熱すぎるね"], "forbidden_examples": []}
+{"id": 39, "category": "ネットスラング・カタカナ口語", "left_context": "この新作パズルほんと", "target": "かみげーだとおもう", "expected": "神ゲーだと思う", "acceptable": [], "forbidden_examples": ["紙ゲー"]}
+{"id": 40, "category": "ネットスラング・カタカナ口語", "left_context": "深夜に一人で作業してたら", "target": "ねおちしちゃった", "expected": "寝落ちしちゃった", "acceptable": [], "forbidden_examples": []}
+{"id": 41, "category": "過剰漢字・当て字抑止", "left_context": "急ぎで進めないといけないし", "target": "とりあえずやってみる", "expected": "とりあえずやってみる", "acceptable": [], "forbidden_examples": ["取り敢えず", "取りあえず"]}
+{"id": 42, "category": "過剰漢字・当て字抑止", "left_context": "本題とは関係ないけど", "target": "ちなみにきのうのけん", "expected": "ちなみに昨日の件", "acceptable": [], "forbidden_examples": ["因みに"]}
+{"id": 43, "category": "過剰漢字・当て字抑止", "left_context": "一週間も徹夜続きは", "target": "さすがにきついよ", "expected": "さすがにキツいよ", "acceptable": ["さすがにきついよ"], "forbidden_examples": ["流石に"]}
+{"id": 44, "category": "過剰漢字・当て字抑止", "left_context": "お休みをもらえたので", "target": "せっかくならでかけたい", "expected": "せっかくなら出かけたい", "acceptable": [], "forbidden_examples": ["折角"]}
+{"id": 45, "category": "過剰漢字・当て字抑止", "left_context": "全部は無理だとしても", "target": "せめてはんぶんはおわらせたい", "expected": "せめて半分は終わらせたい", "acceptable": [], "forbidden_examples": ["責めて", "攻めて"]}
+{"id": 46, "category": "過剰漢字・当て字抑止", "left_context": "新しい操作に慣れるまで", "target": "なかなかむずかしいね", "expected": "なかなか難しいね", "acceptable": [], "forbidden_examples": ["中々"]}
+{"id": 47, "category": "過剰漢字・当て字抑止", "left_context": "締め切りが近づいてるのに", "target": "ほとんどすすんでない", "expected": "ほとんど進んでない", "acceptable": [], "forbidden_examples": ["殆ど"]}
+{"id": 48, "category": "過剰漢字・当て字抑止", "left_context": "うちの地域では雪が", "target": "めったにふらないよ", "expected": "めったに降らないよ", "acceptable": [], "forbidden_examples": ["滅多に"]}
+{"id": 49, "category": "過剰漢字・当て字抑止", "left_context": "設定は変更しないで", "target": "そのままにしておいて", "expected": "そのままにしておいて", "acceptable": [], "forbidden_examples": ["其の儘", "その儘", "置いて"]}
+{"id": 50, "category": "過剰漢字・当て字抑止", "left_context": "あの子は注意を引きたくて", "target": "わざとやってるんだよ", "expected": "わざとやってるんだよ", "acceptable": [], "forbidden_examples": ["態と"]}
+{"id": 51, "category": "過剰漢字・当て字抑止", "left_context": "今週の土曜日は用事があって", "target": "あいにくつごうがわるい", "expected": "あいにく都合が悪い", "acceptable": [], "forbidden_examples": ["生憎"]}
+{"id": 52, "category": "過剰漢字・当て字抑止", "left_context": "長かった工事も来月で", "target": "ようやくおわるらしい", "expected": "ようやく終わるらしい", "acceptable": [], "forbidden_examples": ["漸く"]}
+{"id": 53, "category": "過剰漢字・当て字抑止", "left_context": "突然の電話で", "target": "びっくりしたよ", "expected": "びっくりしたよ", "acceptable": ["ビックリしたよ"], "forbidden_examples": ["吃驚"]}
+{"id": 54, "category": "過剰漢字・当て字抑止", "left_context": "お土産をみんなで", "target": "たくさんかってきたよ", "expected": "たくさん買ってきたよ", "acceptable": ["たくさん買って来たよ"], "forbidden_examples": ["沢山"]}
+{"id": 55, "category": "過剰漢字・当て字抑止", "left_context": "何も言わずに", "target": "いきなりはじまった", "expected": "いきなり始まった", "acceptable": [], "forbidden_examples": ["行き成り"]}
+{"id": 56, "category": "過剰漢字・当て字抑止", "left_context": "結論だけ先に言うと", "target": "つまりこういうこと", "expected": "つまりこういうこと", "acceptable": [], "forbidden_examples": ["詰まり"]}
+{"id": 57, "category": "過剰漢字・当て字抑止", "left_context": "参加者全員に", "target": "それぞれくばっておく", "expected": "それぞれ配っておく", "acceptable": [], "forbidden_examples": ["其々", "置いて"]}
+{"id": 58, "category": "過剰漢字・当て字抑止", "left_context": "これから年末に向けて", "target": "ますますいそがしくなる", "expected": "ますます忙しくなる", "acceptable": [], "forbidden_examples": ["益々"]}
+{"id": 59, "category": "過剰漢字・当て字抑止", "left_context": "急いで走ったせいで", "target": "かえっておそくなった", "expected": "かえって遅くなった", "acceptable": [], "forbidden_examples": ["却って", "返って"]}
+{"id": 60, "category": "過剰漢字・当て字抑止", "left_context": "この仕様だと修正は", "target": "もはやむりじゃない", "expected": "もはや無理じゃない", "acceptable": [], "forbidden_examples": ["最早"]}
+{"id": 61, "category": "補助動詞のひらがな開き", "left_context": "分からないところがあったら", "target": "おしえてほしいな", "expected": "教えてほしいな", "acceptable": [], "forbidden_examples": ["教えて欲しいな"]}
+{"id": 62, "category": "補助動詞のひらがな開き", "left_context": "詳しい事情を先に", "target": "きかせてほしいな", "expected": "聞かせてほしいな", "acceptable": [], "forbidden_examples": ["聞かせて欲しいな"]}
+{"id": 63, "category": "補助動詞のひらがな開き", "left_context": "まずはテスト環境で", "target": "うごかしてみようよ", "expected": "動かしてみようよ", "acceptable": [], "forbidden_examples": ["動かして見ようよ"]}
+{"id": 64, "category": "補助動詞のひらがな開き", "left_context": "明日の会議で使う資料を", "target": "さきにつくっておく", "expected": "先に作っておく", "acceptable": [], "forbidden_examples": ["先に作って置く"]}
+{"id": 65, "category": "補助動詞のひらがな開き", "left_context": "重い荷物で大変そうだし", "target": "もってあげるよ", "expected": "持ってあげるよ", "acceptable": [], "forbidden_examples": ["持って上げるよ"]}
+{"id": 66, "category": "補助動詞のひらがな開き", "left_context": "困っている同僚がいれば", "target": "てつだってあげてよ", "expected": "手伝ってあげてよ", "acceptable": [], "forbidden_examples": ["手伝って上げてよ"]}
+{"id": 67, "category": "補助動詞のひらがな開き", "left_context": "帰り道でパンを買って", "target": "うちまでとどけてくれる", "expected": "家まで届けてくれる", "acceptable": ["うちまで届けてくれる"], "forbidden_examples": ["届けて呉れる"]}
+{"id": 68, "category": "補助動詞のひらがな開き", "left_context": "上司に提出する前に", "target": "かくにんしてもらえる", "expected": "確認してもらえる", "acceptable": [], "forbidden_examples": ["確認して貰える"]}
+{"id": 69, "category": "補助動詞のひらがな開き", "left_context": "次の打ち合わせまでに", "target": "よんでおいてほしい", "expected": "読んでおいてほしい", "acceptable": [], "forbidden_examples": ["読んで置いてほしい", "読んでおいて欲しい", "読んで置いて欲しい"]}
+{"id": 70, "category": "補助動詞のひらがな開き", "left_context": "忘れないうちに今のうち", "target": "めもしておこう", "expected": "メモしておこう", "acceptable": [], "forbidden_examples": ["メモして置こう"]}
+{"id": 71, "category": "補助動詞のひらがな開き", "left_context": "明日のお昼ごはんは家で", "target": "つくってくるつもり", "expected": "作ってくるつもり", "acceptable": [], "forbidden_examples": ["作って来るつもり", "作る積もり"]}
+{"id": 72, "category": "補助動詞のひらがな開き", "left_context": "これから新しい分野にも", "target": "ちょうせんしていくよ", "expected": "挑戦していくよ", "acceptable": [], "forbidden_examples": ["挑戦して行くよ"]}
+{"id": 73, "category": "補助動詞のひらがな開き", "left_context": "締め切りが迫っているのに", "target": "うっかりねてしまった", "expected": "うっかり寝てしまった", "acceptable": [], "forbidden_examples": ["寝て仕舞った"]}
+{"id": 74, "category": "補助動詞のひらがな開き", "left_context": "冷蔵庫の牛乳がもう", "target": "きれているみたい", "expected": "切れているみたい", "acceptable": [], "forbidden_examples": ["切れて居るみたい"]}
+{"id": 75, "category": "補助動詞のひらがな開き", "left_context": "机の上に大事な書類が", "target": "おいてあるはずだよ", "expected": "置いてあるはずだよ", "acceptable": ["置いてある筈だよ"], "forbidden_examples": ["置いて有る"]}
+{"id": 76, "category": "補助動詞のひらがな開き", "left_context": "新しいやり方がうまくいくか", "target": "ためしてみるつもり", "expected": "試してみるつもり", "acceptable": [], "forbidden_examples": ["試して見るつもり", "試してみる積もり"]}
+{"id": 77, "category": "補助動詞のひらがな開き", "left_context": "この件については一度", "target": "かんがえてみますね", "expected": "考えてみますね", "acceptable": [], "forbidden_examples": ["考えて見ますね"]}
+{"id": 78, "category": "補助動詞のひらがな開き", "left_context": "あとで困らないように", "target": "きいておいてくれる", "expected": "聞いておいてくれる", "acceptable": [], "forbidden_examples": ["聞いて置いてくれる", "聞いておいて呉れる"]}
+{"id": 79, "category": "補助動詞のひらがな開き", "left_context": "駅に着いたらメッセージで", "target": "おしえてもらえるとたすかる", "expected": "教えてもらえると助かる", "acceptable": [], "forbidden_examples": ["教えて貰えると"]}
+{"id": 80, "category": "補助動詞のひらがな開き", "left_context": "昨日のデータも含めて", "target": "まとめなおしてみよう", "expected": "まとめ直してみよう", "acceptable": ["纏め直してみよう"], "forbidden_examples": ["まとめ直して見よう"]}
+{"id": 81, "category": "口語縮約・文末・文脈同音", "left_context": "今日の夕方までに絶対", "target": "おわらせちゃうつもり", "expected": "終わらせちゃうつもり", "acceptable": [], "forbidden_examples": ["終わらせちゃう積もり"]}
+{"id": 82, "category": "口語縮約・文末・文脈同音", "left_context": "大事なお皿をうっかり", "target": "わっちゃったごめん", "expected": "割っちゃったごめん", "acceptable": [], "forbidden_examples": ["割っ茶った"]}
+{"id": 83, "category": "口語縮約・文末・文脈同音", "left_context": "出かける前に電気は", "target": "けしとくからね", "expected": "消しとくからね", "acceptable": [], "forbidden_examples": []}
+{"id": 84, "category": "口語縮約・文末・文脈同音", "left_context": "そのデータは共有フォルダに", "target": "おいとくからね", "expected": "置いとくからね", "acceptable": [], "forbidden_examples": ["老いとく"]}
+{"id": 85, "category": "口語縮約・文末・文脈同音", "left_context": "冷めないうちに早く", "target": "たべちゃいなよ", "expected": "食べちゃいなよ", "acceptable": [], "forbidden_examples": []}
+{"id": 86, "category": "口語縮約・文末・文脈同音", "left_context": "会議の開始時間はもう", "target": "きまってるはずだよ", "expected": "決まってるはずだよ", "acceptable": ["決まってる筈だよ"], "forbidden_examples": ["極まってる"]}
+{"id": 87, "category": "口語縮約・文末・文脈同音", "left_context": "あの問題ってもうすでに", "target": "かいけつしたっけ", "expected": "解決したっけ", "acceptable": [], "forbidden_examples": []}
+{"id": 88, "category": "口語縮約・文末・文脈同音", "left_context": "次の定例会って確か", "target": "らいしゅうのすいようびっしょ", "expected": "来週の水曜日っしょ", "acceptable": [], "forbidden_examples": []}
+{"id": 89, "category": "口語縮約・文末・文脈同音", "left_context": "ほら言ったとおりに", "target": "うまくいったじゃん", "expected": "うまくいったじゃん", "acceptable": ["上手くいったじゃん", "うまく行ったじゃん"], "forbidden_examples": []}
+{"id": 90, "category": "口語縮約・文末・文脈同音", "left_context": "昨日の夜遅くまで", "target": "おきてたんだってば", "expected": "起きてたんだってば", "acceptable": [], "forbidden_examples": []}
+{"id": 91, "category": "口語縮約・文末・文脈同音", "left_context": "この計画このまま進めても", "target": "だいじょうぶかなあ", "expected": "大丈夫かなあ", "acceptable": ["大丈夫かなぁ"], "forbidden_examples": []}
+{"id": 92, "category": "口語縮約・文末・文脈同音", "left_context": "あそこの角を曲がったら", "target": "すぐみえるはず", "expected": "すぐ見えるはず", "acceptable": ["すぐ見える筈"], "forbidden_examples": ["直ぐ見える"]}
+{"id": 93, "category": "口語縮約・文末・文脈同音", "left_context": "電車が遅れてるせいで", "target": "まにあいそうにないや", "expected": "間に合いそうにないや", "acceptable": [], "forbidden_examples": []}
+{"id": 94, "category": "口語縮約・文末・文脈同音", "left_context": "さっき頼んだ資料の", "target": "けんはもうすんだ", "expected": "件はもう済んだ", "acceptable": ["件はもうすんだ"], "forbidden_examples": ["剣は", "権は", "県は", "住んだ"]}
+{"id": 95, "category": "口語縮約・文末・文脈同音", "left_context": "明日の会議の資料は", "target": "ちゃんとつくっとくよ", "expected": "ちゃんと作っとくよ", "acceptable": [], "forbidden_examples": ["ちゃんと作っとく用"]}
+{"id": 96, "category": "口語縮約・文末・文脈同音", "left_context": "雨も降ってきたことだし", "target": "さっさとかえっちゃお", "expected": "さっさと帰っちゃお", "acceptable": [], "forbidden_examples": []}
+{"id": 97, "category": "口語縮約・文末・文脈同音", "left_context": "このケーキ賞味期限が", "target": "きょうまでだったはず", "expected": "今日までだったはず", "acceptable": ["今日までだった筈"], "forbidden_examples": []}
+{"id": 98, "category": "口語縮約・文末・文脈同音", "left_context": "その荷物重そうだから", "target": "もってってあげるよ", "expected": "持ってってあげるよ", "acceptable": [], "forbidden_examples": ["持ってって上げるよ"]}
+{"id": 99, "category": "口語縮約・文末・文脈同音", "left_context": "そんな昔のことはもう", "target": "わすれちゃったよ", "expected": "忘れちゃったよ", "acceptable": [], "forbidden_examples": []}
+{"id": 100, "category": "口語縮約・文末・文脈同音", "left_context": "せっかく作ったのに", "target": "こわれちゃったみたい", "expected": "壊れちゃったみたい", "acceptable": [], "forbidden_examples": []}

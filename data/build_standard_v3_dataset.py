@@ -79,11 +79,19 @@ def collect_raw_rows(reserved_keys: set[str]):
     seen_pairs = set()
 
     def add(left: str, reading: str, completion: str, cat: str, fam: str):
-        row = make_row(left, reading, completion, cat, fam)
+        raw_row = make_row(left, reading, completion, cat, fam)
+        if source_keys(raw_row) & reserved_keys:
+            return False
+        if left and normalize(left) in eval_ctx_norm:
+            return False
+        m_left, m_reading, m_comp = nano_builder.mask_row_digits_with_nam(
+            left, raw_row["reading"], completion
+        )
+        row = make_row(m_left, m_reading, m_comp, cat, fam)
         r_keys = source_keys(row)
         if r_keys & reserved_keys:
             return False
-        if left and normalize(left) in eval_ctx_norm:
+        if m_left and normalize(m_left) in eval_ctx_norm:
             return False
         pair_key = (row["prompt"], row["completion"])
         if pair_key in seen_pairs:
@@ -93,7 +101,7 @@ def collect_raw_rows(reserved_keys: set[str]):
         return True
 
     # 0. Inherit clean rows from Nano v3
-    for r in nano_builder.collect_curated_families():
+    for r in nano_builder.collect_curated_families(reserved_keys):
         if r["prompt"].startswith("\uee02\uee00"):
             r["prompt"] = "\uee00" + r["prompt"][2:]
         r_keys = source_keys(r)
@@ -855,6 +863,618 @@ def collect_raw_rows(reserved_keys: set[str]):
         ("救命処置のおかげで心拍と呼吸が微弱だった危険な状態から脱した。", "かしじょうたいからいのちをとりとめる", "仮死状態から命を取り留める", "homophone_balance", "kashi_2"),
     ]
     for left, r, c, cat, fam in reinforcement_rows:
+        add(left, r, c, cat, fam)
+
+    # ==========================================================================
+    # 8. v4 基礎変換能力強化（句頭コロケーション / 複合文節同音切替 / 数字・日付保持）
+    # ==========================================================================
+    capability_rows = [
+        # --- 句頭・短文脈 基本語コロケーション (助詞 vs 女子, 端 vs 箸/橋, 決を採る, 海上, 解錠, 軍習 vs 群衆, 重大違反, 修学期間, 古文書史料, 浮腫) ---
+        ("", "じょしやごじゅんをただす", "助詞や語順を正す", "basic", "joshi_colloc"),
+        ("", "じょしやごじゅんのあやまりをなおす", "助詞や語順の誤りを直す", "basic", "joshi_colloc"),
+        ("", "じょしとごじゅんをかくにんする", "助詞と語順を確認する", "basic", "joshi_colloc"),
+        ("", "じょしやかつようごびをかえない", "助詞や活用語尾を変えない", "basic", "joshi_colloc"),
+        ("", "じょしのつかいかたとごじゅん", "助詞の使い方と語順", "basic", "joshi_colloc"),
+        ("制服を着た生徒たちが校庭に集まっている。", "じょしとだんしがならぶ", "女子と男子が並ぶ", "homophone_balance", "joshi_colloc"),
+        ("体育の授業でクラスの仲間と競技を始める。", "じょしせいとがはしる", "女子生徒が走る", "homophone_balance", "joshi_colloc"),
+
+        ("机の上を広く使いたい。", "はしによせておく", "端に寄せておく", "homophone_balance", "hashi_head"),
+        ("テーブルの真ん中を広く空けたい。", "はしによせてならべる", "端に寄せて並べる", "homophone_balance", "hashi_head"),
+        ("部屋の中央にスペースを作る。", "はしによせてつみあげる", "端に寄せて積み上げる", "homophone_balance", "hashi_head"),
+        ("棚の正面をすっきり整理したい。", "はしによせてかたづける", "端に寄せて片付ける", "homophone_balance", "hashi_head"),
+        ("作業台の中央で資料を広げたい。", "はしによせてつうろをあける", "端に寄せて通路を空ける", "homophone_balance", "hashi_head"),
+        ("食卓にお茶碗と汁物を並べる。", "はしをもちあげてたべる", "箸を持ち上げて食べる", "homophone_balance", "hashi_head"),
+        ("川の向こう岸へ歩いて向かう。", "はしのたもとでまちあわせる", "橋のたもとで待ち合わせる", "homophone_balance", "hashi_head"),
+
+        ("議論が平行線のまま時間が過ぎたため結論を出す。", "けつをとってきめる", "決を採って決める", "homophone_balance", "ketsu_head"),
+        ("議案の賛否を明確にするために投票を行う。", "けつをとってさいけつする", "決を採って採決する", "homophone_balance", "ketsu_head"),
+        ("議長の進行に従って全員の意見を問う。", "きょしゅでけつをとる", "挙手で決を採る", "homophone_balance", "ketsu_head"),
+        ("総会の終盤に重要な方針について賛否を問う。", "ぎじょうでけつをとる", "議場で決を採る", "homophone_balance", "ketsu_head"),
+        ("出席者の過半数で可決するかどうかを決める。", "さんぴのけつをとる", "賛否の決を採る", "homophone_balance", "ketsu_head"),
+
+        ("港を出発して外洋へ向かう。", "かいじょうをこうこうする", "海上を航行する", "homophone_balance", "kaijou_sea"),
+        ("大型の貨物船が波を切って走る。", "おきのかいじょうをすすむ", "沖の海上を進む", "homophone_balance", "kaijou_sea"),
+        ("晴天のもとでフェリーが島を目指す。", "おだやかなかいじょうをすすむ", "穏やかな海上を進む", "homophone_balance", "kaijou_sea"),
+        ("漁船が朝焼けの海を走っていく。", "ふねがかいじょうをすすむ", "船が海上を進む", "homophone_balance", "kaijou_sea"),
+        ("嵐の中でも巡視船が波を越えていく。", "あれたかいじょうをすすむ", "荒れた海上を進む", "homophone_balance", "kaijou_sea"),
+
+        ("玄関のスマートロックに番号を打ち込む。", "あんしょうばんごうでどあをかいじょうする", "暗証番号でドアを解錠する", "homophone_balance", "kaijou_unlock"),
+        ("オフィスの入り口で社員証をかざす。", "かーどきーでどあをかいじょうする", "カードキーでドアを解錠する", "homophone_balance", "kaijou_unlock"),
+        ("セキュリティ室の扉を開ける。", "ぱすわーどでとびらをかいじょうする", "パスワードで扉を解錠する", "homophone_balance", "kaijou_unlock"),
+        ("スマホのアプリを操作して鍵を開ける。", "でんしじょうをかいじょうする", "電子錠を解錠する", "homophone_balance", "kaijou_unlock"),
+
+        ("国防を担う部隊が演習場に入る。", "ぶたいがぐんしゅうをおこなう", "部隊が軍習を行う", "homophone_balance", "gunshuu_bal"),
+        ("司令官の号令のもとで兵士たちが動く。", "やがいでぐんしゅうをおこなう", "野外で軍習を行う", "homophone_balance", "gunshuu_bal"),
+        ("厳しい気象条件を想定して部隊が動く。", "じっせんてきなぐんしゅうをおこなう", "実戦的な軍習を行う", "homophone_balance", "gunshuu_bal"),
+        ("陸上の演習場で定期的な訓練を重ねる。", "ぐんしゅうをじっしする", "軍習を実施する", "homophone_balance", "gunshuu_bal"),
+        ("暗闇の中での行軍と連携を確認する。", "やかんのぐんしゅうをおこなう", "夜間の軍習を行う", "homophone_balance", "gunshuu_bal"),
+        ("駅前の広場に大勢の観客が詰めかけた。", "ぐんしゅうがおしよせる", "群衆が押し寄せる", "homophone_balance", "gunshuu_bal"),
+        ("お祭りの会場周辺に大勢の人が集まった。", "ぐんしゅうのなかをあるく", "群衆の中を歩く", "homophone_balance", "gunshuu_bal"),
+
+        ("", "じゅうだいいはんをとりしまる", "重大違反を取り締まる", "basic", "juudai_ihan"),
+        ("", "じゅうだいいはんをほうこくする", "重大違反を報告する", "basic", "juudai_ihan"),
+        ("", "じゅうだいいはんのかずをしゅうけいする", "重大違反の数を集計する", "basic", "juudai_ihan"),
+        ("", "じゅうだいなかしつをふせぐ", "重大な過失を防ぐ", "basic", "juudai_ihan"),
+        ("", "じゅうだいじこをよぼうする", "重大事故を予防する", "basic", "juudai_ihan"),
+
+        ("大学で専門分野を学ぶ。", "しゅうがくきかんをまっとうする", "修学期間を全うする", "homophone_balance", "shuugaku_head"),
+        ("規定の履修要件を満たすための年数。", "しゅうがくきかんをさだめる", "修学期間を定める", "homophone_balance", "shuugaku_head"),
+        ("必要な単位をすべて取得する。", "しゅうがくきかんをおえてそつぎょうする", "修学期間を終えて卒業する", "homophone_balance", "shuugaku_head"),
+        ("留学のため在籍の期限を延ばす。", "しゅうがくきかんをえんちょうする", "修学期間を延長する", "homophone_balance", "shuugaku_head"),
+
+        ("博物館のアーカイブで歴史研究をする。", "こもんじょのしりょうをよみとく", "古文書の史料を読み解く", "specialized_knowledge", "komonjo_shiryou"),
+        ("歴史資料館の閲覧室で原本を調べる。", "こもんじょのしりょうをえつらんする", "古文書の史料を閲覧する", "specialized_knowledge", "komonjo_shiryou"),
+        ("温度と湿度を管理した書庫に納める。", "こもんじょのしりょうをほぞんする", "古文書の史料を保存する", "specialized_knowledge", "komonjo_shiryou"),
+        ("江戸時代以前の文字記録を精査する。", "こもんじょのしりょうをぶんせきする", "古文書の史料を分析する", "specialized_knowledge", "komonjo_shiryou"),
+        ("幕府の記録が残る古い書物を調べる。", "こもんじょのしりょうをひもとく", "古文書の史料を紐解く", "specialized_knowledge", "komonjo_shiryou"),
+
+        ("適切な投薬治療を続けた結果、", "かんかいしふしゅもひいた", "寛解し浮腫も引いた", "specialized_knowledge", "fushu_med"),
+        ("入院治療が効いてむくみが取れていく。", "びょうじょうがかんかいしふしゅがきえる", "病状が寛解し浮腫が消える", "specialized_knowledge", "fushu_med"),
+        ("主治医から経過良好との診断を受ける。", "ふしゅがかいぜんしてたいいんする", "浮腫が改善して退院する", "specialized_knowledge", "fushu_med"),
+        ("血液検査の数値とむくみの経過が良くなる。", "かしやがんめんのふしゅがかいぜんした", "下肢や顔面の浮腫が改善した", "specialized_knowledge", "fushu_med"),
+
+        # --- 四字熟語・専門語・送り仮名・カナ/口語 ---
+        ("悔しさを胸に秘めて地道な鍛錬を続ける。", "がしんしょうたんのどりょくをかさねる", "臥薪嘗胆の努力を重ねる", "idioms_and_literature", "gashin"),
+        ("目標達成の日を信じて長い苦労を耐え抜く。", "がしんしょうたんのつきひをおくる", "臥薪嘗胆の月日を送る", "idioms_and_literature", "gashin"),
+        ("苦節の年月を乗り越えて大舞台に立つ。", "がしんしょうたんのおもいでいどむ", "臥薪嘗胆の思いで挑む", "idioms_and_literature", "gashin"),
+        ("敗戦の雪辱を果たすまで長い下積みを耐える。", "がしんしょうたんのさいげつをすごす", "臥薪嘗胆の歳月を過ごす", "idioms_and_literature", "gashin"),
+
+        ("当事者から離れて客観的な視点を持つ。", "おかめはちもくでぜんたいをみわたす", "傍目八目で全体を見渡す", "idioms_and_literature", "okame"),
+        ("外側から冷静に戦況を観察して分析する。", "おかめはちもくでじょうきょうをみる", "傍目八目で状況を見る", "idioms_and_literature", "okame"),
+        ("第三者の立場から落ち着いて見極める。", "おかめはちもくでれいせいにはんだんする", "傍目八目で冷静に判断する", "idioms_and_literature", "okame"),
+
+        ("ささいな出来事を大げさに誇張して話す。", "しんしょうぼうだいにいいたてる", "針小棒大に言い立てる", "idioms_and_literature", "shinshou"),
+        ("根拠のない噂話を大きく膨らませて広める。", "しんしょうぼうだいにふちょうする", "針小棒大に吹聴する", "idioms_and_literature", "shinshou"),
+        ("事実を誇張して周囲に広めてはいけない。", "しんしょうぼうだいにいいふらさない", "針小棒大に言いふらさない", "idioms_and_literature", "shinshou"),
+        ("小さなミスを大事件のように語る話。", "しんしょうぼうだいなうわさばなし", "針小棒大な噂話", "idioms_and_literature", "shinshou"),
+
+        ("軽い罪を犯した者に対する短期間の自由刑。", "びざいでたんきのこうりゅうにしょす", "微罪で短期の拘留に処す", "specialized_knowledge", "kouryuu_law"),
+        ("裁判官が短期間の拘禁処分を言い渡す。", "たんきのこうりゅうけいをいいわたす", "短期の拘留刑を言い渡す", "specialized_knowledge", "kouryuu_law"),
+        ("軽微な法令違反により短期間収容される。", "けいはんざいでたんきのこうりゅうにしょされる", "軽犯罪で短期の拘留に処される", "specialized_knowledge", "kouryuu_law"),
+
+        ("裁判所へ強制執行を請求する書面を出す。", "きょうせいしっこうのもうしたてをおこなう", "強制執行の申立てを行う", "specialized_knowledge", "moushitate"),
+        ("債権保全のための仮処分を申請する。", "かりさしおさえのもうしたてをする", "仮差押えの申立てをする", "specialized_knowledge", "moushitate"),
+        ("債務名義をもとに執行手続を求める。", "さいばんしょにきょうせいしっこうのもうしたてをする", "裁判所に強制執行の申立てをする", "specialized_knowledge", "moushitate"),
+
+        ("取引先の企業へ年頭の挨拶状を送る。", "きしゃのますますのごせいえい", "貴社のますますのご清栄", "homophone_balance", "kisha_keigo"),
+        ("お取引先様の今後の発展を祈念して挨拶する。", "きしゃのますますのごはんえい", "貴社のますますのご繁栄", "homophone_balance", "kisha_keigo"),
+        ("ビジネスレターの結びに繁栄を願う言葉を添える。", "きしゃのますますのごりゅうせい", "貴社のますますのご隆盛", "homophone_balance", "kisha_keigo"),
+
+        ("", "くらうどではなくたんまつでしょりする", "クラウドではなく端末で処理する", "basic", "katakana_loan"),
+        ("", "くらうどではなくてーぶるでかんりする", "クラウドではなくテーブルで管理する", "basic", "katakana_loan"),
+        ("", "うぇぶさいとをひらいてがいようをかくにんする", "ウェブサイトを開いて概要を確認する", "basic", "katakana_loan"),
+
+        ("", "ちがうよ", "違うよ", "colloquial", "colloquial_short"),
+        ("", "それはちがう", "それは違う", "colloquial", "colloquial_short"),
+        ("", "いけんがちがう", "意見が違う", "colloquial", "colloquial_short"),
+        ("", "おれきのういった", "俺昨日行った", "colloquial", "colloquial_short"),
+        ("", "おれきょういく", "俺今日行く", "colloquial", "colloquial_short"),
+
+        # --- 複合文節・同音反復（名詞介入なしの直接接続含む） ---
+        ("テレビの生放送中に箱が潰れるミスを防ぐため、", "ほうそうじこをふせぐためにほうそうをかくにんする", "放送事故を防ぐために包装を確認する", "multi_clause_compound", "comp_cap"),
+        ("生中継の番組で賞品の箱が破損しないよう、", "ほうそうじこをふせぐためにほうそうをきょうかする", "放送事故を防ぐために包装を強化する", "multi_clause_compound", "comp_cap"),
+        ("オンエア直前にプレゼント用の箱をしっかり包み、", "なまほうそうのまえにほうそうをてっていする", "生放送の前に包装を徹底する", "multi_clause_compound", "comp_cap"),
+        ("視聴者プレゼント企画の放送に先立って梱包を行い、", "ばんぐみのほうそうまえにほうそうをてっていする", "番組の放送前に包装を徹底する", "multi_clause_compound", "comp_cap"),
+
+        ("手術の方針を決める前に患者本人の考えを尊重し、", "たんとういしのかんじゃにたいするいしをかくにんする", "担当医師の患者に対する意思を確認する", "multi_clause_compound", "comp_cap"),
+        ("診察室で主治医が患者本人の意向を聞き取り、", "いしのかんじゃにたいするいしをたしかめる", "医師の患者に対する意思を確かめる", "multi_clause_compound", "comp_cap"),
+        ("治療計画の説明の場で患者の本当の望みを把握するため、", "しゅじいしのかんじゃにたいするいしをきく", "主治医師の患者に対する意思を聞く", "multi_clause_compound", "comp_cap"),
+
+        ("古代から信仰を集める神社で拝観許可の手続きを行い、", "しんせいなしんでんでしんせいのしょるいをだす", "神聖な神殿で申請の書類を出す", "multi_clause_compound", "comp_cap"),
+        ("歴史あるお寺の受付で特別拝観の届出を行い、", "しんせいなけいないでしんせいのてつづきをする", "神聖な境内で申請の手続きをする", "multi_clause_compound", "comp_cap"),
+        ("厳かな神域の社務所で参拝許可の書類を提出し、", "しんせいなおみやでしんせいのうけつけをする", "神聖なお宮で申請の受付をする", "multi_clause_compound", "comp_cap"),
+
+        ("国際会議の全日程が終わった直後にデータ解析を行い、", "かいきのしゅうりょうとともにかいきぶんせきをはじめる", "会期の終了とともに回帰分析を始める", "multi_clause_compound", "comp_cap"),
+        ("研究発表の期間が終わってから研究室で統計計算を進め、", "かいきのしゅうりょうごにかいきぶんせきをおこなう", "会期の終了後に回帰分析を行う", "multi_clause_compound", "comp_cap"),
+        ("学会の開催期間中に共同研究者と統計モデルの解析を進め、", "がっかいのかいきちゅうにかいきぶんせきをおこなう", "学会の会期中に回帰分析を行う", "multi_clause_compound", "comp_cap"),
+
+        ("厳しい状況でも冷静な判断力を維持して反撃の機会を狙い、", "しょうきをうしなわずにしょうきをさぐる", "正気を失わずに勝機を探る", "multi_clause_compound", "comp_cap"),
+        ("苦しい展開でも心を落ち着けて勝利のチャンスを見極め、", "しょうきをたもってしょうきをみいだす", "正気を保って勝機を見出す", "multi_clause_compound", "comp_cap"),
+        ("試合終盤の劣勢でも冷静さを保って大逆転を狙い、", "さいごまでしょうきをうしなわずにしょうきをつかむ", "最後まで正気を失わずに勝機を掴む", "multi_clause_compound", "comp_cap"),
+
+        ("金融グループのトップが下した判断で貸付金を帳消しにし、", "そうさいのしじでふりょうさいけんをそうさいする", "総裁の指示で不良債権を相殺する", "multi_clause_compound", "comp_cap"),
+        ("最高責任者の命令に従って互いの債権を差し引き計算し、", "そうさいのしじにしたがってさいけんをそうさいする", "総裁の指示に従って債権を相殺する", "multi_clause_compound", "comp_cap"),
+        ("中央組織のトップが方針を示して双方の債権を精算し、", "ぎんこうそうさいのしじでさいけんをそうさいする", "銀行総裁の指示で債権を相殺する", "multi_clause_compound", "comp_cap"),
+
+        # --- 全角数字入力 → 半角数字出力の桁数・日付忠実保持 ---
+        ("駄菓子屋で小銭を出して買う。", "１０えんのガム", "10円のガム", "alphanumeric", "digit_exact"),
+        ("郵便局の窓口で封筒用に買う。", "５０えんのきって", "50円の切手", "alphanumeric", "digit_exact"),
+        ("近所のベーカリーで朝食を買う。", "１００えんのパン", "100円のパン", "alphanumeric", "digit_exact"),
+        ("コンビニのレジ横でガムを選ぶ。", "１００えんのガム", "100円のガム", "alphanumeric", "digit_exact"),
+        ("駄菓子屋の棚から安いお菓子を選ぶ。", "１００えんのかし", "100円の菓子", "alphanumeric", "digit_exact"),
+        ("小銭入れから百円玉を二枚出して買う。", "２００えんのあめ", "200円の飴", "alphanumeric", "digit_exact"),
+        ("お菓子の詰め合わせを三百円で買う。", "３００えんのあめ", "300円の飴", "alphanumeric", "digit_exact"),
+        ("お土産用のキャンディを五百円で買う。", "５００えんのあめ", "500円の飴", "alphanumeric", "digit_exact"),
+        ("駅前の定食屋で昼食をとる。", "１０００えんのランチ", "1000円のランチ", "alphanumeric", "digit_exact"),
+        ("新幹線に乗る前に売店で弁当を買う。", "２０００えんのべんとう", "2000円の弁当", "alphanumeric", "digit_exact"),
+
+        ("体力づくりのために少し走る。", "５きろはしる", "5キロ走る", "alphanumeric", "digit_exact"),
+        ("健康のために街を散策する。", "１０きろあるく", "10キロ歩く", "alphanumeric", "digit_exact"),
+        ("週末のマラソン大会の距離。", "１０きろのコース", "10キロのコース", "alphanumeric", "digit_exact"),
+        ("ハーフマラソンに向けて距離を伸ばす。", "２０きろはしる", "20キロ走る", "alphanumeric", "digit_exact"),
+        ("フルマラソン前の長距離練習。", "３０きろはしる", "30キロ走る", "alphanumeric", "digit_exact"),
+        ("ウルトラマラソンの過酷な距離。", "１００きろはしる", "100キロ走る", "alphanumeric", "digit_exact"),
+
+        ("お正月の翌日の日付をメモする。", "１がつ２にち", "1月2日", "alphanumeric", "digit_exact"),
+        ("三が日の最終日の予定を書く。", "１がつ３にち", "1月3日", "alphanumeric", "digit_exact"),
+        ("二月の最初の日をカレンダーに記す。", "２がつ１にち", "2月1日", "alphanumeric", "digit_exact"),
+        ("二月二日の記念日を手帳に書く。", "２がつ２にち", "2月2日", "alphanumeric", "digit_exact"),
+        ("ひな祭りの日付を確認する。", "３がつ３にち", "3月3日", "alphanumeric", "digit_exact"),
+        ("新年度の初日を手帳に書き込む。", "４がつ１にち", "4月1日", "alphanumeric", "digit_exact"),
+        ("こどもの日の予定を記録する。", "５がつ５にち", "5月5日", "alphanumeric", "digit_exact"),
+        ("七夕の日の日付を入力する。", "７がつ７にち", "7月7日", "alphanumeric", "digit_exact"),
+        ("十月十日の日付をメモする。", "１０がつ１０か", "10月10日", "alphanumeric", "digit_exact"),
+        ("十一月十一日の予定を記録する。", "１１がつ１１にち", "11月11日", "alphanumeric", "digit_exact"),
+    ]
+    for left, r, c, cat, fam in capability_rows:
+        add(left, r, c, cat, fam)
+
+    # ==========================================================================
+    # 9. v4 非数値領域・空文脈整合・量子化耐性補強 (cap-r2)
+    # ==========================================================================
+    capability_r2_rows = [
+        # --- 高難度250問の非数値未解決・量子化逆転補強 ---
+        ("管制塔の指示に従って旅客機が高度を下げていく。", "こうかをはじめる", "降下を始める", "homophone_balance", "kouka_descent_head"),
+        ("滑走路への進入に向けて機体が高度を落としていく。", "こうかをかいししました", "降下を開始しました", "homophone_balance", "kouka_descent_head"),
+        ("悪天候の雲を抜けるためヘリコプターが高度を下げる。", "こうかをつづけています", "降下を続けています", "homophone_balance", "kouka_descent_head"),
+        ("着陸許可が出たため飛行機がゆっくり高度を落とす。", "こうかをかいしする", "降下を開始する", "homophone_balance", "kouka_descent_head"),
+        ("目的地の空港が近づき旅客機が高度を下げ始める。", "こうかをはじめた", "降下を始めた", "homophone_balance", "kouka_descent_head"),
+
+        ("大規模なトラフィックが集中する決済基盤において、", "べきとうせいのあるえーぴーあいでふくそうをふせぐ", "冪等性のあるAPIで輻輳を防ぐ", "multi_clause_compound", "comp_fukusou_api"),
+        ("アクセスが殺到するクラウドのバックエンド環境で、", "べきとうなえーぴーあいでふくそうをかいしょうする", "冪等なAPIで輻輳を解消する", "multi_clause_compound", "comp_fukusou_api"),
+        ("高負荷なリクエストが続く分散システムにおいて、", "べきとうせいのあるえーぴーあいでふくそうをおさえる", "冪等性のあるAPIで輻輳を抑える", "multi_clause_compound", "comp_fukusou_api"),
+        ("大量の同時接続が発生するオンラインサービスで、", "ひどうきのえーぴーあいでふくそうをかいしょうする", "非同期のAPIで輻輳を解消する", "multi_clause_compound", "comp_fukusou_api"),
+        ("重複リクエストを安全にさばくWebサーバーにおいて、", "べきとうせいのあるせっけいでふくそうをかいしょうする", "冪等性のある設計で輻輳を解消する", "multi_clause_compound", "comp_fukusou_api"),
+
+        ("苦い敗北の記憶を胸に刻みながら厳しい練習を耐え抜く。", "がしんしょうたんのまいにちをおくる", "臥薪嘗胆の毎日を送る", "idioms_and_literature", "gashin_r2"),
+        ("王座奪還を誓ってどんな苦しい鍛錬にも耐え忍ぶ。", "がしんしょうたんのくろうをかさねる", "臥薪嘗胆の苦労を重ねる", "idioms_and_literature", "gashin_r2"),
+        ("屈辱をバネにして地道な努力を一日も欠かさず続ける。", "がしんしょうたんのせいしんではげむ", "臥薪嘗胆の精神で励む", "idioms_and_literature", "gashin_r2"),
+        ("悔しい思いを忘れず逆転の日までじっと耐え忍ぶ。", "がしんしょうたんのきもちでたえる", "臥薪嘗胆の気持ちで耐える", "idioms_and_literature", "gashin_r2"),
+
+        ("軽微な罪を犯した被告人に対して短い自由刑を科した。", "たんきのこうりゅうをいいわたす", "短期の拘留を言い渡す", "specialized_knowledge", "kouryuu_r2"),
+        ("微罪により三十日未満の短い自由刑が言い渡された。", "たんきのこうりゅうにしょせられる", "短期の拘留に処せられる", "specialized_knowledge", "kouryuu_r2"),
+
+        ("ホテルの客室でスマートフォンを無線ネットワークに接続する。", "へやのわいふぁいにつなぐ", "部屋のWi-Fiにつなぐ", "alphanumeric", "wifi_tsunagu"),
+        ("タブレット端末を自宅の無線ルーターに接続する。", "じたくのわいふぁいにつなぐ", "自宅のWi-Fiにつなぐ", "alphanumeric", "wifi_tsunagu"),
+        ("空港のロビーでパソコンを公衆無線LANに接続する。", "むりょうのわいふぁいにつなぐ", "無料のWi-Fiにつなぐ", "alphanumeric", "wifi_tsunagu"),
+        ("新しいノートパソコンをオフィスの無線ネットワークに接続する。", "しゃないのわいふぁいにつなぐ", "社内のWi-Fiにつなぐ", "alphanumeric", "wifi_tsunagu"),
+
+        # --- 230問テストの非数値未解決・量子化逆転補強 ---
+        ("テンキーに暗証番号を入力してロックを解除する。", "どあをかいじょうしてなかにはいる", "ドアを解錠して中に入る", "homophone_balance", "kaijou_head"),
+        ("カードリーダーに社員証をかざして鍵を開ける。", "どあをかいじょうしてにゅうしつする", "ドアを解錠して入室する", "homophone_balance", "kaijou_head"),
+        ("スマートロックに番号を入力して扉の鍵を開ける。", "どあをかいじょうしてあける", "ドアを解錠して開ける", "homophone_balance", "kaijou_head"),
+        ("生体認証センサーで本人確認をして鍵を開ける。", "ろっくをかいじょうしてどあをあける", "ロックを解錠してドアを開ける", "homophone_balance", "kaijou_head"),
+
+        ("規定された学校のカリキュラムをすべて学び終える。", "しゅうがくきかんをぶじにおえる", "修学期間を無事に終える", "homophone_balance", "shuugaku_r2"),
+        ("所定された学校での学習年数をすべて修了する。", "しゅうがくきかんをすべておえる", "修学期間をすべて終える", "homophone_balance", "shuugaku_r2"),
+
+        ("甘いお菓子を口に入れてゆっくり味わっている。", "のどあめをなめる", "のど飴をなめる", "homophone_balance", "ame_nameru"),
+        ("袋から甘いキャンディを一つ取り出して口に入れる。", "あまいあめをなめる", "甘い飴をなめる", "homophone_balance", "ame_nameru"),
+        ("小腹が空いたのでポケットから甘いお菓子を出す。", "いちごあめをなめる", "いちご飴をなめる", "homophone_balance", "ame_nameru"),
+        ("喉の調子を整えるために甘いお菓子を口に含む。", "はちみつあめをなめる", "はちみつ飴をなめる", "homophone_balance", "ame_nameru"),
+
+        ("工作を始める前に使う道具をあらかじめ集めておく。", "ひつようなものをそろえる", "必要な物を揃える", "homophone_balance", "hitsuyou_mono"),
+        ("出張の前に持っていく道具や荷物をあらかじめ用意する。", "ひつようなものをかばんにいれる", "必要な物を鞄に入れる", "homophone_balance", "hitsuyou_mono"),
+        ("明日の作業で使う機材を前もってチェックして集める。", "さぎょうにひつようなものをよういする", "作業に必要な物を用意する", "homophone_balance", "hitsuyou_mono"),
+        ("キャンプに出発する前に使う道具を一通り買い揃える。", "じゅんびにひつようなものをよういする", "準備に必要な物を用意する", "homophone_balance", "hitsuyou_mono"),
+
+        ("", "あさごはんをたべてからいく", "朝ご飯を食べてから行く", "basic", "asagohan_orth"),
+        ("", "あさごはんをつくってからでかける", "朝ご飯を作ってから出かける", "basic", "asagohan_orth"),
+        ("", "あさごはんをしっかりたべる", "朝ご飯をしっかり食べる", "basic", "asagohan_orth"),
+        ("", "ひるごはんをたべてからでかける", "昼ご飯を食べてから出かける", "basic", "asagohan_orth"),
+
+        ("", "あとでかくにんする", "後で確認する", "colloquial", "colloquial_kanji"),
+        ("", "あとでへんじする", "後で返事する", "colloquial", "colloquial_kanji"),
+        ("", "あとでみる", "後で見る", "colloquial", "colloquial_kanji"),
+        ("", "あとでおくる", "後で送る", "colloquial", "colloquial_kanji"),
+        ("", "ぜんぜんわからない", "全然分からない", "colloquial", "colloquial_kanji"),
+        ("", "りゆうがわからない", "理由が分からない", "colloquial", "colloquial_kanji"),
+        ("", "よくわからない", "よく分からない", "colloquial", "colloquial_kanji"),
+        ("", "いみがわからない", "意味が分からない", "colloquial", "colloquial_kanji"),
+        ("", "なんでこうなる", "何でこうなる", "colloquial", "colloquial_kanji"),
+        ("", "なんでそんなこという", "何でそんなこと言う", "colloquial", "colloquial_kanji"),
+        ("", "なんでこない", "何で来ない", "colloquial", "colloquial_kanji"),
+        ("", "なんでだめなの", "何でダメなの", "colloquial", "colloquial_kanji"),
+        ("", "おれはしらん", "俺は知らん", "colloquial", "colloquial_kanji"),
+        ("", "そんなことはしらん", "そんなことは知らん", "colloquial", "colloquial_kanji"),
+
+        ("創作の名称を含む。", "ぽこるんえっくすをきどうする", "ぽこるんえっくすを起動する", "unknown", "coined_proper"),
+        ("ゲームの名称を含む。", "めるふぃあえっくすをきどうする", "めるふぃあえっくすを起動する", "unknown", "coined_proper"),
+        ("物語の名称を含む。", "かふぇるーなでまつ", "かふぇるーなで待つ", "unknown", "coined_proper"),
+        ("創作の名称を含む。", "かふぇみるくでまつ", "かふぇみるくで待つ", "unknown", "coined_proper"),
+        ("創作の名称を含む。", "つきみるをこうかいする", "つきみるを公開する", "unknown", "coined_proper"),
+        ("ゲームの名称を含む。", "ゆめみるをこうかいする", "ゆめみるを公開する", "unknown", "coined_proper"),
+        ("物語の名称を含む。", "あおのしずくをつかう", "あおのしずくを使う", "unknown", "coined_proper"),
+        ("ゲームの名称を含む。", "つきのしずくをつかう", "つきのしずくを使う", "unknown", "coined_proper"),
+        ("創作の名称を含む。", "みらいけんきゅうしつにそうだんする", "みらいけんきゅうしつに相談する", "unknown", "coined_proper"),
+        ("物語の名称を含む。", "あおぞらえきでおりる", "あおぞら駅で降りる", "unknown", "coined_proper"),
+        ("創作の名称を含む。", "あおかぜえきでおりる", "あおかぜ駅で降りる", "unknown", "coined_proper"),
+        ("ゲームの名称を含む。", "ふわぴょんかする", "ふわぴょん化する", "unknown", "coined_proper"),
+        ("創作の名称を含む。", "もふぴょんかする", "もふぴょん化する", "unknown", "coined_proper"),
+        ("物語の名称を含む。", "えるめいとうをたんけんする", "えるめいとうを探検する", "unknown", "coined_proper"),
+        ("ゲームの名称を含む。", "そらのこーどをにゅうりょくする", "そらのこーどを入力する", "unknown", "coined_proper"),
+        ("創作の名称を含む。", "つきのこーどをにゅうりょくする", "つきのこーどを入力する", "unknown", "coined_proper"),
+
+        # --- Numeric counter coverage under nam masking (cap-nam) ---
+        ("エレベーターで", "3かいのりびんぐ", "3階のリビング", "numeric_counter", "num_counter_kai"),
+        ("ビルの", "5かいのおふぃす", "5階のオフィス", "numeric_counter", "num_counter_kai"),
+        ("校舎の", "2かいのきょうしつ", "2階の教室", "numeric_counter", "num_counter_kai"),
+        ("ホテルの", "10かいのろうか", "10階の廊下", "numeric_counter", "num_counter_kai"),
+        ("期末の", "5きょうかのべんきょう", "5教科の勉強", "numeric_counter", "num_counter_kyouka"),
+        ("受験の", "5きょうかのしけん", "5教科の試験", "numeric_counter", "num_counter_kyouka"),
+        ("模試の", "3きょうかのごうけい", "3教科の合計", "numeric_counter", "num_counter_kyouka"),
+        ("主要", "5きょうかのふくしゅう", "5教科の復習", "numeric_counter", "num_counter_kyouka"),
+        ("全体の", "50％のわりあい", "50%の割合", "numeric_counter", "num_counter_pct"),
+        ("実験で", "80％のせいこうりつ", "80%の成功率", "numeric_counter", "num_counter_pct"),
+        ("セールで", "20％のわりびき", "20%の割引", "numeric_counter", "num_counter_pct"),
+        ("来年の", "2025ねん", "2025年", "numeric_counter", "num_counter_date"),
+        ("去年の", "2024ねん", "2024年", "numeric_counter", "num_counter_date"),
+        ("予定は", "3がつ15にち", "3月15日", "numeric_counter", "num_counter_date"),
+        ("夏休みの", "8がつ20にち", "8月20日", "numeric_counter", "num_counter_date"),
+        ("全部で", "3かいのれんしゅう", "3回の練習", "numeric_counter", "num_counter_misc"),
+        ("会議に", "10にんがさんかする", "10人が参加する", "numeric_counter", "num_counter_misc"),
+        ("図書館で", "5さつのほんをかりる", "5冊の本を借りる", "numeric_counter", "num_counter_misc"),
+    ]
+    for left, r, c, cat, fam in capability_r2_rows:
+        add(left, r, c, cat, fam)
+
+    capability_nam_r2_rows = [
+        # --- Cluster A: nam counters, phonetic variants, dates/times, direct-verb attachment ---
+        # 時 / 分(ふん・ぷん) / 秒 / 時間
+        ("午後の予定は", "9じにはじまる", "9時に始まる", "numeric_counter", "num_time_jifun"),
+        ("会議の開始時刻を", "10じはんにする", "10時半にする", "numeric_counter", "num_time_jifun"),
+        ("明日の朝", "7じにめざましをかける", "7時に目覚ましをかける", "numeric_counter", "num_time_jifun"),
+        ("電車の到着時刻を", "8じ15ふんにきめる", "8時15分に決める", "numeric_counter", "num_time_jifun"),
+        ("午後の休憩は", "15じ45ふんから", "15時45分から", "numeric_counter", "num_time_jifun"),
+        ("列車の発車まで", "あと5ふんです", "あと5分です", "numeric_counter", "num_time_jifun"),
+        ("電子レンジで", "3ぷんあたためる", "3分温める", "numeric_counter", "num_time_jifun"),
+        ("作業を開始してから", "10ぷんけいかした", "10分経過した", "numeric_counter", "num_time_jifun"),
+        ("発表の持ち時間は", "20ぷんほどです", "20分ほどです", "numeric_counter", "num_time_jifun"),
+        ("平日の夜間シフトで", "8じかんはたらく", "8時間働く", "numeric_counter", "num_time_jifun"),
+        ("一日の睡眠時間を", "7じかんたもつ", "7時間保つ", "numeric_counter", "num_time_jifun"),
+        ("処理が終わるまで", "30びょうかかる", "30秒かかる", "numeric_counter", "num_time_jifun"),
+
+        # 本 (ほん / ぽん / ぼん + direct verbs)
+        ("机の引き出しに鉛筆を", "2ほんしまう", "2本しまう", "numeric_counter", "num_hon_variants"),
+        ("大きな木を庭に", "4ほんうえる", "4本植える", "numeric_counter", "num_hon_variants"),
+        ("紹介用の動画を合計", "5ほんへんしゅうする", "5本編集する", "numeric_counter", "num_hon_variants"),
+        ("スーパーで牛乳を", "1ぽんかっていく", "1本買っていく", "numeric_counter", "num_hon_variants"),
+        ("冷蔵庫にある瓶を", "6ぽんとりだす", "6本取り出す", "numeric_counter", "num_hon_variants"),
+        ("玄関の傘立てに傘を", "3ぼんならべる", "3本並べる", "numeric_counter", "num_hon_variants"),
+        ("段ボールの箱にロープを", "2ぼんまきつける", "2本巻き付ける", "numeric_counter", "num_hon_variants"),
+        ("長距離トラックに鉄柱を", "10ぽん積み込む".replace("積み込む", "つみこむ"), "10本積み込む", "numeric_counter", "num_hon_variants"),
+
+        # 件 / 軒 / 券 (homophone counters)
+        ("エラーの報告が", "3けんみつかった", "3件見つかった", "numeric_counter", "num_ken_variants"),
+        ("問い合わせメールを", "8けんしょりする", "8件処理する", "numeric_counter", "num_ken_variants"),
+        ("未読の通知が", "2けんのこっている", "2件残っている", "numeric_counter", "num_ken_variants"),
+        ("システムの不具合が", "5けんはっせいした", "5件発生した", "numeric_counter", "num_ken_variants"),
+        ("契約の更新手続きが", "4けんかんりょうする", "4件完了する", "numeric_counter", "num_ken_variants"),
+        ("商店街を歩いて", "4けんのみせをまわる", "4軒の店を回る", "numeric_counter", "num_ken_variants"),
+        ("駅前の古い家が", "2けんとりこわされる", "2軒取り壊される", "numeric_counter", "num_ken_variants"),
+        ("映画館の前売りチケットを", "3けんこうにゅうする", "3券購入する", "numeric_counter", "num_ken_variants"),
+
+        # 台 / 台目 vs 代 / 代目
+        ("オフィスの端末を", "5だいふやす", "5台増やす", "numeric_counter", "num_dai_variants"),
+        ("駐車場に車を", "3だいとめる", "3台停める", "numeric_counter", "num_dai_variants"),
+        ("開発用のテスト機を", "4だいじゅんびする", "4台準備する", "numeric_counter", "num_dai_variants"),
+        ("家庭用のパソコンの", "2だいめをかう", "2台目を買う", "numeric_counter", "num_dai_variants"),
+        ("スマホの機種変で", "3だいめにのりかえる", "3台目に乗り換える", "numeric_counter", "num_dai_variants"),
+        ("職場のノートPCはこれで", "4だいめです", "4台目です", "numeric_counter", "num_dai_variants"),
+        ("この老舗和菓子屋の", "3だいめがつぐ", "3代目が継ぐ", "numeric_counter", "num_dai_variants"),
+        ("創業家から数えて", "5だいめのしゃちょう", "5代目の社長", "numeric_counter", "num_dai_variants"),
+        ("利用者の主な年齢層は", "20だいから30だい", "20代から30代", "numeric_counter", "num_dai_variants"),
+
+        # 枚 (particle-less / ずつ / verbs)
+        ("会議室の机に資料を", "10まいずつおく", "10枚ずつ置く", "numeric_counter", "num_mai_variants"),
+        ("アルバム用の写真を", "5まいえらぶ", "5枚選ぶ", "numeric_counter", "num_mai_variants"),
+        ("名刺を取引先に", "2まいわたす", "2枚渡す", "numeric_counter", "num_mai_variants"),
+        ("記念写真を", "8まいさつえいする", "8枚撮影する", "numeric_counter", "num_mai_variants"),
+        ("封筒に切手を", "4まいはる", "4枚貼る", "numeric_counter", "num_mai_variants"),
+
+        # 杯 (はい / ぱい / ばい)
+        ("朝の目覚めにコーヒーを", "1ぱいのむ", "1杯飲む", "numeric_counter", "num_hai_variants"),
+        ("居酒屋で生ビールを", "2はいおかわりする", "2杯おかわりする", "numeric_counter", "num_hai_variants"),
+        ("水筒に冷たいお茶を", "3ばいいれる", "3杯入れる", "numeric_counter", "num_hai_variants"),
+        ("鍋にだし汁を", "4はいそそぐ", "4杯注ぐ", "numeric_counter", "num_hai_variants"),
+
+        # 人 / 冊 / 階 / 回 (direct verbs & compound endings)
+        ("作業チームに社員を", "4にんはいぞくする", "4人配属する", "numeric_counter", "num_core_direct"),
+        ("今回のイベントでスタッフを", "5にんやとう", "5人雇う", "numeric_counter", "num_core_direct"),
+        ("会議室にメンバーが", "8にんあつまる", "8人集まる", "numeric_counter", "num_core_direct"),
+        ("来月の採用面接で", "3にんさいようする", "3人採用する", "numeric_counter", "num_core_direct"),
+        ("小説と図鑑を合計", "3さつかりる", "3冊借りる", "numeric_counter", "num_core_direct"),
+        ("書店の棚から雑誌を", "2さつえらぶ", "2冊選ぶ", "numeric_counter", "num_core_direct"),
+        ("レポートの参考に書籍を", "6さつよむ", "6冊読む", "numeric_counter", "num_core_direct"),
+        ("階段を使って建物の", "4かいへのぼる", "4階へ上る", "numeric_counter", "num_core_direct"),
+        ("ビルの入り口から", "6かいまであがる", "6階まで上がる", "numeric_counter", "num_core_direct"),
+        ("地下のフロアから地上の", "5かいにおりる", "5階に降りる", "numeric_counter", "num_core_direct"),
+        ("同じテストを念のため", "2かいじっこうする", "2回実行する", "numeric_counter", "num_core_direct"),
+        ("今週になってすでに", "4かいめのみーてぃんぐ", "4回目のミーティング", "numeric_counter", "num_core_direct"),
+        ("ボタンを続けて", "3かいおす", "3回押す", "numeric_counter", "num_core_direct"),
+
+        # 日付 / 日間(にち・か) / 泊 / 年度 / 番目 / 文字 / %
+        ("会議の実施日は", "6がつ10かにきめる", "6月10日に決める", "numeric_counter", "num_date_unit"),
+        ("イベントの開始日を", "9がつ14にちにする", "9月14日にする", "numeric_counter", "num_date_unit"),
+        ("商品の発送予定は", "4がつ20かごろです", "4月20日頃です", "numeric_counter", "num_date_unit"),
+        ("次回の定期点検を", "11がつ5かにいれる", "11月5日に入れる", "numeric_counter", "num_date_unit"),
+        ("書類の締め切りまで", "あと3にちのびる", "あと3日延びる", "numeric_counter", "num_date_unit"),
+        ("展示会の開催まで", "あと10にちのこる", "あと10日残る", "numeric_counter", "num_date_unit"),
+        ("京都と奈良を巡る", "1はく2かのたび", "1泊2日の旅", "numeric_counter", "num_date_unit"),
+        ("温泉旅館でゆったり", "3はく4にちすごす", "3泊4日過ごす", "numeric_counter", "num_date_unit"),
+        ("", "2028ねんどのけいかく", "2028年度の計画", "numeric_counter", "num_date_unit"),
+        ("来期の目標として", "2029ねんどのほうしん", "2029年度の方針", "numeric_counter", "num_date_unit"),
+        ("行列の先頭から", "3ばんめにならぶ", "3番目に並ぶ", "numeric_counter", "num_date_unit"),
+        ("一覧のリストで", "5ばんめをせんたくする", "5番目を選択する", "numeric_counter", "num_date_unit"),
+        ("", "20もじいじょうのたんご", "20文字以上の単語", "numeric_counter", "num_date_unit"),
+        ("パスワードは最低", "12もじにする", "12文字にする", "numeric_counter", "num_date_unit"),
+        ("電池の残量が残り", "15ぱーせんとになる", "15%になる", "numeric_counter", "num_date_unit"),
+        ("目標の達成率が", "95ぱーせんとをこえる", "95%を超える", "numeric_counter", "num_date_unit"),
+
+        # --- Cluster B: Empty-context ("") cold-start collocation minimal pairs ---
+        ("", "きしゃがはつげんする", "記者が発言する", "homophone_balance", "cold_kisha"),
+        ("", "きしゃのかめらまん", "記者のカメラマン", "homophone_balance", "cold_kisha"),
+        ("", "きしゃがえきにつく", "汽車が駅に着く", "homophone_balance", "cold_kisha"),
+        ("", "きしゃのきてきがきこえる", "汽車の汽笛が聞こえる", "homophone_balance", "cold_kisha"),
+        ("", "きしゃにのりこむ", "汽車に乗り込む", "homophone_balance", "cold_kisha"),
+        ("", "きしゃのまどからながめる", "汽車の窓から眺める", "homophone_balance", "cold_kisha"),
+
+        ("", "しんちょうにはんだんする", "慎重に判断する", "homophone_balance", "cold_shinchou"),
+        ("", "しんちょうにあつかう", "慎重に扱う", "homophone_balance", "cold_shinchou"),
+        ("", "しんちょうなたいおう", "慎重な対応", "homophone_balance", "cold_shinchou"),
+        ("", "しんちょうがのびる", "身長が伸びる", "homophone_balance", "cold_shinchou"),
+        ("", "しんちょうとたいじゅう", "身長と体重", "homophone_balance", "cold_shinchou"),
+        ("", "しんちょうがたかいひと", "身長が高い人", "homophone_balance", "cold_shinchou"),
+
+        ("", "たんきをおさえる", "短気を抑える", "homophone_balance", "cold_tanki"),
+        ("", "たんきなせいかく", "短気な性格", "homophone_balance", "cold_tanki"),
+        ("", "たんきなひとほどおこる", "短気な人ほど怒る", "homophone_balance", "cold_tanki"),
+        ("", "たんきでしゅうりょうする", "短期で終了する", "homophone_balance", "cold_tanki"),
+        ("", "たんきのけんしゅう", "短期の研修", "homophone_balance", "cold_tanki"),
+
+        ("", "じゅうたいがはっせいする", "渋滞が発生する", "homophone_balance", "cold_juutai"),
+        ("", "じゅうたいをぬける", "渋滞を抜ける", "homophone_balance", "cold_juutai"),
+        ("", "じゅうたいでおくれる", "渋滞で遅れる", "homophone_balance", "cold_juutai"),
+        ("", "じゅうたいのしょうねん", "重体の少年", "homophone_balance", "cold_juutai"),
+        ("", "じゅうたいとなってはこばれる", "重体となって運ばれる", "homophone_balance", "cold_juutai"),
+        ("", "じゅうたいからかいふくする", "重体から回復する", "homophone_balance", "cold_juutai"),
+
+        ("", "せいさんなばめん", "凄惨な場面", "homophone_balance", "cold_seisan"),
+        ("", "せいさんなじけん", "凄惨な事件", "homophone_balance", "cold_seisan"),
+        ("", "せいさんなこうけい", "凄惨な光景", "homophone_balance", "cold_seisan"),
+        ("", "せいさんをふやす", "生産を増やす", "homophone_balance", "cold_seisan"),
+        ("", "せいさんせいがあがる", "生産性が上がる", "homophone_balance", "cold_seisan"),
+
+        ("", "しょうめいをたてる", "証明を立てる", "homophone_balance", "cold_shoumei"),
+        ("", "しょうめいがかんりょうする", "証明が完了する", "homophone_balance", "cold_shoumei"),
+        ("", "しょうめいがつく", "照明が点く", "homophone_balance", "cold_shoumei"),
+        ("", "しょうめいをあかるくする", "照明を明るくする", "homophone_balance", "cold_shoumei"),
+
+        # --- Cluster C: Kun-yomi multi-sense verbs, polite orthography, Nano edge anchors ---
+        ("組織の体制を整えて", "かいぜんをはかる", "改善を図る", "homophone_balance", "kun_hakaru"),
+        ("部署間の連携を強化し", "きょうりょくをはかる", "協力を図る", "homophone_balance", "kun_hakaru"),
+        ("新システムの導入により", "こうりつかをはかる", "効率化を図る", "homophone_balance", "kun_hakaru"),
+        ("メジャーを使って部屋の", "ながさをはかる", "長さを測る", "homophone_balance", "kun_hakaru"),
+        ("砂時計をひっくり返して", "じかんをはかる", "時間を計る", "homophone_balance", "kun_hakaru"),
+
+        ("専門学校の課程を", "きちんとおさめる", "きちんと修める", "homophone_balance", "kun_osameru"),
+        ("大学院の修士課程を", "じゅんちょうにおさめる", "順調に修める", "homophone_balance", "kun_osameru"),
+        ("混乱していた現場の事態を", "おだやかにおさめる", "穏やかに収める", "homophone_balance", "kun_osameru"),
+        ("税金と公共料金を期限内に", "しっかりおさめる", "しっかり納める", "homophone_balance", "kun_osameru"),
+
+        ("健康維持のため野菜から", "えいようをとる", "栄養を摂る", "homophone_balance", "kun_toru_misc"),
+        ("朝食にフルーツと牛乳で", "びたみんをとる", "ビタミンを摂る", "homophone_balance", "kun_toru_misc"),
+        ("午前中に記念式典を", "げんしゅくにとりおこなう", "厳粛に執り行う", "homophone_balance", "kun_toru_misc"),
+        ("重要な契約の調印式を", "とどこおりなくとりおこなう", "滞りなく執り行う", "homophone_balance", "kun_toru_misc"),
+        ("内線電話で担当者へ", "おとりつぎします", "お取り次ぎします", "homophone_balance", "keigo_toritsugi"),
+        ("受付から会議室の方へ", "おとりつぎもうしあげます", "お取り次ぎ申し上げます", "homophone_balance", "keigo_toritsugi"),
+
+        ("アプリの動作要件から", "しようをきめる", "仕様を決める", "homophone_balance", "nano_anchors"),
+        ("要件定義の会議で", "しようをかためる", "仕様を固める", "homophone_balance", "nano_anchors"),
+        ("", "そんなはなしはしらん", "そんな話は知らん", "colloquial", "nano_anchors"),
+        ("", "あしたのことはしらん", "明日のことは知らん", "colloquial", "nano_anchors"),
+        ("", "きょうのしりょうだけわたす", "今日の資料だけ渡す", "homophone_balance", "nano_anchors"),
+        ("失敗の悔しさを糧として", "がしんしょうたんのどりょく", "臥薪嘗胆の努力", "idioms_and_literature", "nano_anchors"),
+
+        # --- Cluster D: Ginata-yomi segmentation & loanword particle boundaries ---
+        ("土足厳禁の玄関で", "くつとはきものをぬぐ", "靴と履物を脱ぐ", "homophone_balance", "seg_hakimono"),
+        ("座敷に上がる前には", "かならずはきものをそろえる", "必ず履物を揃える", "homophone_balance", "seg_hakimono"),
+        ("旅館の浴衣ではなく", "きれいなきものをきる", "綺麗な着物を着る", "homophone_balance", "seg_hakimono"),
+
+        ("トラックを全力で", "いまはしっているところだ", "今走っているところだ", "homophone_balance", "seg_hashiru"),
+        ("競技場の外周コースを", "いまはしっているせんしゅ", "今走っている選手", "homophone_balance", "seg_hashiru"),
+        ("以前は秘密だったが", "みんながいまはしっている", "みんなが今は知っている", "homophone_balance", "seg_hashiru"),
+
+        ("配達員が玄関に", "くるまでまつことにした", "来るまで待つことにした", "homophone_balance", "seg_kuruma"),
+        ("到着の電車が駅に", "くるまでまつしかない", "来るまで待つしかない", "homophone_balance", "seg_kuruma"),
+        ("雨が強くなってきたから", "くるまでまつよていだ", "車で待つ予定だ", "homophone_balance", "seg_kuruma"),
+
+        ("ローカルフォルダと", "どうきがとれている", "同期が取れている", "homophone_balance", "seg_douki"),
+        ("スマホとPCの間で", "どうきがおくれている", "同期が遅れている", "homophone_balance", "seg_douki"),
+        ("データベース同士の", "どうきがとまった", "同期が止まった", "homophone_balance", "seg_douki"),
+        ("行動の背景にある", "どうきをせつめいする", "動機を説明する", "homophone_balance", "seg_douki"),
+    ]
+    for left, r, c, cat, fam in capability_nam_r2_rows:
+        add(left, r, c, cat, fam)
+
+    # ==========================================================================
+    # 10. R3: 日常チャット・略語・ネット口語・過剰漢字抑止・補助動詞ひらがな開き
+    # ==========================================================================
+    capability_colloquial_r3_rows = [
+        # --- Chat abbreviations & casual greetings ---
+        ("了解した時の短い返事", "りょありがとう", "りょありがとう", "colloquial", "col_ryo1"),
+        ("チャットで手短に了承を伝える", "りょですよろしく", "りょですよろしく", "colloquial", "col_ryo2"),
+        ("了承の返事を送る", "りょりょうかいです", "りょ了解です", "colloquial", "col_ryo3"),
+        ("作業終了後のチャット返信", "りょですおつかれ", "りょですお疲れ", "colloquial", "col_ryo4"),
+        ("手伝ってくれた同僚に", "あざすたすかる", "あざす助かる", "colloquial", "col_azasu1"),
+        ("気軽に感謝を伝える", "あざすありがとう", "あざすありがとう", "colloquial", "col_azasu2"),
+        ("差し入れを受け取って", "あざすいただきます", "あざすいただきます", "colloquial", "col_azasu3"),
+        ("チャットでお礼を言う", "まじあざすです", "マジあざすです", "colloquial", "col_azasu4"),
+        ("お礼を言われた時の返事", "どういたしましてだいじょうぶ", "どういたしまして大丈夫", "colloquial", "col_douita1"),
+        ("こちらこそ助かったよと返す", "どういたしましておたがいさま", "どういたしましてお互い様", "colloquial", "col_douita2"),
+        ("助けてもらって感謝する", "ありがとうーほんとたすかる", "ありがとうーほんと助かる", "colloquial", "col_arigatou1"),
+        ("いつも助かっていることを伝える", "いつもありがとうーたすかってる", "いつもありがとうー助かってる", "colloquial", "col_arigatou2"),
+        ("遅くに帰宅した家族を迎える", "おかえりなさいたくさんつかれたでしょ", "おかえりなさいたくさん疲れたでしょ", "colloquial", "col_okaeri1"),
+        ("遠出から帰った友人に声をかける", "おかえりつかれたんじゃない", "おかえり疲れたんじゃない", "colloquial", "col_okaeri2"),
+        ("出かける家族を見送る", "いってらっしゃいみずわすれないで", "行ってらっしゃい水忘れないで", "colloquial", "col_ittera1"),
+        ("朝の玄関で見送る", "いってらっしゃいかさもって", "行ってらっしゃい傘持って", "colloquial", "col_ittera2"),
+        ("実は最初の計画では", "きょういくつもりだった", "今日行くつもりだった", "colloquial", "col_tsumori1"),
+        ("今後の予定を説明する", "あしたやるつもりだったよ", "明日やるつもりだったよ", "colloquial", "col_tsumori2"),
+        ("出発時間の予定を話す", "はやくでるつもりだった", "早く出るつもりだった", "colloquial", "col_tsumori3"),
+        ("話を切り出す前の前置き", "あのさちょっときいていい", "あのさちょっと聞いていい", "colloquial", "col_anosa1"),
+        ("予定を尋ねる前置き", "あのさあしたひまかな", "あのさ明日暇かな", "colloquial", "col_anosa2"),
+        ("今話せるか確認する", "あのさいまいそがしい", "あのさ今忙しい", "colloquial", "col_anosa3"),
+        ("話題を切り替えるチャット", "てかきのうのけんどうなった", "てか昨日の件どうなった", "colloquial", "col_teka1"),
+        ("進捗を確認する口語", "てかあのけんどうなった", "てかあの件どうなった", "colloquial", "col_teka2"),
+        ("作業を終えた仲間を労う", "きょうもおつかれさまおやすみ", "今日もお疲れ様おやすみ", "colloquial", "col_otsu1"),
+        ("落ち込む友達を励ます", "どんまいつぎがんばろ", "ドンマイ次頑張ろ", "colloquial", "col_donmai1"),
+        ("ミスを気にしないよう伝える", "どんまいきにしないで", "ドンマイ気にしないで", "colloquial", "col_donmai2"),
+        ("駅に到着した連絡", "いまえきについたところ", "今駅に着いたところ", "colloquial", "col_tsuita1"),
+        ("待ち合わせ場所に着いた連絡", "もうすぐそこについたよ", "もうすぐそこに着いたよ", "colloquial", "col_tsuita2"),
+
+        # --- Net slang, katakana colloquialisms & contrastive senses ---
+        ("共感した投稿へのコメント", "わかるみがふかすぎる", "わかるみが深すぎる", "colloquial", "col_wakarumi1"),
+        ("意見に深く納得する", "ほんとわかるみがふかいよ", "ほんとわかるみが深いよ", "colloquial", "col_wakarumi2"),
+        ("思わず同意したとき", "それなわかるみがある", "それなわかるみがある", "colloquial", "col_wakarumi3"),
+        ("ネット通販でつい購入する", "またぽちってしまった", "またポチってしまった", "colloquial", "col_pochiru1"),
+        ("割引商品を見つけてすぐ買う", "すぐぽちったわ", "すぐポチったわ", "colloquial", "col_pochiru2"),
+        ("注文品の到着を話す", "きのうぽちったやつがとどいた", "昨日ポチったやつが届いた", "colloquial", "col_pochiru3"),
+        ("懐かしい風景に心を動かされる", "なんかえもいきもちになる", "なんかエモい気持ちになる", "colloquial", "col_emoi1"),
+        ("夕暮れの景色に感動する", "えもすぎてないた", "エモすぎて泣いた", "colloquial", "col_emoi2"),
+        ("昔の写真を見返しながら", "えもいおもいでだな", "エモい思い出だな", "colloquial", "col_emoi3"),
+        ("まだ望みが残っているとき", "まだわんちゃんあるかも", "まだワンチャンあるかも", "colloquial", "col_wanchan1"),
+        ("当選の可能性に期待する", "わんちゃんあたるかもしれない", "ワンチャン当たるかもしれない", "colloquial", "col_wanchan2"),
+        ("散歩中の可愛い子犬を見て", "ちいさなわんちゃんをなでる", "小さなわんちゃんを撫でる", "colloquial", "col_wanchan_dog"),
+        ("友達の冗談が面白くて笑う", "いやうけるんだけど", "いやウケるんだけど", "colloquial", "col_ukeru1"),
+        ("思わず吹き出してしまう", "ほんとうけるわ", "ほんとウケるわ", "colloquial", "col_ukeru2"),
+        ("ツボにはまって笑う", "それまじうけるな", "それマジウケるな", "colloquial", "col_ukeru3"),
+        ("受験会場へ向かう前", "しけんをうけるじゅんび", "試験を受ける準備", "colloquial", "col_ukeru_v"),
+        ("手詰まりになってお手上げ", "これかんぜんにつんだな", "これ完全に詰んだな", "colloquial", "col_tsunda1"),
+        ("鍵も財布も忘れて困る", "まじでつんだかもしれない", "マジで詰んだかもしれない", "colloquial", "col_tsunda2"),
+        ("引っ越しの荷物をまとめる", "だんぼーるをつんだ", "段ボールを積んだ", "colloquial", "col_tsunda_v"),
+        ("分からない用語を調べる", "わからないならぐぐろう", "分からないならググろう", "colloquial", "col_guguru1"),
+        ("SNSの投稿が大きく広まる", "きゅうにばずってびっくりした", "急にバズってびっくりした", "colloquial", "col_bazuru1"),
+        ("趣味に深くはまり込む", "そのさーくるにぬまった", "そのサークルに沼った", "colloquial", "col_numaru1"),
+        ("面白すぎて笑いが止まらない", "それはまじでくさすぎる", "それはマジで草すぎる", "colloquial", "col_kusa1"),
+        ("ゲームの動作がおかしいとき", "さっきからばぐってるよ", "さっきからバグってるよ", "colloquial", "col_bug1"),
+        ("親切で素早いサポート", "しょっぷのかみたいおう", "ショップの神対応", "colloquial", "col_kami1"),
+        ("夜作業中にそのまま眠る", "つくえでねおちした", "机で寝落ちした", "colloquial", "col_neochi1"),
+        ("試合の逆転シーンに興奮する", "さっきのしーんげきあつ", "さっきのシーン激アツ", "colloquial", "col_gekiatsu1"),
+        ("ボスの強さに驚く", "てきのつよさがえぐい", "敵の強さがエグい", "colloquial", "col_egui1"),
+
+        # --- Over-kanji & ateji suppression (adverbs / conjunctions / formal nouns) ---
+        ("まずは仮案で確認してみる", "とりあえずこれでためす", "とりあえずこれで試す", "colloquial", "col_adv1"),
+        ("話題に補足を付け加える", "ちなみにつぎのよていは", "ちなみに次の予定は", "colloquial", "col_adv2"),
+        ("無茶なスケジュールを見て", "さすがにむりがあるよ", "さすがに無理があるよ", "colloquial", "col_adv3"),
+        ("好機を逃さず楽しむ", "せっかくきたんだからたのしも", "せっかく来たんだから楽しも", "colloquial", "col_adv4"),
+        ("最低限これだけは欲しいと伝える", "せめてれんらくくらいほしい", "せめて連絡くらいほしい", "colloquial", "col_adv5"),
+        ("難しくて進展しない様子", "なかなかうまくいかないね", "なかなか上手くいかないね", "colloquial", "col_adv6"),
+        ("大半の作業が終わった報告", "ほとんどかたづいたよ", "ほとんど片付いたよ", "colloquial", "col_adv7"),
+        ("滅多に見られない現象", "めったにないきかいだ", "めったにない機会だ", "colloquial", "col_adv8"),
+        ("変更せず現状を保つ", "しばらくそのままにしておく", "しばらくそのままにしておく", "colloquial", "col_adv9"),
+        ("冗談でわざと外したとき", "わざとまちがえたんでしょ", "わざと間違えたんでしょ", "colloquial", "col_adv10"),
+        ("日程が合わず申し訳ない", "あいにくきょうはふざいです", "あいにく今日は不在です", "colloquial", "col_adv11"),
+        ("長い待ち時間のあとついに", "ようやくじゅんびができた", "ようやく準備ができた", "colloquial", "col_adv12"),
+        ("想定外の知らせに驚く", "きいてびっくりしちゃった", "聞いてびっくりしちゃった", "colloquial", "col_adv13"),
+        ("十分な休養を取った報告", "きのうたくさんねたよ", "昨日たくさん寝たよ", "colloquial", "col_adv14"),
+        ("予報になかった雨が降り出す", "いきなりあめがふってきた", "いきなり雨が降ってきた", "colloquial", "col_adv15"),
+        ("要点をわかりやすく言い換える", "つまりこういういみだよね", "つまりこういう意味だよね", "colloquial", "col_adv16"),
+        ("人によってやり方は異なる", "それぞれやりかたがちがう", "それぞれやり方が違う", "colloquial", "col_adv17"),
+        ("今後の展開に期待する", "これからますますたのしみだ", "これからますます楽しみだ", "colloquial", "col_adv18"),
+        ("良かれと思ってした配慮が裏目に出る", "かえってじかんがかかるよ", "かえって時間がかかるよ", "colloquial", "col_adv19a"),
+        ("安物を買って逆に出費が増える", "かえってたかくついた", "かえって高くついた", "colloquial", "col_adv19b"),
+        ("無理に手伝うと逆効果になる", "かえってめいわくになる", "かえって迷惑になる", "colloquial", "col_adv19c"),
+        ("定時で仕事が終わったら", "いえにかえってゆっくりする", "家に帰ってゆっくりする", "colloquial", "col_adv19_v"),
+        ("限界を超えて手が打てない", "もはやこれまでですね", "もはやこれまでですね", "colloquial", "col_adv20"),
+        ("検討すべき事項が多い", "やることがいろいろある", "やることがいろいろある", "colloquial", "col_adv21"),
+        ("春の訪れを感じる", "だんだんあたたかくなる", "だんだん暖かくなる", "colloquial", "col_adv22"),
+        ("抜かりなく確認しておく", "ちゃんとかくにんしとく", "ちゃんと確認しとく", "colloquial", "col_adv23"),
+
+        # --- Auxiliary verbs kept in hiragana + main-verb contrasts ---
+        ("少し手助けをお願いする", "ちょっとてつだってほしい", "ちょっと手伝ってほしい", "colloquial", "col_aux_hoshii1"),
+        ("文面の修正を頼むチャット", "ここをなおしてほしいな", "ここを直してほしいな", "colloquial", "col_aux_hoshii2"),
+        ("帰り道を心配して声をかける", "きをつけてかえってほしい", "気をつけて帰ってほしい", "colloquial", "col_aux_hoshii3"),
+        ("確認をお願いする", "もういちどみてほしい", "もう一度見てほしい", "colloquial", "col_aux_hoshii4"),
+        ("到着連絡を頼む", "ついたらおしえてほしい", "着いたら教えてほしい", "colloquial", "col_aux_hoshii5"),
+        ("詳しい説明を求める", "りゆうをきかせてほしい", "理由を聞かせてほしい", "colloquial", "col_aux_hoshii6"),
+        ("家具屋で理想の机を探す", "おおきいつくえがほしいな", "大きい机が欲しいな", "colloquial", "col_aux_hoshii_n"),
+        ("別案をテストする", "ちがうほうほうをためしてみる", "違う方法を試してみる", "colloquial", "col_aux_miru"),
+        ("事前に資料を用意する", "しりょうをつくっておく", "資料を作っておく", "colloquial", "col_aux_oku"),
+        ("重い荷物を持ってやる", "にもつをもっていってあげる", "荷物を持っていってあげる", "colloquial", "col_aux_ageru"),
+        ("親切に送り届けてもらう", "くるまでえきまでおくってくれる", "車で駅まで送ってくれる", "colloquial", "col_aux_kureru"),
+        ("先輩にチェックを頼む", "せんぱいにみてもらう", "先輩に見てもらう", "colloquial", "col_aux_morau"),
+        ("自宅から昼食を持参する", "おべんとうをもってくる", "お弁当を持ってくる", "colloquial", "col_aux_kuru"),
+        ("将来に向けて成長する", "これからものびていく", "これからも伸びていく", "colloquial", "col_aux_iku"),
+        ("うっかり置き忘れる", "でんしゃにわすれてしまった", "電車に忘れてしまった", "colloquial", "col_aux_shimau"),
+        ("部屋の空調が動いている", "えあこんがついているよ", "エアコンがついているよ", "colloquial", "col_aux_iru"),
+        ("会場の準備ができている", "いすならべてあるよ", "椅子並べてあるよ", "colloquial", "col_aux_aru"),
+        ("美術館で名画を鑑賞する", "ゆうめいなえをみる", "有名な絵を見る", "colloquial", "col_aux_main1"),
+        ("棚の上に本を戻す", "つくえにほんをおく", "机に本を置く", "colloquial", "col_aux_main2"),
+
+        # --- Casual contractions & spoken endings ---
+        ("ついうっかり完食してしまった", "けーきぜんぶたべちゃった", "ケーキ全部食べちゃった", "colloquial", "col_cont1"),
+        ("忘れないよう控えておく", "あとでめもをとっとくよ", "後でメモを取っとくよ", "colloquial", "col_cont2"),
+        ("後輩に簡単な作業を任せる", "これだけやっといてね", "これだけやっといてね", "colloquial", "col_cont3"),
+        ("曜日を確認する独り言", "きょうってなんようびだっけ", "今日って何曜日だっけ", "colloquial", "col_cont4"),
+        ("予定を軽く確認する", "あしたはやすみっしょ", "明日は休みっしょ", "colloquial", "col_cont5"),
+        ("予想が見事に的中した", "ほらあたったじゃん", "ほら当たったじゃん", "colloquial", "col_cont6"),
+        ("昔のことを思い出して確認", "そうだったんだっけ", "そうだったんだっけ", "colloquial", "col_cont7"),
+        ("仕事が終わって帰宅する", "はやくうちにかえっちゃおう", "早く家に帰っちゃおう", "colloquial", "col_cont8"),
+
+        # --- Redundancy anchors so 8% val split never empties any pattern from train ---
+        ("作業完了したみたいで", "みんなおつですやすんでね", "みんなおつです休んでね", "colloquial", "col_otsu2"),
+        ("珍しい単語の意味を", "すまほでぐぐったよ", "スマホでググったよ", "colloquial", "col_guguru2"),
+        ("面白い動画がSNSで", "またばずったらしい", "またバズったらしい", "colloquial", "col_bazuru2"),
+        ("お気に入りの作品に", "すっかりぬまってしまった", "すっかり沼ってしまった", "colloquial", "col_numaru2"),
+        ("ゲーム画面の動作が", "きょうもばぐってるね", "今日もバグってるね", "colloquial", "col_bug2"),
+        ("新発売のゲームが", "まじでかみげーすぎる", "マジで神ゲーすぎる", "colloquial", "col_kami2"),
+        ("アニメの展開が", "さいこうにげきあつだった", "最高に激アツだった", "colloquial", "col_gekiatsu2"),
+        ("テストの問題数が", "こんかいもえぐいね", "今回もエグいね", "colloquial", "col_egui2"),
+        ("晴れていたのに急に", "いきなりゆきがふってきた", "いきなり雪が降ってきた", "colloquial", "col_adv15_2"),
+        ("新機能の使い勝手を", "まずはつかってみるよ", "まずは使ってみるよ", "colloquial", "col_aux_miru_2"),
+        ("大事な予定を忘れないよう", "めもにかいておくよ", "メモに書いておくよ", "colloquial", "col_aux_oku_2"),
+        ("道に迷っている人に", "えきまであんないしてあげる", "駅まで案内してあげる", "colloquial", "col_aux_ageru_2"),
+        ("忙しいときに先輩が", "いつもたすけてくれる", "いつも助けてくれる", "colloquial", "col_aux_kureru_2"),
+        ("専門の先生に見ていただき", "くわしくおしえてもらう", "詳しく教えてもらう", "colloquial", "col_aux_morau_2"),
+        ("近所のコンビニで", "おちゃをかってくるよ", "お茶を買ってくるよ", "colloquial", "col_aux_kuru_2"),
+        ("これからもチーム全員で", "いっしょにがんばっていくよ", "一緒に頑張っていくよ", "colloquial", "col_aux_iku_2"),
+        ("つい買いすぎてしまい", "おかしをぜんぶたべてしまった", "お菓子を全部食べてしまった", "colloquial", "col_aux_shimau_2"),
+        ("玄関の前に来客が", "だれかまっているよ", "誰か待っているよ", "colloquial", "col_aux_iru_2"),
+        ("冷蔵庫の中で冷たい", "じゅーすがひやしてあるよ", "ジュースが冷やしてあるよ", "colloquial", "col_aux_aru_2"),
+        ("時間がまだあるので", "とりあえずこーひーをのもう", "とりあえずコーヒーを飲もう", "colloquial", "col_adv1_2"),
+        ("余談になりますが", "ちなみにこのしりょうもどうぞ", "ちなみにこの資料もどうぞ", "colloquial", "col_adv2_2"),
+        ("そこまで遅い時間だと", "さすがにでんしゃがないよ", "さすがに電車がないよ", "colloquial", "col_adv3_2"),
+        ("遠くまで足を運んだので", "せっかくならおいしいものたべたい", "せっかくなら美味しいもの食べたい", "colloquial", "col_adv4_2"),
+        ("全部は直せなくても", "せめてたいとるだけでもなおそう", "せめてタイトルだけでも直そう", "colloquial", "col_adv5_2"),
+        ("作業に時間がかかり", "なかなかおわらないね", "なかなか終わらないね", "colloquial", "col_adv6_2"),
+        ("荷物の整理がようやく", "ほとんどできあがった", "ほとんど出来上がった", "colloquial", "col_adv7_2"),
+        ("こんな珍しい体験は", "めったにできるものじゃない", "めったにできるものじゃない", "colloquial", "col_adv8_2"),
+        ("元の表示がちょうどいいし", "いまはそのままにしておこう", "今はそのままにしておこう", "colloquial", "col_adv9_2"),
+        ("大事な場面なのに", "わざとおおげさにいう", "わざと大げさに言う", "colloquial", "col_adv10_2"),
+        ("雨が続いておりまして", "あいにくそとにでられません", "あいにく外に出られません", "colloquial", "col_adv11_2"),
+        ("調整に手間取りましたが", "ようやくかんせいにこぎつけた", "ようやく完成にこぎつけた", "colloquial", "col_adv12_2"),
+    ]
+    for left, r, c, cat, fam in capability_colloquial_r3_rows:
         add(left, r, c, cat, fam)
 
     return rows

@@ -34,10 +34,24 @@ from dataset_isolation import (  # noqa: E402
 PUA_RE = re.compile(r"[\uee00-\uf8ff]")
 KANJI_RE = re.compile(r"[\u4e00-\u9fff]")
 HIRA_RE = re.compile(r"[\u3041-\u3096]")
+DIGIT_RUN_RE = re.compile(r"[0-9０-９]+")
 
 
 def hira_to_kata(text: str) -> str:
     return "".join(chr(ord(c) + 96) if 0x3041 <= ord(c) <= 0x3096 else c for c in text)
+
+
+def mask_row_digits_with_nam(left_context: str, reading: str, completion: str) -> tuple[str, str, str]:
+    masked_context = DIGIT_RUN_RE.sub("nam", left_context) if left_context else left_context
+    reading_digits = DIGIT_RUN_RE.findall(reading)
+    completion_digits = DIGIT_RUN_RE.findall(completion)
+    if reading_digits and len(reading_digits) == len(completion_digits):
+        return (
+            masked_context,
+            DIGIT_RUN_RE.sub("nam", reading),
+            DIGIT_RUN_RE.sub("nam", completion),
+        )
+    return masked_context, reading, completion
 
 
 def make_row(left_context: str, reading_hira_or_kata: str, completion: str, category: str, family: str) -> dict:
@@ -58,7 +72,7 @@ def make_row(left_context: str, reading_hira_or_kata: str, completion: str, cate
     }
 
 
-def collect_curated_families() -> list[dict]:
+def collect_curated_families(reserved_keys: set[str] | None = None) -> list[dict]:
     """Curated, strictly balanced homophone, structural, and anchor families."""
     spec = [
         # === Family 1: キシャ (貴社 8 / 記者 10 / 汽車 8 / 帰社 6) ===
@@ -419,7 +433,14 @@ def collect_curated_families() -> list[dict]:
     ]
     rows = []
     for left_ctx, reading, comp, cat, fam in spec:
-        rows.append(make_row(left_ctx, reading, comp, cat, fam))
+        raw_row = make_row(left_ctx, reading, comp, cat, fam)
+        if reserved_keys and (source_keys(raw_row) & reserved_keys):
+            continue
+        m_left, m_reading, m_comp = mask_row_digits_with_nam(left_ctx, raw_row["reading"], comp)
+        masked_row = make_row(m_left, m_reading, m_comp, cat, fam)
+        if reserved_keys and (source_keys(masked_row) & reserved_keys):
+            continue
+        rows.append(masked_row)
     return rows
 
 
@@ -445,7 +466,7 @@ def main():
         if c.get("left_context") and c["left_context"] != "なし"
     }
 
-    curated = collect_curated_families()
+    curated = collect_curated_families(reserved_keys)
     curated_clean = [
         r for r in curated
         if (not r["left_context"] or normalize(r["left_context"]) not in eval_ctx_norm)

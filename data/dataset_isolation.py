@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_FILES = (
     ROOT / "data/kana_kanji_llm_testset_5x.jsonl",
     ROOT / "data/kana_kanji_hard_context_testset.jsonl",
+    ROOT / "data/kana_kanji_ime_realistic_testset.jsonl",
+    ROOT / "data/kana_kanji_colloquial_chat_testset.jsonl",
     ROOT / "data/typo_benchmark_300.jsonl",
     ROOT / "benchmarks/research/typo_testset.jsonl",
     ROOT / "benchmarks/research/predictive_testset.jsonl",

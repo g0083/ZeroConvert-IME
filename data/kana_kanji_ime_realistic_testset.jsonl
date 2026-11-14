@@ -1,0 +1,160 @@
+{"id": 1, "category": "自動確定直後・文途中チャンク", "left_context": "昨日の会議で議論した", "target": "かだいをせいりする", "expected": "課題を整理する", "acceptable": [], "forbidden_examples": []}
+{"id": 2, "category": "自動確定直後・文途中チャンク", "left_context": "映画館の窓口で", "target": "けんをうけとる", "expected": "券を受け取る", "acceptable": ["券を受取る"], "forbidden_examples": ["件", "県", "剣", "権"]}
+{"id": 3, "category": "自動確定直後・文途中チャンク", "left_context": "近くのコンビニで", "target": "ばんごはんをかう", "expected": "晩ご飯を買う", "acceptable": ["晩御飯を買う"], "forbidden_examples": []}
+{"id": 4, "category": "自動確定直後・文途中チャンク", "left_context": "新しいサーバーを", "target": "きどうしてからつかう", "expected": "起動してから使う", "acceptable": [], "forbidden_examples": ["軌道", "輝度"]}
+{"id": 5, "category": "自動確定直後・文途中チャンク", "left_context": "取引先にメールを", "target": "そうふしてほうこくする", "expected": "送付して報告する", "acceptable": [], "forbidden_examples": ["送風"]}
+{"id": 6, "category": "自動確定直後・文途中チャンク", "left_context": "駅の東口で", "target": "ともだちとごうりゅうする", "expected": "友達と合流する", "acceptable": ["友だちと合流する"], "forbidden_examples": []}
+{"id": 7, "category": "自動確定直後・文途中チャンク", "left_context": "長編小説の草稿を", "target": "いっきにかきあげる", "expected": "一気に書き上げる", "acceptable": ["一気に書きあげる"], "forbidden_examples": []}
+{"id": 8, "category": "自動確定直後・文途中チャンク", "left_context": "壊れた自転車を", "target": "しゅうりにだす", "expected": "修理に出す", "acceptable": [], "forbidden_examples": []}
+{"id": 9, "category": "自動確定直後・文途中チャンク", "left_context": "古い資料とデータを", "target": "くらべてせいりする", "expected": "比べて整理する", "acceptable": [], "forbidden_examples": []}
+{"id": 10, "category": "自動確定直後・文途中チャンク", "left_context": "深夜の道路を", "target": "しずかにそうこうする", "expected": "静かに走行する", "acceptable": [], "forbidden_examples": ["奏功", "操行", "壮行"]}
+{"id": 11, "category": "自動確定直後・文途中チャンク", "left_context": "台風の接近に備えて", "target": "まどをしっかりしめる", "expected": "窓をしっかり閉める", "acceptable": [], "forbidden_examples": ["締める", "絞める"]}
+{"id": 12, "category": "自動確定直後・文途中チャンク", "left_context": "来月の予算案から", "target": "むだなけいひをけずる", "expected": "無駄な経費を削る", "acceptable": [], "forbidden_examples": []}
+{"id": 13, "category": "自動確定直後・文途中チャンク", "left_context": "雨でぬかるんだ道を", "target": "しんちょうにあるく", "expected": "慎重に歩く", "acceptable": [], "forbidden_examples": ["新調", "伸張"]}
+{"id": 14, "category": "自動確定直後・文途中チャンク", "left_context": "病院の待合室で", "target": "ばんごうがよばれるのをまつ", "expected": "番号が呼ばれるのを待つ", "acceptable": [], "forbidden_examples": []}
+{"id": 15, "category": "自動確定直後・文途中チャンク", "left_context": "玄関の郵便受けから", "target": "とどいたはがきをとる", "expected": "届いたはがきを取る", "acceptable": ["届いた葉書を取る"], "forbidden_examples": []}
+{"id": 16, "category": "自動確定直後・文途中チャンク", "left_context": "会議室のホワイトボードに", "target": "きょうのぎだいをかく", "expected": "今日の議題を書く", "acceptable": [], "forbidden_examples": ["技大"]}
+{"id": 17, "category": "自動確定直後・文途中チャンク", "left_context": "完成した設計図を", "target": "たんとうしゃにてわたす", "expected": "担当者に手渡す", "acceptable": [], "forbidden_examples": []}
+{"id": 18, "category": "自動確定直後・文途中チャンク", "left_context": "図書館で借りた本を", "target": "きげんまでにへんきゃくする", "expected": "期限までに返却する", "acceptable": [], "forbidden_examples": []}
+{"id": 19, "category": "自動確定直後・文途中チャンク", "left_context": "冷たい風を防ぎながら", "target": "ゆっくりいえへかえる", "expected": "ゆっくり家へ帰る", "acceptable": [], "forbidden_examples": ["変える", "替える"]}
+{"id": 20, "category": "自動確定直後・文途中チャンク", "left_context": "商店街の角にある", "target": "ぱんやへたちよる", "expected": "パン屋へ立ち寄る", "acceptable": [], "forbidden_examples": []}
+{"id": 21, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "あしたのよていをかくにんする", "expected": "明日の予定を確認する", "acceptable": [], "forbidden_examples": []}
+{"id": 22, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "あたらしいきのうをついかする", "expected": "新しい機能を追加する", "acceptable": [], "forbidden_examples": []}
+{"id": 23, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "かだいのげんいんをちょうさする", "expected": "課題の原因を調査する", "acceptable": [], "forbidden_examples": []}
+{"id": 24, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "きのうのめもをみかえしてみる", "expected": "昨日のメモを見返してみる", "acceptable": ["昨日のメモを見かえしてみる"], "forbidden_examples": []}
+{"id": 25, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "つぎのえきでのりかえてからいく", "expected": "次の駅で乗り換えてから行く", "acceptable": ["次の駅で乗換えてから行く"], "forbidden_examples": []}
+{"id": 26, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "らいしゅうのうけつけをかいしする", "expected": "来週の受付を開始する", "acceptable": ["来週の受け付けを開始する"], "forbidden_examples": []}
+{"id": 27, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "しりょうのないようをこうしんする", "expected": "資料の内容を更新する", "acceptable": [], "forbidden_examples": ["行進"]}
+{"id": 28, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "こわれたぶひんをこうかんしてもらう", "expected": "壊れた部品を交換してもらう", "acceptable": [], "forbidden_examples": ["好感"]}
+{"id": 29, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "しごとのじゅんばんをいれかえる", "expected": "仕事の順番を入れ替える", "acceptable": ["仕事の順番を入れかえる"], "forbidden_examples": []}
+{"id": 30, "category": "自動確定直前・文節境界チャンク", "left_context": "午前中は晴れですが", "target": "ごごからあめがふりはじめる", "expected": "午後から雨が降り始める", "acceptable": [], "forbidden_examples": []}
+{"id": 31, "category": "自動確定直前・文節境界チャンク", "left_context": "会議が長引いたので", "target": "ちゅうしょくのじかんをずらす", "expected": "昼食の時間をずらす", "acceptable": [], "forbidden_examples": []}
+{"id": 32, "category": "自動確定直前・文節境界チャンク", "left_context": "入力した内容を", "target": "ほぞんしてからつぎへすすむ", "expected": "保存してから次へ進む", "acceptable": [], "forbidden_examples": []}
+{"id": 33, "category": "自動確定直前・文節境界チャンク", "left_context": "画面の文字が小さいので", "target": "ひょうじばいりつをかくだいする", "expected": "表示倍率を拡大する", "acceptable": [], "forbidden_examples": []}
+{"id": 34, "category": "自動確定直前・文節境界チャンク", "left_context": "出張の申請をするため", "target": "こうつうひのめいさいをまとめる", "expected": "交通費の明細をまとめる", "acceptable": [], "forbidden_examples": ["迷彩"]}
+{"id": 35, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "せんげつのうりあげをしゅうけいする", "expected": "先月の売上を集計する", "acceptable": ["先月の売り上げを集計する"], "forbidden_examples": []}
+{"id": 36, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "けいひのせいさんをわすれずにする", "expected": "経費の精算を忘れずにする", "acceptable": [], "forbidden_examples": ["清算"]}
+{"id": 37, "category": "自動確定直前・文節境界チャンク", "left_context": "予定を変更したため", "target": "さんかしゃにれんらくをいれる", "expected": "参加者に連絡を入れる", "acceptable": [], "forbidden_examples": []}
+{"id": 38, "category": "自動確定直前・文節境界チャンク", "left_context": "メールの添付ファイルが", "target": "ただしくひらけないことがある", "expected": "正しく開けないことがある", "acceptable": [], "forbidden_examples": []}
+{"id": 39, "category": "自動確定直前・文節境界チャンク", "left_context": "システムを停止する前に", "target": "ばっくあっぷをとっておく", "expected": "バックアップを取っておく", "acceptable": ["バックアップをとっておく"], "forbidden_examples": []}
+{"id": 40, "category": "自動確定直前・文節境界チャンク", "left_context": "なし", "target": "きょうじゅうにへんしんをおくる", "expected": "今日中に返信を送る", "acceptable": [], "forbidden_examples": ["変身"]}
+{"id": 41, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "いがいなてんかい", "expected": "意外な展開", "acceptable": [], "forbidden_examples": ["以外"]}
+{"id": 42, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "ここいがいはあいている", "expected": "ここ以外は空いている", "acceptable": ["ここ以外は開いている"], "forbidden_examples": ["意外"]}
+{"id": 43, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "こうしょうにおうじる", "expected": "交渉に応じる", "acceptable": [], "forbidden_examples": ["高尚", "公証", "考証"]}
+{"id": 44, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "きしゃのかいけん", "expected": "記者の会見", "acceptable": [], "forbidden_examples": ["汽車", "帰社", "貴社"]}
+{"id": 45, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "きしゃをみおくる", "expected": "汽車を見送る", "acceptable": [], "forbidden_examples": ["記者", "帰社"]}
+{"id": 46, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "きかがくもよう", "expected": "幾何学模様", "acceptable": [], "forbidden_examples": []}
+{"id": 47, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "しんちょうにえらぶ", "expected": "慎重に選ぶ", "acceptable": [], "forbidden_examples": ["身長", "新調"]}
+{"id": 48, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "しんちょうをはかる", "expected": "身長を測る", "acceptable": [], "forbidden_examples": ["慎重", "新調"]}
+{"id": 49, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "たんきでしあげる", "expected": "短期で仕上げる", "acceptable": [], "forbidden_examples": ["短気"]}
+{"id": 50, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "たんきをおこす", "expected": "短気を起こす", "acceptable": [], "forbidden_examples": ["短期", "単騎"]}
+{"id": 51, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "せいさんなげんば", "expected": "凄惨な現場", "acceptable": [], "forbidden_examples": ["生産", "精算", "清算"]}
+{"id": 52, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "せいさんらいん", "expected": "生産ライン", "acceptable": [], "forbidden_examples": ["精算", "凄惨"]}
+{"id": 53, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "こうかてきなほうほう", "expected": "効果的な方法", "acceptable": [], "forbidden_examples": ["硬貨", "降下", "高価"]}
+{"id": 54, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "こうかなとけい", "expected": "高価な時計", "acceptable": [], "forbidden_examples": ["効果", "硬貨", "降下"]}
+{"id": 55, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "しょうめいをけす", "expected": "照明を消す", "acceptable": [], "forbidden_examples": ["証明"]}
+{"id": 56, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "しょうめいをしめす", "expected": "証明を示す", "acceptable": [], "forbidden_examples": ["照明"]}
+{"id": 57, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "じゅうたいにはまる", "expected": "渋滞にはまる", "acceptable": ["渋滞にハマる"], "forbidden_examples": ["重体", "重態"]}
+{"id": 58, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "じゅうたいにおちいる", "expected": "重体に陥る", "acceptable": ["重態に陥る"], "forbidden_examples": ["渋滞"]}
+{"id": 59, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "いしがつよいひと", "expected": "意志が強い人", "acceptable": ["意思が強い人"], "forbidden_examples": ["石", "医師"]}
+{"id": 60, "category": "文頭コールドスタート短チャンク", "left_context": "なし", "target": "いしのしんさつ", "expected": "医師の診察", "acceptable": [], "forbidden_examples": ["意思", "意志", "石"]}
+{"id": 61, "category": "訓読み多義動詞・複合動詞", "left_context": "初対面の相手と", "target": "きっさてんであう", "expected": "喫茶店で会う", "acceptable": [], "forbidden_examples": ["合う", "遭う"]}
+{"id": 62, "category": "訓読み多義動詞・複合動詞", "left_context": "計算の結果と", "target": "すうじがあう", "expected": "数字が合う", "acceptable": [], "forbidden_examples": ["会う", "遭う"]}
+{"id": 63, "category": "訓読み多義動詞・複合動詞", "left_context": "山道の途中で", "target": "おおあめにあう", "expected": "大雨に遭う", "acceptable": ["大雨にあう"], "forbidden_examples": ["合う", "会う"]}
+{"id": 64, "category": "訓読み多義動詞・複合動詞", "left_context": "旅行の記念に", "target": "しゃしんをとる", "expected": "写真を撮る", "acceptable": [], "forbidden_examples": ["取る", "採る", "捕る"]}
+{"id": 65, "category": "訓読み多義動詞・複合動詞", "left_context": "栄養のバランスよく", "target": "しょくじをとる", "expected": "食事を摂る", "acceptable": ["食事を取る"], "forbidden_examples": []}
+{"id": 66, "category": "訓読み多義動詞・複合動詞", "left_context": "山の斜面に生える", "target": "さんさいをとる", "expected": "山菜を採る", "acceptable": [], "forbidden_examples": ["撮る", "捕る"]}
+{"id": 67, "category": "訓読み多義動詞・複合動詞", "left_context": "犯人を現場で", "target": "すぐにとりおさえる", "expected": "すぐに取り押さえる", "acceptable": [], "forbidden_examples": []}
+{"id": 68, "category": "訓読み多義動詞・複合動詞", "left_context": "正確な距離を", "target": "ものさしではかる", "expected": "物差しで測る", "acceptable": ["ものさしで測る"], "forbidden_examples": ["図る", "謀る"]}
+{"id": 69, "category": "訓読み多義動詞・複合動詞", "left_context": "業務の効率化を", "target": "いまのうちにはかる", "expected": "今のうちに図る", "acceptable": [], "forbidden_examples": ["測る", "量る", "計る"]}
+{"id": 70, "category": "訓読み多義動詞・複合動詞", "left_context": "ストップウォッチで", "target": "たいむをはかる", "expected": "タイムを計る", "acceptable": ["タイムを測る"], "forbidden_examples": ["図る", "謀る"]}
+{"id": 71, "category": "訓読み多義動詞・複合動詞", "left_context": "悪天候のせいで", "target": "けいかくがくるう", "expected": "計画が狂う", "acceptable": [], "forbidden_examples": []}
+{"id": 72, "category": "訓読み多義動詞・複合動詞", "left_context": "期限までに税金を", "target": "かならずおさめる", "expected": "必ず納める", "acceptable": [], "forbidden_examples": ["修める", "治める"]}
+{"id": 73, "category": "訓読み多義動詞・複合動詞", "left_context": "大学の課程を", "target": "ぶじにおさめる", "expected": "無事に修める", "acceptable": [], "forbidden_examples": ["納める", "治める"]}
+{"id": 74, "category": "訓読み多義動詞・複合動詞", "left_context": "激しい争いを", "target": "はやめにおさめる", "expected": "早めに収める", "acceptable": ["早めに治める"], "forbidden_examples": []}
+{"id": 75, "category": "訓読み多義動詞・複合動詞", "left_context": "前任者から業務を", "target": "ていねいにひきつぐ", "expected": "丁寧に引き継ぐ", "acceptable": [], "forbidden_examples": []}
+{"id": 76, "category": "訓読み多義動詞・複合動詞", "left_context": "緊急の会議を", "target": "ごごからとりおこなう", "expected": "午後から執り行う", "acceptable": [], "forbidden_examples": []}
+{"id": 77, "category": "訓読み多義動詞・複合動詞", "left_context": "古くなった方針を", "target": "いちどみなおす", "expected": "一度見直す", "acceptable": [], "forbidden_examples": []}
+{"id": 78, "category": "訓読み多義動詞・複合動詞", "left_context": "作業のモードを", "target": "しゅどうにきりかえる", "expected": "手動に切り替える", "acceptable": ["手動に切りかえる"], "forbidden_examples": []}
+{"id": 79, "category": "訓読み多義動詞・複合動詞", "left_context": "届いた荷物を", "target": "うけとっておく", "expected": "受け取っておく", "acceptable": ["受けとっておく"], "forbidden_examples": []}
+{"id": 80, "category": "訓読み多義動詞・複合動詞", "left_context": "重い荷物を二人で", "target": "もちあげる", "expected": "持ち上げる", "acceptable": [], "forbidden_examples": []}
+{"id": 81, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "お忙しいところ", "target": "ごかくにんいただく", "expected": "ご確認いただく", "acceptable": [], "forbidden_examples": []}
+{"id": 82, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "先ほど送った資料を", "target": "ごらんいただけますか", "expected": "ご覧いただけますか", "acceptable": [], "forbidden_examples": []}
+{"id": 83, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "ご提案のスケジュールで", "target": "すすめさせていただきます", "expected": "進めさせていただきます", "acceptable": [], "forbidden_examples": []}
+{"id": 84, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "もしよろしければ", "target": "さしつかえなければ", "expected": "差し支えなければ", "acceptable": [], "forbidden_examples": []}
+{"id": 85, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "来週お時間があれば", "target": "おめにかかりたい", "expected": "お目にかかりたい", "acceptable": [], "forbidden_examples": []}
+{"id": 86, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "添付の請求書を", "target": "ごさしゅうください", "expected": "ご査収ください", "acceptable": [], "forbidden_examples": []}
+{"id": 87, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "貴重なご意見を", "target": "ちょうだいいたしました", "expected": "頂戴いたしました", "acceptable": ["頂戴致しました"], "forbidden_examples": []}
+{"id": 88, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "送付された企画書を", "target": "はいけんいたしました", "expected": "拝見いたしました", "acceptable": ["拝見致しました"], "forbidden_examples": ["拝肩"]}
+{"id": 89, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "今後の進め方について", "target": "おしえていただきたい", "expected": "教えていただきたい", "acceptable": ["教えて頂きたい"], "forbidden_examples": []}
+{"id": 90, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "問題がないか事前に", "target": "しらべておきます", "expected": "調べておきます", "acceptable": [], "forbidden_examples": ["調べて置きます"]}
+{"id": 91, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "引き続きチームで", "target": "すすめてまいります", "expected": "進めてまいります", "acceptable": ["進めて参ります"], "forbidden_examples": ["収めて"]}
+{"id": 92, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "今回の対応については", "target": "いたしかねます", "expected": "いたしかねます", "acceptable": ["致しかねます"], "forbidden_examples": []}
+{"id": 93, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "恐れ入りますが", "target": "いましばらくおまちください", "expected": "今しばらくお待ちください", "acceptable": ["今暫くお待ちください"], "forbidden_examples": []}
+{"id": 94, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "担当部署のほうへ", "target": "おとりつぎいたします", "expected": "お取り次ぎいたします", "acceptable": ["お取次ぎいたします"], "forbidden_examples": []}
+{"id": 95, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "変更点については", "target": "あとでおしらせします", "expected": "後でお知らせします", "acceptable": ["あとでお知らせします"], "forbidden_examples": []}
+{"id": 96, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "お手数をおかけして", "target": "もうしわけありません", "expected": "申し訳ありません", "acceptable": ["申し訳有りません"], "forbidden_examples": []}
+{"id": 97, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "日程が確定した段階で", "target": "べっとごあんないします", "expected": "別途ご案内します", "acceptable": ["別途御案内します"], "forbidden_examples": []}
+{"id": 98, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "ご不明な点があれば", "target": "おといあわせください", "expected": "お問い合わせください", "acceptable": ["お問合せください"], "forbidden_examples": []}
+{"id": 99, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "先日はご多忙の中", "target": "おこしくださりかんしゃします", "expected": "お越しくださり感謝します", "acceptable": [], "forbidden_examples": []}
+{"id": 100, "category": "ビジネス敬語・補助動詞の開閉", "left_context": "契約の更新に際し", "target": "ごしょうだくねがえますか", "expected": "ご承諾願えますか", "acceptable": [], "forbidden_examples": []}
+{"id": 101, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "これ昨日のやつより", "target": "まじですごいよ", "expected": "マジですごいよ", "acceptable": ["まじですごいよ", "マジで凄いよ"], "forbidden_examples": ["真実で"]}
+{"id": 102, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "今そっち向かってるから", "target": "ちょっとまってて", "expected": "ちょっと待ってて", "acceptable": [], "forbidden_examples": ["鳥渡", "一寸"]}
+{"id": 103, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "急いで帰らないと", "target": "まじでやばいかも", "expected": "マジでやばいかも", "acceptable": ["まじでやばいかも", "マジでヤバいかも"], "forbidden_examples": ["真実で"]}
+{"id": 104, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "ファイル整理したから", "target": "とりまおくったよ", "expected": "とりま送ったよ", "acceptable": ["トリマ送ったよ"], "forbidden_examples": ["取り間"]}
+{"id": 105, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "急なお願いなのに", "target": "めっちゃたすかる", "expected": "めっちゃ助かる", "acceptable": ["メッチャ助かる"], "forbidden_examples": []}
+{"id": 106, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "友達に勧められて", "target": "きのうみたえいが", "expected": "昨日見た映画", "acceptable": ["昨日観た映画"], "forbidden_examples": []}
+{"id": 107, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "よく考え直したら", "target": "やっぱりやめておく", "expected": "やっぱりやめておく", "acceptable": [], "forbidden_examples": ["矢張り", "止めて置く"]}
+{"id": 108, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "そういう背景なら", "target": "なるほどですね", "expected": "なるほどですね", "acceptable": [], "forbidden_examples": ["成程", "成る程"]}
+{"id": 109, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "わざわざ遠くまで", "target": "きてくれてありがとう", "expected": "来てくれてありがとう", "acceptable": [], "forbidden_examples": ["呉れて"]}
+{"id": 110, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "眠くなってきたし", "target": "そろそろねようかな", "expected": "そろそろ寝ようかな", "acceptable": [], "forbidden_examples": ["徐々"]}
+{"id": 111, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "なし", "target": "わざわざありがとね", "expected": "わざわざありがとね", "acceptable": [], "forbidden_examples": ["態々"]}
+{"id": 112, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "なし", "target": "とにかくやってみよう", "expected": "とにかくやってみよう", "acceptable": [], "forbidden_examples": ["兎に角", "何に角"]}
+{"id": 113, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "なし", "target": "さっきはおつかれさま", "expected": "さっきはお疲れ様", "acceptable": ["さっきはお疲れさま"], "forbidden_examples": ["先刻"]}
+{"id": 114, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "駅の階段ですべって", "target": "めっちゃいたかった", "expected": "めっちゃ痛かった", "acceptable": [], "forbidden_examples": []}
+{"id": 115, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "さっきの話し合い", "target": "どうにかなりそう", "expected": "どうにかなりそう", "acceptable": [], "forbidden_examples": ["如何にか"]}
+{"id": 116, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "今週は忙しいから", "target": "むりしなくていいよ", "expected": "無理しなくていいよ", "acceptable": ["無理しなくて良いよ"], "forbidden_examples": []}
+{"id": 117, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "なし", "target": "おはようきょうもよろしく", "expected": "おはよう今日もよろしく", "acceptable": ["おはよう今日も宜しく"], "forbidden_examples": []}
+{"id": 118, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "そんなつもりじゃ", "target": "なかったんだけどな", "expected": "なかったんだけどな", "acceptable": [], "forbidden_examples": ["無かったんだけどな"]}
+{"id": 119, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "なし", "target": "なんかちがうきがする", "expected": "なんか違う気がする", "acceptable": ["何か違う気がする"], "forbidden_examples": []}
+{"id": 120, "category": "日常チャット・口語・過剰漢字抑止", "left_context": "雨ひどくなってきたし", "target": "きょうはもうかえろう", "expected": "今日はもう帰ろう", "acceptable": [], "forbidden_examples": ["猛"]}
+{"id": 121, "category": "数値nam・助数詞・単位チャンク", "left_context": "エレベーターで", "target": "3かいにあがる", "expected": "3階に上がる", "acceptable": [], "forbidden_examples": ["3回", "3会", "nam"]}
+{"id": 122, "category": "数値nam・助数詞・単位チャンク", "left_context": "同じ操作をあと", "target": "3かいくりかえす", "expected": "3回繰り返す", "acceptable": ["3回くり返す"], "forbidden_examples": ["3階", "nam"]}
+{"id": 123, "category": "数値nam・助数詞・単位チャンク", "left_context": "図書館で本を", "target": "4さつかりてきた", "expected": "4冊借りてきた", "acceptable": ["4冊かりてきた"], "forbidden_examples": ["4札", "nam"]}
+{"id": 124, "category": "数値nam・助数詞・単位チャンク", "left_context": "打ち合わせは", "target": "14じ30ぷんから", "expected": "14時30分から", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 125, "category": "数値nam・助数詞・単位チャンク", "left_context": "配布用のプリントを", "target": "25まいずつくばる", "expected": "25枚ずつ配る", "acceptable": [], "forbidden_examples": ["25毎", "nam"]}
+{"id": 126, "category": "数値nam・助数詞・単位チャンク", "left_context": "会社の社用車を", "target": "2だいめにする", "expected": "2台目にする", "acceptable": [], "forbidden_examples": ["2題目", "2代目", "nam"]}
+{"id": 127, "category": "数値nam・助数詞・単位チャンク", "left_context": "会議の議事録を", "target": "15ぷんいないにまとめる", "expected": "15分以内にまとめる", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 128, "category": "数値nam・助数詞・単位チャンク", "left_context": "前回の測定より", "target": "12ぱーせんとへった", "expected": "12%減った", "acceptable": ["12パーセント減った"], "forbidden_examples": ["nam"]}
+{"id": 129, "category": "数値nam・助数詞・単位チャンク", "left_context": "駅のロッカーに", "target": "500えんだまをいれる", "expected": "500円玉を入れる", "acceptable": ["500円玉をいれる"], "forbidden_examples": ["nam"]}
+{"id": 130, "category": "数値nam・助数詞・単位チャンク", "left_context": "新しいメンバーを", "target": "6にんついかする", "expected": "6人追加する", "acceptable": [], "forbidden_examples": ["6任", "nam"]}
+{"id": 131, "category": "数値nam・助数詞・単位チャンク", "left_context": "サーバーの保守作業を", "target": "5がつ20かにする", "expected": "5月20日にする", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 132, "category": "数値nam・助数詞・単位チャンク", "left_context": "重たいダンボールを", "target": "3ぼんまとめてもつ", "expected": "3本まとめて持つ", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 133, "category": "数値nam・助数詞・単位チャンク", "left_context": "なし", "target": "2027ねんどのよさん", "expected": "2027年度の予算", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 134, "category": "数値nam・助数詞・単位チャンク", "left_context": "なし", "target": "16もじいじょう", "expected": "16文字以上", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 135, "category": "数値nam・助数詞・単位チャンク", "left_context": "会場の席を", "target": "2ばんめからあける", "expected": "2番目から空ける", "acceptable": ["2番目から開ける"], "forbidden_examples": ["2晩目", "nam"]}
+{"id": 136, "category": "数値nam・助数詞・単位チャンク", "left_context": "バッテリー残量が", "target": "8ぱーせんとのこる", "expected": "8%残る", "acceptable": ["8パーセント残る"], "forbidden_examples": ["nam"]}
+{"id": 137, "category": "数値nam・助数詞・単位チャンク", "left_context": "書類の提出期限まで", "target": "あと7にちある", "expected": "あと7日ある", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 138, "category": "数値nam・助数詞・単位チャンク", "left_context": "プログラムのエラーが", "target": "0けんになった", "expected": "0件になった", "acceptable": [], "forbidden_examples": ["0軒", "0券", "nam"]}
+{"id": 139, "category": "数値nam・助数詞・単位チャンク", "left_context": "コーヒーを全員分", "target": "12はいちゅうもんする", "expected": "12杯注文する", "acceptable": [], "forbidden_examples": ["12敗", "nam"]}
+{"id": 140, "category": "数値nam・助数詞・単位チャンク", "left_context": "ホテルの宿泊を", "target": "2はく3にちにきめる", "expected": "2泊3日に決める", "acceptable": [], "forbidden_examples": ["nam"]}
+{"id": 141, "category": "文節切り出し・外来語＋助詞境界", "left_context": "昔は知らなかったが", "target": "いまはしっている", "expected": "今は知っている", "acceptable": [], "forbidden_examples": ["今走っている"]}
+{"id": 142, "category": "文節切り出し・外来語＋助詞境界", "left_context": "ゴールを目指して", "target": "いまはしっている", "expected": "今走っている", "acceptable": [], "forbidden_examples": ["今は知っている"]}
+{"id": 143, "category": "文節切り出し・外来語＋助詞境界", "left_context": "朝の食卓用に", "target": "ぱんをつくった", "expected": "パンを作った", "acceptable": [], "forbidden_examples": ["パンツ"]}
+{"id": 144, "category": "文節切り出し・外来語＋助詞境界", "left_context": "駐車場の隅にある", "target": "くるまでまつよ", "expected": "車で待つよ", "acceptable": [], "forbidden_examples": ["来るまで"]}
+{"id": 145, "category": "文節切り出し・外来語＋助詞境界", "left_context": "終電の列車がホームに", "target": "くるまでまつよ", "expected": "来るまで待つよ", "acceptable": [], "forbidden_examples": ["車で"]}
+{"id": 146, "category": "文節切り出し・外来語＋助詞境界", "left_context": "神社に入る前に", "target": "ここではきものをぬぐ", "expected": "ここで履物を脱ぐ", "acceptable": ["ここで履き物を脱ぐ"], "forbidden_examples": ["着物を"]}
+{"id": 147, "category": "文節切り出し・外来語＋助詞境界", "left_context": "なし", "target": "れいてんしーをさげる", "expected": "レイテンシーを下げる", "acceptable": ["レイテンシを下げる"], "forbidden_examples": []}
+{"id": 148, "category": "文節切り出し・外来語＋助詞境界", "left_context": "動作が重いときは", "target": "きゃっしゅをくりあする", "expected": "キャッシュをクリアする", "acceptable": [], "forbidden_examples": []}
+{"id": 149, "category": "文節切り出し・外来語＋助詞境界", "left_context": "急ぎの打ち合わせを", "target": "らいしゅうにりすけする", "expected": "来週にリスケする", "acceptable": [], "forbidden_examples": []}
+{"id": 150, "category": "文節切り出し・外来語＋助詞境界", "left_context": "本番環境への", "target": "でぷろいがかんりょうした", "expected": "デプロイが完了した", "acceptable": [], "forbidden_examples": []}
+{"id": 151, "category": "文節切り出し・外来語＋助詞境界", "left_context": "検索ボックスに", "target": "ふぉーかすがあたる", "expected": "フォーカスが当たる", "acceptable": ["フォーカスがあたる"], "forbidden_examples": []}
+{"id": 152, "category": "文節切り出し・外来語＋助詞境界", "left_context": "設定画面の", "target": "とぐるをきりかえる", "expected": "トグルを切り替える", "acceptable": ["トグルを切りかえる"], "forbidden_examples": []}
+{"id": 153, "category": "文節切り出し・外来語＋助詞境界", "left_context": "音声データの", "target": "のいずをじょきょする", "expected": "ノイズを除去する", "acceptable": [], "forbidden_examples": []}
+{"id": 154, "category": "文節切り出し・外来語＋助詞境界", "left_context": "クラウド側との", "target": "どうきがはずれている", "expected": "同期が外れている", "acceptable": [], "forbidden_examples": ["動悸", "動機", "同機"]}
+{"id": 155, "category": "文節切り出し・外来語＋助詞境界", "left_context": "ログの出力から", "target": "ぼとるねっくをみつける", "expected": "ボトルネックを見つける", "acceptable": ["ボトルネックをみつける"], "forbidden_examples": []}
+{"id": 156, "category": "文節切り出し・外来語＋助詞境界", "left_context": "なし", "target": "りふぁくたりんぐする", "expected": "リファクタリングする", "acceptable": [], "forbidden_examples": []}
+{"id": 157, "category": "文節切り出し・外来語＋助詞境界", "left_context": "ブラウザのタブを", "target": "ぷれびゅーでひらく", "expected": "プレビューで開く", "acceptable": [], "forbidden_examples": []}
+{"id": 158, "category": "文節切り出し・外来語＋助詞境界", "left_context": "エラーが出たら", "target": "とれーすろぐをのこす", "expected": "トレースログを残す", "acceptable": [], "forbidden_examples": []}
+{"id": 159, "category": "文節切り出し・外来語＋助詞境界", "left_context": "フォームの入力欄を", "target": "ばりでーしょんする", "expected": "バリデーションする", "acceptable": [], "forbidden_examples": []}
+{"id": 160, "category": "文節切り出し・外来語＋助詞境界", "left_context": "サーバーの負荷を", "target": "へらすためにきゃっしゅする", "expected": "減らすためにキャッシュする", "acceptable": [], "forbidden_examples": []}

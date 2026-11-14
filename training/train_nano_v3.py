@@ -46,6 +46,7 @@ def parse_args():
     parser.add_argument("--val_file", type=str, default="artifacts/datasets/standard-v3-knowledge/val.jsonl")
     parser.add_argument("--output_dir", type=str, default="artifacts/checkpoints/nano-v4-argon4-lora")
     parser.add_argument("--merged_dir", type=str, default="artifacts/checkpoints/nano-v4-argon4-merged")
+    parser.add_argument("--run_name", type=str, default="zerocon-nano-v4")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=8)
@@ -222,6 +223,44 @@ class SuperTeacherDualAnchorTrainer(Trainer):
         z_y = s_flat.gather(dim=-1, index=y_flat.unsqueeze(-1)).squeeze(-1)
         z_b = s_flat.gather(dim=-1, index=b_pred.unsqueeze(-1)).squeeze(-1)
 
+        # Prior-token self-copy / digit-boundary margin:
+        # Penalize copying any distinct prior target token y_p (p < t, y_p != -100, y_p != y_t)
+        with torch.no_grad():
+            distinct_prior = (
+                (shift_labels.unsqueeze(2) != shift_labels.unsqueeze(1))
+                & tril_mask
+                & valid_prior
+                & valid_mask.unsqueeze(2)
+            )  # [B, L, L]
+            safe_prior_ids = torch.where(shift_labels > 0, shift_labels, torch.zeros_like(shift_labels))
+
+        prior_logits_all = shift_s.float().gather(
+            dim=-1,
+            index=safe_prior_ids.unsqueeze(1).expand(-1, seq_len, -1),
+        )
+        prior_logits_masked = prior_logits_all.masked_fill(~distinct_prior, -1e9)
+        prior_copy_max_2d, _ = prior_logits_masked.max(dim=-1)
+        has_distinct_prior_2d = distinct_prior.any(dim=-1)
+        has_distinct_prior = has_distinct_prior_2d[valid_mask]
+        prior_copy_max = torch.where(
+            has_distinct_prior,
+            prior_copy_max_2d[valid_mask],
+            torch.zeros_like(z_y),
+        )
+        prior_copy_margin = torch.where(
+            has_distinct_prior,
+            F.relu(self.self_copy_gamma - (z_y - prior_copy_max)),
+            torch.zeros_like(z_y),
+        )
+
+        # Runner-up margin for 4-bit quantization (IQ4_NL_emb8) robustness
+        s_other = s_flat.masked_fill(
+            F.one_hot(y_flat, num_classes=s_flat.size(-1)).bool(),
+            -1e9,
+        )
+        z_runner_up = s_other.max(dim=-1).values
+        quant_margin = F.relu(2.4 - (z_y - z_runner_up))
+
         # EOS Anti-Hallucination Margin: enforce z(</s>) - max_{h in {172,248,4,469}} z(h) >= 6.0 at EOS
         z_halluc = s_flat[:, [172, 248, 4, 469]].max(dim=-1).values
         eos_margin = torch.where(is_eos, F.relu(6.0 - (z_y - z_halluc)), torch.zeros_like(z_y))
@@ -235,16 +274,25 @@ class SuperTeacherDualAnchorTrainer(Trainer):
         margin_loss = F.relu(gamma_vec - (z_y - z_b))
 
         # Dual-Anchor Gating Loss (Measure 3):
-        # 1) When Base Nano agrees with Target: distill from both Super-Teacher and Base Nano
-        loss_base_correct = 0.30 * ce_loss + 0.40 * kl_t_corr + 0.30 * kl_b + 0.15 * eos_margin
+        # 1) When Base agrees with Target: distill from both Teacher and Base, plus boundary/quantization margins
+        loss_base_correct = (
+            0.30 * ce_loss
+            + 0.40 * kl_t_corr
+            + 0.30 * kl_b
+            + 0.15 * eos_margin
+            + 0.20 * prior_copy_margin
+            + 0.20 * quant_margin
+        )
 
-        # 2) When Base Nano is wrong: Super-Teacher KL + Contrastive Margin + Target-Corrected Base KL
+        # 2) When Base is wrong: Super-Teacher KL + Contrastive Margin + Target-Corrected Base KL
         loss_base_wrong = (
             0.45 * ce_loss
             + 0.25 * kl_t_corr
             + 0.05 * kl_b_corr
             + 0.25 * margin_loss
             + 0.15 * eos_margin
+            + 0.20 * prior_copy_margin
+            + 0.20 * quant_margin
         )
 
         token_loss = torch.where(base_agrees, loss_base_correct, loss_base_wrong)
@@ -253,7 +301,13 @@ class SuperTeacherDualAnchorTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
-def save_merged_with_exact_base_metadata(student_dir: str, lora_dir: str, out_dir: str, alpha_blend: float = 1.0):
+def save_merged_with_exact_base_metadata(
+    student_dir: str,
+    lora_dir: str,
+    out_dir: str,
+    alpha_blend: float = 1.0,
+    fullwidth_digit_scale: float = 1.0,
+):
     """Merge DoRA/LoRA weights with optional WiSE-FT interpolation and preserve exact base GGUF tokenizer files."""
     os.makedirs(out_dir, exist_ok=True)
     base_state = AutoModelForCausalLM.from_pretrained(
@@ -270,6 +324,15 @@ def save_merged_with_exact_base_metadata(student_dir: str, lora_dir: str, out_di
             for name, param in merged_model.named_parameters():
                 if name in base_state:
                     param.copy_((1.0 - alpha_blend) * base_state[name] + alpha_blend * param.data)
+
+    if fullwidth_digit_scale != 1.0 and (Path(student_dir) / "vocab.json").exists():
+        tok = AutoTokenizer.from_pretrained(student_dir, local_files_only=True)
+        wte = merged_model.get_input_embeddings().weight
+        with torch.no_grad():
+            for ch in "０１２３４５６７８９":
+                ids = tok.encode(ch, add_special_tokens=False)
+                if len(ids) == 1:
+                    wte.data[ids[0]] *= fullwidth_digit_scale
 
     merged_model.save_pretrained(out_dir)
 
@@ -307,29 +370,31 @@ def build_tokenized_examples(raw_rows: list[dict], tokenizer, max_length: int, i
     for row in raw_rows:
         prompt = row["prompt"]
         comp = row["completion"]
+        prompts = [prompt, "\uee02" + prompt] if (is_train and prompt.startswith("\uee00")) else [prompt]
 
-        if " " in prompt or " " in comp:
-            # Variant 1: llama.cpp raw ASCII space in prompt ([UNK]=0) -> full-width space (\u3000=567) in completion
-            p_tok_unk = encode_with_space_token(tokenizer, prompt, SPACE_UNK_TOKEN_ID)
-            c_tok_u3000 = encode_with_space_token(tokenizer, comp, SPACE_U3000_TOKEN_ID) + [eos_id]
-            tokenized.append({
-                "input_ids": (p_tok_unk + c_tok_u3000)[:max_length],
-                "labels": ([-100] * len(p_tok_unk) + c_tok_u3000)[:max_length],
-            })
-            # Variant 2: ZenzContext.swift normalized \u3000 (567) in prompt -> \u3000 (567) in completion
-            if is_train and " " in prompt:
-                p_tok_u3000 = encode_with_space_token(tokenizer, prompt, SPACE_U3000_TOKEN_ID)
+        for p_text in prompts:
+            if " " in p_text or " " in comp:
+                # Variant 1: llama.cpp raw ASCII space in prompt ([UNK]=0) -> full-width space (\u3000=567) in completion
+                p_tok_unk = encode_with_space_token(tokenizer, p_text, SPACE_UNK_TOKEN_ID)
+                c_tok_u3000 = encode_with_space_token(tokenizer, comp, SPACE_U3000_TOKEN_ID) + [eos_id]
                 tokenized.append({
-                    "input_ids": (p_tok_u3000 + c_tok_u3000)[:max_length],
-                    "labels": ([-100] * len(p_tok_u3000) + c_tok_u3000)[:max_length],
+                    "input_ids": (p_tok_unk + c_tok_u3000)[:max_length],
+                    "labels": ([-100] * len(p_tok_unk) + c_tok_u3000)[:max_length],
                 })
-        else:
-            p_tok = tokenizer.encode(prompt, add_special_tokens=False)
-            c_tok = tokenizer.encode(comp, add_special_tokens=False) + [eos_id]
-            tokenized.append({
-                "input_ids": (p_tok + c_tok)[:max_length],
-                "labels": ([-100] * len(p_tok) + c_tok)[:max_length],
-            })
+                # Variant 2: ZenzContext.swift normalized \u3000 (567) in prompt -> \u3000 (567) in completion
+                if is_train and " " in p_text:
+                    p_tok_u3000 = encode_with_space_token(tokenizer, p_text, SPACE_U3000_TOKEN_ID)
+                    tokenized.append({
+                        "input_ids": (p_tok_u3000 + c_tok_u3000)[:max_length],
+                        "labels": ([-100] * len(p_tok_u3000) + c_tok_u3000)[:max_length],
+                    })
+            else:
+                p_tok = tokenizer.encode(p_text, add_special_tokens=False)
+                c_tok = tokenizer.encode(comp, add_special_tokens=False) + [eos_id]
+                tokenized.append({
+                    "input_ids": (p_tok + c_tok)[:max_length],
+                    "labels": ([-100] * len(p_tok) + c_tok)[:max_length],
+                })
 
     return tokenized
 
@@ -447,7 +512,7 @@ def main():
             if src.exists():
                 shutil.copy2(src, Path(target_dir) / "dataset-provenance.json")
 
-            gguf_name = "zerocon-nano-v4-f16.gguf" if blend == 1.0 else "zerocon-nano-v4-blend85-f16.gguf"
+            gguf_name = f"{args.run_name}-f16.gguf" if blend == 1.0 else f"{args.run_name}-blend85-f16.gguf"
             f16_gguf = str(ROOT / "artifacts" / "models" / gguf_name)
             convert_merged_to_gguf(target_dir, f16_gguf)
 
