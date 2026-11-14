@@ -231,8 +231,12 @@ fun MainScreen(
     var keyboardBottomPaddingDp by remember {
         mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32))
     }
+    val initialTouchAssistSettings = remember { TouchAssistSettings.load(imePrefs) }
     var isDynamicTouchAssistEnabled by remember {
-        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_DYNAMIC_TOUCH_ASSIST, true))
+        mutableStateOf(initialTouchAssistSettings.hitAreaEnabled)
+    }
+    var isTouchTypoCorrectionEnabled by remember {
+        mutableStateOf(initialTouchAssistSettings.correctionEnabled)
     }
     var isAutoCommitEnabled by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, true))
@@ -244,7 +248,8 @@ fun MainScreen(
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST, true))
     }
     var isDictionaryTypoCorrection by remember {
-        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, false))
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION,
+            ZeroConvertInputMethodService.DEFAULT_DICTIONARY_TYPO_CORRECTION))
     }
     var isPredictiveConversion by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, true))
@@ -929,14 +934,27 @@ fun MainScreen(
             )
             SettingsDivider(palette)
             SettingsSwitchRow(
-                title = "予測タッチ補正（次打鍵拡大・誤タップ救済）",
-                description = "次の入力候補となるキーの当たり判定をわずかに広げ、境界付近の誤タップ時にも押下位置をもとに正しい文字を提案します。",
+                title = "キーの当たり判定を調整",
+                description = "QWERTYで次に押しそうなキーの判定範囲を広げ、押しやすくします。",
                 checked = isDynamicTouchAssistEnabled,
                 palette = palette,
                 onCheckedChange = { checked ->
                     isDynamicTouchAssistEnabled = checked
                     imePrefs.edit()
                         .putBoolean(ZeroConvertInputMethodService.KEY_DYNAMIC_TOUCH_ASSIST, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "タッチ位置による候補の重み付け",
+                description = "「タイポ補正」がONのとき、日本語QWERTYの押下位置を使って近接キーの補正候補を重み付けします。英語では押下位置を使って補正候補を並べます。",
+                checked = isTouchTypoCorrectionEnabled,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isTouchTypoCorrectionEnabled = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_TOUCH_TYPO_CORRECTION, checked)
                         .apply()
                 }
             )
@@ -1095,26 +1113,13 @@ fun MainScreen(
             )
             SettingsDivider(palette)
             SettingsSwitchRow(
-                title = "予測変換",
-                description = "入力途中の読みから単語・フレーズの候補を提示します。",
+                title = "予測変換（単語・フレーズ）",
+                description = "入力中の読みをもとに、続きの単語・フレーズを通常候補に表示します。文の続きの提案は「文の先読み」で設定します。",
                 checked = isPredictiveConversion,
                 palette = palette,
                 onCheckedChange = { checked ->
                     isPredictiveConversion = checked
                     imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, checked).apply()
-                }
-            )
-            SettingsDivider(palette)
-            SettingsSwitchRow(
-                title = "ローマ字入力の辞書補正",
-                description = "促音・撥音の重複や登録済みの誤入力を通常候補に加えます。フリック入力は対象外です。",
-                checked = isDictionaryTypoCorrection,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    isDictionaryTypoCorrection = checked
-                    imePrefs.edit()
-                        .putBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, checked)
-                        .apply()
                 }
             )
             SettingsDivider(palette)
@@ -1136,15 +1141,24 @@ fun MainScreen(
             )
         }
 
-        SettingsSection("AIアシスト", palette) {
+        SettingsSection("タイポ補正と先読み", palette) {
             SettingsSwitchRow(
-                title = "AIアシスト",
+                title = "タイポ補正",
+                description = "辞書・打鍵の補正規則とZeroCon Modelで誤入力を補正します。通常変換で補正できなかった入力は、モデルによる補正候補を提案します。補正候補はタップで反映できます。",
+                checked = isDictionaryTypoCorrection,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isDictionaryTypoCorrection = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_DICTIONARY_TYPO_CORRECTION, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "文の先読み",
                 badge = "試験",
-                description = if (isAiAssistEnabled) {
-                    "誤入力の補正や文脈に応じた先読みを表示します。補正はタップで採用し、確定前ならBackspaceで元に戻せます。"
-                } else {
-                    "補正・先読み候補を表示しません。通常のかな漢字変換は引き続き使用できます。"
-                },
+                description = "変換結果と文脈をもとに、ZeroCon Modelが文の続きを提案します。候補をタップすると採用・確定します。",
                 checked = isAiAssistEnabled,
                 palette = palette,
                 onCheckedChange = { checked ->
@@ -1154,11 +1168,11 @@ fun MainScreen(
                         .apply()
                 }
             )
-            if (isAiAssistEnabled) {
+            if (isDictionaryTypoCorrection) {
                 SettingsDivider(palette)
                 SettingsSwitchRow(
-                    title = "根拠のある誤入力を自動補正",
-                    description = "採用・確定の実績や一意な打鍵修正を使用します。確定前なら元に戻せます。",
+                    title = "補正候補を自動で反映",
+                    description = "通常変換の後に生成した候補のうち、採用・確定の実績や一意な打鍵修正で裏付けられた補正を自動で反映します。確定前ならBackspaceで元に戻せます。",
                     checked = isAutoTypoCorrection,
                     palette = palette,
                     onCheckedChange = { enabled ->
@@ -1167,10 +1181,6 @@ fun MainScreen(
                             .putBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, enabled)
                             .apply()
                     }
-                )
-                SettingsNote(
-                    text = "先読みは選択中のZeroCon変換モデルを使用します。誤入力補正は専用Correctorモデルを使用します。",
-                    palette = palette
                 )
             }
         }

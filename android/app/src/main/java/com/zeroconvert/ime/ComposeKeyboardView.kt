@@ -1954,7 +1954,8 @@ private fun SharedQwertyLayout(
                     cornerRadius = 7.dp,
                     baseColor = actionKeyBg,
                     palette = palette,
-                    onBeforePress = flushBeforeAction
+                    onBeforePress = flushBeforeAction,
+                    hapticOnPress = false
                 ) {
                     Text(text = "◀", color = textColor, fontSize = 13.sp)
                 }
@@ -1968,7 +1969,8 @@ private fun SharedQwertyLayout(
                     cornerRadius = 7.dp,
                     baseColor = actionKeyBg,
                     palette = palette,
-                    onBeforePress = flushBeforeAction
+                    onBeforePress = flushBeforeAction,
+                    hapticOnPress = false
                 ) {
                     Text(text = "▶", color = textColor, fontSize = 13.sp)
                 }
@@ -2179,7 +2181,8 @@ fun NumericPadLayout(
                 baseColor = actionKeyBg,
                 palette = palette,
                 initialDelayMs = 300L,
-                repeatIntervalMs = 50L
+                repeatIntervalMs = 50L,
+                hapticOnPress = false
             ) {
                 Text(text = "◀", color = textColor, fontSize = 14.sp)
             }
@@ -2194,7 +2197,8 @@ fun NumericPadLayout(
                 baseColor = actionKeyBg,
                 palette = palette,
                 initialDelayMs = 300L,
-                repeatIntervalMs = 50L
+                repeatIntervalMs = 50L,
+                hapticOnPress = false
             ) {
                 Text(text = "▶", color = textColor, fontSize = 14.sp)
             }
@@ -3371,7 +3375,8 @@ fun SymbolsPanel(
                 baseColor = actionKeyBg,
                 palette = palette,
                 initialDelayMs = 300L,
-                repeatIntervalMs = 50L
+                repeatIntervalMs = 50L,
+                hapticOnPress = false
             ) {
                 Text(text = "◀", color = textColor, fontSize = 13.sp)
             }
@@ -3385,7 +3390,8 @@ fun SymbolsPanel(
                 baseColor = actionKeyBg,
                 palette = palette,
                 initialDelayMs = 300L,
-                repeatIntervalMs = 50L
+                repeatIntervalMs = 50L,
+                hapticOnPress = false
             ) {
                 Text(text = "▶", color = textColor, fontSize = 13.sp)
             }

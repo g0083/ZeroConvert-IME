@@ -15,7 +15,8 @@ data class Candidate(
     val segments: List<DictionarySegment> = emptyList(),
     val learningAllowed: Boolean = true,
     val engineCandidateId: String = "",
-    val engineConsumedReading: Int? = null
+    val engineConsumedReading: Int? = null,
+    val enginePredictionReading: String = ""
 ) {
     fun previewForReading(reading: String): String = text + engineConsumedReading
         ?.takeIf { it in 1..reading.length }?.let { reading.substring(it) }.orEmpty()
@@ -98,8 +99,6 @@ object ZenzNative {
     private external fun nativeAssistEpoch(): Long
     private external fun nativeGenerate(kind: Int, prompt: String, maxTokens: Int, timeoutMs: Int, epoch: Long): Array<String>
     @Volatile private var assistReady = 0
-    private var correctorPath = ""
-    private val correctorCache = LruCache<String, com.zeroconvert.ime.assist.ModelCompletion>(32)
     private val predictionCache = LruCache<String, com.zeroconvert.ime.assist.ModelCompletion>(64)
 
     fun assistSession(): com.zeroconvert.ime.assist.AssistInference {
@@ -115,14 +114,13 @@ object ZenzNative {
                 val kind = model.ordinal
                 if (assistReady and (1 shl kind) == 0) return com.zeroconvert.ime.assist.ModelCompletion("", "unavailable")
                 val key = "$revision|$kind|$maxTokens|$prompt"
-                val cache = if (model == com.zeroconvert.ime.assist.AssistModel.CORRECTOR) correctorCache else predictionCache
-                cache.get(key)?.let { return it }
+                predictionCache.get(key)?.let { return it }
                 val reply = nativeGenerate(kind, prompt, maxTokens, timeoutMs, expectedEpoch)
                 if (modelRevision != revision || nativeAssistEpoch() != expectedEpoch) {
                     return com.zeroconvert.ime.assist.ModelCompletion("", "cancelled")
                 }
                 val completion = com.zeroconvert.ime.assist.ModelCompletion(reply.getOrElse(1) { "" }, reply.getOrElse(0) { "error" })
-                if (completion.finished) cache.put(key, completion)
+                if (completion.finished) predictionCache.put(key, completion)
                 return completion
             }
         }
@@ -243,7 +241,7 @@ object ZenzNative {
         val ok = try {
             val loaded = if (BuildConfig.WINDOWS_ENGINE) com.zeroconvert.ime.engine.WindowsEngine.switchModel(modelFile)
                 else nativeLoadModel(modelFile.absolutePath)
-            assistReady = if (loaded) nativeInitAssist(modelFile.absolutePath, correctorPath) else 0
+            assistReady = if (loaded) nativeInitAssist(modelFile.absolutePath, "") else 0
             loaded
         } finally { modelEpoch.incrementAndGet() }
         if (ok) {
@@ -261,7 +259,7 @@ object ZenzNative {
     fun init(context: Context): Boolean {
         lifecycleRequests.incrementAndGet()
         if (isInitialized && isDictInitialized) {
-            if (assistReady == 0 && converterPath.isNotEmpty()) assistReady = nativeInitAssist(converterPath, correctorPath)
+            if (assistReady == 0 && converterPath.isNotEmpty()) assistReady = nativeInitAssist(converterPath, "")
             return true
         }
 
@@ -292,10 +290,10 @@ object ZenzNative {
                     .putString("selected_model_name", currentModelName).apply()
                 modelEpoch.incrementAndGet()
                 try {
-                    correctorPath = ModelManager.ensureCorrector(context)?.absolutePath.orEmpty()
+                    ModelManager.cleanupLegacyCorrector(context)
                     com.zeroconvert.ime.assist.AssistVocabulary.load(context)
                     com.zeroconvert.ime.assist.ReadingCheck.load(context)
-                    assistReady = nativeInitAssist(modelFile.absolutePath, correctorPath)
+                    assistReady = nativeInitAssist(modelFile.absolutePath, "")
                 } finally { modelEpoch.incrementAndGet() }
             }
         }
@@ -425,7 +423,6 @@ object ZenzNative {
                     assistReady = 0
                     isInitialized = false
                     isDictInitialized = false
-                    correctorCache.clear()
                     predictionCache.clear()
                     dictCache.clear()
                 }

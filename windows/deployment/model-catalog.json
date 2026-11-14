@@ -16,22 +16,6 @@
       "legacyFilename": "zerocon-nano-v4-q8_0.gguf",
       "sha256": "a89fe90fc29431279834773cdbe7c9afeba30722ee986327b300bf4b334c0e0f",
       "bytes": 29039232
-    },
-    {
-      "id": "corrector",
-      "name": "ZeroCon Model Corrector",
-      "filename": "zerocon-model-corrector.gguf",
-      "legacyFilename": "typo-corrector-xsmall-q4km.gguf",
-      "sha256": "dd87dbdc1a04cb4391f8429e6a1addc3c65d824996dd465e96803a5c1411fe2e",
-      "bytes": 18452384
-    },
-    {
-      "id": "keyboard-prior",
-      "name": "ZeroCon Keyboard Prior",
-      "filename": "zerocon-model-keyboard-prior.gguf",
-      "legacyFilename": "keyboard-prior-xsmall-20261027-q4km.gguf",
-      "sha256": "494f925dd9078fec88702a05d5516930aa6871be414e915575504be311b1986c",
-      "bytes": 18452288
     }
   ]
 }

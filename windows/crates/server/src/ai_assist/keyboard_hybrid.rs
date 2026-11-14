@@ -16,11 +16,18 @@ use std::{
 static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
 static STARTING: AtomicBool = AtomicBool::new(false);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkerSpec {
+    model: PathBuf,
+    runtime_dir: PathBuf,
+    gpu_layers: u32,
+}
+
 struct Worker {
     child: Child,
     input: ChildStdin,
     output: mpsc::Receiver<String>,
-    model: PathBuf,
+    spec: WorkerSpec,
 }
 
 impl Drop for Worker {
@@ -41,37 +48,117 @@ fn repo_root_from_manifest() -> Option<PathBuf> {
 }
 
 fn find_worker_executable(root: &Path) -> Option<PathBuf> {
-    let installed = root.join("llama_cpu/keyboard-prior.exe");
-    if installed.is_file() {
-        return Some(installed);
-    }
+    let mut candidates = vec![
+        root.join("keyboard-prior.exe"),
+        root.join("llama_cpu/keyboard-prior.exe"),
+    ];
     if let Some(repo) = repo_root_from_manifest() {
-        let trial = repo.join("ZeroConvertIME-windows/llama_cpu/keyboard-prior.exe");
-        if trial.is_file() {
-            return Some(trial);
+        candidates.push(repo.join("ZeroConvertIME-windows/keyboard-prior.exe"));
+        candidates.push(repo.join("ZeroConvertIME-windows/llama_cpu/keyboard-prior.exe"));
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn vulkan_loader_available() -> bool {
+    let in_path = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .any(|dir| dir.join("vulkan-1.dll").is_file());
+    if in_path {
+        return true;
+    }
+    std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .is_some_and(|sys| sys.join("System32/vulkan-1.dll").is_file())
+}
+
+fn resolve_runtime_preferences_from_str(settings_json: &str) -> (String, String, u32) {
+    let value = serde_json::from_str::<Value>(settings_json).ok();
+    let zenzai = value.as_ref().and_then(|v| v.get("zenzai"));
+    let model = zenzai
+        .and_then(|z| z.get("model"))
+        .and_then(Value::as_str)
+        .unwrap_or("nano_v4_iq4_emb8")
+        .to_owned();
+    let raw_backend = zenzai
+        .and_then(|z| z.get("backend"))
+        .and_then(Value::as_str)
+        .unwrap_or("vulkan");
+    let backend = if raw_backend.eq_ignore_ascii_case("vulkan")
+        || raw_backend.eq_ignore_ascii_case("cuda")
+    {
+        "vulkan".to_owned()
+    } else {
+        "cpu".to_owned()
+    };
+    let configured_layers = zenzai
+        .and_then(|z| z.get("gpu_layers"))
+        .and_then(Value::as_u64)
+        .map(|n| u32::try_from(n).unwrap_or(99))
+        .unwrap_or(99)
+        .min(99);
+    let gpu_layers = if backend == "vulkan" {
+        configured_layers
+    } else {
+        0
+    };
+    (model, backend, gpu_layers)
+}
+
+fn read_runtime_preferences() -> (String, String, u32) {
+    let settings_json = runtime::settings_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    resolve_runtime_preferences_from_str(&settings_json)
+}
+
+fn find_runtime_dir_and_layers(
+    root: &Path,
+    executable: &Path,
+    backend: &str,
+    gpu_layers: u32,
+) -> (PathBuf, u32) {
+    let exec_parent = executable.parent().unwrap_or(root);
+    // Legacy layout places keyboard-prior.exe inside `llama_cpu/`, where Windows
+    // forces static DLL imports from `executable.parent()` regardless of PATH.
+    if exec_parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("llama_"))
+    {
+        let layers = if exec_parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("llama_vulkan"))
+            && vulkan_loader_available()
+        {
+            gpu_layers
+        } else {
+            0
+        };
+        return (exec_parent.to_path_buf(), layers);
+    }
+
+    let install_root = if executable.starts_with(root) {
+        root
+    } else {
+        exec_parent
+    };
+    if backend.eq_ignore_ascii_case("vulkan") {
+        let vulkan_dir = install_root.join("llama_vulkan");
+        if vulkan_dir.join("llama.dll").is_file() && vulkan_loader_available() {
+            return (vulkan_dir, gpu_layers);
         }
     }
-    None
+    let cpu_dir = install_root.join("llama_cpu");
+    if cpu_dir.join("llama.dll").is_file() {
+        return (cpu_dir, 0);
+    }
+    (exec_parent.to_path_buf(), 0)
 }
 
-fn find_runtime_dir(_root: &Path, executable: &Path) -> PathBuf {
-    // The worker and its DLLs are one deployed ABI unit. Never combine a
-    // cached development EXE with DLLs found through the current directory/PATH.
-    executable.parent().unwrap_or(Path::new(".")).to_path_buf()
-}
-
-fn resolve_active_model(root: &Path) -> Option<PathBuf> {
-    let selected_id = runtime::settings_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            v.get("zenzai")
-                .and_then(|z| z.get("model"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "nano_v4_iq4_emb8".to_owned());
-    let filename = match selected_id.as_str() {
+fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
+    let filename = match selected_id {
         "nano_v4_q8" | "standard" | "standard_q4km" => "zerocon-nano-v4-q8_0.gguf",
         _ => "zerocon-nano-v4-iq4nl-emb8.gguf",
     };
@@ -79,7 +166,6 @@ fn resolve_active_model(root: &Path) -> Option<PathBuf> {
         root.join("models").join(filename),
         root.join("models/zerocon-nano-v4-iq4nl-emb8.gguf"),
         root.join("models/zerocon-nano-v4-q8_0.gguf"),
-        root.join("models/zerocon-model-keyboard-prior.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -87,10 +173,12 @@ fn resolve_active_model(root: &Path) -> Option<PathBuf> {
     }
     let repo_root = repo_root_from_manifest()?;
     for candidate in [
+        repo_root.join("artifacts/models/zerocon").join(filename),
         repo_root.join("artifacts/models").join(filename),
         repo_root
             .join("ZeroConvertIME-windows/models")
             .join(filename),
+        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4-iq4nl-emb8.gguf"),
         repo_root.join("artifacts/models/zerocon-nano-v4-iq4nl-emb8.gguf"),
     ] {
         if candidate.is_file() {
@@ -100,22 +188,41 @@ fn resolve_active_model(root: &Path) -> Option<PathBuf> {
     None
 }
 
+fn resolve_worker_spec(root: &Path, executable: &Path) -> Option<WorkerSpec> {
+    let (model_id, backend, configured_layers) = read_runtime_preferences();
+    let model = resolve_active_model(root, &model_id)?;
+    let (runtime_dir, gpu_layers) =
+        find_runtime_dir_and_layers(root, executable, &backend, configured_layers);
+    Some(WorkerSpec {
+        model,
+        runtime_dir,
+        gpu_layers,
+    })
+}
+
 impl Worker {
     fn start(root: &Path, dictionary: &Path) -> Option<Self> {
         let executable = find_worker_executable(root)?;
-        let model = resolve_active_model(root)?;
+        let spec = resolve_worker_spec(root, &executable)?;
         if !dictionary.is_file() {
             return None;
         }
-        let runtime_dir = find_runtime_dir(root, &executable);
         let existing_path = std::env::var("PATH").unwrap_or_default();
         let mut command = Command::new(&executable);
         command
             .arg("--assist")
-            .arg(&model)
+            .arg(&spec.model)
             .arg(dictionary)
-            .current_dir(&runtime_dir)
-            .env("PATH", format!("{};{existing_path}", runtime_dir.display()))
+            .current_dir(&spec.runtime_dir)
+            .env(
+                "PATH",
+                format!("{};{existing_path}", spec.runtime_dir.display()),
+            )
+            .env("AZOOKEY_LLAMA_BACKEND_DIR", &spec.runtime_dir)
+            .env(
+                "AZOOKEY_KEYBOARD_PRIOR_GPU_LAYERS",
+                spec.gpu_layers.to_string(),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -124,10 +231,10 @@ impl Worker {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        Self::from_child(command.spawn().ok()?, model)
+        Self::from_child(command.spawn().ok()?, spec)
     }
 
-    fn from_child(mut child: Child, model: PathBuf) -> Option<Self> {
+    fn from_child(mut child: Child, spec: WorkerSpec) -> Option<Self> {
         let input = child.stdin.take()?;
         let output = child.stdout.take()?;
         let (send, receive) = mpsc::sync_channel(2);
@@ -143,7 +250,7 @@ impl Worker {
             child,
             input,
             output: receive,
-            model,
+            spec,
         };
         worker
             .output
@@ -182,6 +289,18 @@ impl Worker {
     }
 }
 
+fn exe_root() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_owned))
+}
+
+fn worker_spec_stale(worker: &Worker, root: &Path) -> bool {
+    find_worker_executable(root)
+        .and_then(|executable| resolve_worker_spec(root, &executable))
+        .is_some_and(|spec| worker.spec != spec)
+}
+
 /// Initialization happens independently of input callbacks. Requests never wait
 /// on this lock: a cold/missing worker simply leaves the ordinary path available.
 pub fn prewarm() {
@@ -199,18 +318,12 @@ pub fn prewarm() {
         let Some(dictionary) = runtime::reverse_dictionary_path() else {
             return;
         };
-        let Some(root) = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(Path::to_owned))
-        else {
+        let Some(root) = exe_root() else {
             return;
         };
         if let Ok(mut slot) = WORKER.lock() {
-            let desired = resolve_active_model(&root);
-            if slot
-                .as_ref()
-                .is_none_or(|w| desired.as_ref().is_some_and(|m| &w.model != m))
-            {
+            if slot.as_ref().is_none_or(|w| worker_spec_stale(w, &root)) {
+                *slot = None;
                 *slot = Worker::start(&root, &dictionary);
             }
         }
@@ -313,13 +426,10 @@ pub fn repair_readings(
         hosted?
     } else if wait_for_worker {
         let mut slot = WORKER.lock().ok()?;
-        if slot.is_none() {
-            if let (Some(dictionary), Some(root)) = (
-                runtime::reverse_dictionary_path(),
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(Path::to_owned)),
-            ) {
+        let root = exe_root()?;
+        if slot.as_ref().is_none_or(|w| worker_spec_stale(w, &root)) {
+            if let Some(dictionary) = runtime::reverse_dictionary_path() {
+                *slot = None;
                 *slot = Worker::start(&root, &dictionary);
             }
         }
@@ -330,7 +440,10 @@ pub fn repair_readings(
         result?
     } else {
         let mut slot = WORKER.try_lock().ok()?;
-        if slot.is_none() {
+        let stale = slot
+            .as_ref()
+            .is_some_and(|w| exe_root().is_some_and(|root| worker_spec_stale(w, &root)));
+        if slot.is_none() || stale {
             drop(slot);
             prewarm();
             return None;
@@ -460,7 +573,7 @@ mod tests {
 mod deployment_tests {
     use super::*;
     #[test]
-    fn deployed_worker_and_runtime_stay_in_the_same_directory() {
+    fn deployed_worker_follows_backend_and_keeps_legacy_fallback() {
         let root = std::env::temp_dir().join(format!(
             "worker-deployment-{}-{}",
             std::process::id(),
@@ -470,14 +583,45 @@ mod deployment_tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&root).unwrap();
-        let runtime = root.join("llama_cpu");
-        std::fs::create_dir(&runtime).unwrap();
-        let executable = runtime.join("keyboard-prior.exe");
-        std::fs::write(&executable, b"test fixture").unwrap();
-        assert_eq!(find_worker_executable(&root), Some(executable.clone()));
-        assert_eq!(find_runtime_dir(&root, &executable), runtime);
-        std::fs::remove_file(executable).unwrap();
-        std::fs::remove_dir(runtime).unwrap();
-        std::fs::remove_dir(root).unwrap();
+
+        let legacy_runtime = root.join("llama_cpu");
+        std::fs::create_dir(&legacy_runtime).unwrap();
+        let legacy_executable = legacy_runtime.join("keyboard-prior.exe");
+        std::fs::write(&legacy_executable, b"test fixture").unwrap();
+        assert_eq!(find_worker_executable(&root), Some(legacy_executable.clone()));
+        assert_eq!(
+            find_runtime_dir_and_layers(&root, &legacy_executable, "vulkan", 99),
+            (legacy_runtime.clone(), 0)
+        );
+
+        let root_executable = root.join("keyboard-prior.exe");
+        std::fs::write(&root_executable, b"test fixture").unwrap();
+        std::fs::write(legacy_runtime.join("llama.dll"), b"cpu dll").unwrap();
+        let vulkan_runtime = root.join("llama_vulkan");
+        std::fs::create_dir(&vulkan_runtime).unwrap();
+        std::fs::write(vulkan_runtime.join("llama.dll"), b"vulkan dll").unwrap();
+
+        assert_eq!(find_worker_executable(&root), Some(root_executable.clone()));
+        assert_eq!(
+            find_runtime_dir_and_layers(&root, &root_executable, "cpu", 99),
+            (legacy_runtime.clone(), 0)
+        );
+        let expected_vulkan = if vulkan_loader_available() {
+            (vulkan_runtime.clone(), 99)
+        } else {
+            (legacy_runtime.clone(), 0)
+        };
+        assert_eq!(
+            find_runtime_dir_and_layers(&root, &root_executable, "vulkan", 99),
+            expected_vulkan
+        );
+
+        let (_, parsed_backend, parsed_layers) = resolve_runtime_preferences_from_str(
+            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_q8"}}"#,
+        );
+        assert_eq!(parsed_backend, "vulkan");
+        assert_eq!(parsed_layers, 16);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

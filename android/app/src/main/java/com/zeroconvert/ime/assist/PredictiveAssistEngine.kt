@@ -6,10 +6,10 @@ import com.zeroconvert.ime.ZenzNative
 class ModelPredictor(private val inference: AssistInference, private val restore: (String) -> String? = ReadingCheck::readingForSurface) {
     private fun useful(text: String) = isUsefulPredictionText(text)
 
-    fun suggest(context: String, reading: String, surface: String): AiAssistResult? {
+    fun suggest(context: String, reading: String, surface: String, baselineReading: String = ""): AiAssistResult? {
         if (reading.hasPendingRomaji()) return null
         if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
-            return com.zeroconvert.ime.engine.WindowsEngine.assist("prediction", context, reading, surface, inference)
+            return com.zeroconvert.ime.engine.WindowsEngine.assist("prediction", context, reading, surface, inference, baselineReading)
         }
         if (surface.codePointSize() < 2 || reading.codePointSize() !in 1..512 ||
             context.any { it in '\uEE00'..'\uEE0F' } || (reading + surface).hasUnsafeTokens()) return null

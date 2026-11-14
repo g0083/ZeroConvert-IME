@@ -1,0 +1,31 @@
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -356,6 +356,18 @@
+     cparams.fused_dsv4_hc_comb = true;
+     cparams.fused_dsv4_hc_post = true;
+     cparams.auto_fhc           = true;
++
++    // ZeroCon GPT-2 models never use GDN, Lightning Indexer, or DeepSeek V4 HC ops;
++    // skip probing those unused fused graphs during context reservation.
++    if (model.arch == LLM_ARCH_GPT2) {
++        cparams.fused_gdn_ar       = false;
++        cparams.fused_gdn_ch       = false;
++        cparams.fused_lid          = false;
++        cparams.fused_dsv4_hc_pre  = false;
++        cparams.fused_dsv4_hc_comb = false;
++        cparams.fused_dsv4_hc_post = false;
++        cparams.auto_fhc           = false;
++    }
+ 
+     // only the indexer models build this mask, skip the probe for the others
+     cparams.fused_top_k_mask = true;
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -2527,6 +2527,7 @@
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_STARCODER;
+             } else if (
+                     tokenizer_pre == "gpt-2"   ||
++                    tokenizer_pre == "gpt2-small-japanese-char" ||
+                     tokenizer_pre == "phi-2"   ||
+                     tokenizer_pre == "jina-es" ||
+                     tokenizer_pre == "jina-de" ||

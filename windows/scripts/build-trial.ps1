@@ -81,7 +81,7 @@ while ($true) {
     $swiftRuntime = $null
     if ('keyboard' -in $plan) {
         $keyboardWorker = & (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1')
-        Add-TrialOutput 'keyboard' $keyboardWorker 'llama_cpu/keyboard-prior.exe'
+        Add-TrialOutput 'keyboard' $keyboardWorker 'keyboard-prior.exe'
     }
     if ('swift' -in $plan) {
         if ($env:SDKROOT -notmatch '^(.*)[\\/]Platforms[\\/]([^\\/]+)[\\/]Windows\.platform[\\/]') { throw 'SDKROOT must identify the Swift Windows SDK.' }

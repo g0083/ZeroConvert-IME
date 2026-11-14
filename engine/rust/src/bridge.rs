@@ -80,6 +80,8 @@ struct Request {
     baseline: String,
     #[serde(default)]
     context: String,
+    #[serde(default, rename = "baselineReading")]
+    baseline_reading: String,
 }
 
 pub fn dispatch(value: &str) -> Result<Value, String> {
@@ -166,6 +168,7 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
     if request.input.chars().count() > 512
         || request.baseline.chars().count() > 2048
         || request.context.chars().count() > 4096
+        || request.baseline_reading.chars().count() > 512
     {
         return Err("request exceeds engine limits".into());
     }
@@ -176,8 +179,15 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         corrector_port: runtime::PREDICTION_SERVER_PORT,
         ..AiAssistConfig::default()
     };
+    let Some(assist_reading) = crate::assist_policy::assist_reading(
+        &request.input,
+        &request.baseline_reading,
+        request.op == "correction",
+    ) else {
+        return Ok(Value::Null);
+    };
     match request.op.as_str() {
-        "correction" => Ok(ai_assist::corrector::suggest_composition(&request.context, &request.input, &request.baseline, &config)
+        "correction" => Ok(ai_assist::corrector::suggest_composition(&request.context, assist_reading, &request.baseline, &config)
             .filter(|s| s.surface != request.baseline && s.surface != request.input)
             .map(|suggestion| {
                 let automatic = ai_assist::corrector::can_auto_apply_composition(&request.input, &request.baseline, &suggestion.surface);
@@ -185,7 +195,7 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
                     "tokenSurface": suggestion.token_surface, "autoApply": automatic,
                     "relevance": if automatic { 100 } else if suggestion.learned { 70 } else { 30 }})
             }).unwrap_or(Value::Null)),
-        "prediction" => Ok(ai_assist::prediction::suggest(&request.context, &request.input, &request.baseline, &config)
+        "prediction" => Ok(ai_assist::prediction::suggest(&request.context, assist_reading, &request.baseline, &config)
             .map(|s| json!({"text": format!("{}{}", request.baseline, s.continuation),
                 "continuation": s.continuation, "relevance": s.relevance})).unwrap_or(Value::Null)),
         "macros" => Ok(json!(ai_assist::current_expansions(&request.input).iter().map(|m| &m.text).collect::<Vec<_>>())),
@@ -250,6 +260,28 @@ pub unsafe extern "C" fn zerocon_engine_free(value: *mut c_char) {
     }
 }
 
+/// # Safety
+/// `request` is a NUL-terminated UTF-8 string, valid until this call returns.
+/// Free the returned string once with `zerocon_engine_free`.
+#[no_mangle]
+pub unsafe extern "C" fn zerocon_assist_policy(request: *const c_char) -> *mut c_char {
+    let result = std::panic::catch_unwind(|| {
+        if request.is_null() {
+            return Err("null policy request".into());
+        }
+        let request = CStr::from_ptr(request)
+            .to_str()
+            .map_err(|error| error.to_string())?;
+        crate::assist_policy::dispatch(request)
+    });
+    let value = match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => json!({"error": error}),
+        Err(_) => json!({"error": "assist policy panic"}),
+    };
+    CString::new(value.to_string()).unwrap().into_raw()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +327,44 @@ mod tests {
         )).unwrap();
         assert_eq!(result["continuation"], "でした。");
         assert!(replacement.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn prediction_uses_the_corrected_reading_issued_with_the_normal_candidate() {
+        let _guard = ai_assist::prediction::tests::MODEL_TEST_LOCK
+            .lock()
+            .unwrap();
+        ai_assist::prediction::clear_cache();
+        struct Capturing(Arc<Mutex<Vec<Value>>>);
+        impl runtime::CompletionBackend for Capturing {
+            fn read_learning(&self) -> bool {
+                false
+            }
+            fn complete(&self, _: u16, _: &str, body: &Value, _: u64) -> Option<Value> {
+                let mut calls = self.0.lock().unwrap();
+                calls.push(body.clone());
+                Some(if calls.len() == 1 {
+                    json!({"content": "デス。"})
+                } else {
+                    json!({"content": "新しい共通試験です。"})
+                })
+            }
+        }
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let result = runtime::with_backend(Box::new(Capturing(calls.clone())), || dispatch(
+            r#"{"op":"prediction","input":"あたらしいきょうつうしけな","baselineReading":"あたらしいきょうつうしけん","baseline":"新しい共通試験"}"#
+        )).unwrap();
+        assert_eq!(result["continuation"], "です。");
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .ends_with("アタラシイキョウツウシケン"));
+        assert!(calls[1]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("アタラシイキョウツウシケンデス。"));
     }
 
     #[test]

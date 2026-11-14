@@ -10,11 +10,12 @@ use shared::proto::{
     AdjustClauseBoundaryRequest, AdjustClauseBoundaryResponse, AdvanceClauseRequest,
     AdvanceClauseResponse, AppendTextRequest, AppendTextResponse, ClearTextRequest,
     ClearTextResponse, ComposingText, CompositionOperationKind, CompositionSnapshotOperation,
-    MoveCursorRequest, MoveCursorResponse, PerformanceLogRequest, PerformanceLogResponse,
-    PrepareFutureClausesRequest, PrepareFutureClausesResponse, PreparedClauseAdvance,
-    RemoveTextRequest, RemoveTextResponse, ReplaceCompositionRequest, ReplaceCompositionResponse,
-    ShrinkTextRequest, ShrinkTextResponse, StartReconversionRequest, StartReconversionResponse,
-    Suggestion, UpdateCompositionSnapshotRequest, UpdateCompositionSnapshotResponse,
+    DeleteForwardTextRequest, DeleteForwardTextResponse, MoveCursorRequest, MoveCursorResponse,
+    PerformanceLogRequest, PerformanceLogResponse, PrepareFutureClausesRequest,
+    PrepareFutureClausesResponse, PreparedClauseAdvance, RemoveTextRequest, RemoveTextResponse,
+    ReplaceCompositionRequest, ReplaceCompositionResponse, ShrinkTextRequest, ShrinkTextResponse,
+    StartReconversionRequest, StartReconversionResponse, Suggestion,
+    UpdateCompositionSnapshotRequest, UpdateCompositionSnapshotResponse,
 };
 use shared::{server_pipe_path, AppConfig};
 
@@ -39,6 +40,7 @@ const USE_ZENZAI: bool = true;
 static ASSIST_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 static JEV_CONVERSION_ENABLED: AtomicBool = AtomicBool::new(false);
 static AI_ASSIST_ENABLED: AtomicBool = AtomicBool::new(false);
+static TYPO_CORRECTION_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRANSLATION_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRANSLATION_TARGET: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 static TRANSLATION_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -70,14 +72,17 @@ fn reload_ai_assist_from_settings(config: &AppConfig) {
     ai_assist::prediction::clear_cache();
     let enabled = config.general.experimental_ai_assist;
     AI_ASSIST_ENABLED.store(enabled, Ordering::Relaxed);
+    let correction_enabled = config.general.experimental_typo_correction;
+    TYPO_CORRECTION_ENABLED.store(correction_enabled, Ordering::Relaxed);
     let is_lm_studio = config.general.experimental_ai_engine == "lm_studio";
     AI_ENGINE_IS_LM_STUDIO.store(is_lm_studio, Ordering::Relaxed);
-    if enabled && !is_lm_studio {
+    if correction_enabled && !is_lm_studio {
         ai_assist::keyboard_hybrid::prewarm();
     }
     eprintln!(
-        "[AI Assist] config loaded: enabled={}, prediction=zerocon, corrector_engine={}",
+        "[AI Assist] config loaded: prediction={}, correction={}, corrector_engine={}",
         enabled,
+        correction_enabled,
         if is_lm_studio {
             "lm_studio"
         } else {
@@ -93,7 +98,8 @@ fn reload_ai_assist_from_settings(config: &AppConfig) {
 fn current_assist_config() -> AiAssistConfig {
     let is_lm_studio = AI_ENGINE_IS_LM_STUDIO.load(Ordering::Relaxed);
     AiAssistConfig {
-        enabled: AI_ASSIST_ENABLED.load(Ordering::Relaxed),
+        enabled: AI_ASSIST_ENABLED.load(Ordering::Relaxed)
+            || TYPO_CORRECTION_ENABLED.load(Ordering::Relaxed),
         engine: if is_lm_studio {
             "lm_studio".to_string()
         } else {
@@ -131,6 +137,7 @@ fn append_local_macros(
             let additions: Vec<Suggestion> = inserted
                 .into_iter()
                 .map(|text| Suggestion {
+                    prediction_reading: Default::default(),
                     text,
                     subtext: String::new(),
                     corresponding_count: whole_composition_count,
@@ -173,15 +180,24 @@ fn append_ai_assist_candidates(
         .then(|| ai_assist::keyboard_hybrid::suggest(context, hiragana_text, composing_raw, config))
         .flatten();
     let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
+    let allow_channel_repair = hybrid.is_none();
     let targets = [hiragana_text];
     let mut found_typo = hybrid.flatten();
     for target in targets
         .into_iter()
         .filter(|_| kind != 2 && !hybrid_proposal)
     {
-        if let Some(suggestion) =
+        let suggestion = if allow_channel_repair {
             ai_assist::corrector::suggest_composition(context, target, &first_surface, config)
-        {
+        } else {
+            ai_assist::corrector::suggest_composition_heuristic(
+                context,
+                target,
+                &first_surface,
+                config,
+            )
+        };
+        if let Some(suggestion) = suggestion {
             found_typo = Some(suggestion);
             break;
         }
@@ -197,6 +213,7 @@ fn append_ai_assist_candidates(
             };
             // Preserve normal candidate order. The client decides whether to propose or apply.
             final_suggestions.push(Suggestion {
+                prediction_reading: Default::default(),
                 text: suggestion.surface.clone(),
                 subtext,
                 corresponding_count: whole_composition_count,
@@ -236,6 +253,7 @@ fn append_ai_assist_candidates(
                 continuation = prediction.continuation;
                 relevance = relevance.max(prediction.relevance);
                 final_suggestions.push(Suggestion {
+                    prediction_reading: Default::default(),
                     text,
                     subtext: continuation.clone(),
                     corresponding_count: whole_composition_count,
@@ -619,6 +637,7 @@ struct FFICandidate {
     hiragana: *mut c_char,
     corresponding_count: c_int,
     candidate_id: u64,
+    prediction_reading: *mut c_char,
 }
 
 unsafe extern "C" {
@@ -628,6 +647,7 @@ unsafe extern "C" {
     fn AppendText(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
     fn AppendTextDirect(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
     fn RemoveText(cursorPtr: *mut c_int) -> *mut c_char;
+    fn DeleteForwardText(cursorPtr: *mut c_int) -> *mut c_char;
     fn MoveCursor(offset: c_int, cursorPtr: *mut c_int) -> *mut c_char;
     fn GetCursorPosition() -> c_int;
     fn GetRawInput() -> *mut c_char;
@@ -655,6 +675,7 @@ unsafe extern "C" {
         requiredInputCount: c_int,
         lengthPtr: *mut c_int,
     ) -> *mut *mut FFICandidate;
+    fn GetComposedTextForCursorRange(lengthPtr: *mut c_int) -> *mut *mut FFICandidate;
     fn FreeCString(ptr: *mut c_char);
     fn FreeCandidateList(ptr: *mut *mut FFICandidate, length: c_int);
     fn CommitLearningCandidate(candidateId: u64, commitKind: c_int) -> bool;
@@ -1390,6 +1411,7 @@ fn merge_reconversion_suggestions(
     let mut seen_texts = HashSet::with_capacity(MAX_RECONVERSION_SUGGESTIONS);
     seen_texts.insert(surface.to_string());
     merged.push(Suggestion {
+        prediction_reading: Default::default(),
         text: surface.to_string(),
         subtext: String::new(),
         corresponding_count,
@@ -1524,6 +1546,7 @@ fn hiragana_boundary_fallback(
     Some(ComposedText {
         hiragana: Some(hiragana.to_string()),
         suggestions: vec![Suggestion {
+            prediction_reading: Default::default(),
             text: prefix,
             subtext: suffix,
             corresponding_count,
@@ -1584,6 +1607,16 @@ fn remove_text() -> Result<RawComposingText, String> {
         let mut cursor: c_int = 0;
         let result = RemoveText(&mut cursor);
         let text = ffi_text_result("RemoveText", result)?;
+
+        Ok(RawComposingText { text, cursor })
+    }
+}
+
+fn delete_forward_text() -> Result<RawComposingText, String> {
+    unsafe {
+        let mut cursor: c_int = 0;
+        let result = DeleteForwardText(&mut cursor);
+        let text = ffi_text_result("DeleteForwardText", result)?;
 
         Ok(RawComposingText { text, cursor })
     }
@@ -1702,56 +1735,93 @@ fn update_active_composition_state(text: &str) {
     HAS_ACTIVE_COMPOSITION.store(!text.is_empty(), Ordering::Relaxed);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComposedTextQueryMode {
+    Full,
+    CursorPrefix(Option<i32>),
+    CursorRange,
+    Reconversion,
+}
+
+fn composed_text_mode_for_cursor(text: &str, cursor: i32) -> Option<ComposedTextQueryMode> {
+    if text.is_empty() {
+        return None;
+    }
+    let total_chars = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
+    if cursor >= total_chars {
+        Some(ComposedTextQueryMode::Full)
+    } else {
+        Some(ComposedTextQueryMode::CursorRange)
+    }
+}
+
 fn get_composed_text(
     use_cursor_prefix: bool,
     required_cursor_prefix_input_count: Option<i32>,
     request_id: u64,
 ) -> Result<ComposedText, String> {
-    get_composed_text_from_ffi(
-        use_cursor_prefix,
-        required_cursor_prefix_input_count,
-        false,
-        request_id,
-    )
+    let mode = if use_cursor_prefix {
+        ComposedTextQueryMode::CursorPrefix(required_cursor_prefix_input_count)
+    } else {
+        ComposedTextQueryMode::Full
+    };
+    get_composed_text_from_mode(mode, request_id)
 }
 
 fn get_reconversion_composed_text(request_id: u64) -> Result<ComposedText, String> {
-    get_composed_text_from_ffi(false, None, true, request_id)
+    get_composed_text_from_mode(ComposedTextQueryMode::Reconversion, request_id)
 }
 
-fn get_composed_text_from_ffi(
-    use_cursor_prefix: bool,
-    required_cursor_prefix_input_count: Option<i32>,
-    reconversion: bool,
+fn compose_after_cursor_aware_mutation(
+    composing_text: &mut RawComposingText,
+    request_id: u64,
+) -> Result<(ComposedText, String, bool), String> {
+    let cursor = get_cursor_position();
+    composing_text.cursor = cursor;
+    let total_chars = i32::try_from(composing_text.text.chars().count()).unwrap_or(i32::MAX);
+    let is_at_end = cursor >= total_chars;
+    let raw_input = if composing_text.text.is_empty() {
+        String::new()
+    } else {
+        get_raw_input()?
+    };
+    let composed_text = match composed_text_mode_for_cursor(&composing_text.text, cursor) {
+        None => ComposedText {
+            hiragana: Some(String::new()),
+            suggestions: Vec::new(),
+        },
+        Some(mode) => get_composed_text_from_mode(mode, request_id)?,
+    };
+    Ok((composed_text, raw_input, is_at_end))
+}
+
+fn get_composed_text_from_mode(
+    mode: ComposedTextQueryMode,
     request_id: u64,
 ) -> Result<ComposedText, String> {
     let mut length: c_int = 0;
-    let operation = if reconversion {
-        "get_composed_text_for_reconversion"
-    } else if use_cursor_prefix {
-        "get_composed_text_for_cursor_prefix"
-    } else {
-        "get_composed_text"
+    let operation = match mode {
+        ComposedTextQueryMode::Reconversion => "get_composed_text_for_reconversion",
+        ComposedTextQueryMode::CursorPrefix(_) => "get_composed_text_for_cursor_prefix",
+        ComposedTextQueryMode::CursorRange => "get_composed_text_for_cursor_range",
+        ComposedTextQueryMode::Full => "get_composed_text",
     };
     let ffi_call_start = Instant::now();
     let result = unsafe {
-        if reconversion {
-            GetComposedTextForReconversion(&mut length)
-        } else if use_cursor_prefix {
-            GetComposedTextForCursorPrefix(
-                required_cursor_prefix_input_count.unwrap_or(-1),
-                &mut length,
-            )
-        } else {
-            GetComposedText(&mut length)
+        match mode {
+            ComposedTextQueryMode::Reconversion => GetComposedTextForReconversion(&mut length),
+            ComposedTextQueryMode::CursorPrefix(required_input_count) => {
+                GetComposedTextForCursorPrefix(required_input_count.unwrap_or(-1), &mut length)
+            }
+            ComposedTextQueryMode::CursorRange => GetComposedTextForCursorRange(&mut length),
+            ComposedTextQueryMode::Full => GetComposedText(&mut length),
         }
     };
-    let call_name = if reconversion {
-        "GetComposedTextForReconversion"
-    } else if use_cursor_prefix {
-        "GetComposedTextForCursorPrefix"
-    } else {
-        "GetComposedText"
+    let call_name = match mode {
+        ComposedTextQueryMode::Reconversion => "GetComposedTextForReconversion",
+        ComposedTextQueryMode::CursorPrefix(_) => "GetComposedTextForCursorPrefix",
+        ComposedTextQueryMode::CursorRange => "GetComposedTextForCursorRange",
+        ComposedTextQueryMode::Full => "GetComposedText",
     };
     let candidates = unsafe { OwnedFfiCandidates::from_raw(call_name, result, length)? };
     let length = candidates.len();
@@ -1760,7 +1830,10 @@ fn get_composed_text_from_ffi(
         operation,
         "ffi_call",
         elapsed_ms(ffi_call_start),
-        "candidate_count={length};use_cursor_prefix={use_cursor_prefix};reconversion={reconversion}"
+        "candidate_count={length};use_cursor_prefix={};use_cursor_range={};reconversion={}",
+        matches!(mode, ComposedTextQueryMode::CursorPrefix(_)),
+        matches!(mode, ComposedTextQueryMode::CursorRange),
+        matches!(mode, ComposedTextQueryMode::Reconversion)
     );
 
     let mut suggestions = Vec::with_capacity(length);
@@ -1832,6 +1905,13 @@ fn get_composed_text_from_ffi(
             subtext,
             corresponding_count,
             candidate_id: candidate.candidate_id,
+            prediction_reading: if candidate.prediction_reading.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(candidate.prediction_reading) }
+                    .to_string_lossy()
+                    .into_owned()
+            },
         };
 
         suggestions.push(suggestion);
@@ -1853,7 +1933,7 @@ fn get_composed_text_from_ffi(
         suggestions.len()
     );
     candidates.free_with_performance(request_id, operation);
-    if !use_cursor_prefix && !reconversion {
+    if matches!(mode, ComposedTextQueryMode::Full) {
         promote_full_composition_top_candidate(&mut suggestions, hiragana.as_deref());
     }
 
@@ -2187,6 +2267,7 @@ impl AzookeyService for MyAzookeyService {
                     suggestions: text
                         .into_iter()
                         .map(|text| Suggestion {
+                            prediction_reading: Default::default(),
                             text,
                             subtext: String::new(),
                             corresponding_count: request.input_count,
@@ -2205,6 +2286,7 @@ impl AzookeyService for MyAzookeyService {
             || !(2..=512).contains(&request.reading.chars().count())
             || request.raw_input.chars().count() > 512
             || request.baseline.chars().count() > 512
+            || request.baseline_reading.chars().count() > 512
             || request.input_count <= 0
         {
             return Ok(Response::new(
@@ -2215,7 +2297,34 @@ impl AzookeyService for MyAzookeyService {
         if request.kind > 2 {
             return Err(Status::invalid_argument("unknown assistance kind"));
         }
-        let slots = if request.kind == 2 {
+        let plan = shared::assist_policy::request_plan(
+            request.kind != 2 && TYPO_CORRECTION_ENABLED.load(Ordering::Relaxed),
+            request.kind != 1 && AI_ASSIST_ENABLED.load(Ordering::Relaxed),
+            false,
+            &request.reading,
+            &request.baseline_reading,
+        );
+        let assist_kind = match (plan.correction, plan.prediction) {
+            (true, true) => 0,
+            (true, false) => 1,
+            (false, true) => 2,
+            (false, false) => {
+                return Ok(Response::new(
+                    shared::proto::GetAssistCandidatesResponse::default(),
+                ));
+            }
+        };
+        let Some(assist_reading) = shared::assist_policy::assist_reading(
+            &request.reading,
+            &request.baseline_reading,
+            assist_kind == 1,
+        )
+        .map(str::to_owned) else {
+            return Ok(Response::new(
+                shared::proto::GetAssistCandidatesResponse::default(),
+            ));
+        };
+        let slots = if assist_kind == 2 {
             &PREDICTION_REQUEST_SLOTS
         } else {
             &ASSIST_REQUEST_SLOTS
@@ -2229,6 +2338,7 @@ impl AzookeyService for MyAzookeyService {
         let response = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut suggestions = vec![Suggestion {
+                prediction_reading: Default::default(),
                 text: request.baseline.clone(),
                 subtext: String::new(),
                 corresponding_count: request.input_count,
@@ -2236,11 +2346,11 @@ impl AzookeyService for MyAzookeyService {
             }];
             let (relevance, continuation) = append_ai_assist_candidates(
                 &context,
-                &request.reading,
+                &assist_reading,
                 &request.raw_input,
                 &config,
                 &mut suggestions,
-                request.kind,
+                assist_kind,
             );
             suggestions.remove(0);
             let auto_apply = relevance == 100
@@ -2324,6 +2434,8 @@ impl AzookeyService for MyAzookeyService {
             return Ok(Response::new(AppendTextResponse {
                 composing_text: Some(ComposingText::default()),
                 server_session_id: server_session_id(),
+                raw_input: None,
+                cursor: None,
             }));
         }
         let mut mutation_guard = self.mutation_lock.lock().await;
@@ -2336,7 +2448,7 @@ impl AzookeyService for MyAzookeyService {
         let conversion_continuation_surface = request.conversion_continuation_surface;
         let input_style = request.input_style;
         let input = request.text_to_append;
-        let (composing_text, composed_text) = run_ffi(move || {
+        let (composing_text, composed_text, raw_input, is_at_end) = run_ffi(move || {
             set_request_id(request_id);
             let input_len = input.chars().count();
             match (
@@ -2353,7 +2465,7 @@ impl AzookeyService for MyAzookeyService {
                 _ => clear_conversion_continuation(),
             }
             let append_start = Instant::now();
-            let composing_text = if input_style == INPUT_STYLE_DIRECT {
+            let mut composing_text = if input_style == INPUT_STYLE_DIRECT {
                 add_text_direct(&input).map_err(|error| status_from_error("append_text", error))?
             } else {
                 add_text(&input).map_err(|error| status_from_error("append_text", error))?
@@ -2366,8 +2478,12 @@ impl AzookeyService for MyAzookeyService {
                 "input_len={input_len};input_style={input_style}"
             );
             let get_composed_start = Instant::now();
-            let composed_text = get_composed_text(false, None, request_id)
-                .map_err(|error| status_from_error("append_text", error))?;
+            let (composed_text, raw_input, is_at_end) =
+                compose_after_cursor_aware_mutation(&mut composing_text, request_id)
+                    .map_err(|error| status_from_error("append_text", error))?;
+            if !is_at_end || composing_text.text.is_empty() {
+                clear_conversion_continuation();
+            }
             performance_event_lazy!(
                 request_id,
                 "append_text",
@@ -2383,7 +2499,7 @@ impl AzookeyService for MyAzookeyService {
                     .count()
             );
             update_active_composition_state(&composing_text.text);
-            Ok::<_, Status>((composing_text, composed_text))
+            Ok::<_, Status>((composing_text, composed_text, raw_input, is_at_end))
         })
         .await??;
         performance_event_lazy!(
@@ -2398,19 +2514,21 @@ impl AzookeyService for MyAzookeyService {
         );
 
         let mut final_suggestions = composed_text.suggestions;
-        let full_count = final_suggestions
-            .iter()
-            .map(|s| s.corresponding_count)
-            .max()
-            .unwrap_or(0);
-        append_local_macros(
-            composed_text
-                .hiragana
-                .as_deref()
-                .unwrap_or(&composing_text.text),
-            full_count,
-            &mut final_suggestions,
-        );
+        if is_at_end && !composing_text.text.is_empty() {
+            let full_count = final_suggestions
+                .iter()
+                .map(|s| s.corresponding_count)
+                .max()
+                .unwrap_or(0);
+            append_local_macros(
+                composed_text
+                    .hiragana
+                    .as_deref()
+                    .unwrap_or(&composing_text.text),
+                full_count,
+                &mut final_suggestions,
+            );
+        }
         let hiragana_text = composed_text
             .hiragana
             .unwrap_or_else(|| composing_text.text.clone());
@@ -2421,6 +2539,8 @@ impl AzookeyService for MyAzookeyService {
                 suggestions: final_suggestions,
             }),
             server_session_id: server_session_id(),
+            raw_input: Some(raw_input),
+            cursor: Some(composing_text.cursor),
         }))
     }
 
@@ -2437,7 +2557,7 @@ impl AzookeyService for MyAzookeyService {
         let operations = request.operations;
         let operation_count = operations.len();
 
-        let (composing_text, composed_text) = run_ffi(move || {
+        let (composing_text, composed_text, raw_input, is_at_end) = run_ffi(move || {
             set_request_id(request_id);
             // This is an absolute-state operation: clear the old converter state and
             // replay the complete client-observed mutation log. It is safe to repeat after a
@@ -2464,6 +2584,10 @@ impl AzookeyService for MyAzookeyService {
                         composing_text = remove_text()
                             .map_err(|error| status_from_error("replace_composition", error))?;
                     }
+                    CompositionOperationKind::DeleteForward => {
+                        composing_text = delete_forward_text()
+                            .map_err(|error| status_from_error("replace_composition", error))?;
+                    }
                     CompositionOperationKind::MoveCursor => {
                         composing_text = move_cursor(operation.cursor_offset)
                             .map_err(|error| status_from_error("replace_composition", error))?;
@@ -2471,17 +2595,11 @@ impl AzookeyService for MyAzookeyService {
                 }
             }
 
-            let composed_text = if composing_text.text.is_empty() {
-                ComposedText {
-                    hiragana: Some(String::new()),
-                    suggestions: Vec::new(),
-                }
-            } else {
-                get_composed_text(false, None, request_id)
-                    .map_err(|error| status_from_error("replace_composition", error))?
-            };
+            let (composed_text, raw_input, is_at_end) =
+                compose_after_cursor_aware_mutation(&mut composing_text, request_id)
+                    .map_err(|error| status_from_error("replace_composition", error))?;
             update_active_composition_state(&composing_text.text);
-            Ok::<_, Status>((composing_text, composed_text))
+            Ok::<_, Status>((composing_text, composed_text, raw_input, is_at_end))
         })
         .await??;
         performance_event_lazy!(
@@ -2496,19 +2614,21 @@ impl AzookeyService for MyAzookeyService {
         );
 
         let mut final_suggestions = composed_text.suggestions;
-        let full_count = final_suggestions
-            .iter()
-            .map(|s| s.corresponding_count)
-            .max()
-            .unwrap_or(0);
-        append_local_macros(
-            composed_text
-                .hiragana
-                .as_deref()
-                .unwrap_or(&composing_text.text),
-            full_count,
-            &mut final_suggestions,
-        );
+        if is_at_end && !composing_text.text.is_empty() {
+            let full_count = final_suggestions
+                .iter()
+                .map(|s| s.corresponding_count)
+                .max()
+                .unwrap_or(0);
+            append_local_macros(
+                composed_text
+                    .hiragana
+                    .as_deref()
+                    .unwrap_or(&composing_text.text),
+                full_count,
+                &mut final_suggestions,
+            );
+        }
         let hiragana_text = composed_text
             .hiragana
             .unwrap_or_else(|| composing_text.text.clone());
@@ -2519,6 +2639,8 @@ impl AzookeyService for MyAzookeyService {
                 suggestions: final_suggestions,
             }),
             server_session_id: server_session_id(),
+            raw_input: Some(raw_input),
+            cursor: Some(composing_text.cursor),
         }))
     }
 
@@ -2673,10 +2795,8 @@ impl AzookeyService for MyAzookeyService {
         let (composing_text, raw_input, composed_text) = run_ffi(move || {
             set_request_id(request_id);
             let remove_start = Instant::now();
-            let composing_text =
+            let mut composing_text =
                 remove_text().map_err(|error| status_from_error("remove_text", error))?;
-            let raw_input =
-                get_raw_input().map_err(|error| status_from_error("remove_text", error))?;
             if composing_text.text.is_empty() {
                 clear_conversion_continuation();
             }
@@ -2689,8 +2809,9 @@ impl AzookeyService for MyAzookeyService {
                 composing_text.text.chars().count()
             );
             let get_composed_start = Instant::now();
-            let composed_text = get_composed_text(false, None, request_id)
-                .map_err(|error| status_from_error("remove_text", error))?;
+            let (composed_text, raw_input, _) =
+                compose_after_cursor_aware_mutation(&mut composing_text, request_id)
+                    .map_err(|error| status_from_error("remove_text", error))?;
             performance_event_lazy!(
                 request_id,
                 "remove_text",
@@ -2721,6 +2842,72 @@ impl AzookeyService for MyAzookeyService {
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
+            cursor: Some(composing_text.cursor),
+        }))
+    }
+
+    async fn delete_forward_text(
+        &self,
+        request: Request<DeleteForwardTextRequest>,
+    ) -> Result<Response<DeleteForwardTextResponse>, Status> {
+        let mut mutation_guard = self.mutation_lock.lock().await;
+        authorize_composition(&mut mutation_guard, &request, true).await?;
+        let request = request.into_inner();
+        let _request_guard = ServerRequestGuard::begin(true);
+        let request_id = request_id_or_next(request.request_id);
+        let handler_start = Instant::now();
+
+        let (composing_text, raw_input, composed_text) = run_ffi(move || {
+            set_request_id(request_id);
+            let delete_start = Instant::now();
+            let mut composing_text = delete_forward_text()
+                .map_err(|error| status_from_error("delete_forward_text", error))?;
+            if composing_text.text.is_empty() {
+                clear_conversion_continuation();
+            }
+            performance_event_lazy!(
+                request_id,
+                "delete_forward_text",
+                "swift_delete_forward_text",
+                elapsed_ms(delete_start),
+                "hiragana_len={}",
+                composing_text.text.chars().count()
+            );
+            let get_composed_start = Instant::now();
+            let (composed_text, raw_input, _) =
+                compose_after_cursor_aware_mutation(&mut composing_text, request_id)
+                    .map_err(|error| status_from_error("delete_forward_text", error))?;
+            performance_event_lazy!(
+                request_id,
+                "delete_forward_text",
+                "swift_get_composed_text",
+                elapsed_ms(get_composed_start),
+                "suggestions={}",
+                composed_text.suggestions.len()
+            );
+            update_active_composition_state(&composing_text.text);
+            Ok::<_, Status>((composing_text, raw_input, composed_text))
+        })
+        .await??;
+        performance_event_lazy!(
+            request_id,
+            "delete_forward_text",
+            "total",
+            elapsed_ms(handler_start),
+            "status=success;cursor={};hiragana_len={};suggestions={}",
+            composing_text.cursor,
+            composing_text.text.chars().count(),
+            composed_text.suggestions.len()
+        );
+
+        Ok(Response::new(DeleteForwardTextResponse {
+            composing_text: Some(ComposingText {
+                hiragana: composed_text.hiragana.unwrap_or(composing_text.text),
+                suggestions: composed_text.suggestions,
+            }),
+            server_session_id: server_session_id(),
+            raw_input: Some(raw_input),
+            cursor: Some(composing_text.cursor),
         }))
     }
 
@@ -2735,13 +2922,12 @@ impl AzookeyService for MyAzookeyService {
         let request_id = request_id_or_next(request.request_id);
         let handler_start = Instant::now();
         let raw_offset = request.offset;
-        let use_cursor_prefix = raw_offset == 0;
 
         let (composing_text, composed_text, raw_input) = run_ffi(move || {
             set_request_id(request_id);
             clear_conversion_continuation();
             let move_start = Instant::now();
-            let composing_text =
+            let mut composing_text =
                 move_cursor(raw_offset).map_err(|error| status_from_error("move_cursor", error))?;
             performance_event_lazy!(
                 request_id,
@@ -2752,18 +2938,16 @@ impl AzookeyService for MyAzookeyService {
                 composing_text.text.chars().count()
             );
             let get_composed_start = Instant::now();
-            let composed_text = get_composed_text(use_cursor_prefix, None, request_id)
-                .map_err(|error| status_from_error("move_cursor", error))?;
-            let raw_input = use_cursor_prefix
-                .then(get_raw_input)
-                .transpose()
-                .map_err(|error| status_from_error("move_cursor", error))?;
+            let (composed_text, raw_input, _) =
+                compose_after_cursor_aware_mutation(&mut composing_text, request_id)
+                    .map_err(|error| status_from_error("move_cursor", error))?;
             performance_event_lazy!(
                 request_id,
                 "move_cursor",
                 "swift_get_composed_text",
                 elapsed_ms(get_composed_start),
-                "use_cursor_prefix={use_cursor_prefix};suggestions={}",
+                "cursor={};suggestions={}",
+                composing_text.cursor,
                 composed_text.suggestions.len()
             );
             update_active_composition_state(&composing_text.text);
@@ -2775,7 +2959,7 @@ impl AzookeyService for MyAzookeyService {
             "move_cursor",
             "total",
             elapsed_ms(handler_start),
-            "status=success;offset={raw_offset};cursor={};hiragana_len={};suggestions={};use_cursor_prefix={use_cursor_prefix}",
+            "status=success;offset={raw_offset};cursor={};hiragana_len={};suggestions={}",
             composing_text.cursor,
             composing_text.text.chars().count(),
             composed_text.suggestions.len()
@@ -2787,7 +2971,8 @@ impl AzookeyService for MyAzookeyService {
                 suggestions: composed_text.suggestions,
             }),
             server_session_id: server_session_id(),
-            raw_input,
+            raw_input: Some(raw_input),
+            cursor: Some(composing_text.cursor),
         }))
     }
 
@@ -3044,10 +3229,10 @@ impl AzookeyService for MyAzookeyService {
         let handler_start = Instant::now();
         let raw_offset = validate_shrink_offset(request.offset)?;
 
-        let (composing_text, composed_text) = run_ffi(move || {
+        let (composing_text, composed_text, raw_input) = run_ffi(move || {
             set_request_id(request_id);
             let shrink_start = Instant::now();
-            let composing_text =
+            let mut composing_text =
                 shrink_text(raw_offset).map_err(|error| status_from_error("shrink_text", error))?;
             performance_event_lazy!(
                 request_id,
@@ -3058,8 +3243,9 @@ impl AzookeyService for MyAzookeyService {
                 composing_text.text.chars().count()
             );
             let get_composed_start = Instant::now();
-            let composed_text = get_composed_text(false, None, request_id)
-                .map_err(|error| status_from_error("shrink_text", error))?;
+            let (composed_text, raw_input, _) =
+                compose_after_cursor_aware_mutation(&mut composing_text, request_id)
+                    .map_err(|error| status_from_error("shrink_text", error))?;
             performance_event_lazy!(
                 request_id,
                 "shrink_text",
@@ -3069,7 +3255,7 @@ impl AzookeyService for MyAzookeyService {
                 composed_text.suggestions.len()
             );
             update_active_composition_state(&composing_text.text);
-            Ok::<_, Status>((composing_text, composed_text))
+            Ok::<_, Status>((composing_text, composed_text, raw_input))
         })
         .await??;
         performance_event_lazy!(
@@ -3088,6 +3274,8 @@ impl AzookeyService for MyAzookeyService {
                 suggestions: composed_text.suggestions,
             }),
             server_session_id: server_session_id(),
+            raw_input: Some(raw_input),
+            cursor: Some(composing_text.cursor),
         }))
     }
 
@@ -4010,6 +4198,7 @@ mod path_tests {
             std::time::Duration::from_secs(1),
             service.get_assist_candidates(tonic::Request::new(
                 shared::proto::GetAssistCandidatesRequest {
+                    baseline_reading: Default::default(),
                     reading: "よろしくn".into(),
                     raw_input: "yorosiku".into(),
                     baseline: "よろしくn".into(),
@@ -4043,6 +4232,7 @@ mod path_tests {
         super::AI_ASSIST_ENABLED.store(true, Ordering::Relaxed);
         // A correction and an unchanged-surface completion must coexist.
         let mut suggestions = vec![shared::proto::Suggestion {
+            prediction_reading: Default::default(),
             text: "おつれさまよろしくお願い".to_string(),
             subtext: String::new(),
             corresponding_count: 5,
@@ -4082,6 +4272,7 @@ mod path_tests {
 
         super::AI_ASSIST_ENABLED.store(true, Ordering::Relaxed);
         let mut suggestions = vec![shared::proto::Suggestion {
+            prediction_reading: Default::default(),
             text: "よろしく".to_string(),
             subtext: String::new(),
             corresponding_count: 4,
@@ -4128,6 +4319,7 @@ mod path_tests {
         super::AI_ASSIST_ENABLED.store(true, Ordering::Relaxed);
         for (reading, surface) in [("だい1", "第1"), ("ねん3", "年3"), ("だい#", "第#")] {
             let mut suggestions = vec![shared::proto::Suggestion {
+                prediction_reading: Default::default(),
                 text: surface.to_string(),
                 subtext: String::new(),
                 corresponding_count: 2,
@@ -4494,18 +4686,21 @@ mod path_tests {
     fn promote_full_composition_top_candidate_promotes_full_sentence_over_partial_prefix() {
         let mut suggestions = vec![
             Suggestion {
+                prediction_reading: Default::default(),
                 text: "歯科医".to_string(),
                 subtext: "にみてもらう".to_string(),
                 corresponding_count: 6,
                 candidate_id: 1,
             },
             Suggestion {
+                prediction_reading: Default::default(),
                 text: "しかいにみてもらう".to_string(),
                 subtext: String::new(),
                 corresponding_count: 17,
                 candidate_id: 2,
             },
             Suggestion {
+                prediction_reading: Default::default(),
                 text: "歯科医に診てもらう".to_string(),
                 subtext: String::new(),
                 corresponding_count: 17,
@@ -4518,6 +4713,27 @@ mod path_tests {
         assert_eq!(suggestions[0].text, "歯科医に診てもらう");
         assert_eq!(suggestions[1].text, "歯科医");
         assert_eq!(suggestions[2].text, "しかいにみてもらう");
+    }
+
+    #[test]
+    fn composed_text_mode_for_cursor_selects_cursor_range_mid_sentence_and_full_at_end() {
+        assert_eq!(super::composed_text_mode_for_cursor("", 0), None);
+        assert_eq!(
+            super::composed_text_mode_for_cursor("あい", 0),
+            Some(super::ComposedTextQueryMode::CursorRange)
+        );
+        assert_eq!(
+            super::composed_text_mode_for_cursor("あい", 1),
+            Some(super::ComposedTextQueryMode::CursorRange)
+        );
+        assert_eq!(
+            super::composed_text_mode_for_cursor("あい", 2),
+            Some(super::ComposedTextQueryMode::Full)
+        );
+        assert_eq!(
+            super::composed_text_mode_for_cursor("あい", 5),
+            Some(super::ComposedTextQueryMode::Full)
+        );
     }
 }
 

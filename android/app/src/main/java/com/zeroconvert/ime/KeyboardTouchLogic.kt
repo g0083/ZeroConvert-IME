@@ -729,6 +729,16 @@ internal fun shouldVibrateOnEditorDelete(
 }
 
 /**
+ * Decides whether moving the caret directly in the host editor (when IME composing buffers
+ * are not handling the move) changed the caret/selection position and should trigger cursor
+ * movement haptic feedback.
+ */
+internal fun shouldVibrateOnEditorCursorMove(
+    textInDirection: CharSequence?,
+    hasSelection: Boolean
+): Boolean = hasSelection || !textInDirection.isNullOrEmpty()
+
+/**
  * Pixel bounds for a floating QWERTY key preview bubble anchored above the pressed key.
  */
 internal data class QwertyPreviewBounds(

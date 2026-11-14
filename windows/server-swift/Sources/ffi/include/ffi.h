@@ -15,6 +15,7 @@ struct FFICandidate {
     char *hiragana;
     int correspondingCount;
     unsigned long long candidateId;
+    char *predictionReading;
 };
 
 void FreeCString(char *ptr);

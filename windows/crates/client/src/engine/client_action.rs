@@ -16,6 +16,7 @@ pub enum ClientAction {
     UndoTypoCorrection,
     RestoreReconversionOriginal,
     RemoveText,
+    DeleteForwardText,
     ShrinkText(String),
     ShrinkTextRaw(String),
     ShrinkTextDirect(String),

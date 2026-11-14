@@ -103,12 +103,15 @@ Filename: "{app}\{#MySettingsAppName}"; Description: "設定アプリを起動";
 #ifdef LocalZeroConPackage
 ; Retired bundled engines and model aliases, restricted to known install-owned paths.
 Type: filesandordirs; Name: "{app}\llama_cuda"
+Type: files; Name: "{app}\llama_cpu\keyboard-prior.exe"
 Type: filesandordirs; Name: "{app}\llama_lfm"
 Type: files; Name: "{app}\zenz.gguf"
 Type: files; Name: "{app}\models\zenz-v3.2-small-q4km.gguf"
 Type: files; Name: "{app}\models\zenz-v3.2-small-iq4xs.gguf"
 Type: files; Name: "{app}\models\zenz-v3.2-xsmall-q4km.gguf"
 Type: files; Name: "{app}\models\typo-corrector-xsmall-q4km.gguf"
+Type: files; Name: "{app}\models\zerocon-model-corrector.gguf"
+Type: files; Name: "{app}\models\zerocon-model-keyboard-prior.gguf"
 Type: files; Name: "{userdesktop}\Azookey.lnk"
 #endif
 Type: files; Name: "{app}\uninstall.exe"

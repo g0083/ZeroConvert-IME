@@ -921,7 +921,7 @@ impl TextServiceFactory {
                             // suffix-only text. With no primary span, clear it explicitly.
                             let prop = context.GetProperty(&GUID_PROP_ATTRIBUTE)?;
                             prop.Clear(cookie, &range)?;
-                            caret_range.Collapse(cookie, TF_ANCHOR_END)?;
+                            caret_range.Collapse(cookie, TF_ANCHOR_START)?;
                         } else {
                             caret_range.Collapse(cookie, TF_ANCHOR_END)?;
                         }

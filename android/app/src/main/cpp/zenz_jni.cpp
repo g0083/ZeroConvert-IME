@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdarg>
+#include <thread>
 #include <android/log.h>
 #include "llama.h"
 
@@ -36,6 +37,9 @@ static struct llama_model * g_model = nullptr;
 static struct llama_context * g_ctx = nullptr;
 static const struct llama_vocab * g_vocab = nullptr;
 static struct llama_sampler * g_sampler = nullptr;
+static std::vector<llama_token> g_cached_tokens;
+static int g_decode_threads = 2;
+static int g_batch_threads = 4;
 static std::string g_log_path;
 static azookey::AzooKeyDictionary g_dictionary;
 
@@ -74,6 +78,7 @@ static bool load_model_internal(const char * path) {
         llama_free(g_ctx);
         g_ctx = nullptr;
     }
+    g_cached_tokens.clear();
     if (g_model != nullptr) {
         llama_model_free(g_model);
         g_model = nullptr;
@@ -101,16 +106,23 @@ static bool load_model_internal(const char * path) {
     bool is_q3km = (path_str.find("q3km") != std::string::npos || path_str.find("q3_k_m") != std::string::npos || path_str.find("zenz.gguf") != std::string::npos);
     bool is_small = (path_str.find("small") != std::string::npos && path_str.find("xsmall") == std::string::npos);
 
+    const int logical_cores = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    g_decode_threads = logical_cores <= 1 ? 1 : std::clamp(logical_cores / 2, 2, 4);
+    g_batch_threads = logical_cores <= 1 ? 1 : std::clamp(logical_cores - 1, g_decode_threads, 6);
+
     struct llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx = 1024;
-    cparams.n_batch = 128;
+    cparams.n_batch = 256;
+    cparams.n_ubatch = 256;
+    cparams.n_outputs_max = 256;
+    cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    cparams.no_perf = true;
     cparams.abort_callback = [](void *) { return normal_cancelled(); };
 
-    // Maximize performance across mobile Big cores (ARM Cortex-A7xx/X):
-    // 4 threads fully parallelizes matrix multiplication without over-subscribing LITTLE cores.
-    cparams.n_threads = 4;
-    cparams.n_threads_batch = 4;
-    LOGI("Using 4 threads for accelerated inference: path=%s, is_q4km=%d, is_q3km=%d, is_small=%d",
+    cparams.n_threads = g_decode_threads;
+    cparams.n_threads_batch = g_batch_threads;
+    LOGI("Auto threads for Zenz inference: cores=%d, decode=%d, batch=%d, n_batch=%u, n_ubatch=%u, path=%s, is_q4km=%d, is_q3km=%d, is_small=%d",
+         logical_cores, g_decode_threads, g_batch_threads, cparams.n_batch, cparams.n_ubatch,
          path_str.c_str(), is_q4km, is_q3km, is_small);
 
     g_ctx = llama_init_from_model(g_model, cparams);
@@ -293,18 +305,44 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
     g_abort_flag.store(false);
     g_normal_deadline = start_time + std::chrono::milliseconds(1200);
     llama_sampler_reset(g_sampler);
-    llama_memory_clear(llama_get_memory(g_ctx), true);
     const int max_generate_tokens = std::clamp(static_cast<int>(count_utf8_chars(reading_str) * 3 + 16), 32, 384);
     std::vector<llama_token> tokens(prompt.size() + 32);
     const int n_tokens = llama_tokenize(g_vocab, prompt.data(), static_cast<int>(prompt.size()), tokens.data(), static_cast<int>(tokens.size()), false, true);
     if (n_tokens <= 0 || n_tokens + max_generate_tokens > static_cast<int>(llama_n_ctx(g_ctx))) return assist_to_java(env, "");
-    for (int start = 0; start < n_tokens;) {
+    tokens.resize(n_tokens);
+
+    auto *mem = llama_get_memory(g_ctx);
+    auto invalidate_cache = [&]() {
+        llama_memory_clear(mem, true);
+        g_cached_tokens.clear();
+    };
+    int common_len = 0;
+    const int common_limit = std::min(static_cast<int>(g_cached_tokens.size()), std::max(0, n_tokens - 1));
+    while (common_len < common_limit && g_cached_tokens[common_len] == tokens[common_len]) {
+        ++common_len;
+    }
+    if (common_len > 0) {
+        if (!llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(common_len), -1) ||
+            llama_memory_seq_pos_max(mem, 0) != static_cast<llama_pos>(common_len - 1)) {
+            invalidate_cache();
+            common_len = 0;
+        }
+    } else {
+        invalidate_cache();
+    }
+
+    const int prompt_delta = n_tokens - common_len;
+    llama_set_n_threads(g_ctx, g_decode_threads, prompt_delta <= 4 ? g_decode_threads : g_batch_threads);
+    g_cached_tokens.resize(common_len);
+    for (int start = common_len; start < n_tokens;) {
         if (normal_cancelled()) return assist_to_java(env, "");
         int count = std::min(n_tokens - start, static_cast<int>(llama_n_batch(g_ctx)));
         auto batch = llama_batch_get_one(tokens.data() + start, count);
-        if (llama_decode(g_ctx, batch) != 0) return assist_to_java(env, "");
+        if (llama_decode(g_ctx, batch) != 0) { invalidate_cache(); return assist_to_java(env, ""); }
+        g_cached_tokens.insert(g_cached_tokens.end(), tokens.begin() + start, tokens.begin() + start + count);
         start += count;
     }
+    llama_set_n_threads(g_ctx, g_decode_threads, g_decode_threads);
     std::string result;
     for (int i = 0; i < max_generate_tokens; ++i) {
         if (normal_cancelled()) return assist_to_java(env, "");
@@ -326,7 +364,8 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
         if (stop != std::string::npos) return assist_to_java(env, result.substr(0, stop));
         if (result.size() > 8192 || std::any_of(result.begin(), result.end(), [](unsigned char c) { return c < 32; })) return assist_to_java(env, "");
         auto next = llama_batch_get_one(&token, 1);
-        if (llama_decode(g_ctx, next) != 0) return assist_to_java(env, "");
+        if (llama_decode(g_ctx, next) != 0) { invalidate_cache(); return assist_to_java(env, ""); }
+        g_cached_tokens.push_back(token);
     }
     // A token/latency budget is not a word boundary. Fall back to dictionary candidates.
     return assist_to_java(env, "");
@@ -351,6 +390,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeClose(JNIEnv * /* env */, jobject /* t
         llama_free(g_ctx);
         g_ctx = nullptr;
     }
+    g_cached_tokens.clear();
     if (g_model != nullptr) {
         llama_model_free(g_model);
         g_model = nullptr;

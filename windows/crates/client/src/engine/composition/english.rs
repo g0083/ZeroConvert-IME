@@ -34,6 +34,7 @@ pub(super) fn candidates(prefix: &str) -> Candidates {
     }
     let count = texts.len();
     Candidates {
+        prediction_readings: Default::default(),
         texts,
         sub_texts: vec![String::new(); count],
         hiragana: prefix.into(),

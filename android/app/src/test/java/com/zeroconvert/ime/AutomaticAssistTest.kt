@@ -10,6 +10,35 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class AutomaticAssistTest {
+    @Test fun unifiedCorrectionAndPredictionUseIndependentSharedSettings() {
+        for (correction in listOf(false, true)) for (prediction in listOf(false, true)) {
+            val uncorrected = SharedAssistPolicy.requestPlan(correction, prediction, false,
+                "しますた", policy = RustAssistPolicy)
+            assertEquals(correction, uncorrected.correction)
+            assertEquals(prediction, uncorrected.prediction)
+            val corrected = SharedAssistPolicy.requestPlan(correction, prediction, false,
+                "しますた", "しました", RustAssistPolicy)
+            assertFalse(corrected.correction)
+            assertEquals(prediction, corrected.prediction)
+            val applied = SharedAssistPolicy.requestPlan(correction, prediction, true,
+                "しますた", policy = RustAssistPolicy)
+            assertFalse(applied.correction)
+            assertEquals(prediction, applied.prediction)
+        }
+    }
+
+    @Test fun disabledFeaturesNeverStartModelOrNativeAssistance() = runBlocking {
+        val inference = object : AssistInference {
+            override val revision = 1L
+            override fun complete(model: AssistModel, prompt: String, maxTokens: Int, timeoutMs: Int): ModelCompletion =
+                error("disabled assistance must not infer")
+        }
+        AiAssistManager.streamAiAssist("しますた", "しますた", "", false, inference,
+            policy = RustAssistPolicy, allowPrediction = false) { error("disabled assistance must not publish") }
+        assertNull(AiAssistManager.requestAiAssist("shimasuta", "しますた", "しますた", "",
+            allowCorrection = false, inference = inference, allowPrediction = false, policy = RustAssistPolicy))
+    }
+
     private fun correction(auto: Boolean = false, relevance: Int = if (auto) 100 else 30) =
         AiAssistResult(AiAssistType.TYPO_CORRECTION, "お疲れ様", "補正", relevance, "おつくれさま", autoApply = auto)
     private fun prediction() = AiAssistResult(AiAssistType.PREDICTION, "おつくれ様でした。", "先読み", 60)
@@ -51,7 +80,7 @@ class AutomaticAssistTest {
     @Test fun automaticCorrectionStaysEditableAndNeverTrainsItself() {
         val input = ComposingText().apply { insertAtCursorPosition("gakou", InputStyle.ROMAN2KANA) }
         val original = input.clone()
-        val session = CorrectionSession()
+        val session = CorrectionSession(RustAssistPolicy)
         assertTrue(session.apply(input, "学校", "がこう", explicit = false))
         assertEquals("学校", session.fixedPrefix(input.convertTarget))
         assertTrue(session.acceptancesForCommit("学校").isEmpty())
@@ -70,7 +99,7 @@ class AutomaticAssistTest {
 
     @Test fun undoingAutomaticCorrectionKeepsEarlierExplicitAcceptance() {
         val input = ComposingText().apply { insertAtCursorPosition("がこう", InputStyle.DIRECT) }
-        val session = CorrectionSession()
+        val session = CorrectionSession(RustAssistPolicy)
         session.apply(input, "学校", "がこう")
         session.edited()
         input.insertAtCursorPosition("にいきます", InputStyle.DIRECT)
@@ -80,7 +109,7 @@ class AutomaticAssistTest {
     }
 
     @Test fun weakCorrectionWaitsForPredictionAndDoesNotReplaceDisplayedTarget() {
-        val state = AssistPresentation()
+        val state = AssistPresentation(RustAssistPolicy)
         assertNull(state.complete(AiAssistType.TYPO_CORRECTION, correction()).selected)
         val shown = state.complete(AiAssistType.PREDICTION, prediction())
         assertEquals(prediction(), shown.selected)
@@ -89,21 +118,35 @@ class AutomaticAssistTest {
     }
 
     @Test fun absentPredictionReleasesManualCorrectionAndAutomaticEvidenceDoesNotWait() {
-        val manual = AssistPresentation()
+        val manual = AssistPresentation(RustAssistPolicy)
         manual.complete(AiAssistType.TYPO_CORRECTION, correction())
         assertEquals(correction(), manual.complete(AiAssistType.PREDICTION, null).selected)
-        val automatic = AssistPresentation()
+        val automatic = AssistPresentation(RustAssistPolicy)
         val first = automatic.complete(AiAssistType.TYPO_CORRECTION, correction(auto = true))
         assertNotNull(first.automaticCorrection)
-        assertNull(first.selected)
+        assertEquals(correction(auto = true), first.selected)
         assertNull(automatic.complete(AiAssistType.PREDICTION, prediction()).automaticCorrection)
     }
 
     @Test fun learnedCorrectionWinsWhenAvailableBeforeTheFirstPresentation() {
-        val state = AssistPresentation()
+        val state = AssistPresentation(RustAssistPolicy)
         val learned = correction(relevance = 70)
         state.complete(AiAssistType.TYPO_CORRECTION, learned)
         assertEquals(learned, state.complete(AiAssistType.PREDICTION, prediction()).selected)
+    }
+
+    @Test fun firstPredictionWaitsForCorrectionAndKeepsItsTapTargetAfterDeadline() {
+        val state = AssistPresentation(RustAssistPolicy)
+        assertNull(state.complete(AiAssistType.PREDICTION, prediction(), elapsedMs = 10).selected)
+        assertNull(state.update(199).selected)
+        assertEquals(prediction(), state.update(200).selected)
+        val late = state.complete(AiAssistType.TYPO_CORRECTION, correction(relevance = 80), elapsedMs = 250)
+        assertEquals(prediction(), late.selected)
+        assertEquals(2, late.suggestions.size)
+        assertEquals("ignore", SharedAssistPolicy.adoptionAction(prediction(), false, true, false, RustAssistPolicy))
+        assertEquals("commitText", SharedAssistPolicy.adoptionAction(prediction(), true, false, true, RustAssistPolicy))
+        assertEquals("replaceComposition", SharedAssistPolicy.adoptionAction(correction(), true, false, false, RustAssistPolicy))
+        assertEquals("ignore", SharedAssistPolicy.adoptionAction(correction(), true, false, true, RustAssistPolicy))
     }
 
     @Test fun fastPredictionIsPublishedWhileCorrectorIsStillWorking() = runBlocking {

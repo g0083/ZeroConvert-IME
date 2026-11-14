@@ -39,8 +39,9 @@ nonisolated(unsafe) var config: [String : Any] = [
     "enable": false,
     "profile": "",
     "backend": "cpu",
-    "experimentalTypoCorrection": false,
+    "experimentalTypoCorrection": defaultKeyboardTypoCorrection,
 ]
+let defaultKeyboardTypoCorrection = true
 let maxUserDictionaryEntryCount = 50
 let minInputCountForZenzaiCandidates = 4
 let minHiraganaCountForZenzaiCandidates = 2
@@ -771,9 +772,10 @@ private func ensureConverterRuntimeDirectory() {
 }
 
 func normalizedZenzaiBackend(_ backend: String?) -> String {
-    (backend ?? "cpu")
+    let trimmed = (backend ?? "cpu")
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .lowercased()
+    return trimmed == "cuda" ? "vulkan" : trimmed
 }
 
 private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> Bool {
@@ -1115,7 +1117,7 @@ func cacheLearningCandidates(_ candidates: [Candidate]) -> UInt64? {
         disableLearningForKeyboardTypoCorrectionCandidates(
             candidates,
             experimentalTypoCorrectionEnabled:
-                (config["experimentalTypoCorrection"] as? Bool) ?? false
+                (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection
         )
     )
 }
@@ -1500,7 +1502,7 @@ struct EmojiTextReplacerCache {
 
 nonisolated(unsafe) private var emojiTextReplacerCache = EmojiTextReplacerCache()
 
-private func makeConvertRequestOptions(
+func makeConvertRequestOptions(
     context: String,
     zenzaiEnabled: Bool,
     runtimeDirectoryURL: URL,
@@ -1510,7 +1512,7 @@ private func makeConvertRequestOptions(
     profile: String,
     learningType: LearningType = .nothing,
     learningMemoryDirectoryURL: URL? = nil,
-    experimentalKeyboardTypoCorrection: Bool = false,
+    experimentalKeyboardTypoCorrection: Bool = defaultKeyboardTypoCorrection,
     predictiveConversion: Bool = false
 ) -> ConvertRequestOptions {
     return ConvertRequestOptions(
@@ -2253,7 +2255,7 @@ func getOptions(
         learningType: currentLearningType,
         learningMemoryDirectoryURL: currentLearningMemoryDirectoryURL,
         experimentalKeyboardTypoCorrection:
-            (config["experimentalTypoCorrection"] as? Bool) ?? false,
+            (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection,
         predictiveConversion:
             (config["predictiveConversion"] as? Bool) ?? {
                 #if os(Android)
@@ -2446,6 +2448,9 @@ struct SComposingText {
 }
 
 func constructCandidateString(candidate: Candidate, hiragana: String) -> String {
+    if candidate.data.count == 1 && candidate.data[0].metadata.contains(.isKeyboardTypoCorrection) {
+        return candidate.text
+    }
     if candidate.rubyCount > hiragana.count && !candidate.text.isEmpty {
         return candidate.text
     }
@@ -2767,7 +2772,7 @@ public func load_config() {
     let previousBackend = (config["backend"] as? String) ?? "cpu"
     let previousGpuLayers = resolvedGpuLayerCount(config["gpuLayers"] as? Int)
     let previousExperimentalTypoCorrection =
-        (config["experimentalTypoCorrection"] as? Bool) ?? false
+        (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection
     let previousEffectiveZenzaiEnabled = effectiveZenzaiRuntimeEnabled(
         isConfigured: previousZenzaiEnabled,
         backend: previousBackend,
@@ -2781,7 +2786,7 @@ public func load_config() {
         let conversionDictionary = makeConversionDictionaryEntries(
             userEntries: dynamicUserDictionary,
             experimentalTypoCorrectionEnabled:
-                (config["experimentalTypoCorrection"] as? Bool) ?? false
+                (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection
         )
         converter.importDynamicUserDictionary(conversionDictionary)
         normalNBestSupplementConverter.importDynamicUserDictionary(conversionDictionary)
@@ -2794,7 +2799,7 @@ public func load_config() {
     config["backend"] = "cpu"
     config["gpuLayers"] = 99
     config["model"] = "standard"
-    config["experimentalTypoCorrection"] = false
+    config["experimentalTypoCorrection"] = defaultKeyboardTypoCorrection
     #if os(Android)
     let defaultPredictiveConversion = true
     #else
@@ -2832,7 +2837,7 @@ public func load_config() {
         applyRomajiInputStyle(rows: settings.romaji_table?.rows)
         currentLearningType = learningType(for: settings.learning?.mode)
         config["experimentalTypoCorrection"] =
-            settings.general?.experimental_typo_correction ?? false
+            settings.general?.experimental_typo_correction ?? defaultKeyboardTypoCorrection
         config["predictiveConversion"] =
             settings.general?.predictive_conversion ?? defaultPredictiveConversion
 
@@ -2883,7 +2888,7 @@ public func load_config() {
     let currentProfile = (config["profile"] as? String) ?? ""
     let currentBackend = (config["backend"] as? String) ?? "cpu"
     let currentExperimentalTypoCorrection =
-        (config["experimentalTypoCorrection"] as? Bool) ?? false
+        (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection
     let currentEffectiveZenzaiEnabled = effectiveZenzaiRuntimeEnabled(
         isConfigured: currentZenzaiEnabled,
         backend: currentBackend,
@@ -3156,15 +3161,37 @@ public func get_cursor_position() -> CInt {
 
 @_silgen_name("GetRawInput")
 public func get_raw_input() -> UnsafeMutablePointer<CChar>? {
-    let characters = composingText.input.compactMap(inputCharacter)
-    guard characters.count == composingText.input.count else {
-        serverLog(
-            "ERROR",
-            "GetRawInput: failed inputCount=\(composingText.input.count) characterCount=\(characters.count)"
-        )
-        return nil
+    var characters: [Character] = []
+    characters.reserveCapacity(composingText.input.count)
+    for element in composingText.input {
+        if case .compositionSeparator = element.piece {
+            continue
+        }
+        guard let character = inputCharacter(element) else {
+            serverLog(
+                "ERROR",
+                "GetRawInput: failed inputCount=\(composingText.input.count) characterCount=\(characters.count)"
+            )
+            return nil
+        }
+        characters.append(character)
     }
     return _strdup(String(characters))
+}
+
+@_silgen_name("DeleteForwardText")
+public func delete_forward_text(cursorPtr: UnsafeMutablePointer<CInt>) -> UnsafeMutablePointer<CChar> {
+    serverLog(
+        "DEBUG",
+        "DeleteForwardText: start cursor=\(composingText.convertTargetCursorPosition) inputCount=\(composingText.input.count)"
+    )
+    composingText.deleteForwardFromCursorPosition(count: 1)
+    cursorPtr.pointee = CInt(composingText.convertTargetCursorPosition)
+    serverLog(
+        "DEBUG",
+        "DeleteForwardText: completed hiraganaLength=\(composingText.convertTarget.count) inputCount=\(composingText.input.count) cursor=\(composingText.convertTargetCursorPosition)"
+    )
+    return _strdup(composingText.convertTarget)!
 }
 
 private func clauseAdjustmentBoundaryMap(
@@ -3623,6 +3650,7 @@ public func free_candidate_list(
         free(candidate.text)
         free(candidate.subtext)
         free(candidate.hiragana)
+        free(candidate.predictionReading)
     }
 
     if isContiguousCandidateStorage, let candidateStorage {
@@ -3652,23 +3680,52 @@ public func get_composed_text_for_reconversion(lengthPtr: UnsafeMutablePointer<C
     get_composed_text_impl(lengthPtr: lengthPtr, allowZenzai: false)
 }
 
+@_silgen_name("GetComposedTextForCursorRange")
+public func get_composed_text_for_cursor_range(lengthPtr: UnsafeMutablePointer<CInt>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    if composingText.isAtEndIndex {
+        return get_composed_text_impl(lengthPtr: lengthPtr, allowZenzai: true)
+    }
+    let cursorPosition = composingText.convertTargetCursorPosition
+    let suffixAfterCursor = String(composingText.convertTarget.dropFirst(cursorPosition))
+    let prefixComposingText = composingText.prefixToCursorPosition()
+    if prefixComposingText.convertTarget.isEmpty {
+        lengthPtr.pointee = 0
+        return to_list_pointer([])
+    }
+    return get_composed_text_impl(
+        lengthPtr: lengthPtr,
+        allowZenzai: true,
+        sourceComposingText: prefixComposingText,
+        suffixAfterCursor: suffixAfterCursor,
+        isCursorAtEndOverride: false
+    )
+}
+
 private func get_composed_text_impl(
     lengthPtr: UnsafeMutablePointer<CInt>,
-    allowZenzai: Bool
+    allowZenzai: Bool,
+    sourceComposingText: ComposingText? = nil,
+    suffixAfterCursor: String = "",
+    isCursorAtEndOverride: Bool? = nil
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    let targetComposingText = sourceComposingText ?? composingText
+    let isCursorAtEnd = isCursorAtEndOverride ?? targetComposingText.isAtEndIndex
     let functionStart = performanceNow()
     let performanceEnabled = serverLogCallbacks.isPerformanceLogEnabled()
-    let originalHiragana = composingText.convertTarget
+    let originalHiragana = targetComposingText.convertTarget
     let rawContextString = (config["context"] as? String) ?? ""
     let diagnosticSnapshot = zenzaiDiagnosticSnapshot()
     let runtimeZenzaiEnabled = diagnosticSnapshot.runtimeEnabled && allowZenzai
-    let previewState = makeCandidatePreviewComposingText(from: composingText)
+    let previewState = makeCandidatePreviewComposingText(from: targetComposingText)
     let previewComposingText = previewState.composingText
     let previewHiragana = previewComposingText.convertTarget
+    let fullHiraganaForCandidate = suffixAfterCursor.isEmpty
+        ? previewHiragana
+        : previewHiragana + suffixAfterCursor
     let explicitContinuationRequest = makeConversionContinuationRequest(
         continuation: conversionContinuation,
         allowZenzai: allowZenzai,
-        isCursorAtEnd: composingText.isAtEndIndex,
+        isCursorAtEnd: isCursorAtEnd,
         previewHiragana: previewHiragana,
         hasTrailingUncompletedRoman: hasTrailingUncompletedRoman(
             in: previewComposingText
@@ -3676,7 +3733,7 @@ private func get_composed_text_impl(
         context: rawContextString
     )
     let automaticContinuation = (allowZenzai && explicitContinuationRequest == nil
-        && composingText.isAtEndIndex
+        && isCursorAtEnd
         && !hasTrailingUncompletedRoman(in: previewComposingText))
         ? makeAutomaticConversionContinuation(
             context: rawContextString,
@@ -3687,7 +3744,7 @@ private func get_composed_text_impl(
     let continuationRequest = explicitContinuationRequest ?? makeConversionContinuationRequest(
         continuation: automaticContinuation,
         allowZenzai: allowZenzai,
-        isCursorAtEnd: composingText.isAtEndIndex,
+        isCursorAtEnd: isCursorAtEnd,
         previewHiragana: previewHiragana,
         hasTrailingUncompletedRoman: hasTrailingUncompletedRoman(
             in: previewComposingText
@@ -3707,7 +3764,7 @@ private func get_composed_text_impl(
     } else {
         useZenzai = effectiveZenzaiEnabledForCandidates(
             isConfigured: runtimeZenzaiEnabled,
-            inputCount: composingText.input.count,
+            inputCount: targetComposingText.input.count,
             hiraganaCount: originalHiragana.count
         )
     }
@@ -3716,7 +3773,7 @@ private func get_composed_text_impl(
         ? zenzaiDiagnosticDetails(
             snapshot: diagnosticSnapshot,
             contextLength: contextString.count,
-            inputCount: composingText.input.count,
+            inputCount: targetComposingText.input.count,
             hiraganaLength: originalHiragana.count,
             previewHiraganaLength: previewHiragana.count,
             useZenzai: useZenzai,
@@ -3847,21 +3904,42 @@ private func get_composed_text_impl(
             hiragana: previewHiragana
         )
     } ?? zenzaiMainResults
-    let mergedMainResults = normalNBestConverted.map {
+    let mergedMainResults = (suffixAfterCursor.isEmpty ? normalNBestConverted : nil).map {
         mergePredictiveSupplementCandidates(
             exactMerged: mergedExactResults,
             predictionResults: $0.predictionResults,
             hiragana: previewHiragana
         )
     } ?? mergedExactResults
+    let touchCandidates = suffixAfterCursor.isEmpty
+        ? touchWeightedKeyboardCandidates(
+            composing: previewComposingText,
+            evidence: currentKeyboardTouchEvidence,
+            options: options,
+            lookup: { text, lookupOptions in
+                normalNBestSupplementConverter.requestExactKeyboardCorrectionCandidates(text, options: lookupOptions)
+            }
+        )
+        : KeyboardTouchCandidates()
+    let weightedMainResults = mergeTouchWeightedKeyboardCandidates(
+        normal: mergedMainResults, touch: touchCandidates,
+        dictionary: normalNBestConverted?.mainResults ?? converted.mainResults
+    )
     let rawMainResults = prioritizeLearningSelectionOverrides(
-        mergedMainResults,
+        weightedMainResults,
         ruby: previewHiragana,
         candidate: { $0 },
         synthesizeElement: { $0 }
     )
     var mainResults = rawMainResults
-    if let first = mainResults.first, first.rubyCount > previewHiragana.count {
+    if !suffixAfterCursor.isEmpty,
+       let first = mainResults.first,
+       first.rubyCount != previewHiragana.count,
+       let exactIdx = mainResults.firstIndex(where: { $0.rubyCount == previewHiragana.count }) {
+        let exactCandidate = mainResults.remove(at: exactIdx)
+        mainResults.insert(exactCandidate, at: 0)
+    } else if let first = mainResults.first, first.rubyCount > previewHiragana.count,
+              !isTouchWeightedKeyboardCandidate(first) {
         if let exactIdx = mainResults.firstIndex(where: { $0.rubyCount <= previewHiragana.count }) {
             let exactCandidate = mainResults.remove(at: exactIdx)
             mainResults.insert(exactCandidate, at: 0)
@@ -3900,7 +3978,7 @@ private func get_composed_text_impl(
 
         let resolveStart = performanceEnabled ? performanceNow() : 0
         let resolvedCandidate = resolveCandidateCompositionForDisplay(
-            originalComposingText: composingText,
+            originalComposingText: targetComposingText,
             previewComposingText: previewComposingText,
             candidateComposingCount: candidate.composingCount,
             resolutionCache: &resolutionCache
@@ -3912,8 +3990,11 @@ private func get_composed_text_impl(
 
         let strdupStart = performanceEnabled ? performanceNow() : 0
         let text = _strdup(candidateText)
-        let subtext = _strdup(resolvedCandidate.remainingConvertTarget)
-        let hiragana = i == 0 ? _strdup(previewHiragana) : nil
+        let combinedSubtext = suffixAfterCursor.isEmpty
+            ? resolvedCandidate.remainingConvertTarget
+            : resolvedCandidate.remainingConvertTarget + suffixAfterCursor
+        let subtext = _strdup(combinedSubtext)
+        let hiragana = i == 0 ? _strdup(fullHiraganaForCandidate) : nil
         if performanceEnabled {
             strdupCandidatesMs += elapsedPerformanceMilliseconds(since: strdupStart)
         }
@@ -3924,7 +4005,10 @@ private func get_composed_text_impl(
                 subtext: subtext,
                 hiragana: hiragana,
                 correspondingCount: Int32(correspondingCount),
-                candidateId: learningCandidateId(at: i, batchFirstId: learningCandidateBatchFirstId)
+                candidateId: learningCandidateId(at: i, batchFirstId: learningCandidateBatchFirstId),
+                predictionReading: suffixAfterCursor.isEmpty
+                    ? keyboardCorrectionReading(candidate, remainingReading: resolvedCandidate.remainingConvertTarget).flatMap { _strdup($0) }
+                    : nil
             )
         )
     }
@@ -4285,7 +4369,8 @@ public func get_composed_text_for_cursor_prefix(
                 subtext: subtext,
                 hiragana: hiragana,
                 correspondingCount: Int32(correspondingCount),
-                candidateId: learningCandidateId(at: i, batchFirstId: learningCandidateBatchFirstId)
+                candidateId: learningCandidateId(at: i, batchFirstId: learningCandidateBatchFirstId),
+                predictionReading: nil
             )
         )
     }

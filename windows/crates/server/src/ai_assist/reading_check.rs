@@ -157,7 +157,11 @@ fn dictionary() -> Option<&'static ReverseDictionary> {
 }
 
 pub fn has_same_reading(surface: &str, reading: &str) -> bool {
-    dictionary().is_some_and(|d| d.matches(surface, reading))
+    if let Some(d) = dictionary() {
+        return d.matches(surface, reading);
+    }
+    // Match min_reading_distance's unconfigured-test fallback when reverse-v2.bin is absent.
+    min_reading_distance(surface, reading) == Some(0)
 }
 
 // Direct-input correction changes the canonical input to a surface. Reconstruct

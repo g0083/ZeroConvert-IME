@@ -59,6 +59,14 @@ object WindowsEngine {
 
     private external fun nativeSwift(request: String): String
     private external fun nativeAssist(request: String, inference: CompletionHost): String
+    private external fun nativeAssistPolicy(request: String): String
+
+    /** Bounded decisions only. This JNI call never acquires the conversion worker or model. */
+    fun assistPolicy(request: JSONObject): JSONObject {
+        val reply = JSONObject(nativeAssistPolicy(request.toString()))
+        check(!reply.has("error")) { reply.optString("error") }
+        return reply
+    }
     private external fun nativeSetDataRoot(root: String)
     private external fun nativeConversionEpoch(): Long
     private external fun nativeAbortConversion()
@@ -299,7 +307,8 @@ object WindowsEngine {
     internal suspend fun candidates(input: ComposingText, context: String, ai: Boolean, profile: String,
                            personalize: Boolean, dictionaryCorrection: Boolean,
                            predictiveConversion: Boolean = true,
-                           continuation: ConversionContinuation? = null): List<Candidate> {
+                           continuation: ConversionContinuation? = null,
+                           touchBiases: List<TouchKeyBias> = emptyList()): List<Candidate> {
         if (input.convertTargetCursorPosition <= 0) return emptyList()
         val queued = System.nanoTime()
         val epoch = nativeConversionEpoch()
@@ -323,6 +332,7 @@ object WindowsEngine {
                     .put("separator", element.separator).put("text", element.text))
             }
             val result = checkedSwift(JSONObject().put("op", "convert").put("elements", elements)
+                .put("touchEvidence", engineTouchEvidence(input, touchBiases))
                 .put("cursorUtf16", input.convertTargetCursorPosition).put("expectedReading", input.convertTarget)
                 .put("continuationReading", continuation?.reading.orEmpty())
                 .put("continuationSurface", continuation?.surface.orEmpty())
@@ -352,7 +362,8 @@ object WindowsEngine {
                 Candidate(candidate.getString("text"), KanaKanjiConverter.toKatakana(input.convertTarget.take(consumed)),
                     isAI = neuralAllowed, learningAllowed = candidate.getBoolean("learningAllowed"),
                     engineCandidateId = candidate.getString("candidateId").takeUnless { it == "0" }.orEmpty(),
-                    engineConsumedReading = consumed)
+                    engineConsumedReading = consumed,
+                    enginePredictionReading = candidate.optString("predictionReading"))
             }.distinctBy { it.text to it.engineConsumedReading }
             val macrosRaw = assistReply(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor))
             val macroTexts = macrosRaw?.let { raw ->
@@ -364,12 +375,14 @@ object WindowsEngine {
         }
     }
 
-    fun assist(op: String, context: String, input: String, baseline: String, inference: AssistInference): AiAssistResult? {
+    fun assist(op: String, context: String, input: String, baseline: String, inference: AssistInference,
+               baselineReading: String = ""): AiAssistResult? {
         if (!ready) return null
         val raw = assistReply(nativeAssist(JSONObject().put("op", op)
             .put("revision", (inference.revision shl 32) xor AssistVocabulary.revision)
             .put("readLearning", LearningPolicy.canRead)
-            .put("context", context).put("input", input).put("baseline", baseline).toString(),
+            .put("context", context).put("input", input).put("baseline", baseline)
+            .put("baselineReading", baselineReading).toString(),
             CompletionHost(inference))) ?: return null
         val result = JSONObject(raw)
         val correction = op == "correction"

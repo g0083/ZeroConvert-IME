@@ -11,9 +11,10 @@
 // 入力スレッドから同期呼び出ししない。
 
 use serde_json::{json, Value};
-use std::io::{Read, Write};
-use std::net::TcpStream;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub mod corrector;
@@ -223,57 +224,213 @@ impl Default for AiAssistConfig {
         Self {
             enabled: false,
             engine: "embedded".to_string(),
-            corrector_port: 18090,
+            corrector_port: runtime::PREDICTION_SERVER_PORT,
             prediction_port: runtime::PREDICTION_SERVER_PORT,
         }
     }
 }
 
-/// 超軽量HTTP POSTリクエスト（依存関係不要・即座にタイムアウト可能）
+static HTTP_KEEPALIVE_POOL: OnceLock<Mutex<HashMap<SocketAddr, TcpStream>>> = OnceLock::new();
+
+fn http_keepalive_pool() -> &'static Mutex<HashMap<SocketAddr, TcpStream>> {
+    HTTP_KEEPALIVE_POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn take_pooled_http_stream(addr: SocketAddr) -> Option<TcpStream> {
+    http_keepalive_pool().lock().ok()?.remove(&addr)
+}
+
+fn return_pooled_http_stream(addr: SocketAddr, stream: TcpStream) {
+    if let Ok(mut pool) = http_keepalive_pool().lock() {
+        pool.insert(addr, stream);
+    }
+}
+
+fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+struct HttpHeaderMeta {
+    content_length: Option<usize>,
+    peer_close: bool,
+}
+
+fn parse_http_headers(header_bytes: &[u8]) -> HttpHeaderMeta {
+    let header_str = String::from_utf8_lossy(header_bytes);
+    let mut lines = header_str.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let is_http_1_0 = status_line.starts_with("HTTP/1.0");
+    let mut content_length = None;
+    let mut saw_keep_alive = false;
+    let mut saw_close = false;
+
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            let name_lower = name.trim().to_ascii_lowercase();
+            let value_trim = value.trim();
+            if name_lower == "content-length" {
+                content_length = value_trim.parse::<usize>().ok();
+            } else if name_lower == "connection" {
+                let value_lower = value_trim.to_ascii_lowercase();
+                if value_lower.split(',').any(|v| v.trim() == "close") {
+                    saw_close = true;
+                }
+                if value_lower.split(',').any(|v| v.trim() == "keep-alive") {
+                    saw_keep_alive = true;
+                }
+            }
+        }
+    }
+
+    let peer_close = saw_close || (is_http_1_0 && !saw_keep_alive);
+    HttpHeaderMeta {
+        content_length,
+        peer_close,
+    }
+}
+
+fn read_http_post_response(
+    stream: &mut TcpStream,
+    deadline: Instant,
+    reused: bool,
+) -> Result<(Option<Value>, bool), bool> {
+    let mut response_buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let header_end = loop {
+        if let Some(pos) = find_header_end(&response_buf) {
+            break pos;
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(false);
+        };
+        if stream.set_read_timeout(Some(remaining)).is_err() {
+            return Err(reused && response_buf.is_empty());
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => {
+                if reused && response_buf.is_empty() {
+                    return Err(true);
+                }
+                return Err(false);
+            }
+            Ok(count) => {
+                response_buf.extend_from_slice(&chunk[..count]);
+                if response_buf.len() > 256 * 1024 {
+                    return Err(false);
+                }
+            }
+            Err(err) => {
+                let can_retry = reused
+                    && response_buf.is_empty()
+                    && !matches!(err.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock);
+                return Err(can_retry);
+            }
+        }
+    };
+
+    let meta = parse_http_headers(&response_buf[..header_end]);
+    let body_start = header_end + 4;
+
+    if let Some(content_len) = meta.content_length {
+        let total_needed = body_start.checked_add(content_len).ok_or(false)?;
+        if total_needed > 256 * 1024 {
+            return Err(false);
+        }
+        while response_buf.len() < total_needed {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(false);
+            };
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| false)?;
+            let count = stream.read(&mut chunk).map_err(|_| false)?;
+            if count == 0 {
+                return Err(false);
+            }
+            response_buf.extend_from_slice(&chunk[..count]);
+        }
+        let json_slice = &response_buf[body_start..total_needed];
+        let value = serde_json::from_slice(json_slice).ok();
+        let can_reuse = !meta.peer_close && response_buf.len() == total_needed;
+        Ok((value, can_reuse))
+    } else {
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(false);
+            };
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| false)?;
+            let count = stream.read(&mut chunk).map_err(|_| false)?;
+            if count == 0 {
+                break;
+            }
+            response_buf.extend_from_slice(&chunk[..count]);
+            if response_buf.len() > 256 * 1024 {
+                return Err(false);
+            }
+        }
+        let json_slice = &response_buf[body_start..];
+        let value = serde_json::from_slice(json_slice).ok();
+        Ok((value, false))
+    }
+}
+
+/// 超軽量HTTP POSTリクエスト（Keep-Alive 接続プール対応・依存関係不要・即座にタイムアウト可能）
 fn simple_http_post(port: u16, path: &str, body_json: &Value, timeout_ms: u64) -> Option<Value> {
     if let Some(response) = runtime::complete_override(port, path, body_json, timeout_ms) {
         return response;
     }
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    let addr = format!("127.0.0.1:{}", port);
-    let mut stream =
-        TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_millis(timeout_ms)).ok()?;
-
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(timeout_ms)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(timeout_ms)));
-
+    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().ok()?;
     let body_str = body_json.to_string();
     let request = format!(
-        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
         path, port, body_str.len(), body_str
     );
 
-    if stream.write_all(request.as_bytes()).is_err() {
-        return None;
-    }
+    for attempt in 0..2 {
+        let (mut stream, reused) = if attempt == 0 {
+            if let Some(pooled) = take_pooled_http_stream(addr) {
+                (pooled, true)
+            } else {
+                let remaining = deadline.checked_duration_since(Instant::now())?;
+                let s = TcpStream::connect_timeout(&addr, remaining).ok()?;
+                (s, false)
+            }
+        } else {
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            let s = TcpStream::connect_timeout(&addr, remaining).ok()?;
+            (s, false)
+        };
 
-    let mut response_buf = Vec::new();
-    let mut chunk = [0; 4096];
-    loop {
-        let remaining = deadline.checked_duration_since(Instant::now())?;
-        stream.set_read_timeout(Some(remaining)).ok()?;
-        let count = stream.read(&mut chunk).ok()?;
-        if count == 0 {
-            break;
-        }
-        response_buf.extend_from_slice(&chunk[..count]);
-        if response_buf.len() > 128 * 1024 {
+        let _ = stream.set_nodelay(true);
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return None;
+        };
+        let _ = stream.set_read_timeout(Some(remaining));
+        let _ = stream.set_write_timeout(Some(remaining));
+
+        if stream.write_all(request.as_bytes()).is_err() || stream.flush().is_err() {
+            if reused {
+                continue;
+            }
             return None;
         }
-    }
-    let response_str = String::from_utf8_lossy(&response_buf);
 
-    if let Some(pos) = response_str.find("\r\n\r\n") {
-        let json_part = &response_str[pos + 4..];
-        serde_json::from_str(json_part).ok()
-    } else {
-        None
+        match read_http_post_response(&mut stream, deadline, reused) {
+            Ok((value, can_reuse)) => {
+                if can_reuse {
+                    return_pooled_http_stream(addr, stream);
+                }
+                return value;
+            }
+            Err(true) => continue,
+            Err(false) => return None,
+        }
     }
+
+    None
 }
 
 /// Cancellable variant for long-running completions (translation). The read
@@ -1785,5 +1942,92 @@ mod tests {
             fetch_moshikashite_candidate("", "モウイッカイヤロイ", &conf).as_deref(),
             Some("もう一回やろう"),
         );
+    }
+
+    #[test]
+    fn simple_http_post_reuses_keepalive_and_recovers_on_stale_close() {
+        use super::simple_http_post;
+        use serde_json::{json, Value};
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Duration;
+
+        fn read_request_body(reader: &mut BufReader<&mut TcpStream>) -> Value {
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+
+        // Case 1: Single TCP connection handles two consecutive keep-alive POSTs.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            for seq in 1..=2 {
+                let mut reader = BufReader::new(&mut stream);
+                let req = read_request_body(&mut reader);
+                drop(reader);
+                assert_eq!(req["seq"], json!(seq));
+                let reply = json!({"ok": seq}).to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                )
+                .unwrap();
+                stream.flush().unwrap();
+            }
+        });
+
+        let r1 = simple_http_post(port, "/completion", &json!({"seq": 1}), 1000).unwrap();
+        let r2 = simple_http_post(port, "/completion", &json!({"seq": 2}), 1000).unwrap();
+        assert_eq!(r1["ok"], json!(1));
+        assert_eq!(r2["ok"], json!(2));
+        worker.join().unwrap();
+
+        // Case 2: Peer sends keep-alive compatible headers, closes socket quietly after
+        // response 1, and client transparently retries response 2 on a fresh connection.
+        let listener2 = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port2 = listener2.local_addr().unwrap().port();
+        let worker2 = std::thread::spawn(move || {
+            for seq in 1..=2 {
+                let (mut stream, _) = listener2.accept().unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let req = read_request_body(&mut reader);
+                drop(reader);
+                assert_eq!(req["seq"], json!(seq));
+                let reply = json!({"recovered": seq}).to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                )
+                .unwrap();
+                stream.flush().unwrap();
+                // Drop stream immediately without Connection: close header.
+            }
+        });
+
+        let r1 = simple_http_post(port2, "/completion", &json!({"seq": 1}), 1000).unwrap();
+        let r2 = simple_http_post(port2, "/completion", &json!({"seq": 2}), 1000).unwrap();
+        assert_eq!(r1["recovered"], json!(1));
+        assert_eq!(r2["recovered"], json!(2));
+        worker2.join().unwrap();
     }
 }

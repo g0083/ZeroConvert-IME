@@ -666,7 +666,6 @@ function Assert-RequiredInstallFiles {
     "EmojiDictionary",
     "zenz.gguf",
     "llama_cpu",
-    "llama_cuda",
     "llama_vulkan"
   )
 

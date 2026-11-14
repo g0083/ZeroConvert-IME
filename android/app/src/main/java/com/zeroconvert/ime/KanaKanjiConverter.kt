@@ -200,9 +200,10 @@ class KanaKanjiConverter {
         profile: String = "",
         personalize: Boolean = true,
         fixedSurfacePrefix: String = "",
-        experimentalKeyboardCorrection: Boolean = false,
+        experimentalKeyboardCorrection: Boolean = true,
         predictiveConversion: Boolean = true,
-        continuation: ConversionContinuation? = null
+        continuation: ConversionContinuation? = null,
+        touchBiases: List<TouchKeyBias> = emptyList()
     ): List<Candidate> = withContext(Dispatchers.Default) {
         val hiragana = composingText.convertTargetBeforeCursor
         if (hiragana.isEmpty()) return@withContext emptyList()
@@ -230,7 +231,7 @@ class KanaKanjiConverter {
 
         com.zeroconvert.ime.engine.WindowsEngine.candidates(
             composingText, leftContext, enableAI, profile, personalize, experimentalKeyboardCorrection,
-            predictiveConversion = predictiveConversion, continuation = continuation
+            predictiveConversion = predictiveConversion, continuation = continuation, touchBiases = touchBiases
         )
     }
 }

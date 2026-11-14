@@ -556,4 +556,14 @@ class KeyboardTouchLogicTest {
         assertEquals(0f, effectiveKeyCapCornerRadiusPx(widthPx = 0f, heightPx = 100f, requestedRadiusPx = 20f), 0.01f)
         assertEquals(0f, effectiveKeyCapCornerRadiusPx(widthPx = 100f, heightPx = 100f, requestedRadiusPx = -5f), 0.01f)
     }
+
+    @Test
+    fun shouldVibrateOnEditorCursorMove_vibratesOnlyWhenMoveCanAdvance() {
+        assertTrue(shouldVibrateOnEditorCursorMove(textInDirection = "あ", hasSelection = false))
+        assertTrue(shouldVibrateOnEditorCursorMove(textInDirection = "\n", hasSelection = false))
+        assertTrue(shouldVibrateOnEditorCursorMove(textInDirection = "", hasSelection = true))
+        assertTrue(shouldVibrateOnEditorCursorMove(textInDirection = null, hasSelection = true))
+        assertFalse(shouldVibrateOnEditorCursorMove(textInDirection = "", hasSelection = false))
+        assertFalse(shouldVibrateOnEditorCursorMove(textInDirection = null, hasSelection = false))
+    }
 }

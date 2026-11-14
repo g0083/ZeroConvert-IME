@@ -25,12 +25,10 @@ pub(super) enum TranslationError {
 #[derive(Clone, Debug, Default)]
 pub(super) struct TypoState {
     pub applied: Option<Rc<AppliedCorrection>>,
-    pub rejected_surface: Option<String>,
-    pub hold_auto_commit: bool,
+    pub correction: shared::assist_policy::CorrectionState,
     pub primary_assist: Option<u64>,
     pub translation_error: Option<TranslationError>,
     pub prediction_continuation: String,
-    accepted: Vec<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -46,8 +44,8 @@ struct Pending {
     generation: u64,
     timer: usize,
     started: Instant,
-    receiver: mpsc::Receiver<AssistOutcome>,
-    task: tokio::task::JoinHandle<()>,
+    receiver: Option<mpsc::Receiver<AssistOutcome>>,
+    task: Option<tokio::task::JoinHandle<()>>,
     correction_task: Option<tokio::task::JoinHandle<()>>,
     correction_receiver: Option<mpsc::Receiver<AssistOutcome>>,
     correction_result: Option<shared::proto::GetAssistCandidatesResponse>,
@@ -62,11 +60,14 @@ struct Pending {
     context_key: (u64, u64, u64),
     translation_error: Option<TranslationError>,
     model: (String, String),
+    features: (bool, bool),
 }
 
 impl Drop for Pending {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
         if let Some(task) = &self.correction_task {
             task.abort();
         }
@@ -103,7 +104,7 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
     }
     let mut results = Vec::new();
     if !pending.prediction_done {
-        if let Some(outcome) = receive(&pending.receiver) {
+        if let Some(outcome) = pending.receiver.as_ref().and_then(receive) {
             pending.prediction_done = true;
             match outcome {
                 AssistOutcome::Done(result) => {
@@ -174,14 +175,19 @@ fn first_assist_ready(
     automatic: bool,
     elapsed: Duration,
 ) -> bool {
-    automatic || (prediction_done && (correction_done || elapsed >= Duration::from_millis(200)))
+    shared::assist_policy::first_result_ready(
+        prediction_done,
+        correction_done,
+        automatic,
+        elapsed.as_millis() as u64,
+    )
 }
 
 fn merge_results(
     state: &mut Composition,
     responses: Vec<(u32, shared::proto::GetAssistCandidatesResponse)>,
 ) -> Option<String> {
-    let rejected = state.typo.rejected_surface.clone();
+    let rejected = state.typo.correction.rejected_surface.clone();
     let mut choices = Vec::new();
     let mut auto_apply = false;
     for (kind, response) in responses {
@@ -206,9 +212,8 @@ fn merge_results(
         }
     }
     // Keep an already displayed Tab target stable until the next edit.
-    if state.typo.primary_assist.is_none() {
-        state.typo.primary_assist = choose_primary(&choices);
-    }
+    state.typo.primary_assist =
+        shared::assist_policy::choose_primary(&choices, state.typo.primary_assist);
     auto_apply
         .then(|| {
             state
@@ -220,13 +225,6 @@ fn merge_results(
                 .cloned()
         })
         .flatten()
-}
-
-fn choose_primary(choices: &[(u32, u64)]) -> Option<u64> {
-    choices
-        .iter()
-        .max_by_key(|(score, id)| (*score, *id == shared::ai_candidate::PREDICTIVE))
-        .map(|(_, id)| *id)
 }
 
 fn editable_composition(composition: &Composition) -> bool {
@@ -418,7 +416,9 @@ impl TextServiceFactory {
         let config = self.input_config_snapshot()?;
         let config = config.app_config();
         let translation = config.general.experimental_translation;
-        if (!translation && !config.general.experimental_ai_assist)
+        if (!translation
+            && !config.general.experimental_typo_correction
+            && !config.general.experimental_ai_assist)
             || IMEState::input_mode()? == InputMode::Latin
             || IMEState::keyboard_disabled().unwrap_or(true)
         {
@@ -462,11 +462,27 @@ impl TextServiceFactory {
             let preview = self.borrow()?.borrow_composition()?.preview.clone();
             self.update_context(&preview)?;
         }
+        let baseline_reading = candidates
+            .texts
+            .first()
+            .and_then(|surface| candidates.prediction_readings.get(surface))
+            .cloned()
+            .unwrap_or_default();
+        let plan = shared::assist_policy::request_plan(
+            config.general.experimental_typo_correction && !translation,
+            config.general.experimental_ai_assist && !translation,
+            corrected,
+            &candidates.hiragana,
+            &baseline_reading,
+        );
+        if !translation && !plan.correction && !plan.prediction {
+            return Ok(());
+        }
         let ipc = IMEState::ipc_service()?.context("No IPC service")?;
-        let (sender, receiver) = mpsc::channel();
         let timer = unsafe { SetTimer(None, 0, 25, Some(poll)) };
         anyhow::ensure!(timer != 0, "Cannot schedule assistance completion");
         let request = shared::proto::GetAssistCandidatesRequest {
+            baseline_reading,
             reading: candidates.hiragana.clone(),
             raw_input: raw_input.clone(),
             baseline: format!(
@@ -487,10 +503,16 @@ impl TextServiceFactory {
             request_id: timer as u64,
             kind: if translation { 3 } else { 2 },
         };
-        let task = ipc.assist_candidates_background(request.clone(), sender);
-        let (correction_task, correction_receiver) = if corrected || translation {
-            (None, None)
+        let (task, receiver) = if translation || plan.prediction {
+            let (sender, receiver) = mpsc::channel();
+            (
+                Some(ipc.assist_candidates_background(request.clone(), sender)),
+                Some(receiver),
+            )
         } else {
+            (None, None)
+        };
+        let (correction_task, correction_receiver) = if plan.correction {
             let (sender, receiver) = mpsc::channel();
             let mut correction = request;
             correction.kind = 1;
@@ -498,6 +520,8 @@ impl TextServiceFactory {
                 Some(ipc.assist_candidates_background(correction, sender)),
                 Some(receiver),
             )
+        } else {
+            (None, None)
         };
         PENDING.with(|pending| {
             *pending.borrow_mut() = Some(Pending {
@@ -511,8 +535,8 @@ impl TextServiceFactory {
                 correction_receiver,
                 correction_result: None,
                 prediction_result: None,
-                prediction_done: false,
-                correction_done: corrected || translation,
+                prediction_done: !translation && !plan.prediction,
+                correction_done: !plan.correction,
                 owner,
                 context,
                 composition,
@@ -523,6 +547,10 @@ impl TextServiceFactory {
                 model: (
                     config.general.experimental_ai_engine.clone(),
                     config.zenzai.backend.clone(),
+                ),
+                features: (
+                    config.general.experimental_typo_correction,
+                    config.general.experimental_ai_assist,
                 ),
             })
         });
@@ -538,7 +566,11 @@ impl TextServiceFactory {
         let config = config.app_config();
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
         if pending.translation != config.general.experimental_translation
-            || (!pending.translation && !config.general.experimental_ai_assist)
+            || pending.features
+                != (
+                    config.general.experimental_typo_correction,
+                    config.general.experimental_ai_assist,
+                )
             || IMEState::keyboard_disabled().unwrap_or(true)
             || self.current_context_has_sensitive_input_scope()
             || pending.context_key != ipc.assist_snapshot_key()
@@ -622,14 +654,19 @@ impl TextServiceFactory {
         if !IMEState::app_config_snapshot()?
             .app_config()
             .general
-            .experimental_ai_assist
+            .experimental_typo_correction
             || IMEState::keyboard_disabled().unwrap_or(true)
         {
             return Ok(());
         }
         let mut original = self.borrow()?.borrow_composition()?.clone();
         if !editable_composition(&original)
-            || original.typo.applied.is_some()
+            || shared::assist_policy::adoption_action(
+                shared::ai_candidate::TYPO_CORRECTION,
+                explicit,
+                true,
+                original.typo.correction.is_applied(),
+            ) != shared::assist_policy::AdoptionAction::ReplaceComposition
             || !original
                 .candidates
                 .candidate_ids
@@ -664,6 +701,18 @@ impl TextServiceFactory {
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
         let ledger = ipc.input_ledger_snapshot();
         let source = original.candidates.hiragana.clone();
+        let mut correction = original.typo.correction.clone();
+        if !correction.apply(
+            &source,
+            surface,
+            explicit,
+            shared::conversion_policy::raw_input_has_pending_romaji_tail(
+                &original.raw_input,
+                &source,
+            ),
+        ) {
+            return Ok(());
+        }
         let mut candidates = match ipc.replace_with_direct_surface(surface) {
             Ok(candidates) => candidates,
             Err(error) => {
@@ -675,16 +724,10 @@ impl TextServiceFactory {
         };
         select_surface(&mut candidates, surface);
         // Persist canonical converter input before any reentrant TSF edit.
-        let mut accepted = original.typo.accepted.clone();
         original.typo = TypoState {
-            rejected_surface: Some(surface.into()),
-            accepted: accepted.clone(),
+            correction: original.typo.correction.clone(),
             ..Default::default()
         };
-        if explicit {
-            accepted.push((source.clone(), surface.into()));
-            accepted.truncate(8);
-        }
         let applied = Rc::new(AppliedCorrection {
             original,
             ledger,
@@ -706,9 +749,7 @@ impl TextServiceFactory {
             state.live_conversion_snapshots.clear();
             state.typo = TypoState {
                 applied: Some(applied),
-                hold_auto_commit: true,
-                rejected_surface: None,
-                accepted,
+                correction,
                 ..Default::default()
             };
         }
@@ -734,6 +775,10 @@ impl TextServiceFactory {
         let Some(applied) = self.borrow()?.borrow_composition()?.typo.applied.clone() else {
             return Ok(());
         };
+        let mut correction = self.borrow()?.borrow_composition()?.typo.correction.clone();
+        if !correction.revert() {
+            return Ok(());
+        }
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
         let mut candidates = match ipc.replace_from_snapshot(&applied.ledger) {
             Ok(candidates) => candidates,
@@ -745,6 +790,7 @@ impl TextServiceFactory {
         let baseline = format!("{}{}", applied.original.preview, applied.original.suffix);
         select_surface(&mut candidates, &baseline);
         let mut restored = applied.original.clone();
+        restored.typo.correction = correction;
         restored.state = CompositionState::Composing;
         restored.preview = baseline.clone();
         restored.suffix.clear();
@@ -771,10 +817,10 @@ impl TextServiceFactory {
                 service.borrow_composition().ok().map(|state| {
                     let mut accepted: Vec<_> = state
                         .typo
-                        .accepted
-                        .iter()
-                        .filter(|(_, surface)| displayed.contains(surface))
-                        .cloned()
+                        .correction
+                        .acceptances_for_commit(displayed)
+                        .into_iter()
+                        .map(|entry| (entry.reading, entry.surface))
                         .collect();
                     // Space/arrow selection is also an explicit acceptance. Learn
                     // only after the selected whole-composition surface commits.
@@ -807,20 +853,22 @@ impl TextServiceFactory {
         }
         let service = self.borrow()?;
         let mut state = service.borrow_mut_composition()?;
+        let rejected = state.typo.correction.rejected_surface.clone();
+        state.typo.correction.edited();
         state.typo.applied = None;
         state.typo.primary_assist = None;
         state.typo.prediction_continuation.clear();
         // Retain the hold through the first following edit; the ordinary stability
         // window must build up again before automatic prefix commit is possible.
-        if state.typo.hold_auto_commit {
+        if state.typo.correction.hold_auto_commit {
             state.live_conversion_snapshots.clear();
             state.live_conversion_history.clear();
         }
-        if !actions
+        if actions
             .iter()
             .any(|action| matches!(action, ClientAction::ShowCandidateWindow))
         {
-            state.typo.rejected_surface = None;
+            state.typo.correction.rejected_surface = rejected;
         }
         Ok(())
     }
@@ -839,6 +887,7 @@ mod tests {
             raw_input: "kaigihaashitadesu".into(),
             preview: "会議は明日です".into(),
             candidates: Candidates {
+                prediction_readings: Default::default(),
                 texts: vec!["会議は明日です".into()],
                 sub_texts: vec![String::new()],
                 hiragana: "かいぎはあしたです".into(),
@@ -948,6 +997,7 @@ mod tests {
     fn response(id: u64, text: &str, relevance: u32) -> shared::proto::GetAssistCandidatesResponse {
         shared::proto::GetAssistCandidatesResponse {
             suggestions: vec![shared::proto::Suggestion {
+                prediction_reading: Default::default(),
                 text: text.into(),
                 candidate_id: id,
                 corresponding_count: 4,
@@ -996,6 +1046,7 @@ mod tests {
     fn bounded_keyboard_proposal_precedes_continuation_without_automatic_apply() {
         let mut state = Composition {
             candidates: Candidates {
+                prediction_readings: Default::default(),
                 texts: vec!["資料を送りmっす".into()],
                 sub_texts: vec![String::new()],
                 hiragana: "しりょうをおくりmっす".into(),
@@ -1029,6 +1080,7 @@ mod tests {
     fn weak_correction_cannot_hide_prediction_or_change_displayed_tab_target() {
         let mut state = Composition {
             candidates: Candidates {
+                prediction_readings: Default::default(),
                 texts: vec!["よろしくお願い".into()],
                 sub_texts: vec![String::new()],
                 hiragana: "よろしくおねがい".into(),
@@ -1083,10 +1135,13 @@ mod tests {
             Some(shared::ai_candidate::PREDICTIVE)
         );
         assert_eq!(
-            choose_primary(&[
-                (70, shared::ai_candidate::TYPO_CORRECTION),
-                (45, shared::ai_candidate::PREDICTIVE)
-            ]),
+            shared::assist_policy::choose_primary(
+                &[
+                    (70, shared::ai_candidate::TYPO_CORRECTION),
+                    (45, shared::ai_candidate::PREDICTIVE)
+                ],
+                None
+            ),
             Some(shared::ai_candidate::TYPO_CORRECTION)
         );
     }
@@ -1132,6 +1187,7 @@ mod tests {
             raw_input: "okseri".into(),
             state: CompositionState::Composing,
             candidates: Candidates {
+                prediction_readings: Default::default(),
                 texts: vec!["おkせり".into(), "おかえり".into()],
                 sub_texts: vec![String::new(); 2],
                 hiragana: "おkせり".into(),
@@ -1220,6 +1276,7 @@ mod tests {
     fn rejected_correction_stays_hidden_and_labels_never_enter_document() {
         let mut candidates = Candidates::default();
         let suggestion = shared::proto::Suggestion {
+            prediction_reading: Default::default(),
             text: "おかえり".into(),
             subtext: "補正".into(),
             corresponding_count: 6,
@@ -1234,6 +1291,7 @@ mod tests {
     #[test]
     fn correction_is_second_and_keeps_normal_candidate_order_and_identity() {
         let mut candidates = Candidates {
+            prediction_readings: Default::default(),
             texts: vec!["原候補".into(), "通常の別候補".into()],
             sub_texts: vec![String::new(); 2],
             candidate_ids: vec![10, 20],
@@ -1243,6 +1301,7 @@ mod tests {
         append_suggestions(
             &mut candidates,
             vec![shared::proto::Suggestion {
+                prediction_reading: Default::default(),
                 text: "おかえり".into(),
                 candidate_id: shared::ai_candidate::TYPO_CORRECTION,
                 corresponding_count: 6,

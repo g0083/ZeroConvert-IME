@@ -60,30 +60,13 @@ object ModelManager {
 
     val DEFAULT_MODEL_SPEC = BUILT_IN_MODELS[0]
 
-    private const val CORRECTOR_SHA256 = "dd87dbdc1a04cb4391f8429e6a1addc3c65d824996dd465e96803a5c1411fe2e"
-
-    /** Separate directory: never offer the Corrector as an ordinary conversion model. */
-    fun ensureCorrector(context: Context): File? {
-        val dir = File(context.filesDir, "assist").apply { mkdirs() }
-        val destination = File(dir, "corrector-$CORRECTOR_SHA256.gguf")
-        fun hash(file: File): String = file.inputStream().use { input ->
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
-            val buffer = ByteArray(65536)
-            while (true) { val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
-            digest.digest().joinToString("") { "%02x".format(it) }
-        }
-        return try {
-            if (destination.isFile && hash(destination) == CORRECTOR_SHA256) return destination
-            val temporary = File(dir, "corrector.tmp")
-            context.assets.open("models/zerocon-model-corrector.gguf").use { input ->
-                temporary.outputStream().use { input.copyTo(it) }
-            }
-            check(hash(temporary) == CORRECTOR_SHA256) { "Corrector model checksum mismatch" }
-            check(temporary.renameTo(destination)) { "Cannot install Corrector model" }
-            destination
+    /** Remove retired separate corrector copies from upgraded app storage. */
+    fun cleanupLegacyCorrector(context: Context) {
+        try {
+            val assistDir = File(context.filesDir, "assist")
+            if (assistDir.exists()) assistDir.deleteRecursively()
         } catch (error: Exception) {
-            Log.w(TAG, "Corrector model unavailable", error)
-            null
+            Log.w(TAG, "Failed to remove legacy assist dir", error)
         }
     }
 

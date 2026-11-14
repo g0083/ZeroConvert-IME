@@ -782,6 +782,7 @@ pub(super) fn candidates(
     corresponding_count: &[i32],
 ) -> Candidates {
     Candidates {
+        prediction_readings: Default::default(),
         texts: texts.iter().map(|value| (*value).to_string()).collect(),
         sub_texts: sub_texts.iter().map(|value| (*value).to_string()).collect(),
         hiragana: hiragana.to_string(),
@@ -1493,10 +1494,14 @@ fn existing_temporary_latin_after_space_conversion_preserves_direct_composition(
 }
 
 #[test]
-fn delete_uses_remove_text_path_while_composing() {
+fn delete_uses_delete_forward_path_before_suffix_while_composing() {
     let composition = Composition {
         state: CompositionState::Composing,
-        raw_input: "ab".to_string(),
+        preview: "あ".to_string(),
+        suffix: "い".to_string(),
+        raw_input: "a".to_string(),
+        raw_hiragana: "あ".to_string(),
+        cursor_position: Some(1),
         ..Composition::default()
     };
 
@@ -1508,17 +1513,19 @@ fn delete_uses_remove_text_path_while_composing() {
         &AppConfig::default(),
         false,
     )
-    .expect("delete should remove composing text");
+    .expect("delete should forward-delete into the trailing suffix");
 
     assert_eq!(next_state, CompositionState::Composing);
-    assert_eq!(actions, vec![ClientAction::RemoveText]);
+    assert_eq!(actions, vec![ClientAction::DeleteForwardText]);
 }
 
 #[test]
-fn delete_ends_composition_after_last_character() {
+fn delete_ends_composition_when_deleting_the_sole_character_from_start() {
     let composition = Composition {
         state: CompositionState::Previewing,
+        suffix: "あ".to_string(),
         raw_input: "a".to_string(),
+        cursor_position: Some(0),
         ..Composition::default()
     };
 
@@ -1530,13 +1537,79 @@ fn delete_ends_composition_after_last_character() {
         &AppConfig::default(),
         false,
     )
-    .expect("delete should clear the final composing character");
+    .expect("delete at start of single-character composition should clear and end");
 
     assert_eq!(next_state, CompositionState::None);
     assert_eq!(
         actions,
-        vec![ClientAction::RemoveText, ClientAction::EndComposition]
+        vec![
+            ClientAction::DeleteForwardText,
+            ClientAction::EndComposition
+        ]
     );
+}
+
+#[test]
+fn delete_and_backspace_are_consumed_noops_at_their_respective_boundaries() {
+    let end_composition = Composition {
+        state: CompositionState::Composing,
+        preview: "あ".to_string(),
+        raw_input: "a".to_string(),
+        raw_hiragana: "あ".to_string(),
+        cursor_position: Some(1),
+        ..Composition::default()
+    };
+    let (end_next_state, end_actions) = TextServiceFactory::plan_actions_for_user_action(
+        &end_composition,
+        &UserAction::Delete,
+        &InputMode::Kana,
+        false,
+        &AppConfig::default(),
+        false,
+    )
+    .expect("delete at end should be consumed as a no-op");
+    assert_eq!(end_next_state, CompositionState::Composing);
+    assert!(end_actions.is_empty());
+
+    let start_composition = Composition {
+        state: CompositionState::Previewing,
+        suffix: "あ".to_string(),
+        raw_input: "a".to_string(),
+        cursor_position: Some(0),
+        ..Composition::default()
+    };
+    let (start_next_state, start_actions) = TextServiceFactory::plan_actions_for_user_action(
+        &start_composition,
+        &UserAction::Backspace,
+        &InputMode::Kana,
+        false,
+        &AppConfig::default(),
+        false,
+    )
+    .expect("backspace at start should be consumed as a no-op");
+    assert_eq!(start_next_state, CompositionState::Previewing);
+    assert!(start_actions.is_empty());
+
+    let mid_composition = Composition {
+        state: CompositionState::Composing,
+        preview: "あ".to_string(),
+        suffix: "い".to_string(),
+        raw_input: "a".to_string(),
+        raw_hiragana: "あ".to_string(),
+        cursor_position: Some(1),
+        ..Composition::default()
+    };
+    let (mid_next_state, mid_actions) = TextServiceFactory::plan_actions_for_user_action(
+        &mid_composition,
+        &UserAction::Backspace,
+        &InputMode::Kana,
+        false,
+        &AppConfig::default(),
+        false,
+    )
+    .expect("backspace mid-sentence should remove text before cursor");
+    assert_eq!(mid_next_state, CompositionState::Composing);
+    assert_eq!(mid_actions, vec![ClientAction::RemoveText]);
 }
 
 #[test]
@@ -1850,64 +1923,47 @@ fn kana_input_lowercases_ascii_uppercase_from_capslock() {
 }
 
 #[test]
-fn right_arrow_prepares_clause_navigation_without_initial_move() {
-    let composition = Composition {
-        state: CompositionState::Composing,
-        preview: "いい加減統一しろ".to_string(),
-        raw_input: "iikagentouitusiro".to_string(),
-        raw_hiragana: "いいかげんとういつしろ".to_string(),
-        corresponding_count: 17,
-        ..Composition::default()
-    };
+fn left_right_and_shift_arrows_move_cursor_by_one_character() {
+    for initial_state in [CompositionState::Composing, CompositionState::Previewing] {
+        let composition = Composition {
+            state: initial_state,
+            preview: "いい加減統一しろ".to_string(),
+            raw_input: "iikagentouitusiro".to_string(),
+            raw_hiragana: "いいかげんとういつしろ".to_string(),
+            corresponding_count: 17,
+            ..Composition::default()
+        };
 
-    let (_, actions) = TextServiceFactory::plan_actions_for_user_action(
-        &composition,
-        &UserAction::Navigation(Navigation::Right),
-        &InputMode::Kana,
-        false,
-        &AppConfig::default(),
-        false,
-    )
-    .expect("right arrow should prepare clause navigation");
+        for (user_action, expected_delta) in [
+            (UserAction::Navigation(Navigation::Left), -1),
+            (UserAction::Navigation(Navigation::Right), 1),
+            (UserAction::AdjustClauseBoundary(-1), -1),
+            (UserAction::AdjustClauseBoundary(1), 1),
+        ] {
+            let (next_state, actions) = TextServiceFactory::plan_actions_for_user_action(
+                &composition,
+                &user_action,
+                &InputMode::Kana,
+                false,
+                &AppConfig::default(),
+                false,
+            )
+            .expect("arrow and shift-arrow should move cursor during composition");
 
-    assert_eq!(
-        actions,
-        vec![ClientAction::EnsureClauseNavigationReady {
-            prepare_future_clauses: true,
-        }]
-    );
+            assert_eq!(next_state, CompositionState::Composing);
+            assert_eq!(actions, vec![ClientAction::MoveCursor(expected_delta)]);
+        }
+    }
 }
 
 #[test]
-fn initial_left_arrow_defers_batch_move_ui_sync_until_last_clause() {
-    let composition = Composition {
-        state: CompositionState::Composing,
-        preview: "いい加減統一しろ".to_string(),
-        raw_input: "iikagentouitusiro".to_string(),
-        raw_hiragana: "いいかげんとういつしろ".to_string(),
-        corresponding_count: 17,
-        ..Composition::default()
-    };
-
-    let (_, actions) = TextServiceFactory::plan_actions_for_user_action(
-        &composition,
-        &UserAction::Navigation(Navigation::Left),
-        &InputMode::Kana,
-        false,
-        &AppConfig::default(),
-        false,
-    )
-    .expect("left arrow should prepare navigation and move to the last clause");
-
-    assert_eq!(
-        actions,
-        vec![
-            ClientAction::EnsureClauseNavigationReady {
-                prepare_future_clauses: false,
-            },
-            ClientAction::MoveClause(TextServiceFactory::MOVE_CLAUSE_TO_LAST),
-        ]
-    );
+fn should_defer_clause_navigation_ready_sync_for_batch_move_to_last() {
+    let actions = vec![
+        ClientAction::EnsureClauseNavigationReady {
+            prepare_future_clauses: false,
+        },
+        ClientAction::MoveClause(TextServiceFactory::MOVE_CLAUSE_TO_LAST),
+    ];
 
     assert!(TextServiceFactory::should_defer_clause_navigation_ready_sync(&actions, 0));
     assert!(!TextServiceFactory::should_defer_clause_navigation_ready_sync(&actions, 1));
@@ -4100,6 +4156,7 @@ fn test_live_server_okseri() {
     let started = Instant::now();
     let task = ipc.assist_candidates_background(
         shared::proto::GetAssistCandidatesRequest {
+            baseline_reading: Default::default(),
             reading: candidates.hiragana.clone(),
             raw_input: "okseri".into(),
             baseline: candidates.texts[0].clone(),
@@ -4275,4 +4332,188 @@ fn apply_set_selection_number_selects_the_requested_candidate() {
     assert_eq!(selection_index, 1);
     assert_eq!(preview, "返還");
     assert_eq!(corresponding_count, 3);
+}
+
+#[test]
+fn mid_sentence_typing_in_composing_and_previewing_inserts_without_committing() {
+    for state in [CompositionState::Composing, CompositionState::Previewing] {
+        let composition = Composition {
+            state,
+            preview: "あ".to_string(),
+            suffix: "い".to_string(),
+            raw_input: "a".to_string(),
+            raw_hiragana: "あ".to_string(),
+            cursor_position: Some(1),
+            ..Composition::default()
+        };
+
+        let (next_state, actions) = TextServiceFactory::plan_actions_for_user_action(
+            &composition,
+            &UserAction::Input('k'),
+            &InputMode::Kana,
+            false,
+            &AppConfig::default(),
+            false,
+        )
+        .expect("mid-sentence typing should continue composing without committing");
+
+        assert_eq!(next_state, CompositionState::Composing);
+        assert_eq!(actions, vec![ClientAction::AppendText("k".to_string())]);
+    }
+}
+
+#[test]
+fn punctuation_commit_is_suppressed_mid_sentence_and_allowed_at_end() {
+    let mut app_config = AppConfig::default();
+    app_config.general.punctuation_commit = true;
+
+    for state in [CompositionState::Composing, CompositionState::Previewing] {
+        let mid_composition = Composition {
+            state,
+            preview: "あ".to_string(),
+            suffix: "い".to_string(),
+            raw_input: "a".to_string(),
+            raw_hiragana: "あ".to_string(),
+            cursor_position: Some(1),
+            ..Composition::default()
+        };
+
+        let (next_state, actions) = TextServiceFactory::plan_actions_for_user_action(
+            &mid_composition,
+            &UserAction::Input(','),
+            &InputMode::Kana,
+            false,
+            &app_config,
+            false,
+        )
+        .expect("mid-sentence punctuation should be inserted rather than auto-committing");
+
+        assert_eq!(next_state, CompositionState::Composing);
+        assert_eq!(actions, vec![ClientAction::AppendText(",".to_string())]);
+    }
+
+    let end_composition = Composition {
+        state: CompositionState::Composing,
+        preview: "あ".to_string(),
+        raw_input: "a".to_string(),
+        raw_hiragana: "あ".to_string(),
+        cursor_position: Some(1),
+        ..Composition::default()
+    };
+    let (next_state, actions) = TextServiceFactory::plan_actions_for_user_action(
+        &end_composition,
+        &UserAction::Input(','),
+        &InputMode::Kana,
+        false,
+        &app_config,
+        false,
+    )
+    .expect("punctuation at end should trigger auto-commit");
+
+    assert_eq!(next_state, CompositionState::None);
+    assert_eq!(
+        actions,
+        vec![
+            ClientAction::EndComposition,
+            ClientAction::CommitTextDirect("、".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn candidate_cycle_and_enter_at_cursor_zero_handle_empty_prefix() {
+    let composition = Composition {
+        state: CompositionState::Previewing,
+        suffix: "あ".to_string(),
+        raw_input: "a".to_string(),
+        cursor_position: Some(0),
+        ..Composition::default()
+    };
+
+    for action in [
+        UserAction::Space,
+        UserAction::Navigation(Navigation::Up),
+        UserAction::Navigation(Navigation::Down),
+    ] {
+        let (next_state, actions) = TextServiceFactory::plan_actions_for_user_action(
+            &composition,
+            &action,
+            &InputMode::Kana,
+            false,
+            &AppConfig::default(),
+            false,
+        )
+        .expect("candidate actions at cursor 0 should be consumed as no-ops");
+
+        assert_eq!(next_state, CompositionState::Composing);
+        assert!(actions.is_empty());
+    }
+
+    let (enter_state, enter_actions) = TextServiceFactory::plan_actions_for_user_action(
+        &composition,
+        &UserAction::Enter,
+        &InputMode::Kana,
+        false,
+        &AppConfig::default(),
+        false,
+    )
+    .expect("enter at cursor 0 should commit trailing suffix and end");
+
+    assert_eq!(enter_state, CompositionState::None);
+    assert_eq!(
+        enter_actions,
+        vec![
+            ClientAction::CommitWithText("あ".to_string()),
+            ClientAction::EndComposition,
+        ]
+    );
+}
+
+#[test]
+fn enter_mid_sentence_commits_prefix_and_keeps_suffix() {
+    let composition = Composition {
+        state: CompositionState::Composing,
+        preview: "漢字".to_string(),
+        suffix: "あ".to_string(),
+        raw_input: "kanji".to_string(),
+        raw_hiragana: "かんじ".to_string(),
+        corresponding_count: 5,
+        cursor_position: Some(2),
+        ..Composition::default()
+    };
+
+    let (next_state, actions) = TextServiceFactory::plan_actions_for_user_action(
+        &composition,
+        &UserAction::Enter,
+        &InputMode::Kana,
+        false,
+        &AppConfig::default(),
+        false,
+    )
+    .expect("mid-sentence enter should commit only the converted prefix");
+
+    assert_eq!(next_state, CompositionState::Composing);
+    assert_eq!(
+        actions,
+        vec![
+            learning_action(
+                LearningCommitScope::CurrentClause,
+                LearningCommitKind::Partial
+            ),
+            ClientAction::ShrinkText(String::new()),
+        ]
+    );
+}
+
+#[test]
+fn append_result_with_non_empty_suffix_does_not_indicate_server_reset() {
+    let previous = candidates(&["あいう"], &[""], "あいう", &[3]);
+    let after_mid_insert = candidates(&["あか"], &["いう"], "あか", &[2]);
+
+    assert!(!TextServiceFactory::append_result_indicates_server_reset(
+        "aiu",
+        &previous,
+        "k",
+        &after_mid_insert,
+    ));
 }

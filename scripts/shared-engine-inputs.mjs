@@ -20,6 +20,7 @@ export const NATIVE_INPUTS = [
 export const SHARED_INPUTS = [
   'windows/scripts/converter_patch.py',
   'windows/crates/shared/src/conversion_policy.rs',
+  'windows/crates/shared/src/assist_policy.rs',
   // Compiled into libzenz_jni.so by engine/native/keyboard_assist.cpp.
   'windows/native/keyboard-prior/channel.hpp',
   'windows/native/keyboard-prior/roman_table.hpp',

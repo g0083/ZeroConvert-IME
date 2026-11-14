@@ -89,8 +89,35 @@ pub fn suggest_composition(
     baseline: &str,
     config: &AiAssistConfig,
 ) -> Option<TypoSuggestion> {
+    suggest_composition_with_channel(context, input, baseline, config, true)
+}
+
+/// Fallback used after `keyboard_hybrid::suggest` already ran channel repair and
+/// returned `Some(None)`: evaluates learned/dictionary/floating-consonant and
+/// deterministic heuristics without running `keyboard_hybrid::repair_readings` twice.
+pub fn suggest_composition_heuristic(
+    context: &str,
+    input: &str,
+    baseline: &str,
+    config: &AiAssistConfig,
+) -> Option<TypoSuggestion> {
+    suggest_composition_with_channel(context, input, baseline, config, false)
+}
+
+fn suggest_composition_with_channel(
+    context: &str,
+    input: &str,
+    baseline: &str,
+    config: &AiAssistConfig,
+    allow_channel_repair: bool,
+) -> Option<TypoSuggestion> {
     let (prefix, target) = trailing_phrase(input, baseline)?;
-    let mut result = suggest(&format!("{context}{prefix}"), target, config)?;
+    let mut result = suggest_with_channel(
+        &format!("{context}{prefix}"),
+        target,
+        config,
+        allow_channel_repair,
+    )?;
     if super::reading_check::has_same_reading(&result.surface, target) {
         return None;
     }
@@ -110,6 +137,86 @@ pub fn can_auto_apply_composition(input: &str, baseline: &str, surface: &str) ->
             .strip_prefix(prefix)
             .is_some_and(|s| can_auto_apply(target, s))
     })
+}
+
+fn normalize_ascii_digit(ch: char) -> Option<char> {
+    match ch {
+        '0'..='9' => Some(ch),
+        '０'..='９' => char::from_u32(ch as u32 - 0xFEE0),
+        _ => None,
+    }
+}
+
+/// Replaces contiguous ASCII/fullwidth digit runs with `"nam"` and returns ASCII digit runs.
+pub fn mask_digits_with_nam(text: &str) -> (String, Vec<String>) {
+    let mut masked = String::with_capacity(text.len());
+    let mut digits = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if let Some(ascii) = normalize_ascii_digit(ch) {
+            current.push(ascii);
+        } else {
+            if !current.is_empty() {
+                digits.push(std::mem::take(&mut current));
+                masked.push_str("nam");
+            }
+            masked.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        digits.push(current);
+        masked.push_str("nam");
+    }
+    (masked, digits)
+}
+
+/// Restores `"nam"` placeholders left-to-right, preserving lowercase English words such as `"name"`.
+pub fn restore_nam_digits(surface: &str, digits: &[String]) -> String {
+    if digits.is_empty() || !surface.contains("nam") {
+        return surface.to_string();
+    }
+    let replace_pass = |input: &str, start_idx: usize, fallback: bool| -> (String, usize) {
+        let mut out = String::with_capacity(input.len());
+        let mut rest = input;
+        let mut digit_idx = start_idx;
+        while digit_idx < digits.len() {
+            let Some(pos) = rest.find("nam") else {
+                break;
+            };
+            out.push_str(&rest[..pos]);
+            let after = &rest[pos + 3..];
+            let keep_literal = if !fallback {
+                matches!(after.chars().next(), Some('a'..='w' | 'y'..='z'))
+            } else {
+                let prev_is_lower = out
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_ascii_lowercase());
+                let is_english_stem = after.starts_with('e')
+                    || (after.starts_with("ing")
+                        && after
+                            .as_bytes()
+                            .get(3)
+                            .is_none_or(|b| !b.is_ascii_lowercase()));
+                prev_is_lower || is_english_stem
+            };
+            if keep_literal {
+                out.push_str("nam");
+            } else {
+                out.push_str(&digits[digit_idx]);
+                digit_idx += 1;
+            }
+            rest = after;
+        }
+        out.push_str(rest);
+        (out, digit_idx)
+    };
+
+    let (first_pass, consumed) = replace_pass(surface, 0, false);
+    if consumed < digits.len() && first_pass.contains("nam") {
+        return replace_pass(&first_pass, consumed, true).0;
+    }
+    first_pass
 }
 
 pub fn payload(context: &str, input: &str) -> Option<Value> {
@@ -132,17 +239,22 @@ pub fn payload(context: &str, input: &str) -> Option<Value> {
         .into_iter()
         .rev()
         .collect();
+    let (masked_context, _) = mask_digits_with_nam(&context);
     let target = to_katakana(input);
-    let prompt = if context.is_empty() {
-        format!("\u{EE00}{target}\u{EE01}")
+    let (masked_target, _) = mask_digits_with_nam(&target);
+    let prompt = if masked_context.is_empty() {
+        format!("\u{EE00}{masked_target}\u{EE01}")
     } else {
-        format!("\u{EE02}{context}\u{EE00}{target}\u{EE01}")
+        format!("\u{EE02}{masked_context}\u{EE00}{masked_target}\u{EE01}")
     };
-    Some(
-        json!({"prompt": prompt, "n_predict": (count * 3 + 16).clamp(32, 384),
+    Some(json!({
+        "prompt": prompt,
+        "n_predict": (count * 3 + 16).clamp(32, 384),
         "temperature": 0.0,
-        "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]}),
-    )
+        "cache_prompt": true,
+        "id_slot": 0,
+        "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
+    }))
 }
 
 pub fn completed_surface(response: &Value, input: &str, budget: u64) -> Option<String> {
@@ -157,16 +269,21 @@ pub fn completed_surface(response: &Value, input: &str, budget: u64) -> Option<S
     {
         return None;
     }
-    let surface = response.get("content")?.as_str()?.trim();
+    let raw_surface = response.get("content")?.as_str()?.trim();
+    let (_, input_digits) = mask_digits_with_nam(input);
+    let surface = restore_nam_digits(raw_surface, &input_digits);
     (!surface.is_empty()
         && surface.chars().count() <= input.chars().count() * 3 + 16
         && !surface
             .chars()
             .any(|c| c.is_control() || ('\u{EE00}'..='\u{EE02}').contains(&c)))
-    .then(|| surface.to_owned())
+    .then_some(surface)
 }
 
 fn infer(context: &str, input: &str, config: &AiAssistConfig) -> Option<String> {
+    if !config.enabled || config.corrector_port < 1024 {
+        return None;
+    }
     let payload = payload(context, input)?;
     let key = (
         config.engine.clone(),
@@ -193,9 +310,19 @@ fn infer(context: &str, input: &str, config: &AiAssistConfig) -> Option<String> 
     Some(surface)
 }
 
-/// Exact, explicit repairs precede inference. Fuzzy vocabulary matches only supply
-/// an offline fallback and never preempt a successfully completed model response.
+/// Candidate readings come from dictionary/channel repair, then the main conversion
+/// model (or lookup fallback) produces the final surface. Raw unrepaired input is
+/// never sent to a separate seq2seq corrector model.
 pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<TypoSuggestion> {
+    suggest_with_channel(context, input, config, true)
+}
+
+fn suggest_with_channel(
+    context: &str,
+    input: &str,
+    config: &AiAssistConfig,
+    allow_channel_repair: bool,
+) -> Option<TypoSuggestion> {
     let context = context.replace(' ', "\u{3000}");
     let input = input.trim();
     if !config.enabled || !(2..=MAX_INPUT).contains(&input.chars().count()) {
@@ -227,9 +354,8 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
             learned: false,
         });
     }
-    // Mixed kana/Latin input is absent from the current corrector training data.
-    // A generic one-key reconstruction supplies a candidate, then the corrector
-    // converts that candidate to its context-dependent final surface.
+    // Mixed kana/Latin input is repaired by deterministic one-key reconstruction,
+    // then converted to its context-dependent surface by the main model.
     if let Some(reading) = romaji_decoder::decode_floating_consonant_typo(input) {
         let expected = typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone());
         let surface = infer(&context, &reading, config)
@@ -244,7 +370,8 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
             learned: false,
         });
     }
-    if config.engine == "embedded"
+    if allow_channel_repair
+        && config.engine == "embedded"
         && config.corrector_port >= 1024
         && runtime::allow_native_worker()
     {
@@ -295,16 +422,7 @@ pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<Ty
             );
         }
     }
-    match infer(&context, input, config) {
-        Some(surface) if katakana_to_hiragana(&surface) == katakana_to_hiragana(input) => None,
-        Some(surface) => Some(TypoSuggestion {
-            surface: surface.clone(),
-            token_reading: input.into(),
-            token_surface: surface,
-            learned: false,
-        }),
-        None => heuristic_typo_suggestion(&context, input, config),
-    }
+    heuristic_typo_suggestion(&context, input, config)
 }
 
 /// Automatic correction requires independent, narrow evidence. Model probability
@@ -391,82 +509,158 @@ mod tests {
         assert!(!supported_reading_change("ai", "あい"));
         assert!(reading_change_distance(&"あ".repeat(129), "あ").is_none());
     }
-    fn mock_inference(input: &str, reply: Value) -> (Option<TypoSuggestion>, Value) {
-        use std::{
-            io::{BufRead, BufReader},
-            net::TcpListener,
+    #[test]
+    fn unified_correction_converts_repaired_readings_via_main_model_and_never_sends_raw_input() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
         };
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        listener.set_nonblocking(true).unwrap();
-        let worker = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            let mut stream = loop {
-                if let Ok((stream, _)) = listener.accept() {
-                    break stream;
-                }
-                assert!(
-                    Instant::now() < deadline,
-                    "corrector request was never sent"
-                );
-                std::thread::sleep(Duration::from_millis(5));
-            };
-            stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
-            let mut reader = BufReader::new(&mut stream);
-            let mut length = 0;
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some(value) = line.strip_prefix("Content-Length: ") {
-                    length = value.trim().parse().unwrap();
-                }
+
+        struct MockUnifiedBackend {
+            repair: Option<Value>,
+            reply: Value,
+            calls: Arc<Mutex<Vec<(u16, String)>>>,
+        }
+        impl runtime::CompletionBackend for MockUnifiedBackend {
+            fn read_learning(&self) -> bool {
+                false
             }
-            let mut body = vec![0; length];
-            reader.read_exact(&mut body).unwrap();
-            drop(reader);
-            let response = reply.to_string();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response.len(),
-                response
-            )
-            .unwrap();
-            serde_json::from_slice(&body).unwrap()
-        });
+            fn allow_native_worker(&self) -> bool {
+                true
+            }
+            fn wait_for_native_worker(&self) -> bool {
+                true
+            }
+            fn complete(
+                &self,
+                port: u16,
+                _path: &str,
+                body: &Value,
+                _timeout_ms: u64,
+            ) -> Option<Value> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((port, body["prompt"].as_str().unwrap_or_default().to_owned()));
+                Some(self.reply.clone())
+            }
+            fn keyboard_repair(
+                &self,
+                _raw: &str,
+                _input: &str,
+                _context: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                Some(self.repair.clone())
+            }
+        }
+
         let config = AiAssistConfig {
             enabled: true,
-            corrector_port: port,
+            corrector_port: runtime::PREDICTION_SERVER_PORT,
             ..Default::default()
         };
-        let result = suggest("確認をお願いします。", input, &config);
-        (result, worker.join().unwrap())
-    }
-    #[test]
-    fn completed_model_response_preempts_fuzzy_rules_and_unchanged_response_vetoes_them() {
-        let (suggestion, sent) = mock_inference(
-            "おせわになております",
-            json!({"content":"お世話になっております", "stopped_eos":true}),
-        );
-        assert_eq!(suggestion.unwrap().surface, "お世話になっております");
-        assert!(sent["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("オセワニナテオリマス"));
-        let (suggestion, _) = mock_inference(
-            "よろすく",
-            json!({"content":"ヨロスク", "stopped_eos":true}),
-        );
-        assert!(
-            suggestion.is_none(),
-            "a fuzzy dictionary rule must not overrule the model's unchanged result"
-        );
+
+        // 1. Repaired reading from keyboard channel is converted using main conversion model.
+        clear_cache();
+        let sent_calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = MockUnifiedBackend {
+            repair: Some(json!({
+                "observed": "おせわになております",
+                "reading": "おせわになっております",
+                "gain": 45.0
+            })),
+            reply: json!({"content": "お世話になっております", "stopped_eos": true}),
+            calls: sent_calls.clone(),
+        };
+        runtime::with_backend(Box::new(backend), || {
+            let suggestion =
+                suggest("確認をお願いします。", "おせわになております", &config).unwrap();
+            assert_eq!(suggestion.surface, "お世話になっております");
+            assert_eq!(suggestion.token_reading, "おせわになております");
+        });
+        {
+            let recorded = sent_calls.lock().unwrap();
+            assert_eq!(recorded.len(), 1);
+            assert_eq!(recorded[0].0, runtime::PREDICTION_SERVER_PORT);
+            assert!(recorded[0].1.contains("オセワニナッテオリマス"));
+            assert!(!recorded[0].1.contains("オセワニナテオリマス"));
+        }
+
+        // 2. When main model returns a surface with a mismatched reading, channel repair rejects it.
+        clear_cache();
+        let bad_surface_calls = Arc::new(Mutex::new(Vec::new()));
+        let bad_surface_backend = MockUnifiedBackend {
+            repair: Some(json!({
+                "observed": "おせわになております",
+                "reading": "おせわになっております",
+                "gain": 45.0
+            })),
+            reply: json!({"content": "全く違う変換結果", "stopped_eos": true}),
+            calls: bad_surface_calls.clone(),
+        };
+        runtime::with_backend(Box::new(bad_surface_backend), || {
+            assert!(suggest("確認をお願いします。", "おせわになております", &config).is_none());
+        });
+        assert_eq!(bad_surface_calls.lock().unwrap().len(), 1);
+
+        // 3. Unrepaired input is never sent to /completion when no repair candidate exists.
+        clear_cache();
+        struct NoRawInferBackend {
+            calls: Arc<Mutex<Vec<String>>>,
+            repair_calls: Arc<AtomicUsize>,
+        }
+        impl runtime::CompletionBackend for NoRawInferBackend {
+            fn read_learning(&self) -> bool {
+                false
+            }
+            fn allow_native_worker(&self) -> bool {
+                true
+            }
+            fn wait_for_native_worker(&self) -> bool {
+                true
+            }
+            fn complete(
+                &self,
+                _port: u16,
+                _path: &str,
+                body: &Value,
+                _timeout_ms: u64,
+            ) -> Option<Value> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(body["prompt"].as_str().unwrap_or_default().to_owned());
+                Some(json!({"content": "宜しく", "stopped_eos": true}))
+            }
+            fn keyboard_repair(
+                &self,
+                _raw: &str,
+                input: &str,
+                _context: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                self.repair_calls.fetch_add(1, Ordering::SeqCst);
+                Some(Some(json!({"observed": input})))
+            }
+        }
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let repair_calls = Arc::new(AtomicUsize::new(0));
+        let guard_backend = NoRawInferBackend {
+            calls: calls.clone(),
+            repair_calls: repair_calls.clone(),
+        };
+        runtime::with_backend(Box::new(guard_backend), || {
+            assert!(suggest("", "よろすく", &config).is_none());
+            assert!(calls.lock().unwrap().is_empty());
+            assert_eq!(repair_calls.load(Ordering::SeqCst), 1);
+
+            // Heuristic-only entrypoint skips channel repair while preserving deterministic heuristics.
+            let heuristic = suggest_composition_heuristic("", "ありあとう", "ありあとう", &config);
+            assert_eq!(heuristic.unwrap().surface, "ありがとう");
+            assert_eq!(repair_calls.load(Ordering::SeqCst), 1);
+            assert!(calls.lock().unwrap().is_empty());
+        });
     }
     #[test]
     fn corrector_keeps_whole_input_and_has_room_to_finish() {
@@ -477,6 +671,8 @@ mod tests {
             .unwrap()
             .ends_with(&format!("\u{EE00}{}\u{EE01}", to_katakana(input))));
         assert!(p["n_predict"].as_u64().unwrap() >= 32);
+        assert_eq!(p["cache_prompt"], json!(true));
+        assert_eq!(p["id_slot"], json!(0));
         assert!(payload("", &"あ".repeat(129)).is_none());
     }
     #[test]
@@ -525,5 +721,41 @@ mod tests {
         assert!(can_auto_apply("おkせり", "おかえり"));
         assert!(!can_auto_apply("おkせr", "おかえり"));
         assert!(!can_auto_apply("okseri", "おかえり"));
+    }
+    #[test]
+    fn nam_masks_and_restores_digits_without_corrupting_english_words() {
+        let (masked_candy, digits_candy) = mask_digits_with_nam("１００えんのあめ");
+        assert_eq!(masked_candy, "namえんのあめ");
+        assert_eq!(digits_candy, vec!["100"]);
+        assert_eq!(restore_nam_digits("nam円の飴", &digits_candy), "100円の飴");
+
+        let (masked_date, digits_date) = mask_digits_with_nam("１がつ１にち");
+        assert_eq!(masked_date, "namがつnamにち");
+        assert_eq!(digits_date, vec!["1", "1"]);
+        assert_eq!(restore_nam_digits("nam月nam日", &digits_date), "1月1日");
+
+        let (masked_tech, digits_tech) = mask_digits_with_nam("Wi-Fi 6EとBluetooth 5.4");
+        assert_eq!(masked_tech, "Wi-Fi namEとBluetooth nam.nam");
+        assert_eq!(digits_tech, vec!["6", "5", "4"]);
+        assert_eq!(
+            restore_nam_digits("Wi-Fi namEとBluetooth nam.nam", &digits_tech),
+            "Wi-Fi 6EとBluetooth 5.4"
+        );
+
+        let (masked_sql, digits_sql) = mask_digits_with_nam("SELECT name FROM customers");
+        assert_eq!(masked_sql, "SELECT name FROM customers");
+        assert!(digits_sql.is_empty());
+        assert_eq!(
+            restore_nam_digits("SELECT name FROM customers", &[String::from("10")]),
+            "SELECT name FROM customers"
+        );
+        assert_eq!(
+            restore_nam_digits("SELECT nameです dynamic", &[String::from("10")]),
+            "SELECT nameです dynamic"
+        );
+        assert_eq!(
+            restore_nam_digits("nambonまとめて持つ", &[String::from("3")]),
+            "3bonまとめて持つ"
+        );
     }
 }

@@ -11,7 +11,7 @@ function Get-TrialInputGroups {
         selection_ui = @('windows/crates/selection-ui')
         server = @('windows/crates/server/src','windows/crates/server/Cargo.toml','windows/crates/server/build.rs')
         keyboard = @('windows/native/keyboard-prior','windows/scripts/build-keyboard-prior.ps1')
-        runtime = @('windows/scripts/prepare-modern-llama.py','windows/scripts/modern-llama.ps1')
+        runtime = @('windows/scripts/prepare-modern-llama.py','windows/scripts/converter_patch.py','windows/scripts/modern-llama.ps1','patches/llama.cpp/zerocon-compat-b12125.patch')
         'translation-model' = @('artifacts/models/plamo-3-translate-0.8b/plamo-3-translate-0.8b-Q4_K_M.gguf','artifacts/models/plamo-3-translate-2b/plamo-3-translate-2b-Q4_K_M.gguf')
         ui = @('windows/crates/ui/src','windows/crates/ui/Cargo.toml','windows/crates/ui/build.rs')
         launcher = @('windows/crates/launcher/src','windows/crates/launcher/Cargo.toml','windows/crates/launcher/build.rs')
@@ -24,8 +24,7 @@ function Get-TrialInputGroups {
         dictionary = @('windows/server-swift/azooKey_dictionary_storage/Dictionary','windows/scripts/generate-reverse-dictionary.mjs')
         emoji = @('windows/server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary')
         deployment = @('windows/deployment')
-        models = @('artifacts/models/zerocon/zerocon-nano-v4-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4-iq4nl-emb8.gguf',
-            'artifacts/models/zerocon/zerocon-model-corrector.gguf','artifacts/models/zerocon/zerocon-model-keyboard-prior.gguf')
+        models = @('artifacts/models/zerocon/zerocon-nano-v4-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4-iq4nl-emb8.gguf')
         tooling = @('windows/scripts/build-trial.ps1','windows/scripts/incremental-trial.psm1')
     }
 }

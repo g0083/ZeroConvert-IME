@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+pub mod assist_policy;
 pub mod conversion_policy;
 use std::{
     collections::HashMap,
@@ -23,13 +24,13 @@ pub mod proto {
 /// intercept them instead of forwarding them to the engine.
 pub mod ai_candidate {
     /// 💡 もしかして (誤字補正) candidate.
-    pub const TYPO_CORRECTION: u64 = 999_901;
+    pub const TYPO_CORRECTION: u64 = crate::assist_policy::TYPO_CORRECTION;
     /// 🔮 ZeroCon先読み candidate.
-    pub const PREDICTIVE: u64 = 999_902;
+    pub const PREDICTIVE: u64 = crate::assist_policy::PREDICTIVE;
     /// ⚡ 動的マクロ (日付・時刻・インライン計算) candidate.
     pub const DYNAMIC_MACRO: u64 = 999_903;
     /// Experimental Japanese-to-English translation (never a learning candidate).
-    pub const TRANSLATION: u64 = 999_904;
+    pub const TRANSLATION: u64 = crate::assist_policy::TRANSLATION;
 
     /// Lowest id of the reserved AI assist range.
     const AI_ASSIST_RANGE_START: u64 = TYPO_CORRECTION;
@@ -43,8 +44,7 @@ pub mod ai_candidate {
     }
 }
 
-// Keep runtime prediction separate from the corrector (18090) and the settings
-// application's benchmark process (8090).
+// Keep runtime prediction/assist separate from the settings application's benchmark process (8090).
 pub const PREDICTION_SERVER_PORT: u16 = 18091;
 pub const TRANSLATION_SERVER_PORT: u16 = 18092;
 pub mod runtime_assets;
@@ -668,10 +668,12 @@ pub struct GeneralConfig {
     pub show_live_conversion_reading: bool,
     #[serde(default = "default_live_conversion_reading_vertical_adjustment")]
     pub live_conversion_reading_vertical_adjustment: i32,
-    #[serde(default)]
+    /// Controls normal-conversion correction and the model fallback together.
+    #[serde(default = "default_keyboard_typo_correction_enabled")]
     pub experimental_typo_correction: bool,
     #[serde(default)]
     pub predictive_conversion: bool,
+    /// Sentence prediction. Keep the persisted legacy key for existing settings.
     #[serde(default = "default_ai_assist_enabled")]
     pub experimental_ai_assist: bool,
     #[serde(default)]
@@ -720,7 +722,7 @@ impl Default for GeneralConfig {
             show_live_conversion_reading: true,
             live_conversion_reading_vertical_adjustment:
                 LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT,
-            experimental_typo_correction: false,
+            experimental_typo_correction: true,
             predictive_conversion: false,
             experimental_ai_assist: true,
             experimental_translation: false,
@@ -825,6 +827,15 @@ mod tests {
         assert_eq!(restored.zenzai.effective_gpu_layers(), 99);
         restored.zenzai.backend = "cpu".into();
         assert_eq!(restored.zenzai.effective_gpu_layers(), 0);
+    }
+
+    #[test]
+    fn retired_cuda_backend_migrates_to_vulkan_on_read() {
+        let mut legacy = serde_json::to_value(super::AppConfig::default()).unwrap();
+        legacy["zenzai"]["backend"] = serde_json::json!("cuda");
+        let json = serde_json::to_string(&legacy).unwrap();
+        let config = super::parse_config(Path::new("settings.json"), &json).unwrap();
+        assert_eq!(config.zenzai.backend, "vulkan");
     }
 
     #[test]
@@ -1040,12 +1051,16 @@ mod tests {
     }
 
     #[test]
-    fn experimental_typo_correction_defaults_to_off() {
+    fn experimental_typo_correction_defaults_to_on_and_preserves_explicit_off() {
         let default_config = GeneralConfig::default();
-        assert!(!default_config.experimental_typo_correction);
+        assert!(default_config.experimental_typo_correction);
 
         let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
-        assert!(!deserialized.experimental_typo_correction);
+        assert!(deserialized.experimental_typo_correction);
+
+        let disabled: GeneralConfig =
+            serde_json::from_str(r#"{"experimental_typo_correction":false}"#).unwrap();
+        assert!(!disabled.experimental_typo_correction);
 
         let enabled: GeneralConfig =
             serde_json::from_str(r#"{"experimental_typo_correction":true}"#).unwrap();
@@ -1717,6 +1732,10 @@ fn default_punctuation_commit_target_enabled() -> bool {
     true
 }
 
+fn default_keyboard_typo_correction_enabled() -> bool {
+    true
+}
+
 fn default_ai_assist_enabled() -> bool {
     true
 }
@@ -2088,6 +2107,10 @@ fn parse_config(config_path: &Path, config_str: &str) -> Result<AppConfig, Confi
 
     if version_comparison.ordering == std::cmp::Ordering::Less {
         config.version = CONFIG_VERSION.to_string();
+    }
+
+    if config.zenzai.backend.eq_ignore_ascii_case("cuda") {
+        config.zenzai.backend = "vulkan".to_string();
     }
 
     repair_mojibake_default_romaji_table(&mut config);

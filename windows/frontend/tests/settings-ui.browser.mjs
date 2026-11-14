@@ -53,7 +53,7 @@ function installMock() {
                     while (state.holdStart) await new Promise((resolve) => setTimeout(resolve, 20));
                     if (state.failStart) throw new Error("mock updater launch failure");
                     return { launched: true };
-                case "check_capability": return { cpu: true, cuda: false, vulkan: true };
+                case "check_capability": return { cpu: true, vulkan: true };
                 case "get_active_model": return { active_id: "standard", models: [] };
                 case "run_quick_benchmark": return { results: [], recommended: null };
                 case "get_default_romaji_rows": return [{ input: "ka", output: "か", next_input: "" }, { input: "kk", output: "っ", next_input: "k" }];

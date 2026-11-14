@@ -30,6 +30,7 @@ import com.zeroconvert.ime.azookey.input.ComposingText
 import com.zeroconvert.ime.azookey.input.InputStyle
 import com.zeroconvert.ime.assist.AssistRequestGate
 import com.zeroconvert.ime.assist.CorrectionSession
+import com.zeroconvert.ime.assist.SharedAssistPolicy
 import com.zeroconvert.ime.assist.hasPendingRomaji
 import com.zeroconvert.ime.translation.TranslationEngine
 import com.zeroconvert.ime.translation.TranslationModelManager
@@ -106,10 +107,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_KEY_BORDERS_ENABLED = "key_borders_enabled" // boolean, default true
         const val KEY_ONE_HANDED_MODE = "one_handed_mode" // String: OFF, LEFT, RIGHT
         const val KEY_KEYBOARD_BOTTOM_PADDING_DP = "keyboard_bottom_padding_dp" // int dp (0..32), default 0
-        const val KEY_DYNAMIC_TOUCH_ASSIST = "dynamic_touch_assist" // boolean, default true
+        const val KEY_DYNAMIC_TOUCH_ASSIST = TouchAssistSettings.KEY_HIT_AREA // predictive hit area, default true
+        const val KEY_TOUCH_TYPO_CORRECTION = TouchAssistSettings.KEY_CORRECTION // independent; inherits old setting once
         const val KEY_EXPERIMENTAL_AI_ASSIST = "experimental_ai_assist" // boolean, default true
         const val KEY_AUTO_TYPO_CORRECTION = "auto_typo_correction" // boolean, default true
-        const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction" // Windows default: false
+        const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction"
+        const val DEFAULT_DICTIONARY_TYPO_CORRECTION = true
         const val KEY_PREDICTIVE_CONVERSION = "predictive_conversion" // boolean, Android default: true, Windows default: false
         const val KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE = "english_space_adopts_candidate" // boolean, default false: insert space without adopting top candidate
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
@@ -194,9 +197,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val oneHandedModeState = mutableStateOf(OneHandedMode.OFF)
     val keyboardBottomPaddingDpState = mutableStateOf(0)
     val isDynamicTouchAssistEnabledState = mutableStateOf(true)
+    val isTouchTypoCorrectionEnabledState = mutableStateOf(true)
     val isAiAssistEnabledState = mutableStateOf(true)
     val isAutoTypoCorrectionState = mutableStateOf(true)
-    val isDictionaryTypoCorrectionState = mutableStateOf(false)
+    val isDictionaryTypoCorrectionState = mutableStateOf(DEFAULT_DICTIONARY_TYPO_CORRECTION)
     val isPredictiveConversionState = mutableStateOf(true)
     val isEnglishSpaceAdoptsCandidateState = mutableStateOf(false)
     val predictiveModelState = mutableStateOf("zerocon")
@@ -786,7 +790,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isTranslationMode()) return
         val assist = aiAssistResultState.value ?: return
         val ic = currentInputConnection ?: return
-        if (!isAiAssistEnabled() || isSensitiveInput() || isConfirming) return
+        if (isSensitiveInput() || isConfirming) return
+        val enabled = when (assist.type) {
+            com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION -> isDictionaryTypoCorrectionState.value
+            com.zeroconvert.ime.assist.AiAssistType.PREDICTION -> isAiAssistEnabled()
+        }
+        if (!enabled) return
         val ticket = displayedAssistTicket ?: return
         if (assistInputConnection !== ic || !requestGate.isCurrent(ticket, requestKey()) || !editorContextIsCurrent()) {
             cancelPendingInference(edited = false)
@@ -794,8 +803,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         if (!explicit && (!assist.autoApply || !isAutoTypoCorrectionState.value || !composingText.isAtEndIndex ||
                 hasSelectionInEditor || corrections.isApplied || assist.sourceReading != composingText.convertTargetBeforeCursor)) return
-        when (assist.type) {
-            com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION -> {
+        when (SharedAssistPolicy.adoptionAction(assist, explicit, assist.autoApply, corrections.isApplied)) {
+            "replaceComposition" -> {
                 val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
                 val preview = if (isRealtimeInlineEnabled()) {
                     predictedCandidate.value.ifEmpty { composingText.convertTargetBeforeCursor } + suffix
@@ -822,7 +831,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 pendingConversionContinuation = null
                 triggerDebouncedConversion(composingText.convertTargetBeforeCursor)
             }
-            com.zeroconvert.ime.assist.AiAssistType.PREDICTION -> {
+            "commitText" -> {
                 commitText(assist.text)
             }
         }
@@ -1400,10 +1409,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isKeyBordersEnabledState.value = prefs.getBoolean(KEY_KEY_BORDERS_ENABLED, true)
         oneHandedModeState.value = OneHandedMode.fromName(prefs.getString(KEY_ONE_HANDED_MODE, OneHandedMode.OFF.name))
         keyboardBottomPaddingDpState.value = prefs.getInt(KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32)
-        isDynamicTouchAssistEnabledState.value = prefs.getBoolean(KEY_DYNAMIC_TOUCH_ASSIST, true)
+        val touchAssist = TouchAssistSettings.load(prefs)
+        val touchCorrectionChanged = isTouchTypoCorrectionEnabledState.value != touchAssist.correctionEnabled
+        isDynamicTouchAssistEnabledState.value = touchAssist.hitAreaEnabled
+        isTouchTypoCorrectionEnabledState.value = touchAssist.correctionEnabled
         isAiAssistEnabledState.value = prefs.getBoolean(KEY_EXPERIMENTAL_AI_ASSIST, true)
         isAutoTypoCorrectionState.value = prefs.getBoolean(KEY_AUTO_TYPO_CORRECTION, true)
-        isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, false)
+        isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, DEFAULT_DICTIONARY_TYPO_CORRECTION)
         isPredictiveConversionState.value = prefs.getBoolean(KEY_PREDICTIVE_CONVERSION, true)
         isEnglishSpaceAdoptsCandidateState.value = prefs.getBoolean(KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
@@ -1435,6 +1447,16 @@ class ZeroConvertInputMethodService : InputMethodService(),
             exitTranslationMode(revert = true)
         } else if (!translationKeepLoadedState.value && !isTranslationMode()) {
             maybeUnloadTranslation()
+        }
+        if (touchCorrectionChanged && !isTranslationMode()) {
+            if (englishComposing.isNotEmpty()) {
+                candidatesList.clear()
+                predictedCandidate.value = ""
+                triggerEnglishSuggestions(englishComposing)
+            } else if (!composingText.isEmpty) {
+                candidatesList.removeAll { it.assist != null }
+                triggerDebouncedConversion(composingText.convertTargetBeforeCursor)
+            }
         }
     }
 
@@ -1589,7 +1611,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         vocabularyRevision = com.zeroconvert.ime.assist.AssistVocabulary.revision,
         conversionRange = conversionRange.active,
         learningMode = LearningPolicy.mode.name,
-        dictionaryCorrectionEnabled = isDictionaryTypoCorrectionState.value
+        dictionaryCorrectionEnabled = isDictionaryTypoCorrectionState.value,
+        touchCorrectionEnabled = isTouchTypoCorrectionEnabledState.value
     )
 
     private fun cancelPendingInference(edited: Boolean = true) {
@@ -2254,11 +2277,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val rangeConversion = conversionRange.active
         val fixedPrefix = corrections.fixedPrefix(surface)
         val dictionaryCorrection = !sensitive && !reconversion && !rangeConversion && isDictionaryTypoCorrectionState.value
-        val rawRomajiSnapshot = snapshot.input
-            .mapNotNull { (it.piece as? com.zeroconvert.ime.azookey.input.InputPiece.CharPiece)?.char }
-            .joinToString("")
-        val dynamicTouchAssistSnapshot = !sensitive && isDynamicTouchAssistEnabledState.value
-        val touchBiasesSnapshot = if (dynamicTouchAssistSnapshot) japaneseTouchBiases.toList() else emptyList()
+        val touchCorrectionSnapshot = !sensitive && isTouchTypoCorrectionEnabledState.value
+        val touchBiasesSnapshot = if (touchCorrectionSnapshot) japaneseTouchBiases.toList() else emptyList()
         inferenceJob = serviceScope.launch(Dispatchers.IO) {
             try {
                 delay(debounceMs)
@@ -2269,7 +2289,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
                     experimentalKeyboardCorrection = dictionaryCorrection,
                     predictiveConversion = isPredictiveConversionEnabled(),
-                    continuation = continuation).let {
+                    continuation = continuation, touchBiases = touchBiasesSnapshot).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
                 ensureActive()
@@ -2311,8 +2331,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     predictedCandidate.value = best
                     lastInferredSurface = surface
                     lastInferredResult = best
-                    if (!sensitive && !reconversion && !rangeConversion && isAiAssistEnabled() && !hasTrailingIncompleteRomaji(surface)) {
-                        val allowCorrection = !corrections.isApplied && fixedPrefix.isEmpty()
+                    if (!sensitive && !reconversion && !rangeConversion &&
+                        (isDictionaryTypoCorrectionState.value || isAiAssistEnabled()) && !hasTrailingIncompleteRomaji(surface)) {
+                        val allowCorrection = isDictionaryTypoCorrectionState.value && !corrections.isApplied && fixedPrefix.isEmpty()
+                        val allowPrediction = isAiAssistEnabled()
+                        val baselineReading = inlineBase()?.enginePredictionReading.orEmpty()
                         aiAssistJob = serviceScope.launch(Dispatchers.IO) {
                             com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(applicationContext)
                             com.zeroconvert.ime.assist.AiAssistManager.streamAiAssist(
@@ -2320,9 +2343,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                                 baseline = best,
                                 context = context,
                                 allowCorrection = allowCorrection,
-                                rawInput = rawRomajiSnapshot,
-                                touchBiases = touchBiasesSnapshot,
-                                enableDynamicTouchAssist = dynamicTouchAssistSnapshot
+                                allowPrediction = allowPrediction,
+                                baselineReading = baselineReading
                             ) { update ->
                                 ensureActive()
                                 if (editorContextMatches(connection, context, sensitive)) {
@@ -2586,8 +2608,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun canAdjustConversionRange(direction: Int): Boolean = conversionRange.canAdjust(composingText, direction)
 
     fun adjustConversionRange(direction: Int) {
-        if (isConfirming || !conversionRange.active) return
-        if (conversionRange.adjust(composingText, direction)) refreshConversionRange()
+        performAdjustConversionRange(direction)
+    }
+
+    private fun performAdjustConversionRange(direction: Int): Boolean {
+        if (isConfirming || !conversionRange.active) return false
+        if (!conversionRange.adjust(composingText, direction)) return false
+        refreshConversionRange()
+        return true
     }
 
     fun cancelConversionRange() {
@@ -2614,42 +2642,56 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun handleCursorLeft() {
-        if (isTranslationMode()) return
-        if (conversionRange.active) { adjustConversionRange(-1); return }
-        canRewindOnNextBackspace = false
-        if (!composingText.isEmpty) {
-            val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
-            val moved = composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
-            if (moved != 0) {
-                selfIssuedCursorMoveAt = System.currentTimeMillis()
-                updateComposingDisplayOnCursorMove()
-            }
-        } else {
-            sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
-        }
+        if (performCursorMove(-1)) vibrateOnKeyPress()
     }
 
     fun handleCursorRight() {
-        if (isTranslationMode()) return
-        if (conversionRange.active) { adjustConversionRange(1); return }
+        if (performCursorMove(1)) vibrateOnKeyPress()
+    }
+
+    private fun performCursorMove(direction: Int): Boolean {
+        if (isTranslationMode()) return false
+        if (conversionRange.active) return performAdjustConversionRange(direction)
         canRewindOnNextBackspace = false
         if (!composingText.isEmpty) {
-            val target = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, 1)
+            val target = ComposingEditorState.moveByCodePoint(
+                composingText.convertTarget,
+                composingText.convertTargetCursorPosition,
+                direction
+            )
             val moved = composingText.moveCursorFromCursorPosition(target - composingText.convertTargetCursorPosition)
             if (moved != 0) {
                 selfIssuedCursorMoveAt = System.currentTimeMillis()
                 updateComposingDisplayOnCursorMove()
+                return true
             }
-        } else {
-            sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+            return false
         }
+        val ic = currentInputConnection ?: return false
+        val hasSelection = try {
+            !ic.getSelectedText(0).isNullOrEmpty()
+        } catch (_: RuntimeException) {
+            false
+        }
+        val textInDirection = try {
+            if (direction < 0) ic.getTextBeforeCursor(1, 0) else ic.getTextAfterCursor(1, 0)
+        } catch (_: RuntimeException) {
+            null
+        }
+        val keyCode = if (direction < 0) {
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT
+        } else {
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+        }
+        sendDownUpKeyEvents(keyCode)
+        return shouldVibrateOnEditorCursorMove(textInDirection, hasSelection)
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
         if (!composingText.isEmpty && event.hasNoModifiers() &&
             (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT || keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT)) {
             managedCursorKeys.add(keyCode)
-            if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) handleCursorLeft() else handleCursorRight()
+            performCursorMove(if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -3006,7 +3048,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             predictedCandidate.value = ""
             return
         }
-        val touchBiasesSnapshot = if (isDynamicTouchAssistEnabledState.value) {
+        val ticket = requestGate.capture(requestKey())
+        val touchBiasesSnapshot = if (isTouchTypoCorrectionEnabledState.value) {
             englishTouchBiases.toList()
         } else {
             emptyList()
@@ -3020,7 +3063,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 EnglishWordDictionary.suggest(applicationContext, prefix, 8)
             }
             withContext(Dispatchers.Main) {
-                if (englishComposing == prefix && !isSensitiveInput()) {
+                if (englishComposing == prefix && !isSensitiveInput() && requestGate.isGenerationCurrent(ticket)) {
                     candidatesList.clear()
                     candidatesList.addAll(cands)
                     predictedCandidate.value = cands.firstOrNull()?.text ?: ""

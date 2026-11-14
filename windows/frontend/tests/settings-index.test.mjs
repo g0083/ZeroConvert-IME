@@ -34,6 +34,12 @@ test("search prefers label prefix matches and is width insensitive", () => {
 test("search matches keywords and section names", () => {
     assert.ok(searchSettings("クリップボード").some((entry) => entry.url === "/keys"));
     assert.ok(searchSettings("るび").some((entry) => entry.label === "ライブ変換中の読みを表示"));
+    assert.ok(searchSettings("AIアシスト").some((entry) => entry.label === "文の先読み"));
+    assert.ok(searchSettings("ローマ字入力の辞書補正").some((entry) => entry.label === "タイポ補正"));
+    assert.ok(searchSettings("追加補正").some((entry) => entry.label === "タイポ補正"));
+    assert.ok(searchSettings("タイポ補正の実行方法").some((entry) => entry.label === "タイポ補正の推論エンジン"));
+    assert.ok(searchSettings("予測変換").some((entry) => entry.label === "予測変換（単語・フレーズ）"));
+    assert.ok(searchSettings("先読みモデル").some((entry) => entry.label === "利用モデル"));
 });
 
 test("search returns nothing for blank or unmatched queries", () => {

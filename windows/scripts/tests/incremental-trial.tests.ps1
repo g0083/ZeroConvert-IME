@@ -54,6 +54,10 @@ Assert (@(Get-TrialBuildPlan @('shared')).Count -eq 5) 'shared changes include a
 Assert (@(Get-TrialBuildPlan @()).Count -eq 0) 'no changes means no work'
 Assert ((@(Get-TrialBuildPlan @('tooling')) -join ',') -eq 'tooling') 'workflow edits do not rebuild product binaries'
 Assert ((@(Get-TrialBuildPlan @('keyboard')) -join ',') -eq 'keyboard') 'keyboard worker edits build the isolated worker only'
+Put 'windows/scripts/converter_patch.py' 'shared converter correction API'
+$converterChanged = Get-TrialInputSnapshot $fixture $next
+Assert ($converterChanged.runtime.hash -ne $next.runtime.hash) 'shared converter patches invalidate runtime inputs'
+Assert ((@(Get-TrialBuildPlan @('runtime')) -join ',') -eq 'keyboard,launcher,runtime,server,swift') 'converter patches rebuild native consumers'
 Put 'windows/native/keyboard-prior/main.cpp' 'native worker source'
 $nativeChanged = Get-TrialInputSnapshot $fixture $next
 Assert ($nativeChanged.keyboard.hash -ne $next.keyboard.hash) 'native worker source changes are tracked'

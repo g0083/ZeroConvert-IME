@@ -58,7 +58,7 @@ Test-ArtifactEntries $staging $changes
 # A frontend-only edit must not restart the conversion engine or load models.
 $changedPaths = @($changes | ForEach-Object { $_.path }) + @($removals | ForEach-Object { $_.path })
 $frontendOnly = $UpdateDirectory -and @($changedPaths | Where-Object { $_ -notin @('frontend.exe','azookey-updater-helper.exe') }).Count -eq 0
-$needsRuntime = -not $UpdateDirectory -or @($changedPaths | Where-Object { $_ -match '^(launcher\.exe|ui\.exe|azookey-server\.(exe|dll)|llama_(cpu|vulkan)/|Dictionary/|EmojiDictionary/|models/|swift|Foundation|dispatch\.dll|BlocksRuntime\.dll|_Foundation)' }).Count -gt 0
+$needsRuntime = -not $UpdateDirectory -or @($changedPaths | Where-Object { $_ -match '^(launcher\.exe|ui\.exe|azookey-server\.(exe|dll)|keyboard-prior\.exe|llama_(cpu|vulkan)/|Dictionary/|EmojiDictionary/|models/|swift|Foundation|dispatch\.dll|BlocksRuntime\.dll|_Foundation)' }).Count -gt 0
 $needsFrontend = $needsRuntime -or @($changedPaths | Where-Object { $_ -in @('frontend.exe','azookey-updater-helper.exe') }).Count -gt 0
 $sessionId = (Get-Process -Id $PID).SessionId
 $running = @()
@@ -72,8 +72,8 @@ foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
     if ($imagePath -and $imagePath.StartsWith($trial + '\', [StringComparison]::OrdinalIgnoreCase) -and
         [ZeroConDistributionProcess]::IsRunning($candidate.Id)) { $running += $candidate }
 }
-# CUDA's executable may live in the per-user backend cache. Include only model
-# processes parented by the already verified trial processes, never all llama servers.
+# Include only model processes parented by the already verified trial processes,
+# never unrelated llama servers.
 if ($running.Count) {
     foreach ($modelProcess in Get-CimInstance Win32_Process -Filter "Name = 'llama-server.exe'") {
         if ($modelProcess.SessionId -eq $sessionId -and $modelProcess.ParentProcessId -in @($running.Id) -and

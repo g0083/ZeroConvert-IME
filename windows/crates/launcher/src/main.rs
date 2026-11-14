@@ -731,10 +731,12 @@ fn load_config() -> AppConfig {
 }
 
 fn backend_dir(config: &AppConfig) -> &'static str {
-    match config.zenzai.backend.as_str() {
-        "cuda" => "llama_cuda_b12125",
-        "vulkan" => "llama_vulkan",
-        _ => "llama_cpu",
+    if config.zenzai.backend.eq_ignore_ascii_case("vulkan")
+        || config.zenzai.backend.eq_ignore_ascii_case("cuda")
+    {
+        "llama_vulkan"
+    } else {
+        "llama_cpu"
     }
 }
 
@@ -842,11 +844,7 @@ mod tests {
         let mut config = shared::AppConfig::default();
         config.general.experimental_ai_assist = true;
         assert_eq!(config.zenzai.backend, "vulkan");
-        for (backend, directory) in [
-            ("vulkan", "llama_vulkan"),
-            ("cuda", "llama_cuda_b12125"),
-            ("cpu", "llama_cpu"),
-        ] {
+        for (backend, directory) in [("vulkan", "llama_vulkan"), ("cpu", "llama_cpu")] {
             std::fs::create_dir_all(path.join(directory)).unwrap();
             std::fs::write(path.join(directory).join("llama-server.exe"), []).unwrap();
             config.zenzai.backend = backend.into();
@@ -868,21 +866,29 @@ mod tests {
             "memory changes must replace the owned process"
         );
         assert_eq!(limited.gpu_layers, 4);
-        let corrector_path = path.join("models").join(shared::runtime_assets::CORRECTOR);
-        std::fs::create_dir_all(corrector_path.parent().unwrap()).unwrap();
-        std::fs::write(&corrector_path, []).unwrap();
-        let corrector = super::assist_server_spec(&path, &config, true).unwrap();
-        assert_eq!(corrector.gpu_layers, 4);
         config.general.experimental_ai_engine = "external".into();
-        assert!(super::assist_server_spec(&path, &config, true).is_none());
         assert!(super::prediction_server_spec(&path, &config).is_some());
         config.general.experimental_ai_assist = false;
+        config.general.experimental_typo_correction = false;
         assert!(super::prediction_server_spec(&path, &config).is_none());
-        assert!(super::assist_server_spec(&path, &config, true).is_none());
-        std::fs::remove_file(corrector_path).unwrap();
+        for engine in ["embedded", "lm_studio"] {
+            config.general.experimental_ai_engine = engine.into();
+            for correction in [false, true] {
+                for prediction in [false, true] {
+                    config.general.experimental_typo_correction = correction;
+                    config.general.experimental_ai_assist = prediction;
+                    let embedded_correction = correction && engine == "embedded";
+                    assert_eq!(
+                        super::prediction_server_spec(&path, &config).is_some(),
+                        prediction || embedded_correction,
+                        "engine={engine}, correction={correction}, prediction={prediction}",
+                    );
+                }
+            }
+        }
         std::fs::remove_file(path.join("models").join(shared::runtime_assets::NANO_IQ4)).unwrap();
         std::fs::remove_dir(path.join("models")).unwrap();
-        for directory in ["llama_vulkan", "llama_cuda_b12125", "llama_cpu"] {
+        for directory in ["llama_vulkan", "llama_cpu"] {
             std::fs::remove_file(path.join(directory).join("llama-server.exe")).unwrap();
             std::fs::remove_dir(path.join(directory)).unwrap();
         }
@@ -1067,6 +1073,106 @@ mod tests {
         );
         assert!(recent_restarts.is_empty());
     }
+
+    #[test]
+    fn optimal_llama_server_params_separates_decode_batch_and_assist_prefix_caching() {
+        use super::{optimal_llama_server_params, AssistRole};
+
+        let pred_cpu = optimal_llama_server_params(AssistRole::Prediction, false, 16);
+        assert_eq!(pred_cpu.n_threads, 6);
+        assert_eq!(pred_cpu.n_threads_batch, 12);
+        assert_eq!(pred_cpu.n_batch, 512);
+        assert_eq!(pred_cpu.n_ubatch, 256);
+
+        let pred_gpu = optimal_llama_server_params(AssistRole::Prediction, true, 16);
+        assert_eq!(pred_gpu.n_threads, 4);
+        assert_eq!(pred_gpu.n_threads_batch, 8);
+        assert_eq!(pred_gpu.n_batch, 512);
+        assert_eq!(pred_gpu.n_ubatch, 512);
+
+        let trans_cpu = optimal_llama_server_params(AssistRole::Translation, false, 16);
+        assert_eq!(trans_cpu.n_threads, 6);
+        assert_eq!(trans_cpu.n_threads_batch, 12);
+        assert_eq!(trans_cpu.n_batch, 1024);
+        assert_eq!(trans_cpu.n_ubatch, 512);
+
+        let low_core = optimal_llama_server_params(AssistRole::Prediction, false, 2);
+        assert_eq!(low_core.n_threads, 2);
+        assert_eq!(low_core.n_threads_batch, 2);
+
+        let single_core = optimal_llama_server_params(AssistRole::Prediction, true, 1);
+        assert_eq!(single_core.n_threads, 1);
+        assert_eq!(single_core.n_threads_batch, 1);
+
+        let pred_args = super::llama_server_args(
+            AssistRole::Prediction,
+            std::path::Path::new("model.gguf"),
+            18091,
+            0,
+            16,
+        );
+        assert!(pred_args.windows(2).any(|w| w == ["-c", "512"]));
+        assert!(pred_args.windows(2).any(|w| w == ["--threads", "6"]));
+        assert!(pred_args.windows(2).any(|w| w == ["--threads-batch", "12"]));
+        assert!(pred_args.windows(2).any(|w| w == ["--batch-size", "512"]));
+        assert!(pred_args.windows(2).any(|w| w == ["--ubatch-size", "256"]));
+        assert!(pred_args.windows(2).any(|w| w == ["--flash-attn", "on"]));
+        assert!(pred_args.iter().any(|a| a == "--no-perf"));
+        assert!(pred_args.windows(2).any(|w| w == ["--parallel", "1"]));
+        assert!(pred_args.windows(2).any(|w| w == ["--cache-reuse", "1"]));
+
+        let trans_args = super::llama_server_args(
+            AssistRole::Translation,
+            std::path::Path::new("plamo.gguf"),
+            18092,
+            99,
+            16,
+        );
+        assert!(trans_args.windows(2).any(|w| w == ["-c", "4096"]));
+        assert!(trans_args.windows(2).any(|w| w == ["--parallel", "1"]));
+        assert!(trans_args.windows(2).any(|w| w == ["--batch-size", "1024"]));
+        assert!(trans_args.windows(2).any(|w| w == ["--ubatch-size", "512"]));
+        assert!(trans_args.iter().any(|a| a == "--no-perf"));
+        assert!(!trans_args.iter().any(|a| a == "--flash-attn"));
+        assert!(!trans_args.iter().any(|a| a == "--cache-reuse"));
+    }
+
+    #[test]
+    fn prediction_and_translation_can_run_with_separate_llama_backends() {
+        let root = std::env::temp_dir().join(format!(
+            "zerocon-launcher-dual-llama-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("llama_cpu")).unwrap();
+        std::fs::create_dir_all(root.join("llama_zerocon")).unwrap();
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        std::fs::write(root.join("llama_cpu/llama-server.exe"), []).unwrap();
+        std::fs::write(root.join("llama_zerocon/llama-server.exe"), []).unwrap();
+        std::fs::write(
+            root.join("models").join(shared::runtime_assets::NANO_IQ4),
+            [],
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("models")
+                .join(shared::runtime_assets::TRANSLATION_0_8B),
+            [],
+        )
+        .unwrap();
+
+        let mut config = shared::AppConfig::default();
+        config.zenzai.backend = "cpu".into();
+        config.general.experimental_ai_assist = true;
+        config.general.experimental_translation = true;
+
+        let pred = super::prediction_server_spec(&root, &config).unwrap();
+        let trans = super::translation_server_spec_for_session(&root, &config, true).unwrap();
+        assert_eq!(pred.backend, root.join("llama_zerocon"));
+        assert_eq!(trans.backend, root.join("llama_cpu"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1115,25 +1221,13 @@ impl Drop for PredictionJob {
 }
 
 fn prediction_server_spec(install_dir: &Path, config: &AppConfig) -> Option<AssistServerSpec> {
-    assist_server_spec(install_dir, config, false)
-}
-
-fn assist_server_spec(
-    install_dir: &Path,
-    config: &AppConfig,
-    corrector: bool,
-) -> Option<AssistServerSpec> {
-    if !config.general.experimental_ai_assist
-        || (corrector && config.general.experimental_ai_engine != "embedded")
-    {
+    let embedded_correction = config.general.experimental_typo_correction
+        && config.general.experimental_ai_engine != "lm_studio";
+    if !(config.general.experimental_ai_assist || embedded_correction) {
         return None;
     }
-    let model = if corrector {
-        shared::runtime_assets::corrector_model(install_dir)
-    } else {
-        shared::runtime_assets::converter_model(install_dir, &config.zenzai.model)
-    };
-    let backend = shared::runtime_assets::backend(install_dir, &config.zenzai.backend);
+    let model = shared::runtime_assets::converter_model(install_dir, &config.zenzai.model);
+    let backend = shared::runtime_assets::zerocon_backend(install_dir, &config.zenzai.backend);
     (model.is_file() && backend.join("llama-server.exe").is_file()).then_some(AssistServerSpec {
         model,
         backend,
@@ -1150,8 +1244,97 @@ fn watch_prediction_server(install_dir: &Path) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AssistRole {
     Prediction,
-    Corrector,
     Translation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LlamaServerTuning {
+    n_threads: usize,
+    n_threads_batch: usize,
+    n_batch: usize,
+    n_ubatch: usize,
+}
+
+fn optimal_llama_server_params(
+    role: AssistRole,
+    use_gpu: bool,
+    logical_cores: usize,
+) -> LlamaServerTuning {
+    let n_threads = if logical_cores <= 1 {
+        1
+    } else if use_gpu {
+        logical_cores.div_ceil(2).clamp(2, 4)
+    } else {
+        (logical_cores / 2).clamp(2, 6)
+    };
+    let n_threads_batch = if logical_cores <= 1 {
+        1
+    } else if use_gpu {
+        (logical_cores / 2).clamp(n_threads, 8)
+    } else {
+        logical_cores.saturating_sub(2).clamp(n_threads, 12)
+    };
+    let (n_batch, n_ubatch) = match role {
+        AssistRole::Prediction => (512, if use_gpu { 512 } else { 256 }),
+        AssistRole::Translation => (1024, 512),
+    };
+    LlamaServerTuning {
+        n_threads,
+        n_threads_batch,
+        n_batch,
+        n_ubatch,
+    }
+}
+
+fn llama_server_args(
+    role: AssistRole,
+    model: &Path,
+    port: u16,
+    gpu_layers: u32,
+    logical_cores: usize,
+) -> Vec<String> {
+    let translation = role == AssistRole::Translation;
+    let tuning = optimal_llama_server_params(role, gpu_layers > 0, logical_cores);
+    let mut args = vec![
+        "-m".to_string(),
+        model.to_string_lossy().into_owned(),
+        "--port".to_string(),
+        port.to_string(),
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
+        "-c".to_string(),
+        if translation { "4096" } else { "512" }.to_string(),
+        "--threads".to_string(),
+        tuning.n_threads.to_string(),
+        "--threads-batch".to_string(),
+        tuning.n_threads_batch.to_string(),
+        "--batch-size".to_string(),
+        tuning.n_batch.to_string(),
+        "--ubatch-size".to_string(),
+        tuning.n_ubatch.to_string(),
+        "-ngl".to_string(),
+        gpu_layers.to_string(),
+    ];
+    if translation {
+        args.extend([
+            "--alias".to_string(),
+            "plamo-3-translate-2b".to_string(),
+            "--parallel".to_string(),
+            "1".to_string(),
+            "--no-perf".to_string(),
+        ]);
+    } else {
+        args.extend([
+            "--flash-attn".to_string(),
+            "on".to_string(),
+            "--no-perf".to_string(),
+            "--parallel".to_string(),
+            "1".to_string(),
+            "--cache-reuse".to_string(),
+            "1".to_string(),
+        ]);
+    }
+    args
 }
 
 fn translation_server_spec(install_dir: &Path, config: &AppConfig) -> Option<AssistServerSpec> {
@@ -1186,19 +1369,14 @@ fn translation_server_spec_for_session(
 }
 
 fn watch_assist_server(install_dir: &Path, role: AssistRole) {
-    let corrector = role == AssistRole::Corrector;
     let translation = role == AssistRole::Translation;
     let port = if translation {
         shared::TRANSLATION_SERVER_PORT
-    } else if corrector {
-        18090
     } else {
         shared::PREDICTION_SERVER_PORT
     };
     let label = if translation {
         "[translation]"
-    } else if corrector {
-        "[corrector]"
     } else {
         "[prediction]"
     };
@@ -1225,8 +1403,6 @@ fn watch_assist_server(install_dir: &Path, role: AssistRole) {
         };
         let desired = if translation {
             translation_server_spec(install_dir, config)
-        } else if corrector {
-            assist_server_spec(install_dir, config, true)
         } else {
             prediction_server_spec(install_dir, config)
         };
@@ -1251,33 +1427,16 @@ fn watch_assist_server(install_dir: &Path, role: AssistRole) {
                     let mut command = Command::new(spec.backend.join("llama-server.exe"));
                     command.current_dir(&spec.backend);
                     command.env("PATH", prepend_to_path(&spec.backend));
-                    command
-                        .arg("-m")
-                        .arg(&spec.model)
-                        .arg("--port")
-                        .arg(port.to_string())
-                        .args([
-                            "--host",
-                            "127.0.0.1",
-                            "-c",
-                            if translation {
-                                "4096"
-                            } else if corrector {
-                                "512"
-                            } else {
-                                "2048"
-                            },
-                            "--threads",
-                            "4",
-                        ])
-                        .arg("-ngl")
-                        .arg(spec.gpu_layers.to_string());
-                    if corrector {
-                        command.args(["-n", "32"]);
-                    }
-                    if translation {
-                        command.args(["--alias", "plamo-3-translate-2b", "--parallel", "1"]);
-                    }
+                    let logical_cores = std::thread::available_parallelism()
+                        .map(usize::from)
+                        .unwrap_or(4);
+                    command.args(llama_server_args(
+                        role,
+                        &spec.model,
+                        port,
+                        spec.gpu_layers,
+                        logical_cores,
+                    ));
                     use std::os::windows::process::CommandExt;
                     command.creation_flags(0x08000000);
                     match spawn_process(command, "llama-server.exe", label) {
@@ -1307,9 +1466,4 @@ fn watch_assist_server(install_dir: &Path, role: AssistRole) {
         }
         thread::sleep(Duration::from_secs(2));
     }
-}
-
-#[allow(dead_code)]
-fn watch_ai_server_process(install_dir: &Path) {
-    watch_assist_server(install_dir, AssistRole::Corrector);
 }

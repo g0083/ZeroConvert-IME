@@ -364,6 +364,7 @@ struct ServerRecoveryState {
     restart_completed_generation: AtomicU64,
     restart_request_in_flight: AtomicBool,
     input_ledger: Mutex<InputLedger>,
+    latest_composition_sync: Mutex<CompositionSyncState>,
     context_epoch: AtomicU64,
     assist_context_revision: AtomicU64,
 }
@@ -381,6 +382,7 @@ impl Default for ServerRecoveryState {
                 operations: Vec::new(),
                 complete: true,
             }),
+            latest_composition_sync: Mutex::new(CompositionSyncState::default()),
         }
     }
 }
@@ -395,7 +397,14 @@ struct InputLedger {
 enum CompositionOperation {
     Append { text: String, input_style: i32 },
     Remove,
+    DeleteForward,
     MoveCursor(i32),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CompositionSyncState {
+    pub(crate) raw_input: Option<String>,
+    pub(crate) cursor: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -536,6 +545,12 @@ fn pop_input_segment_character(ledger: &mut InputLedger) {
     }
 }
 
+fn delete_forward_input_segment_character(ledger: &mut InputLedger) {
+    if ledger.complete {
+        ledger.operations.push(CompositionOperation::DeleteForward);
+    }
+}
+
 fn move_input_cursor(ledger: &mut InputLedger, offset: i32) {
     if ledger.complete && offset != 0 {
         ledger
@@ -579,6 +594,7 @@ pub struct Candidates {
     pub hiragana: String,
     pub corresponding_count: Vec<i32>,
     pub candidate_ids: Vec<u64>,
+    pub prediction_readings: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -607,6 +623,7 @@ impl Candidates {
             && self.hiragana.is_empty()
             && self.corresponding_count.is_empty()
             && self.candidate_ids.is_empty()
+            && self.prediction_readings.is_empty()
     }
 
     #[inline]
@@ -615,6 +632,7 @@ impl Candidates {
             && self.sub_texts == other.sub_texts
             && self.hiragana == other.hiragana
             && self.corresponding_count == other.corresponding_count
+            && self.prediction_readings == other.prediction_readings
     }
 }
 
@@ -1052,6 +1070,12 @@ impl IPCService {
     ) -> anyhow::Result<Candidates> {
         if let Some(composing_text) = composing_text {
             Ok(Candidates {
+                prediction_readings: composing_text
+                    .suggestions
+                    .iter()
+                    .filter(|candidate| !candidate.prediction_reading.is_empty())
+                    .map(|candidate| (candidate.text.clone(), candidate.prediction_reading.clone()))
+                    .collect(),
                 texts: composing_text
                     .suggestions
                     .iter()
@@ -1226,6 +1250,13 @@ impl IPCService {
         pop_input_segment_character(&mut ledger);
     }
 
+    fn record_successful_delete_forward(&self) {
+        let Ok(mut ledger) = self.recovery.input_ledger.lock() else {
+            return;
+        };
+        delete_forward_input_segment_character(&mut ledger);
+    }
+
     fn record_successful_move(&self, offset: i32) {
         if offset == 0 {
             return;
@@ -1235,11 +1266,29 @@ impl IPCService {
         }
     }
 
+    fn record_composition_sync(&self, raw_input: Option<String>, cursor: Option<i32>) {
+        if let Ok(mut sync) = self.recovery.latest_composition_sync.lock() {
+            *sync = CompositionSyncState {
+                raw_input,
+                cursor: cursor.and_then(|c| usize::try_from(c).ok()),
+            };
+        }
+    }
+
+    pub(crate) fn latest_composition_sync(&self) -> CompositionSyncState {
+        self.recovery
+            .latest_composition_sync
+            .lock()
+            .map(|sync| sync.clone())
+            .unwrap_or_default()
+    }
+
     fn clear_input_ledger(&self) {
         if let Ok(mut ledger) = self.recovery.input_ledger.lock() {
             ledger.operations.clear();
             ledger.complete = true;
         }
+        self.record_composition_sync(None, None);
     }
 
     pub(crate) fn discard_input_ledger(&self) {
@@ -1250,6 +1299,7 @@ impl IPCService {
         if let Ok(mut ledger) = self.recovery.input_ledger.lock() {
             mark_input_ledger_incomplete(&mut ledger);
         }
+        self.record_composition_sync(None, None);
     }
 
     pub(crate) fn input_ledger_snapshot(&self) -> InputLedgerSnapshot {
@@ -1494,6 +1544,9 @@ impl IPCService {
         let response = response?;
         let response = response.into_inner();
         self.observe_server_session("append_text", response.server_session_id);
+        if !text.is_empty() {
+            self.record_composition_sync(response.raw_input.clone(), response.cursor);
+        }
         self.record_successful_append(text, input_style);
         self.clear_pending_conversion_continuation();
         Ok(response)
@@ -1521,7 +1574,38 @@ impl IPCService {
                 "remove_text response did not include canonical raw input"
             )));
         };
+        self.record_composition_sync(Some(raw_input.clone()), response.cursor);
         self.record_successful_remove();
+        Ok(TextRemoval {
+            candidates: Self::candidates_from_composing_text(response.composing_text)?,
+            raw_input,
+        })
+    }
+
+    fn send_delete_forward_text(&mut self, request_id: u64) -> anyhow::Result<TextRemoval> {
+        let mut request =
+            tonic::Request::new(shared::proto::DeleteForwardTextRequest { request_id });
+        request.set_timeout(INPUT_RPC_DEADLINE);
+        let response = Self::block_on_server_rpc(
+            self.runtime.as_ref(),
+            &self.recovery,
+            "delete_forward_text",
+            INPUT_RPC_DEADLINE,
+            self.azookey_client.delete_forward_text(request),
+        )?;
+        let response = response.into_inner();
+        self.observe_server_session("delete_forward_text", response.server_session_id);
+        let Some(raw_input) = response.raw_input else {
+            Self::mark_server_recovery_required(
+                &self.recovery,
+                "delete_forward_text_missing_raw_input",
+            );
+            return Err(preserve_recovery_error(anyhow::anyhow!(
+                "delete_forward_text response did not include canonical raw input"
+            )));
+        };
+        self.record_composition_sync(Some(raw_input.clone()), response.cursor);
+        self.record_successful_delete_forward();
         Ok(TextRemoval {
             candidates: Self::candidates_from_composing_text(response.composing_text)?,
             raw_input,
@@ -1649,6 +1733,7 @@ impl IPCService {
         let response = response.into_inner();
         self.observe_server_session("shrink_text", response.server_session_id);
         self.invalidate_input_ledger();
+        self.record_composition_sync(response.raw_input, response.cursor);
         Self::candidates_from_composing_text(response.composing_text)
     }
 
@@ -1741,6 +1826,7 @@ impl IPCService {
         )?;
         let response = response.into_inner();
         self.observe_server_session("move_cursor", response.server_session_id);
+        self.record_composition_sync(response.raw_input, response.cursor);
         self.record_successful_move(offset);
         Self::candidates_from_composing_text(response.composing_text)
     }
@@ -1859,6 +1945,12 @@ impl IPCService {
                     input_style: INPUT_STYLE_ROMAN2KANA,
                     cursor_offset: 0,
                 },
+                CompositionOperation::DeleteForward => shared::proto::CompositionOperation {
+                    kind: shared::proto::CompositionOperationKind::DeleteForward as i32,
+                    text: String::new(),
+                    input_style: INPUT_STYLE_ROMAN2KANA,
+                    cursor_offset: 0,
+                },
                 CompositionOperation::MoveCursor(cursor_offset) => {
                     shared::proto::CompositionOperation {
                         kind: shared::proto::CompositionOperationKind::MoveCursor as i32,
@@ -1883,6 +1975,7 @@ impl IPCService {
         )?
         .into_inner();
         self.observe_server_session("replace_composition", response.server_session_id);
+        self.record_composition_sync(response.raw_input, response.cursor);
         self.recovery.context_epoch.fetch_add(1, Ordering::AcqRel);
         if let Ok(mut ledger) = self.recovery.input_ledger.lock() {
             *ledger = input_ledger.clone();
@@ -2155,6 +2248,28 @@ impl IPCService {
             performance_start,
             request_id,
             "remove_text",
+            "rpc_total",
+            || match &result {
+                Ok((_, recovery)) => {
+                    format!("status=success;recovery={}", recovery.log_value())
+                }
+                Err(error) => format!("status=error;error={error:?}"),
+            },
+        );
+        result.map(|(removal, _)| removal)
+    }
+
+    #[tracing::instrument]
+    pub fn delete_forward_text(&mut self) -> anyhow::Result<TextRemoval> {
+        let request_id = current_or_next_request_id();
+        let performance_start = client_performance_start();
+        let result = self.run_non_idempotent_edit_with_reconnect("delete_forward_text", |this| {
+            this.send_delete_forward_text(request_id)
+        });
+        self.log_client_performance_from_start(
+            performance_start,
+            request_id,
+            "delete_forward_text",
             "rpc_total",
             || match &result {
                 Ok((_, recovery)) => {
@@ -3156,6 +3271,7 @@ mod tests {
         service.record_successful_append("su", INPUT_STYLE_ROMAN2KANA);
         let ledger = service.input_ledger_snapshot().0;
         let remaining = Candidates {
+            prediction_readings: Default::default(),
             texts: vec!["す".into()],
             sub_texts: vec![String::new()],
             hiragana: "す".into(),
@@ -3257,6 +3373,7 @@ mod tests {
                 Ok(tonic::Response::new(ReplaceCompositionResponse {
                     composing_text: Some(probe_composing_text(reading)),
                     server_session_id: 7,
+                    ..Default::default()
                 }))
             })
         }
@@ -3288,6 +3405,53 @@ mod tests {
                     composing_text: Some(probe_composing_text("t")),
                     raw_input: (!missing_raw_input).then(|| "ty".to_string()),
                     server_session_id: 7,
+                    ..Default::default()
+                }))
+            })
+        }
+    }
+
+    impl tonic::server::UnaryService<shared::proto::DeleteForwardTextRequest> for Probe {
+        type Response = shared::proto::DeleteForwardTextResponse;
+        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+        fn call(
+            &mut self,
+            _: tonic::Request<shared::proto::DeleteForwardTextRequest>,
+        ) -> Self::Future {
+            let unavailable = self.unavailable.swap(false, Ordering::AcqRel);
+            let missing_raw_input = self.missing_raw_input.load(Ordering::Acquire);
+            Box::pin(async move {
+                if unavailable {
+                    return Err(tonic::Status::unavailable("delete forward response lost"));
+                }
+                Ok(tonic::Response::new(
+                    shared::proto::DeleteForwardTextResponse {
+                        composing_text: Some(probe_composing_text("あ")),
+                        raw_input: (!missing_raw_input).then(|| "a".to_string()),
+                        server_session_id: 7,
+                        cursor: Some(1),
+                    },
+                ))
+            })
+        }
+    }
+
+    impl tonic::server::UnaryService<shared::proto::MoveCursorRequest> for Probe {
+        type Response = shared::proto::MoveCursorResponse;
+        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+        fn call(
+            &mut self,
+            request: tonic::Request<shared::proto::MoveCursorRequest>,
+        ) -> Self::Future {
+            let offset = request.into_inner().offset;
+            let status = self.mutation_status();
+            Box::pin(async move {
+                status?;
+                Ok(tonic::Response::new(shared::proto::MoveCursorResponse {
+                    composing_text: Some(probe_composing_text("あ")),
+                    server_session_id: 7,
+                    raw_input: Some("ai".to_string()),
+                    cursor: Some(if offset < 0 { 1 } else { 2 }),
                 }))
             })
         }
@@ -3378,6 +3542,7 @@ mod tests {
                         probe_composing_text("なk")
                     }),
                     server_session_id: 7,
+                    ..Default::default()
                 }))
             })
         }
@@ -3424,6 +3589,22 @@ mod tests {
                         let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::<
                             shared::proto::RemoveTextResponse,
                             shared::proto::RemoveTextRequest,
+                        >::default(
+                        ));
+                        Ok(grpc.unary(probe, request).await)
+                    }
+                    "DeleteForwardText" => {
+                        let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::<
+                            shared::proto::DeleteForwardTextResponse,
+                            shared::proto::DeleteForwardTextRequest,
+                        >::default(
+                        ));
+                        Ok(grpc.unary(probe, request).await)
+                    }
+                    "MoveCursor" => {
+                        let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::<
+                            shared::proto::MoveCursorResponse,
+                            shared::proto::MoveCursorRequest,
                         >::default(
                         ));
                         Ok(grpc.unary(probe, request).await)
@@ -4063,8 +4244,33 @@ mod tests {
     }
 
     #[test]
+    fn corrected_prediction_reading_survives_ipc_and_changes_snapshot_identity() {
+        let response = shared::proto::ComposingText {
+            hiragana: "しますた".into(),
+            suggestions: vec![shared::proto::Suggestion {
+                text: "しました".into(),
+                prediction_reading: "しました".into(),
+                ..Default::default()
+            }],
+        };
+        let candidates = IPCService::candidates_from_composing_text(Some(response)).unwrap();
+        assert_eq!(candidates.hiragana, "しますた");
+        assert_eq!(
+            candidates
+                .prediction_readings
+                .get("しました")
+                .map(String::as_str),
+            Some("しました")
+        );
+        let mut stale = candidates.clone();
+        stale.prediction_readings.clear();
+        assert!(!candidates.has_same_composition(&stale));
+    }
+
+    #[test]
     fn prepare_future_clauses_retry_accepts_unchanged_composition() {
         let candidates = Candidates {
+            prediction_readings: Default::default(),
             texts: vec!["いい加減".to_string()],
             sub_texts: vec!["統一".to_string()],
             hiragana: "いいかげんとういつ".to_string(),
@@ -4085,6 +4291,7 @@ mod tests {
     #[test]
     fn prepare_future_clauses_retry_rejects_reset_server_state() {
         let previous = Candidates {
+            prediction_readings: Default::default(),
             texts: vec!["いい加減".to_string()],
             sub_texts: vec!["統一".to_string()],
             hiragana: "いいかげんとういつ".to_string(),
@@ -4103,6 +4310,7 @@ mod tests {
     #[test]
     fn non_idempotent_edit_attempt_completes_without_recovery_on_success() {
         let candidates = Candidates {
+            prediction_readings: Default::default(),
             texts: vec!["か".to_string()],
             sub_texts: vec![String::new()],
             hiragana: "か".to_string(),
@@ -4320,5 +4528,88 @@ mod tests {
                 .unwrap(),
             super::WindowRpcDelivery::SkippedUnavailable
         );
+    }
+
+    #[test]
+    fn delete_forward_and_move_cursor_update_sync_state_and_handle_missing_raw_input() {
+        let (mut service, probe, server) = recovery_rpc_service();
+        probe.deny.store(false, Ordering::Release);
+
+        service.move_cursor(-1).unwrap();
+        assert_eq!(
+            service.latest_composition_sync(),
+            super::CompositionSyncState {
+                raw_input: Some("ai".to_string()),
+                cursor: Some(1),
+            }
+        );
+
+        let removal = service.delete_forward_text().unwrap();
+        assert_eq!(removal.raw_input, "a");
+        assert_eq!(
+            service.latest_composition_sync(),
+            super::CompositionSyncState {
+                raw_input: Some("a".to_string()),
+                cursor: Some(1),
+            }
+        );
+        let ledger = service.input_ledger_snapshot().0;
+        assert_eq!(
+            ledger.operations,
+            vec![
+                CompositionOperation::MoveCursor(-1),
+                CompositionOperation::DeleteForward,
+            ]
+        );
+
+        probe.missing_raw_input.store(true, Ordering::Release);
+        assert!(service.delete_forward_text().is_err());
+        assert!(service.recovery_pending());
+        server.abort();
+    }
+
+    #[test]
+    fn replace_composition_replays_delete_forward_after_transport_loss() {
+        let (mut service, probe, server) = recovery_rpc_service();
+        probe.deny.store(false, Ordering::Release);
+        service.record_successful_append("ai", INPUT_STYLE_ROMAN2KANA);
+        service.move_cursor(-1).unwrap();
+        service.delete_forward_text().unwrap();
+
+        probe.unavailable.store(true, Ordering::Release);
+        let replayed = service.delete_forward_text().unwrap();
+        assert_eq!(replayed.raw_input, "a");
+        assert!(!service.recovery_pending());
+
+        let requests = probe.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let operations = &requests[0].operations;
+        assert_eq!(operations.len(), 3);
+        assert_eq!(operations[0].text, "ai");
+        assert_eq!(
+            operations[1].kind,
+            shared::proto::CompositionOperationKind::MoveCursor as i32
+        );
+        assert_eq!(operations[1].cursor_offset, -1);
+        assert_eq!(
+            operations[2].kind,
+            shared::proto::CompositionOperationKind::DeleteForward as i32
+        );
+        drop(requests);
+
+        let ledger = service.input_ledger_snapshot().0;
+        assert_eq!(
+            ledger.operations,
+            vec![
+                CompositionOperation::Append {
+                    text: "ai".to_string(),
+                    input_style: INPUT_STYLE_ROMAN2KANA,
+                },
+                CompositionOperation::MoveCursor(-1),
+                CompositionOperation::DeleteForward,
+                CompositionOperation::DeleteForward,
+            ]
+        );
+        server.abort();
     }
 }

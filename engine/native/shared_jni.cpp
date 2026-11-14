@@ -13,10 +13,20 @@ void zerocon_swift_free(char *);
 using Complete = char *(*)(void *, bool, const char *, unsigned long long);
 using Release = void (*)(void *, char *);
 char *zerocon_assist_request(const char *, Complete, Release, void *);
+char *zerocon_assist_policy(const char *);
 void zerocon_engine_free(char *);
 }
 
 struct CompletionHost { JNIEnv *env; jobject host; jmethodID complete; };
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_zeroconvert_ime_engine_WindowsEngine_nativeAssistPolicy(JNIEnv *env, jobject, jstring input) {
+    const auto text = assist_from_java(env, input);
+    auto *result = zerocon_assist_policy(text.c_str());
+    auto output = assist_to_java(env, result ? result : "{\"error\":\"empty policy response\"}");
+    zerocon_engine_free(result);
+    return output;
+}
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_zeroconvert_ime_engine_WindowsEngine_nativeConversionEpoch(JNIEnv *, jobject) {

@@ -138,6 +138,17 @@ private let embeddedPerformance = EmbeddedPerformance()
         return ["error": "composition mismatch", "reading": reading]
     }
     composingText = snapshot
+    currentKeyboardTouchEvidence = (request["touchEvidence"] as? [[String: Any]] ?? []).prefix(128).compactMap { entry in
+        guard let index = entry["inputIndex"] as? Int,
+              let typed = entry["typed"] as? String, typed.count == 1,
+              let alternatives = entry["alternatives"] as? [[String: Any]] else { return nil }
+        return KeyboardTouchEvidence(inputIndex: index, typed: typed.first!, alternatives: alternatives.prefix(4).compactMap {
+            guard let key = $0["key"] as? String, key.count == 1,
+                  let weight = $0["weight"] as? Double, weight.isFinite else { return nil }
+            return (key.first!, Float(weight))
+        })
+    }
+    defer { currentKeyboardTouchEvidence = [] }
     config["context"] = request["context"] as? String ?? ""
     let continuationReading = request["continuationReading"] as? String ?? ""
     let continuationSurface = request["continuationSurface"] as? String ?? ""
@@ -160,7 +171,7 @@ private let embeddedPerformance = EmbeddedPerformance()
     // Zero is an exact empty boundary in the shared API, not an unspecified one.
     let candidates = request["allowAI"] as? Bool == false
         ? get_composed_text_for_reconversion(lengthPtr: &length)
-        : (snapshot.isAtEndIndex ? get_composed_text(lengthPtr: &length) : get_composed_text_for_cursor_prefix(requiredInputCount: -1, lengthPtr: &length))
+        : (snapshot.isAtEndIndex ? get_composed_text(lengthPtr: &length) : get_composed_text_for_cursor_range(lengthPtr: &length))
     defer { free_candidate_list(candidates, length) }
     if zerocon_conversion_cancelled() {
         // An aborted decode may leave a partially updated KV cache. Reset both
@@ -186,7 +197,8 @@ private let embeddedPerformance = EmbeddedPerformance()
         result.append(["text": text, "suffix": suffix, "candidateId": String(candidate.candidateId),
                        "correspondingCount": candidate.correspondingCount,
                        "consumedReadingUtf16": consumedUtf16,
-                       "learningAllowed": learningCandidateCache.isLearningTarget(candidate.candidateId)])
+                       "learningAllowed": learningCandidateCache.isLearningTarget(candidate.candidateId),
+                       "predictionReading": candidate.predictionReading.map { String(cString: $0) } ?? ""])
     }
     var response: [String: Any] = ["reading": reading, "cursorUtf16": cursorUtf16, "candidates": result,
             "timing": ["conversionNs": DispatchTime.now().uptimeNanoseconds - started,

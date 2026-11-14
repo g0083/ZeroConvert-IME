@@ -73,7 +73,6 @@ cp target/i686-pc-windows-msvc/$str/azookey_windows.dll build/x86
 cp server-swift/.build/x86_64-unknown-windows-msvc/release/azookey-server.dll build
 
 cp -Recurse -Force llama_cpu build
-cp -Recurse -Force llama_cuda build
 cp -Recurse -Force llama_vulkan build
 
 cp $env:APPDATA/../Local/Programs/Swift/Runtimes/*/usr/bin/* build

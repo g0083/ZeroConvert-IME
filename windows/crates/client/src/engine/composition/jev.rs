@@ -164,6 +164,7 @@ impl TextServiceFactory {
         composition: &Composition,
         disabled_context_observed: bool,
     ) -> bool {
+        let (cursor, total) = TextServiceFactory::effective_cursor_and_total(composition);
         !disabled_context_observed
             && !composition.temporary_latin
             && composition.reconversion_original.is_none()
@@ -172,6 +173,11 @@ impl TextServiceFactory {
             && composition.future_clause_snapshots.is_empty()
             && !composition.raw_input.is_empty()
             && !composition.current_clause_is_split_derived
+            && shared::conversion_policy::should_run_live_assist_at_cursor(
+                cursor,
+                total,
+                !composition.suffix.is_empty(),
+            )
     }
 
     pub(super) fn begin_jev_conversion(&self) -> Result<()> {
@@ -609,6 +615,7 @@ mod tests {
 
     fn candidates() -> Candidates {
         Candidates {
+            prediction_readings: Default::default(),
             texts: vec!["記者", "汽車", "記者", "木"]
                 .into_iter()
                 .map(str::to_owned)

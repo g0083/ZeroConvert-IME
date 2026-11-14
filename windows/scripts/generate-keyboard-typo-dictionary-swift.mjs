@@ -20,6 +20,7 @@ const outputPath = join(
 
 function swiftString(value) {
   return JSON.stringify(value)
+    .replaceAll("\\u0000", "\\u{0}")
     .replaceAll("\\/", "/")
     .replaceAll("\\u2028", "\\u{2028}")
     .replaceAll("\\u2029", "\\u{2029}");
@@ -52,6 +53,9 @@ function lookupReadings(row) {
 }
 
 function generateSwift(rows) {
+  const readings = rows.flatMap((row) => lookupReadings(row).map((reading) =>
+    `    ${swiftString(reading + "\u0000" + row.expected_candidate)}: ${swiftString(katakana(row.corrected_reading))},`
+  )).join("\n");
   const entries = rows.flatMap((row) => lookupReadings(row).map((reading) => {
     return [
       "        DicdataElement(",
@@ -74,6 +78,14 @@ import KanaKanjiConverterModule
 
 let keyboardTypoDictionarySelectionCount = ${rows.length}
 let keyboardTypoDictionaryEntryCount = ${entries.length}
+
+private let keyboardTypoCorrectedReadings: [String: String] = [
+${readings}
+]
+
+func correctedKeyboardTypoReading(_ element: DicdataElement) -> String {
+    keyboardTypoCorrectedReadings[element.ruby + "\\u{0}" + element.word] ?? element.ruby
+}
 
 func makeKeyboardTypoDictionaryEntries() -> [DicdataElement] {
     [
@@ -118,7 +130,7 @@ func disableLearningForKeyboardTypoCorrectionCandidates(
     }
     return candidates.map { source in
         var candidate = source
-        if keyboardTypoDictionaryEntry(in: candidate) != nil
+        if candidate.data.contains(where: { $0.metadata.contains(.isKeyboardTypoCorrection) })
             || !candidate.keyboardTypoCorrections.isEmpty
         {
             candidate.isLearningTarget = false

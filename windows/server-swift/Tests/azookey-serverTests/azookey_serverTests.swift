@@ -881,7 +881,7 @@ private func testCandidate(
     }
 }
 
-@Test func latestLearningSelectionIsPrioritizedOnlyForItsReading() async {
+@Test func latestLearningSelectionPrioritizesWholeAndPartialMatchingReadings() async {
     let katouSugar = testCandidate(
         word: "果糖",
         ruby: "かとう",
@@ -912,15 +912,17 @@ private func testCandidate(
         currentLearningType = .inputAndOutput
         learningSelectionOverrides = ["カトウ": "加藤"]
         let prioritized = prioritizeLearningSelectionOverrides(candidates, ruby: "かとう") { $0 }
-        #expect(prioritized.map(\.text) == ["加藤", "今日", "果糖"])
+        #expect(prioritized.map(\.text) == ["加藤", "果糖", "今日"])
 
         var unrelatedCandidateAccessCount = 0
         let unrelated = prioritizeLearningSelectionOverrides(candidates, ruby: "しゅう") {
             unrelatedCandidateAccessCount += 1
             return $0
         }
-        #expect(unrelated.map(\.text) == ["果糖", "今日", "加藤"])
-        #expect(unrelatedCandidateAccessCount == 0)
+        // The current policy also preserves learned choices for matching
+        // candidate spans when the complete requested reading is different.
+        #expect(unrelated.map(\.text) == ["加藤", "今日", "果糖"])
+        #expect(unrelatedCandidateAccessCount > 0)
 
         currentLearningType = .nothing
         let learningDisabled = prioritizeLearningSelectionOverrides(candidates, ruby: "かとう") { $0 }
@@ -1973,7 +1975,7 @@ private func testCandidate(
             subtext: subtext,
             hiragana: hiragana,
             correspondingCount: 1,
-            candidateId: 1
+            candidateId: 1, predictionReading: nil
         )
     ]
 
@@ -1987,7 +1989,7 @@ private func testCandidate(
             subtext: nilHiraganaSubtext,
             hiragana: nil,
             correspondingCount: 1,
-            candidateId: 2
+            candidateId: 2, predictionReading: nil
         )
     ]
 
@@ -2003,7 +2005,7 @@ private func testCandidate(
             subtext: firstLegacySubtext,
             hiragana: firstLegacyHiragana,
             correspondingCount: 1,
-            candidateId: 3
+            candidateId: 3, predictionReading: nil
         )
     )
 
@@ -2016,7 +2018,7 @@ private func testCandidate(
             subtext: secondLegacySubtext,
             hiragana: nil,
             correspondingCount: 1,
-            candidateId: 4
+            candidateId: 4, predictionReading: nil
         )
     )
 
@@ -3781,5 +3783,216 @@ private func testCandidate(
                 #expect(firstPredictionIndex < firstPartialIndex)
             }
         }
+    }
+}
+
+@Test func cursorMoveMidInsertAndCursorReturnAcrossSeparatorSucceeds() async throws {
+    let packageRoot = packageRootURL()
+    let dictionaryURL = packageRoot
+        .appending(path: "azooKey_dictionary_storage")
+        .appending(path: "Dictionary")
+
+    for keyboardTypoCorrection in [false, true] {
+        let converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+        var options = getOptions(zenzaiEnabled: false)
+        options.experimentalKeyboardTypoCorrection = keyboardTypoCorrection
+
+        // 1. Direct flick: "あいう" -> left 1 -> insert "か" -> right 1 back to end.
+        var direct = ComposingText()
+        for ch in ["あ", "い", "う"] {
+            direct.insertAtCursorPosition(ch, inputStyle: .direct)
+            _ = converter.requestCandidates(direct, options: options)
+        }
+        #expect(direct.moveCursorFromCursorPosition(count: -1) == -1)
+        _ = converter.requestCandidates(direct.prefixToCursorPosition(), options: options)
+        direct.insertAtCursorPosition("か", inputStyle: .direct)
+        let directMid = converter.requestCandidates(direct.prefixToCursorPosition(), options: options)
+        #expect(!directMid.mainResults.isEmpty)
+        #expect(direct.moveCursorFromCursorPosition(count: 1) == 1)
+        #expect(direct.convertTarget == "あいかう")
+        let directReturned = converter.requestCandidates(direct, options: options)
+        #expect(!directReturned.mainResults.isEmpty)
+
+        // 2. Roman2Kana: pending consonant + completed kana in middle -> return right step by step.
+        var roman = ComposingText()
+        for ch in "watashihagakuseidesu" {
+            roman.insertAtCursorPosition(String(ch), inputStyle: .roman2kana)
+            let target = roman.isAtEndIndex ? roman : roman.prefixToCursorPosition()
+            _ = converter.requestCandidates(target, options: options)
+        }
+        #expect(roman.moveCursorFromCursorPosition(count: -6) == -6) // わたしは|がくせいです
+        _ = converter.requestCandidates(roman.prefixToCursorPosition(), options: options)
+        for ch in "nihonno" {
+            roman.insertAtCursorPosition(String(ch), inputStyle: .roman2kana)
+            _ = converter.requestCandidates(roman.prefixToCursorPosition(), options: options)
+        }
+        for _ in 0..<6 {
+            #expect(roman.moveCursorFromCursorPosition(count: 1) == 1)
+            let target = roman.isAtEndIndex ? roman : roman.prefixToCursorPosition()
+            let res = converter.requestCandidates(target, options: options)
+            #expect(!res.mainResults.isEmpty)
+        }
+
+        // 3. Pending 'k' in middle -> return right.
+        var pendingMid = ComposingText()
+        for ch in "aiu" {
+            pendingMid.insertAtCursorPosition(String(ch), inputStyle: .roman2kana)
+            _ = converter.requestCandidates(pendingMid, options: options)
+        }
+        #expect(pendingMid.moveCursorFromCursorPosition(count: -1) == -1)
+        _ = converter.requestCandidates(pendingMid.prefixToCursorPosition(), options: options)
+        pendingMid.insertAtCursorPosition("k", inputStyle: .roman2kana)
+        _ = converter.requestCandidates(pendingMid.prefixToCursorPosition(), options: options)
+        #expect(pendingMid.moveCursorFromCursorPosition(count: 1) == 1)
+        #expect(!converter.requestCandidates(pendingMid, options: options).mainResults.isEmpty)
+
+        // 4. Mid-string backspace inserts frozen compositionSeparator -> return right.
+        var midDelete = ComposingText()
+        for ch in ["あ", "い", "う", "え"] {
+            midDelete.insertAtCursorPosition(ch, inputStyle: .direct)
+            _ = converter.requestCandidates(midDelete, options: options)
+        }
+        #expect(midDelete.moveCursorFromCursorPosition(count: -2) == -2)
+        _ = converter.requestCandidates(midDelete.prefixToCursorPosition(), options: options)
+        midDelete.deleteBackwardFromCursorPosition(count: 1)
+        _ = converter.requestCandidates(midDelete.prefixToCursorPosition(), options: options)
+        #expect(midDelete.moveCursorFromCursorPosition(count: 2) == 2)
+        #expect(midDelete.convertTarget == "あうえ")
+        #expect(!converter.requestCandidates(midDelete, options: options).mainResults.isEmpty)
+
+        // 5. Prefix completion leaving a leading compositionSeparator.
+        var leadingSep = ComposingText()
+        leadingSep.insertAtCursorPosition([
+            .init(character: "あ", inputStyle: .direct),
+            .init(character: "い", inputStyle: .direct),
+            .init(piece: .compositionSeparator, inputStyle: .mapped(id: .empty)),
+            .init(character: "う", inputStyle: .direct),
+            .init(character: "た", inputStyle: .direct),
+        ])
+        _ = converter.requestCandidates(leadingSep, options: options)
+        leadingSep.prefixComplete(composingCount: .inputCount(2))
+        let afterPrefixComplete = converter.requestCandidates(leadingSep, options: options)
+        #expect(!afterPrefixComplete.mainResults.isEmpty)
+    }
+}
+
+@Test func rawInputAndDeleteForwardHandleCompositionSeparatorsCleanly() async {
+    await MainActor.run {
+        let previousComposingText = composingText
+        let previousInputStyle = currentInputStyle
+        defer {
+            composingText = previousComposingText
+            currentInputStyle = previousInputStyle
+        }
+
+        composingText = ComposingText()
+        currentInputStyle = .roman2kana
+        var cursor: CInt = -1
+        let initial = append_text(input: "kyoutenki", cursorPtr: &cursor)
+        free_c_string(initial)
+        #expect(composingText.convertTarget == "きょうてんき")
+        #expect(cursor == 6)
+
+        var moveDelta: CInt = 0
+        // Move left 3 characters to place the cursor before "てんき".
+        free_c_string(move_cursor(offset: -3, cursorPtr: &moveDelta))
+        #expect(moveDelta == -3)
+        #expect(get_cursor_position() == 3)
+
+        // Insert "haii" before "てんき"; AzooKey inserts a compositionSeparator.
+        free_c_string(append_text(input: "haii", cursorPtr: &cursor))
+        #expect(composingText.convertTarget == "きょうはいいてんき")
+        #expect(cursor == 6)
+        #expect(get_cursor_position() == 6)
+
+        let rawInputAfterInsert = get_raw_input()
+        defer { free_c_string(rawInputAfterInsert) }
+        #expect(rawInputAfterInsert.map { String(cString: $0) } == "kyouhaiitenki")
+
+        // DeleteForwardText removes "て" right of cursor without moving cursor left.
+        var cursorAfterDeleteForward: CInt = -1
+        let hiraganaAfterDeleteForward = delete_forward_text(cursorPtr: &cursorAfterDeleteForward)
+        defer { free_c_string(hiraganaAfterDeleteForward) }
+        #expect(String(cString: hiraganaAfterDeleteForward) == "きょうはいいんき")
+        #expect(cursorAfterDeleteForward == 6)
+
+        // DeleteBackward at mid-sentence still yields canonical raw_input.
+        var cursorAfterRemove: CInt = -1
+        let hiraganaAfterRemove = remove_text(cursorPtr: &cursorAfterRemove)
+        defer { free_c_string(hiraganaAfterRemove) }
+        #expect(String(cString: hiraganaAfterRemove) == "きょうはいんき")
+        #expect(cursorAfterRemove == 5)
+
+        let rawInputAfterRemove = get_raw_input()
+        defer { free_c_string(rawInputAfterRemove) }
+        #expect(rawInputAfterRemove.map { String(cString: $0) } == "kyouhainki")
+    }
+}
+
+@Test func cursorRangeConvertsFullPrefixPreservesSuffixAndHandlesStartCursor() async {
+    let packageRoot = packageRootURL()
+    let dictionaryURL = packageRoot
+        .appending(path: "azooKey_dictionary_storage")
+        .appending(path: "Dictionary")
+
+    await MainActor.run {
+        let previousConverter = converter
+        let previousSupplementConverter = normalNBestSupplementConverter
+        let previousComposingText = composingText
+        let previousLearningType = currentLearningType
+        let previousExecURL = execURL
+        let previousZenzaiEnable = config["enable"]
+        let previousPredictive = config["predictiveConversion"]
+        defer {
+            converter = previousConverter
+            normalNBestSupplementConverter = previousSupplementConverter
+            composingText = previousComposingText
+            currentLearningType = previousLearningType
+            execURL = previousExecURL
+            config["enable"] = previousZenzaiEnable
+            config["predictiveConversion"] = previousPredictive
+        }
+
+        converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+        normalNBestSupplementConverter = KanaKanjiConverter(
+            dictionaryURL: dictionaryURL,
+            preloadDictionary: false
+        )
+        currentLearningType = .nothing
+        execURL = packageRoot
+        config["enable"] = false
+        config["predictiveConversion"] = false
+
+        composingText = ComposingText()
+        for ch in "きょうはいいてんき" {
+            composingText.insertAtCursorPosition(String(ch), inputStyle: .direct)
+        }
+
+        // Place cursor at "きょうはいい|てんき" (multi-clause prefix length 6).
+        var moveDelta: CInt = 0
+        free_c_string(move_cursor(offset: -3, cursorPtr: &moveDelta))
+        #expect(get_cursor_position() == 6)
+
+        var length: CInt = 0
+        let list = get_composed_text_for_cursor_range(lengthPtr: &length)
+        defer { free_candidate_list(list, length) }
+        #expect(length > 0)
+        let candidate0 = list[0]!.pointee
+        // Full prefix [0..<6] is "きょうはいい", not truncated to first clause "きょうは".
+        #expect(candidate0.correspondingCount == 6)
+        #expect(String(cString: candidate0.subtext) == "てんき")
+        #expect(String(cString: candidate0.hiragana) == "きょうはいいてんき")
+
+        // Committing top candidate leaves only suffix "てんき" editable.
+        free_c_string(shrink_text(offset: candidate0.correspondingCount))
+        #expect(composingText.convertTarget == "てんき")
+
+        // Moving cursor to start returns 0 candidates while preserving non-empty target.
+        free_c_string(move_cursor(offset: -3, cursorPtr: &moveDelta))
+        #expect(get_cursor_position() == 0)
+        var startLength: CInt = -1
+        let startList = get_composed_text_for_cursor_range(lengthPtr: &startLength)
+        defer { free_candidate_list(startList, startLength) }
+        #expect(startLength == 0)
     }
 }

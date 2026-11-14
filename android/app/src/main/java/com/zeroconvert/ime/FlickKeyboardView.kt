@@ -698,7 +698,8 @@ private fun FlickSideCursorButton(
         visualPadding = visualPadding,
         cornerRadius = 8.dp,
         baseColor = actionKeyBg,
-        palette = palette
+        palette = palette,
+        hapticOnPress = false
     ) {
         Text(text = text, color = textColor, fontSize = 14.sp)
     }

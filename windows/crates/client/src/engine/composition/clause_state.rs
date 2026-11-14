@@ -545,6 +545,7 @@ impl ClauseState {
         ClauseTransition { effect }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_active_for_composition(composition: &Composition) -> bool {
         !composition.clause_snapshots.is_empty()
             || !composition.future_clause_snapshots.is_empty()

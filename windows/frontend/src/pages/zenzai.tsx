@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,7 +28,7 @@ type ModelListResponse = {
 
 export const Zenzai = () => {
     const [value, setValue] = useState({ enable: false, profile: "", backend: "", gpu_layers: 99 });
-    const [capability, setCapability] = useState({ cpu: false, cuda: false, vulkan: false });
+    const [capability, setCapability] = useState({ cpu: false, vulkan: false });
     const [capabilityError, setCapabilityError] = useState(false);
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -40,10 +38,6 @@ export const Zenzai = () => {
     const [activeModelId, setActiveModelId] = useState<string>("");
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [isSwitchingModel, setIsSwitchingModel] = useState(false);
-    const [cudaDialog, setCudaDialog] = useState(false);
-    const [cudaBytes, setCudaBytes] = useState(0);
-    const [cudaInstalling, setCudaInstalling] = useState(false);
-    const [cudaProgress, setCudaProgress] = useState(0);
     const savedRecommendation = useMemo(() => loadQuickBenchmarkRecommendation(), []);
     const [quickBenchmark, setQuickBenchmark] = useState<QuickBenchmarkResult | null>(savedRecommendation);
     const [recommendedBackend, setRecommendedBackend] = useState<QuickBackendId | null>(savedRecommendation?.recommended ?? null);
@@ -68,20 +62,13 @@ export const Zenzai = () => {
             if (!zenzai.enable) {
                 void saveConfigWithToast((config) => { config.zenzai.enable = true; });
             }
+            const normalizedBackend = zenzai.backend === "cpu" ? "cpu" : "vulkan";
             setValue((previous) => ({
                 enable: true,
                 profile: profileEdited.current ? previous.profile : zenzai.profile,
-                backend: zenzai.backend,
+                backend: normalizedBackend,
                 gpu_layers: zenzai.gpu_layers ?? 99,
             }));
-            if (zenzai.backend === "cuda") {
-                void invoke<{ installed: boolean; download_bytes: number }>("cuda_backend_status").then((status) => {
-                    if (!cancelled && !status.installed) {
-                        setCudaBytes(status.download_bytes);
-                        setCudaDialog(true);
-                    }
-                }).catch((error) => { if (!cancelled) toast.error(`CUDAの導入状態を確認できませんでした: ${error}`); });
-            }
             setLoadState("ready");
         }).catch(() => { if (!cancelled) setLoadState("error"); });
         setCapabilityError(false);
@@ -140,36 +127,10 @@ export const Zenzai = () => {
     };
 
     const handleBackendChange = async (backend: string) => {
-        if ((backend === value.backend && backend !== "cuda") || cudaInstalling || runtimeApplying) return;
+        if (backend === value.backend || runtimeApplying) return;
         try {
-            if (backend === "cuda") {
-                const status = await invoke<{ installed: boolean; download_bytes: number }>("cuda_backend_status");
-                if (!status.installed) {
-                    setCudaBytes(status.download_bytes);
-                    setCudaDialog(true);
-                    return;
-                }
-            }
             await saveRuntime({ backend });
         } catch (error) { toast.error(`バックエンドを変更できませんでした: ${error}`); }
-    };
-    const installCuda = async () => {
-        setCudaInstalling(true);
-        setCudaProgress(0);
-        let unlisten: (() => void) | undefined;
-        try {
-            unlisten = await listen<{ received: number; total: number }>("cuda-download-progress", ({ payload }) => {
-                setCudaProgress(Math.min(100, Math.round(payload.received / payload.total * 100)));
-            });
-            await invoke("install_cuda_backend", { confirmed: true });
-            await saveRuntime({ backend: "cuda" });
-            toast.success("CUDAバックエンドを導入しました");
-        } catch (error) {
-            toast.error(`CUDAの導入に失敗しました。バックエンド設定は維持されます: ${error}`);
-        } finally {
-            unlisten?.();
-            setCudaInstalling(false);
-        }
     };
 
     const handleQuickBenchmark = async () => {
@@ -205,32 +166,14 @@ export const Zenzai = () => {
 
     return (
         <SettingsSection title="ZeroCon AI">
-            <AlertDialog open={cudaDialog} onOpenChange={setCudaDialog}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>CUDAバックエンドをダウンロードしますか？</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            NVIDIA GPU用のバックエンドとCUDAランタイム（約{Math.ceil(cudaBytes / 1_000_000)} MB）をインターネットから取得します。
-                            NVIDIAドライバーが必要です。ダウンロード完了後にCUDAを有効にします。
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>キャンセル</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => void installCuda()}>ダウンロードして使う</AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-            {cudaInstalling && <p className="settings-description p-4" role="status" aria-live="polite">
-                {cudaProgress < 100 ? `CUDAをダウンロード中… ${cudaProgress}%` : "CUDAを検証・展開しています…"}
-            </p>}
             {loadState !== "ready" ? <div className="p-4 space-y-2" role="status">
                 <p className={loadState === "error" ? "text-sm text-destructive" : "settings-description"}>
                     {loadState === "error" ? "ZeroCon AIの設定を読み込めませんでした。" : "設定を読み込んでいます…"}
                 </p>
                 {loadState === "error" && <Button variant="outline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>再試行</Button>}
             </div> : <>
-                <SettingsRow label="利用モデル" description="漢字変換・タイポ補正・先読みを統合処理するモデルを選択します（Nano v4 IQ4_emb8 / Q8）。" htmlFor="zenzai-model">
-                    <Select value={activeModelId} disabled={runtimeApplying || cudaInstalling || isSwitchingModel || models.length === 0} onValueChange={(modelId) => void handleModelChange(modelId)}>
+                <SettingsRow label="利用モデル" description="かな漢字変換・内蔵のタイポ補正・文の先読みに使うZeroCon Modelを選びます。" htmlFor="zenzai-model">
+                    <Select value={activeModelId} disabled={runtimeApplying || isSwitchingModel || models.length === 0} onValueChange={(modelId) => void handleModelChange(modelId)}>
                         <SelectTrigger id="zenzai-model" className="w-[320px]">
                             <SelectValue placeholder="モデルを選択" />
                         </SelectTrigger>
@@ -246,18 +189,17 @@ export const Zenzai = () => {
                 </SettingsRow>
 
                 <SettingsRow label="バックエンド" description="漢字変換・タイポ補正・先読みで共用します。変更時はIMEサーバーを自動で再起動します。Windowsの再起動は不要です。入力中の文字を確定してから変更してください。" htmlFor="zenzai-backend">
-                    <Select value={value.backend} disabled={capabilityError || cudaInstalling || runtimeApplying || isSwitchingModel} onValueChange={(backend) => void handleBackendChange(backend)}>
+                    <Select value={value.backend} disabled={capabilityError || runtimeApplying || isSwitchingModel} onValueChange={(backend) => void handleBackendChange(backend)}>
                         <SelectTrigger id="zenzai-backend"><SelectValue placeholder="バックエンドを選択" /></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="cpu" disabled={!capability.cpu}>{recommendedBackend === "cpu" ? "CPU (推奨)" : "CPU"}{!capability.cpu && " — AVX 対応 CPU が必要"}</SelectItem>
-                            <SelectItem value="cuda" disabled={!capability.cuda}>{recommendedBackend === "cuda" ? "CUDA (NVIDIA GPU) (推奨)" : "CUDA (NVIDIA GPU)"}{!capability.cuda && " — NVIDIAドライバーが必要"}</SelectItem>
                             <SelectItem value="vulkan" disabled={!capability.vulkan}>{recommendedBackend === "vulkan" ? "Vulkan (推奨)" : "Vulkan"}{!capability.vulkan && " — このPCでは未対応"}</SelectItem>
                         </SelectContent>
                     </Select>
                 </SettingsRow>
                 {capabilityError && <p className="px-4 pb-3 text-xs text-destructive" role="alert">バックエンドの対応状況を取得できませんでした。</p>}
                 <SettingsRow label="クイックベンチマーク" description="CPUとVulkanで同じ推論を実測し、完了まで数十秒かかります。レイテンシが短い方を推奨バックエンドとして表示します。" htmlFor="zenzai-quick-benchmark">
-                    <Button id="zenzai-quick-benchmark" variant="outline" disabled={quickBenchmarkRunning || runtimeApplying || cudaInstalling || isSwitchingModel} onClick={() => void handleQuickBenchmark()}>
+                    <Button id="zenzai-quick-benchmark" variant="outline" disabled={quickBenchmarkRunning || runtimeApplying || isSwitchingModel} onClick={() => void handleQuickBenchmark()}>
                         {quickBenchmarkRunning ? "測定中…" : "実行"}
                     </Button>
                 </SettingsRow>
@@ -272,8 +214,8 @@ export const Zenzai = () => {
                 {value.backend === "cpu" && <p className="settings-description px-4 pb-3">
                     CPUバックエンドには AVX 対応 CPU が必要です。未対応の場合は標準変換を使います。
                 </p>}
-                <SettingsRow label="GPUに載せる層数" description="少なくすると残りの層の重みをRAMに置き、その層をCPUで処理します。0層ではCPUで推論するため、CPU負荷が増え、遅くなる場合があります。Vulkan/CUDAでは0層でも作業領域などにVRAMを使用する場合があります。漢字変換・内蔵タイポ補正・先読みで共用します。" htmlFor="zenzai-gpu-layers">
-                    <Select value={String(value.gpu_layers)} disabled={value.backend === "cpu" || cudaInstalling || runtimeApplying || isSwitchingModel} onValueChange={(layers) => void saveRuntime({ gpu_layers: Number(layers) })}>
+                <SettingsRow label="GPUに載せる層数" description="少なくすると残りの層の重みをRAMに置き、その層をCPUで処理します。0層ではCPUで推論するため、CPU負荷が増え、遅くなる場合があります。Vulkanでは0層でも作業領域などにVRAMを使用する場合があります。漢字変換・内蔵タイポ補正・先読みで共用します。" htmlFor="zenzai-gpu-layers">
+                    <Select value={String(value.gpu_layers)} disabled={value.backend === "cpu" || runtimeApplying || isSwitchingModel} onValueChange={(layers) => void saveRuntime({ gpu_layers: Number(layers) })}>
                         <SelectTrigger id="zenzai-gpu-layers"><SelectValue /></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="99">全層（速度優先・既定）</SelectItem>

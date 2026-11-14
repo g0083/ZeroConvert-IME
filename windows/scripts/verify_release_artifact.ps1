@@ -86,7 +86,6 @@ function Assert-InstallPayload {
         "Dictionary\Reverse\reverse-v2.bin",
         "EmojiDictionary",
         "llama_cpu",
-        "llama_cuda",
         "llama_vulkan"
     )
 

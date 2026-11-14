@@ -1,5 +1,8 @@
 //! Bounded, immutable surface completion. Scores express evidence, not probability.
-use super::{simple_http_post, to_katakana, AiAssistConfig};
+use super::{
+    corrector::{mask_digits_with_nam, restore_nam_digits},
+    simple_http_post, to_katakana, AiAssistConfig,
+};
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -197,13 +200,19 @@ fn zerocon(
     }
     // First extend the reading, then convert the entire extended reading. Treating
     // the first response as final surface used to append raw kana to converted text.
+    let (masked_context, _) = mask_digits_with_nam(context);
     let target = to_katakana(reading);
+    let (masked_target, target_digits) = mask_digits_with_nam(&target);
     let response = simple_http_post(
         config.prediction_port,
         "/completion",
         &json!({
-            "prompt": format!("\u{EE02}{context}\u{EE00}{target}"), "n_predict": 24,
-            "temperature": 0.0, "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
+            "prompt": format!("\u{EE02}{masked_context}\u{EE00}{masked_target}"),
+            "n_predict": 24,
+            "temperature": 0.0,
+            "cache_prompt": true,
+            "id_slot": 0,
+            "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
         }),
         250,
     )?;
@@ -215,19 +224,22 @@ fn zerocon(
     {
         return None;
     }
-    let extended = format!("{target}{}", to_katakana(continuation));
+    let extended = format!("{masked_target}{}", to_katakana(continuation));
     let response = simple_http_post(
         config.prediction_port,
         "/completion",
         &json!({
-            "prompt": format!("\u{EE02}{context}\u{EE00}{extended}\u{EE01}"),
+            "prompt": format!("\u{EE02}{masked_context}\u{EE00}{extended}\u{EE01}"),
             "n_predict": (extended.chars().count() * 3 + 16).clamp(32, 256),
-            "temperature": 0.0, "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
+            "temperature": 0.0,
+            "cache_prompt": true,
+            "id_slot": 0,
+            "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
         }),
         300,
     )?;
-    let completed = complete_response(&response)?;
-    let suffix = surface_suffix(surface, completed)?;
+    let completed = restore_nam_digits(complete_response(&response)?, &target_digits);
+    let suffix = surface_suffix(surface, &completed)?;
     if !supported_by_context(context, surface, suffix) {
         return None;
     }
@@ -470,5 +482,59 @@ pub(crate) mod tests {
         .expect("non-repeating clause continuation must pass");
         assert_eq!(valid.continuation, "、電車が遅れています。");
         let _ = valid_worker.join().unwrap();
+    }
+
+    #[test]
+    fn zerocon_requests_enable_prompt_cache_in_slot_zero() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        let _guard = MODEL_TEST_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            let mut payloads = Vec::new();
+            for content in ["マス。", "よろしくお願いします。"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.strip_prefix("Content-Length: ") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                drop(reader);
+                payloads.push(serde_json::from_slice::<Value>(&body).unwrap());
+                let reply = json!({"content": content, "stop_type": "eos"}).to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                )
+                .unwrap();
+            }
+            payloads
+        });
+        let config = AiAssistConfig {
+            enabled: true,
+            prediction_port: port,
+            corrector_port: 1,
+            ..Default::default()
+        };
+        let result = suggest("", "よろしくおねがいし", "よろしくお願いし", &config).unwrap();
+        assert_eq!(result.continuation, "ます。");
+        let payloads = worker.join().unwrap();
+        assert_eq!(payloads.len(), 2);
+        for p in payloads {
+            assert_eq!(p["cache_prompt"], json!(true));
+            assert_eq!(p["id_slot"], json!(0));
+        }
     }
 }

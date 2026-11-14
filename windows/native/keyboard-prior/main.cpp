@@ -7,13 +7,29 @@
 #include "llama.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
+
+namespace {
+int env_int_clamped(const char *name, int fallback, int min_val, int max_val) {
+  const char *raw = std::getenv(name);
+  if (!raw || !*raw)
+    return fallback;
+  try {
+    const int parsed = std::stoi(raw);
+    return std::clamp(parsed, min_val, max_val);
+  } catch (...) {
+    return fallback;
+  }
+}
+} // namespace
 
 int main(int argc, char **argv) {
   if (argc == 3 && std::string(argv[1]) == "--validate-channel") {
@@ -48,22 +64,59 @@ int main(int argc, char **argv) {
                  "[dictionary.bin]\n";
     return 2;
   }
-  ggml_backend_load_all();
+  if (!std::getenv("AZOOKEY_KEYBOARD_PRIOR_LOG")) {
+    llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+  }
+  if (const char *backend_dir = std::getenv("AZOOKEY_LLAMA_BACKEND_DIR");
+      backend_dir && *backend_dir) {
+    ggml_backend_load_all_from_path(backend_dir);
+  } else {
+    ggml_backend_load_all();
+  }
   llama_backend_init();
+  const int gpu_layers =
+      env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_GPU_LAYERS", 0, 0, 99);
   auto mp = llama_model_default_params();
-  mp.n_gpu_layers = 0;
-  auto *model = llama_model_load_from_file(argv[(hybrid || assist) ? 2 : 1], mp);
+  mp.n_gpu_layers = gpu_layers;
+  auto *model =
+      llama_model_load_from_file(argv[(hybrid || assist) ? 2 : 1], mp);
   if (!model)
     return 3;
+  const int logical_cores =
+      int(std::max(1u, std::thread::hardware_concurrency()));
+  const int auto_threads =
+      gpu_layers > 0
+          ? (logical_cores <= 1 ? 1 : std::clamp((logical_cores + 1) / 2, 2, 4))
+          : (logical_cores <= 1 ? 1 : std::clamp(logical_cores / 2, 2, 6));
+  const int auto_threads_batch =
+      gpu_layers > 0
+          ? (logical_cores <= 1 ? 1
+                                : std::clamp(logical_cores / 2, auto_threads, 8))
+          : (logical_cores <= 1
+                 ? 1
+                 : std::clamp(logical_cores - 2, auto_threads, 6));
+  const int n_threads =
+      env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_THREADS", auto_threads, 1, 32);
+  const int n_threads_batch = env_int_clamped(
+      "AZOOKEY_KEYBOARD_PRIOR_THREADS_BATCH", auto_threads_batch, 1, 64);
+  const int default_batch = (hybrid || assist) ? 512 : 2048;
+  const int n_batch =
+      env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_BATCH", default_batch, 256, 4096);
+  const int n_ubatch =
+      env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_UBATCH", 512, 64, n_batch);
+
   auto cp = llama_context_default_params();
-  cp.n_ctx = 4096;
-  cp.n_batch = 4096;
-  cp.n_ubatch = 512;
+  cp.n_ctx = (hybrid || assist) ? 512 : 4096;
+  cp.n_batch = (hybrid || assist) ? std::min(n_batch, 512) : 4096;
+  cp.n_ubatch = std::min(n_ubatch, int(cp.n_batch));
+  cp.n_outputs_max = cp.n_batch;
   cp.n_seq_max = 32;
   cp.kv_unified = true;
-  cp.n_threads = 4;
-  cp.n_threads_batch = 4;
-  cp.offload_kqv = false;
+  cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+  cp.no_perf = true;
+  cp.n_threads = n_threads;
+  cp.n_threads_batch = n_threads_batch;
+  cp.offload_kqv = gpu_layers > 0;
   auto *ctx = llama_init_from_model(model, cp);
   if (!ctx) {
     llama_model_free(model);
@@ -71,17 +124,44 @@ int main(int argc, char **argv) {
   }
   const auto *vocab = llama_model_get_vocab(model);
   const int nv = llama_vocab_n_tokens(vocab);
+  std::vector<llama_token> cached_prefix_tokens;
 
   auto score_sequences =
       [&](const std::vector<std::vector<llama_token>> &sequences,
           const std::vector<int> &prefix_lengths) {
         const int count = int(sequences.size());
-        // Share identical token prefixes across candidate sequence IDs.
-        // This preserves the scoring formula while avoiding repeated prefix
-        // work. Floating point/quantized kernels can vary across batch shapes.
+        if (count == 0)
+          return std::vector<double>();
+        if (count > 32)
+          throw std::runtime_error("sequence count exceeds n_seq_max");
+
+        int max_shared = int(sequences[0].size()) - 1;
+        for (int i = 0; i < count; ++i) {
+          max_shared = std::min(max_shared,
+                                std::min(int(sequences[i].size()) - 1,
+                                         std::max(0, prefix_lengths[i] - 1)));
+        }
+        int shared_unscored_len = 0;
+        while (shared_unscored_len < max_shared) {
+          const llama_token tok = sequences[0][shared_unscored_len];
+          bool all_match = true;
+          for (int i = 1; i < count; ++i) {
+            if (sequences[i][shared_unscored_len] != tok) {
+              all_match = false;
+              break;
+            }
+          }
+          if (!all_match)
+            break;
+          ++shared_unscored_len;
+        }
+
+        // Share identical token prefixes across candidate sequence IDs and
+        // preserve the unscored shared prefix across keystrokes & Stage-1->2.
         struct Node {
           llama_token token;
           int pos;
+          bool need_logits;
           std::vector<int> owners;
         };
         struct Edge {
@@ -95,22 +175,82 @@ int main(int argc, char **argv) {
         for (int i = 0; i < count; ++i) {
           const auto &tokens = sequences[i];
           std::vector<llama_token> prefix;
-          for (int j = 0; j < int(tokens.size()) - 1; ++j) {
+          for (int j = shared_unscored_len; j < int(tokens.size()) - 1; ++j) {
             prefix.push_back(tokens[j]);
             auto found = prefixes.find(prefix);
             int node;
             if (found == prefixes.end()) {
               node = int(nodes.size());
               prefixes.emplace(prefix, node);
-              nodes.push_back({tokens[j], j, {}});
+              nodes.push_back({tokens[j], j, false, {}});
             } else
               node = found->second;
             nodes[node].owners.push_back(i);
-            if (j + 1 >= prefix_lengths[i])
+            if (j + 1 >= prefix_lengths[i]) {
+              nodes[node].need_logits = true;
               edges.push_back({node, i, tokens[j + 1]});
+            }
           }
         }
-        llama_memory_clear(llama_get_memory(ctx), true);
+        if (nodes.empty())
+          return std::vector<double>(count, 0.0);
+        const int max_ctx = int(llama_n_ctx(ctx));
+        if (shared_unscored_len + int(nodes.size()) > max_ctx)
+          throw std::runtime_error("batch size");
+
+        auto *mem = llama_get_memory(ctx);
+        int lcp = 0;
+        const int cached_limit =
+            std::min(shared_unscored_len, int(cached_prefix_tokens.size()));
+        while (lcp < cached_limit &&
+               cached_prefix_tokens[lcp] == sequences[0][lcp]) {
+          ++lcp;
+        }
+        if (lcp > 0) {
+          llama_memory_seq_keep(mem, 0);
+          if (!llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(lcp), -1)) {
+            llama_memory_clear(mem, true);
+            cached_prefix_tokens.clear();
+            lcp = 0;
+          }
+        } else {
+          llama_memory_clear(mem, true);
+          cached_prefix_tokens.clear();
+        }
+
+        if (shared_unscored_len > 0) {
+          const int delta = shared_unscored_len - lcp;
+          if (delta > 0) {
+            llama_set_n_threads(ctx, n_threads,
+                                delta <= 4 ? n_threads : n_threads_batch);
+            auto pfx_batch = llama_batch_init(delta, 0, 1);
+            for (int k = 0; k < delta; ++k) {
+              const int pos = lcp + k;
+              pfx_batch.token[k] = sequences[0][pos];
+              pfx_batch.pos[k] = pos;
+              pfx_batch.n_seq_id[k] = 1;
+              pfx_batch.seq_id[k][0] = 0;
+              pfx_batch.logits[k] = 0;
+            }
+            pfx_batch.n_tokens = delta;
+            const int pfx_rc = llama_decode(ctx, pfx_batch);
+            llama_batch_free(pfx_batch);
+            if (pfx_rc != 0) {
+              llama_memory_clear(mem, true);
+              cached_prefix_tokens.clear();
+              throw std::runtime_error("llama_decode prefix failed");
+            }
+          }
+          for (int s = 1; s < count; ++s) {
+            llama_memory_seq_cp(mem, 0, s, 0,
+                                static_cast<llama_pos>(shared_unscored_len));
+          }
+          cached_prefix_tokens.assign(
+              sequences[0].begin(), sequences[0].begin() + shared_unscored_len);
+        } else {
+          cached_prefix_tokens.clear();
+        }
+
         auto batch = llama_batch_init(int(nodes.size()), 0, count);
         for (const auto &node : nodes) {
           const int at = batch.n_tokens++;
@@ -118,28 +258,49 @@ int main(int argc, char **argv) {
           batch.pos[at] = node.pos;
           batch.n_seq_id[at] = int(node.owners.size());
           std::copy(node.owners.begin(), node.owners.end(), batch.seq_id[at]);
-          batch.logits[at] = 1;
+          batch.logits[at] = node.need_logits ? 1 : 0;
         }
+        llama_set_n_threads(ctx, n_threads,
+                            batch.n_tokens <= 4 ? n_threads : n_threads_batch);
         const int rc = llama_decode(ctx, batch);
         llama_batch_free(batch);
-        if (rc != 0)
+        if (rc != 0) {
+          llama_memory_clear(mem, true);
+          cached_prefix_tokens.clear();
           throw std::runtime_error("llama_decode failed");
+        }
         std::vector<double> scores(count, 0);
-        std::vector<double> normalizers;
+        std::vector<double> normalizers(nodes.size(), 0.0);
         for (int i = 0; i < int(nodes.size()); ++i) {
+          if (!nodes[i].need_logits)
+            continue;
           const float *logits = llama_get_logits_ith(ctx, i);
-          if (!logits)
+          if (!logits) {
+            llama_memory_clear(mem, true);
+            cached_prefix_tokens.clear();
             throw std::runtime_error("missing logits");
-          const double max_value = *std::max_element(logits, logits + nv);
-          double denom = 0;
+          }
+          const float max_value = *std::max_element(logits, logits + nv);
+          double denom = 0.0;
           for (int j = 0; j < nv; ++j)
-            denom += std::exp(double(logits[j]) - max_value);
-          normalizers.push_back(max_value + std::log(denom));
+            denom += double(std::expf(logits[j] - max_value));
+          normalizers[i] = double(max_value) + std::log(denom);
         }
         for (const auto &edge : edges) {
           const float *logits = llama_get_logits_ith(ctx, edge.node);
           scores[edge.owner] +=
               double(logits[edge.next]) - normalizers[edge.node];
+        }
+        if (shared_unscored_len > 0) {
+          llama_memory_seq_keep(mem, 0);
+          if (!llama_memory_seq_rm(
+                  mem, 0, static_cast<llama_pos>(shared_unscored_len), -1)) {
+            llama_memory_clear(mem, true);
+            cached_prefix_tokens.clear();
+          }
+        } else {
+          llama_memory_clear(mem, true);
+          cached_prefix_tokens.clear();
         }
         return scores;
       };
@@ -228,8 +389,9 @@ int main(int argc, char **argv) {
         std::string raw_keys, input_utf8, context_utf8;
         const size_t tab1 = line.find('\t');
         if (tab1 == std::string::npos) {
-          const bool all_lower = std::all_of(
-              line.begin(), line.end(), [](char c) { return c >= 'a' && c <= 'z'; });
+          const bool all_lower =
+              std::all_of(line.begin(), line.end(),
+                          [](char c) { return c >= 'a' && c <= 'z'; });
           if (all_lower)
             raw_keys = line;
           else
@@ -244,9 +406,9 @@ int main(int argc, char **argv) {
             context_utf8 = line.substr(tab2 + 1);
           }
         }
-        const auto input_hira =
-            !input_utf8.empty() ? hiragana(decode_utf8(input_utf8))
-                                : roman_decode(raw_keys);
+        const auto input_hira = !input_utf8.empty()
+                                    ? hiragana(decode_utf8(input_utf8))
+                                    : roman_decode(raw_keys);
         const auto candidates =
             assist_candidates(raw_keys, input_hira, dictionary, 24);
         if (candidates.size() <= 1) {
@@ -257,13 +419,12 @@ int main(int argc, char **argv) {
         std::u32string ctx_u32;
         if (!context_utf8.empty()) {
           ctx_u32 = decode_utf8(context_utf8);
-          ctx_u32.erase(
-              std::remove_if(ctx_u32.begin(), ctx_u32.end(),
-                             [](char32_t c) {
-                               return c < 32 ||
-                                      (c >= U'\uee00' && c <= U'\uee02');
-                             }),
-              ctx_u32.end());
+          ctx_u32.erase(std::remove_if(ctx_u32.begin(), ctx_u32.end(),
+                                       [](char32_t c) {
+                                         return c < 32 || (c >= U'\uee00' &&
+                                                           c <= U'\uee02');
+                                       }),
+                        ctx_u32.end());
           if (ctx_u32.size() > 64)
             ctx_u32 = ctx_u32.substr(ctx_u32.size() - 64);
         }
@@ -288,11 +449,10 @@ int main(int argc, char **argv) {
         std::vector<RankedCandidate> ranked;
         for (size_t i = 1; i < candidates.size(); ++i) {
           const int token_diff = int(sequences[i].size()) - orig_tokens;
-          const double len_comp =
-              (token_diff > 0 &&
-               candidates[i].path.score > orig.path.score + 3.5)
-                  ? 6.0 * std::min(token_diff, 2)
-                  : 0.0;
+          const double len_comp = (token_diff > 0 && candidates[i].path.score >
+                                                         orig.path.score + 3.5)
+                                      ? 6.0 * std::min(token_diff, 2)
+                                      : 0.0;
           const double total = candidates[i].path.score + 8.0 * scores[i] +
                                len_comp - candidates[i].penalty * 3.0;
           const double delta = total - baseline;
@@ -305,8 +465,9 @@ int main(int argc, char **argv) {
                     return a.stage1_delta > b.stage1_delta;
                   });
         if (ranked.empty() || ranked[0].stage1_delta < 37.0) {
-          std::cout << "{\"observed\":" << json_string(encode_utf8(orig.reading))
-                    << "}" << std::endl;
+          std::cout << "{\"observed\":"
+                    << json_string(encode_utf8(orig.reading)) << "}"
+                    << std::endl;
         } else {
           const size_t top_k = std::min<size_t>(ranked.size(), 3);
           if (top_k >= 2) {
@@ -335,8 +496,7 @@ int main(int argc, char **argv) {
                 const size_t k = valid_k[j];
                 const int n_surf =
                     int(surf_sequences[j].size()) - surf_prefixes[j];
-                const double surf_mean =
-                    surf_scores[j] / std::max(1, n_surf);
+                const double surf_mean = surf_scores[j] / std::max(1, n_surf);
                 ranked[k].final_score =
                     ranked[k].stage1_delta + 5.0 * surf_mean;
               }
@@ -348,16 +508,16 @@ int main(int argc, char **argv) {
           }
           const size_t best = ranked[0].index;
           const double best_delta = std::max(37.0, ranked[0].stage1_delta);
-          std::cout << "{\"observed\":" << json_string(encode_utf8(orig.reading))
-                    << ",\"reading\":"
+          std::cout << "{\"observed\":"
+                    << json_string(encode_utf8(orig.reading)) << ",\"reading\":"
                     << json_string(encode_utf8(candidates[best].reading));
           if (top_k >= 2 && ranked[1].stage1_delta >= 35.0) {
             const size_t alt = ranked[1].index;
             std::cout << ",\"alt_reading\":"
                       << json_string(encode_utf8(candidates[alt].reading));
           }
-          std::cout << ",\"gain\":" << std::setprecision(14) << best_delta << "}"
-                    << std::endl;
+          std::cout << ",\"gain\":" << std::setprecision(14) << best_delta
+                    << "}" << std::endl;
         }
       }
     } else {

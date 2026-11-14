@@ -56,7 +56,7 @@ class PendingRomajiTest {
     @Test fun aLateAutomaticResultCannotReplacePendingInputOrMoveTheCursor() {
         val composing = input("nan")
         val original = composing.clone()
-        val session = CorrectionSession()
+        val session = CorrectionSession(RustAssistPolicy)
         assertFalse(session.apply(composing, "晩", "何", explicit = false))
         assertEquals(original.input, composing.input)
         assertEquals(original.convertTarget, composing.convertTarget)
@@ -69,9 +69,9 @@ class PendingRomajiTest {
     }
 
     @Test fun explicitAcceptanceAndCompletedKanaCorrectionStillWork() {
-        assertTrue(CorrectionSession().apply(input("nan"), "何", "なn", explicit = true))
+        assertTrue(CorrectionSession(RustAssistPolicy).apply(input("nan"), "何", "なn", explicit = true))
         val completed = input("gakou")
-        assertTrue(CorrectionSession().apply(completed, "学校", "がこう", explicit = false))
+        assertTrue(CorrectionSession(RustAssistPolicy).apply(completed, "学校", "がこう", explicit = false))
     }
 
     @Test fun deletingAndReenteringThePendingConsonantPreservesRawInput() {
@@ -85,7 +85,7 @@ class PendingRomajiTest {
     }
 
     @Test fun streamedAssistPublishesNoSuggestionsForPendingInput() = runBlocking {
-        AiAssistManager.streamAiAssist("なn", "何", "", true, neverInfer) { update ->
+        AiAssistManager.streamAiAssist("なn", "何", "", true, neverInfer, policy = RustAssistPolicy) { update ->
             assertTrue(update.suggestions.isEmpty())
             assertNull(update.automaticCorrection)
             assertNull(update.selected)

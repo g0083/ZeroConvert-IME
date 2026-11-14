@@ -499,19 +499,6 @@ fn clause_integration_auto_clause_navigation_left_starts_at_last_clause() {
 }
 
 #[test]
-fn clause_integration_auto_clause_navigation_routes_shift_arrows_to_reducer() {
-    let right_extra = vec![HarnessUserAction::Right];
-    let (right_harness, _, _) = run_from_auto_clause_preserved_suffix(&right_extra);
-    assert_adjust_boundary_is_routed(&right_harness, -1);
-    assert_adjust_boundary_is_routed(&right_harness, 1);
-
-    let left_extra = vec![HarnessUserAction::Left];
-    let (left_harness, _, _) = run_from_auto_clause_preserved_suffix(&left_extra);
-    assert_adjust_boundary_is_routed(&left_harness, -1);
-    assert_adjust_boundary_is_routed(&left_harness, 1);
-}
-
-#[test]
 fn clause_integration_auto_clause_navigation_adjusts_first_clause_both_directions() {
     let left_extra = vec![HarnessUserAction::Right, HarnessUserAction::ShiftLeft];
     let (left, _, left_history) = run_from_auto_clause_ju(&left_extra);

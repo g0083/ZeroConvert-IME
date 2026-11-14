@@ -131,7 +131,7 @@ class ModelAssistTest {
         assertEquals(AiAssistType.PREDICTION, result!!.type)
         assertEquals(setOf(AssistModel.CORRECTOR, AssistModel.PREDICTION), fixture.calls.map { it.first }.toSet())
         val strong = AiAssistResult(AiAssistType.TYPO_CORRECTION, "学習", "", 70)
-        assertEquals(strong, AiAssistManager.choose(strong, result))
+        assertEquals(strong, AiAssistManager.choose(strong, result, RustAssistPolicy))
     }
 
     private fun dictionary(): ReverseReadingDictionary {

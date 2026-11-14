@@ -1,8 +1,6 @@
 package com.zeroconvert.ime.assist
 
-import com.zeroconvert.ime.KanaKanjiConverter
 import com.zeroconvert.ime.TouchKeyBias
-import com.zeroconvert.ime.ZenzNative
 
 /**
  * Resolves single-keystroke edge-touch ambiguities using measured QWERTY touch coordinates
@@ -13,13 +11,6 @@ object TouchBiasTypoResolver {
     data class BiasedVariant(
         val text: String,
         val confidence: Float
-    )
-
-    data class CorrectionMatch(
-        val reading: String,
-        val surface: String,
-        val confidence: Float,
-        val autoEligible: Boolean
     )
 
     private const val MIN_VARIANT_CONFIDENCE = 0.20f
@@ -56,80 +47,6 @@ object TouchBiasTypoResolver {
         return variants.entries
             .sortedWith(compareByDescending<Map.Entry<String, Float>> { it.value }.thenBy { it.key })
             .map { BiasedVariant(it.key, it.value) }
-    }
-
-    /**
-     * Finds the best spatially-corroborated correction result, returning `null` if [reading] is
-     * already a known clean word or no biased neighbor forms a valid vocabulary/dictionary entry.
-     */
-    fun suggestCorrection(
-        rawInput: String,
-        reading: String,
-        baseline: String,
-        touchBiases: List<TouchKeyBias>,
-        knownCleanCheck: (String) -> Boolean = AssistVocabulary::isKnownCleanReading,
-        vocabLookup: (String) -> String? = ::defaultVocabSurfaceLookup,
-        dictLookup: (String) -> String? = ::defaultDictLookup,
-        allowAutoApplyWhenReady: Boolean = true
-    ): AiAssistResult? {
-        val hiraInput = KanaKanjiConverter.toHiragana(reading.ifEmpty { rawInput }.trim())
-        if (hiraInput.codePointCount(0, hiraInput.length) !in 2..128) return null
-        if (hiraInput.hasUnsafeTokens()) return null
-        if (knownCleanCheck(hiraInput)) return null
-
-        val sourceRomaji = rawInput.ifEmpty { reading }
-        val variants = biasedRomajiVariants(sourceRomaji, touchBiases)
-        if (variants.isEmpty()) return null
-
-        val matches = mutableListOf<CorrectionMatch>()
-        val seenReadings = LinkedHashSet<String>()
-
-        for (variant in variants) {
-            val candHira = RomajiDecoder.romajiToHiragana(variant.text)
-            if (candHira.isEmpty() || candHira == hiraInput) continue
-            if (candHira.any { it in 'a'..'z' || it in 'A'..'Z' }) continue
-            if (!seenReadings.add(candHira)) continue
-
-            val vocabSurface = vocabLookup(candHira)
-            val surface = vocabSurface ?: dictLookup(candHira) ?: continue
-            if (surface.isBlank() || surface == hiraInput || surface == baseline) continue
-
-            val inBuiltInVocab = vocabSurface != null
-            matches.add(
-                CorrectionMatch(
-                    reading = candHira,
-                    surface = surface,
-                    confidence = variant.confidence,
-                    autoEligible = inBuiltInVocab &&
-                        variant.confidence >= 0.80f &&
-                        candHira.codePointCount(0, candHira.length) >= 3
-                )
-            )
-        }
-
-        if (matches.isEmpty()) return null
-        val winner = matches.first()
-        val secondConfidence = matches.getOrNull(1)?.confidence ?: 0f
-        val isDistinctWinner = matches.size == 1 || (winner.confidence - secondConfidence) >= 0.25f
-        val autoApply = allowAutoApplyWhenReady &&
-            winner.autoEligible &&
-            isDistinctWinner &&
-            AssistVocabulary.isReady &&
-            AssistVocabulary.containsReading(winner.reading)
-
-        val relevance = when {
-            autoApply -> 95
-            winner.confidence >= 0.70f -> 60
-            else -> 45
-        }
-        return AiAssistResult(
-            type = AiAssistType.TYPO_CORRECTION,
-            text = winner.surface,
-            label = "💡 ${winner.surface}",
-            relevance = relevance,
-            sourceReading = hiraInput,
-            autoApply = autoApply
-        )
     }
 
     /**
@@ -222,16 +139,4 @@ object TouchBiasTypoResolver {
         return normalized
     }
 
-    private fun defaultVocabSurfaceLookup(reading: String): String? =
-        AssistVocabulary.surface(reading)
-            ?: WindowsTypoData.standard[reading]
-            ?: TypoCorrectionEngine.STANDARD_VOCAB[reading]
-
-    private fun defaultDictLookup(reading: String): String? = try {
-        val kata = KanaKanjiConverter.toKatakana(reading)
-        val hits = ZenzNative.lookupDict(kata, prefixSearch = false, maxCount = 5)
-        hits.firstOrNull { it.reading == kata }?.text
-    } catch (_: Throwable) {
-        null
-    }
 }

@@ -15,7 +15,7 @@ class CorrectionSessionTest {
     @Test fun correctionIsEditableAndUndoRestoresRawKeysAndConvertedPreview() {
         val input = ComposingText().apply { insertAtCursorPosition("otukuresama", InputStyle.ROMAN2KANA) }
         val original = input.clone()
-        val correction = CorrectionSession()
+        val correction = CorrectionSession(RustAssistPolicy)
         assertTrue(correction.apply(input, "お疲れ様", "おつくれ様"))
         assertEquals("お疲れ様", input.convertTarget)
         assertEquals("お疲れ様", ComposingText.getConvertTarget(input.input))
@@ -32,7 +32,7 @@ class CorrectionSessionTest {
         val input = ComposingText().apply { insertAtCursorPosition("おつくれさまです", InputStyle.DIRECT) }
         input.moveCursorFromCursorPosition(-2)
         val original = input.clone()
-        val correction = CorrectionSession()
+        val correction = CorrectionSession(RustAssistPolicy)
         assertTrue(correction.apply(input, "お疲れ様", "おつくれ様です"))
         assertEquals("お疲れ様です", input.convertTarget)
         assertEquals("お疲れ様", input.convertTargetBeforeCursor)
@@ -44,7 +44,7 @@ class CorrectionSessionTest {
 
     @Test fun typingAfterAdoptionKeepsCorrectionAndLearnsOnlyCommittedTextOnce() {
         val input = ComposingText().apply { insertAtCursorPosition("おつくれさま", InputStyle.DIRECT) }
-        val correction = CorrectionSession()
+        val correction = CorrectionSession(RustAssistPolicy)
         correction.apply(input, "お疲れ様", "おつくれ様")
         correction.edited()
         assertTrue(correction.holdsAutoCommit)
@@ -73,7 +73,7 @@ class CorrectionSessionTest {
 
     @Test fun newEditorDiscardsPendingAcceptanceAndUndo() {
         val input = ComposingText().apply { insertAtCursorPosition("がこう", InputStyle.DIRECT) }
-        val correction = CorrectionSession()
+        val correction = CorrectionSession(RustAssistPolicy)
         correction.apply(input, "学校", "がこう")
         correction.clear()
         assertNull(correction.revert(input))
@@ -95,6 +95,7 @@ class CorrectionSessionTest {
         assertFalse(gate.isCurrent(fresh, key.copy(cursor = 3)))
         assertFalse(gate.isCurrent(fresh, key.copy(profile = "別の設定")))
         assertFalse(gate.isCurrent(fresh, key.copy(inputType = 0x81)))
+        assertFalse(gate.isCurrent(fresh, key.copy(touchCorrectionEnabled = false)))
         assertTrue(gate.isGenerationCurrent(fresh))
         gate.invalidate()
         assertFalse(gate.isGenerationCurrent(fresh))

@@ -17,6 +17,7 @@ Gradleモジュールではなく、`:rebuilt` がコンパイルする共有ソ
 | Swift変換ライブラリ | Windowsがビルドに使うvendored converter（`windows/scripts/prepare-modern-llama.py` がchecksum固定で用意し、`prepare-shared-engine.mjs` が同じ版をステージング）。パッチは `windows/scripts/converter_patch.py` が正本 |
 | Swift依存のpin | `engine/Package.resolved`（コミット済み）。Windowsの `windows/server-swift/Package.resolved` と一致することを `check-shared-engine-pins.mjs` が検査する |
 | タイポ補正・先読み・動的マクロ | `engine/rust` がWindowsの `crates/server/src/ai_assist` を直接コンパイル |
+| 補正／先読みの優先選択・採用動作・取消・採用学習の状態 | `windows/crates/shared/src/assist_policy.rs` を両ホストから利用。Androidは推論を呼ばない専用JNIで同じRustを実行 |
 | 自動確定の境界・安定性判定 | `windows/crates/shared/src/conversion_policy.rs` を両ホストから利用 |
 | 入力ポリシー（即確定記号・句読点正規化・数字組成・幅既定値） | 正本は `windows/crates/shared/src/conversion_policy.rs`。Androidは初期化時に `op=inputPolicy` で同じ表を取得して `InputPolicy.kt` に保持し、仕様は `tests/input-policy/cases.tsv` を両OSのテストが読む |
 | 推論・JNI・ファイル配置の差 | `engine/native`、`engine/swift`、Androidの `engine/WindowsEngine.kt` |
@@ -25,6 +26,18 @@ Gradleモジュールではなく、`:rebuilt` がコンパイルする共有ソ
 `BuildConfig.WINDOWS_ENGINE` は常にtrue。変換順位、補正判定、先読みプロンプト/出力検査を
 Kotlinで再実装しない。Androidの文脈取得、入力先照合、機密入力抑止、世代管理、
 InputConnection操作はホストに残す。新しい文節操作モードや専用操作UIは追加しない。
+
+2026-11-13、アシストの採用ポリシーを共通Rustへ移した。初回表示は補正と先読みを
+最大200ms待ち合わせ、表示済みの採用対象は次の編集まで固定する。補正は未確定入力を
+置換し、先読みは明示的な採用で確定する。自動補正の取消では原打鍵とカーソルを復元し、
+同じ補正の再提案を次の編集まで抑止する。明示採用と自動補正の学習記録もRustが管理し、
+入力先への確定成功後にホストが保存を通知する。
+
+Windowsは共通ポリシーを直接呼び、Androidの`CorrectionSession`はRustの状態と
+`ComposingText`の復元用スナップショットを対応づける。JNIはモデルやSwiftのロックを
+取らない。要求世代・入力先・機密欄の確認と、TSF/InputConnectionへの反映は各ホストが行う。
+JVM回帰テストは`buildAssistPolicyTestHost`で同じRustのテスト用プロセスをビルドし、
+本番と同じJSON要求で採用・取消を検証する。
 
 原打鍵、ROMAN2KANA/DIRECT/FROZEN、composition separatorをSwiftへ渡す。
 UTF-16サロゲートペアはUTF-8 ABIへ渡す前に結合する。Swiftの読みとAndroidの
@@ -121,6 +134,18 @@ Windows用Swift SDKで欠けているDispatchは、同版の公式Android SDKを
 [Swift公式手順](https://www.swift.org/documentation/articles/swift-sdk-for-android-getting-started.html)。
 
 ## 完了判定
+
+ローマ字入力のタイポ補正とタッチ位置の重み付けは、Windows正本の
+`KeyboardCorrectionPolicy.swift` で処理する。Kotlinは入力スナップショットと対応する
+キー位置・近接キー・重みを渡し、Swiftの通常候補を表示する。完全一致辞書検索は
+converterの既存辞書・ユーザー辞書・学習状態を使い、候補ごとのモデル推論を行わない。
+補正候補の生成には辞書と補正規則を使い、ZeroCon Modelが有効な通常変換では、
+文脈を考慮したAI変換の結果と統合する。「タイポ補正」はこの通常変換内の補正と、
+未補正入力に対するRustのモデル補正候補生成をまとめて制御する。
+補正候補は観測した原打鍵の消費数を保持し、`predictionReading` で補正後の読みを返す。
+共有Rustの `assist_policy::request_plan` が補正と先読みの実行を判断する。
+通常候補で補正済みならフォールバックを抑え、「文の先読み」がONなら補正後の読みで先読みを生成する。
+タッチ位置によるキー判定範囲の調整はAndroidが担当する。
 
 同じソースのコンパイルとAndroidでの完全な動作同等性は分ける。最終APKで打鍵/フリック、
 削除再入力、カーソル、補正適用/取消、先読み採用、自動確定/巻戻し、辞書、学習、

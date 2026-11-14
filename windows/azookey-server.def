@@ -8,10 +8,12 @@ EXPORTS
     ClearText
     CommitLearningCandidate
     CommitLearningCandidates
+    DeleteForwardText
     FreeCString
     FreeCandidateList
     GetComposedText
     GetComposedTextForCursorPrefix
+    GetComposedTextForCursorRange
     GetComposedTextForReconversion
     GetCursorPosition
     GetRawInput

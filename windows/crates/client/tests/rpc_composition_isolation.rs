@@ -91,6 +91,7 @@ async fn two_rpc_connections_cannot_read_modify_or_learn_each_others_composition
     }
     denied!(move_cursor, MoveCursorRequest::default());
     denied!(remove_text, RemoveTextRequest::default());
+    denied!(delete_forward_text, DeleteForwardTextRequest::default());
     denied!(clear_text, ClearTextRequest::default());
     denied!(append_text, append("ぬすむ"));
     denied!(replace_composition, ReplaceCompositionRequest::default());

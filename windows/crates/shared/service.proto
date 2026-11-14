@@ -7,6 +7,8 @@ message Suggestion {
   string subtext = 2; // Additional information or subtext for the suggestion.
   int32 corresponding_count = 3;
   uint64 candidate_id = 4;
+  // Canonical reading after an engine-generated correction, including untouched suffix.
+  string prediction_reading = 5;
 }
 
 // ComposingText represents the text and its associated suggestions.
@@ -34,6 +36,8 @@ message AppendTextRequest {
 message AppendTextResponse {
   ComposingText composing_text = 1; // The resulting text and suggestions.
   uint64 server_session_id = 2; // Identifies the current server process session.
+  optional string raw_input = 3; // Canonical raw input matching server composing text.
+  optional int32 cursor = 4; // Absolute convertTarget cursor position in scalar characters.
 }
 
 // A client-observed successful mutation used to rebuild server composition
@@ -43,6 +47,7 @@ enum CompositionOperationKind {
   COMPOSITION_OPERATION_KIND_APPEND = 0;
   COMPOSITION_OPERATION_KIND_REMOVE = 1;
   COMPOSITION_OPERATION_KIND_MOVE_CURSOR = 2;
+  COMPOSITION_OPERATION_KIND_DELETE_FORWARD = 3;
 }
 
 message CompositionOperation {
@@ -60,6 +65,8 @@ message ReplaceCompositionRequest {
 message ReplaceCompositionResponse {
   ComposingText composing_text = 1;
   uint64 server_session_id = 2;
+  optional string raw_input = 3;
+  optional int32 cursor = 4;
 }
 
 // Starts reverse conversion from a finalized surface string. The operation is
@@ -90,6 +97,20 @@ message RemoveTextResponse {
   // New clients must not interpret an older server's missing field as an empty
   // composition. Absence triggers reconstruction with the current server.
   optional string raw_input = 3; // Exact remaining raw input after mapped deletion.
+  optional int32 cursor = 4; // Absolute convertTarget cursor position in scalar characters.
+}
+
+// Request message for DeleteForwardText.
+message DeleteForwardTextRequest {
+  uint64 request_id = 1;
+}
+
+// Response message for DeleteForwardText.
+message DeleteForwardTextResponse {
+  ComposingText composing_text = 1;
+  uint64 server_session_id = 2;
+  optional string raw_input = 3;
+  optional int32 cursor = 4;
 }
 
 message MoveCursorRequest {
@@ -147,6 +168,8 @@ message ShrinkTextRequest {
 message ShrinkTextResponse {
   ComposingText composing_text = 1; // The resulting text and suggestions.
   uint64 server_session_id = 2; // Identifies the current server process session.
+  optional string raw_input = 3;
+  optional int32 cursor = 4;
 }
 
 // Advances clause navigation as one server-side transaction. The snapshot is
@@ -196,6 +219,7 @@ message MoveCursorResponse {
   // Present for offset-zero refreshes so a client recovering an edit response
   // can restore the server's exact raw-input identity without replaying it.
   optional string raw_input = 3;
+  optional int32 cursor = 4; // Absolute convertTarget cursor position in scalar characters.
 }
 
 // Request message for ClearText.
@@ -353,6 +377,8 @@ message GetAssistCandidatesRequest {
   // fast prediction arrive without waiting for correction inference. 3: translation
   // of baseline to English, independent of correction/prediction settings.
   uint32 kind = 6;
+  // Issued with the immutable normal candidate, distinct from observed reading.
+  string baseline_reading = 7;
 }
 message GetAssistCandidatesResponse {
   repeated Suggestion suggestions = 1;
@@ -370,6 +396,7 @@ service AzookeyService {
   rpc ReplaceComposition (ReplaceCompositionRequest) returns (ReplaceCompositionResponse);
   rpc StartReconversion (StartReconversionRequest) returns (StartReconversionResponse);
   rpc RemoveText (RemoveTextRequest) returns (RemoveTextResponse);
+  rpc DeleteForwardText (DeleteForwardTextRequest) returns (DeleteForwardTextResponse);
   rpc ShrinkText (ShrinkTextRequest) returns (ShrinkTextResponse);
   rpc AdvanceClause (AdvanceClauseRequest) returns (AdvanceClauseResponse);
   rpc PrepareFutureClauses (PrepareFutureClausesRequest) returns (PrepareFutureClausesResponse);

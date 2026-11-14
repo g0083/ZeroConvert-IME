@@ -303,6 +303,99 @@ pub fn find_auto_commit_live_conversion_snapshot(
         .cloned()
 }
 
+/// Logical cursor position within the active conversion reading (`convertTarget`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorPositionKind {
+    Empty,
+    AtStart,
+    MidSentence,
+    AtEnd,
+}
+
+/// Classifies `cursor` (0-based scalar index) relative to `total_chars`.
+pub fn classify_cursor_position(cursor: usize, total_chars: usize) -> CursorPositionKind {
+    if total_chars == 0 {
+        CursorPositionKind::Empty
+    } else if cursor == 0 {
+        CursorPositionKind::AtStart
+    } else if cursor < total_chars {
+        CursorPositionKind::MidSentence
+    } else {
+        CursorPositionKind::AtEnd
+    }
+}
+
+/// Returns `true` when the cursor sits strictly inside a non-empty reading (`0 < cursor < total`).
+pub fn is_cursor_mid_sentence(cursor: usize, total_chars: usize) -> bool {
+    classify_cursor_position(cursor, total_chars) == CursorPositionKind::MidSentence
+}
+
+/// While previewing candidates, typing inserts at the cursor instead of committing whenever the
+/// cursor is not at the end of the reading (`cursor < total_chars`).
+pub fn should_insert_at_cursor_while_previewing(cursor: usize, total_chars: usize) -> bool {
+    total_chars > 0 && cursor < total_chars
+}
+
+/// Punctuation auto-commit only applies when the cursor is at the end of the composition.
+pub fn should_allow_punctuation_commit(cursor: usize, total_chars: usize) -> bool {
+    total_chars == 0 || cursor >= total_chars
+}
+
+/// Auto-assist (typo correction, prediction, remote reranking) only runs at the composition tail
+/// without an unconverted trailing suffix.
+pub fn should_run_live_assist_at_cursor(
+    cursor: usize,
+    total_chars: usize,
+    has_suffix: bool,
+) -> bool {
+    !has_suffix && cursor >= total_chars
+}
+
+/// Shared commit decision when accepting (`Enter` / candidate selection) with a cursor-scoped range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorCommitAction {
+    /// Commit only the converted prefix `[0..cursor)` and keep the trailing suffix editable.
+    CommitPrefixKeepSuffix,
+    /// Cursor is at start (`preview` is empty) with a trailing suffix: commit the suffix and end.
+    CommitSuffixAndEnd,
+    /// Cursor is at end with no unconverted suffix: commit the whole composition and end.
+    CommitWholeAndEnd,
+}
+
+pub fn decide_cursor_commit_action(has_prefix: bool, has_suffix: bool) -> CursorCommitAction {
+    if !has_suffix {
+        CursorCommitAction::CommitWholeAndEnd
+    } else if !has_prefix {
+        CursorCommitAction::CommitSuffixAndEnd
+    } else {
+        CursorCommitAction::CommitPrefixKeepSuffix
+    }
+}
+
+/// Shared deletion decision for `Backspace` and `Delete` (`ForwardDelete`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorDeleteAction {
+    NoOp,
+    DeleteBackward,
+    DeleteForward,
+}
+
+pub fn decide_backspace_action(cursor: usize, total_chars: usize) -> CursorDeleteAction {
+    if total_chars == 0 || cursor == 0 {
+        CursorDeleteAction::NoOp
+    } else {
+        CursorDeleteAction::DeleteBackward
+    }
+}
+
+pub fn decide_delete_forward_action(cursor: usize, total_chars: usize) -> CursorDeleteAction {
+    if total_chars == 0 || cursor >= total_chars {
+        CursorDeleteAction::NoOp
+    } else {
+        CursorDeleteAction::DeleteForward
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,5 +750,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cursor_classification_and_insert_rules_cover_all_positions() {
+        assert_eq!(classify_cursor_position(0, 0), CursorPositionKind::Empty);
+        assert_eq!(classify_cursor_position(0, 4), CursorPositionKind::AtStart);
+        assert_eq!(
+            classify_cursor_position(2, 4),
+            CursorPositionKind::MidSentence
+        );
+        assert_eq!(classify_cursor_position(4, 4), CursorPositionKind::AtEnd);
+        assert_eq!(classify_cursor_position(9, 4), CursorPositionKind::AtEnd);
+
+        assert!(!is_cursor_mid_sentence(0, 4));
+        assert!(is_cursor_mid_sentence(2, 4));
+        assert!(!is_cursor_mid_sentence(4, 4));
+
+        assert!(should_insert_at_cursor_while_previewing(0, 4));
+        assert!(should_insert_at_cursor_while_previewing(2, 4));
+        assert!(!should_insert_at_cursor_while_previewing(4, 4));
+        assert!(!should_insert_at_cursor_while_previewing(0, 0));
+
+        assert!(!should_allow_punctuation_commit(0, 4));
+        assert!(!should_allow_punctuation_commit(2, 4));
+        assert!(should_allow_punctuation_commit(4, 4));
+
+        assert!(!should_run_live_assist_at_cursor(2, 4, true));
+        assert!(!should_run_live_assist_at_cursor(4, 4, true));
+        assert!(should_run_live_assist_at_cursor(4, 4, false));
+    }
+
+    #[test]
+    fn cursor_commit_and_delete_decisions_preserve_suffix_and_bounds() {
+        assert_eq!(
+            decide_cursor_commit_action(true, false),
+            CursorCommitAction::CommitWholeAndEnd
+        );
+        assert_eq!(
+            decide_cursor_commit_action(false, true),
+            CursorCommitAction::CommitSuffixAndEnd
+        );
+        assert_eq!(
+            decide_cursor_commit_action(true, true),
+            CursorCommitAction::CommitPrefixKeepSuffix
+        );
+
+        assert_eq!(decide_backspace_action(0, 0), CursorDeleteAction::NoOp);
+        assert_eq!(decide_backspace_action(0, 3), CursorDeleteAction::NoOp);
+        assert_eq!(
+            decide_backspace_action(1, 3),
+            CursorDeleteAction::DeleteBackward
+        );
+        assert_eq!(
+            decide_backspace_action(3, 3),
+            CursorDeleteAction::DeleteBackward
+        );
+
+        assert_eq!(decide_delete_forward_action(0, 0), CursorDeleteAction::NoOp);
+        assert_eq!(
+            decide_delete_forward_action(0, 3),
+            CursorDeleteAction::DeleteForward
+        );
+        assert_eq!(
+            decide_delete_forward_action(2, 3),
+            CursorDeleteAction::DeleteForward
+        );
+        assert_eq!(decide_delete_forward_action(3, 3), CursorDeleteAction::NoOp);
     }
 }

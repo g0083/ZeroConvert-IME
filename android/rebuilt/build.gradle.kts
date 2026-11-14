@@ -131,25 +131,16 @@ dependencies {
     implementation("androidx.savedstate:savedstate-ktx:1.2.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20180813")
 }
 
 val verifyAssistAssets by tasks.registering {
-    val corrector = layout.projectDirectory.file("../app/src/main/assets/models/zerocon-model-corrector.gguf")
     val reverse = layout.projectDirectory.file("../app/src/main/assets/dictionary/reverse-v2.bin")
-    val catalog = rootProject.file("../windows/deployment/model-catalog.json")
-    inputs.files(corrector, reverse, catalog)
+    inputs.file(reverse)
     doLast {
-        check(corrector.asFile.isFile && reverse.asFile.isFile) {
+        check(reverse.asFile.isFile) {
             "Run scripts/prepare-android-assist-assets.ps1 before building Android."
         }
-        val models = (groovy.json.JsonSlurper().parse(catalog) as Map<*, *>)["models"] as List<*>
-        val expected = models.map { it as Map<*, *> }.single { it["id"] == "corrector" }["sha256"]
-        val digest = MessageDigest.getInstance("SHA-256")
-        corrector.asFile.inputStream().use { input ->
-            val buffer = ByteArray(65536)
-            while (true) { val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
-        }
-        check(digest.digest().joinToString("") { "%02x".format(it) } == expected) { "Corrector SHA-256 mismatch" }
         reverse.asFile.inputStream().use { input ->
             val magic = ByteArray(4)
             check(input.read(magic) == 4 && magic.contentEquals("AZR2".toByteArray())) { "Invalid reverse dictionary" }
@@ -187,7 +178,23 @@ tasks.matching { it.name == "packageDebug" || it.name == "packageRelease" }.conf
 // The whole JVM suite runs here. An allow-list silently stopped covering tests
 // added later, so the shared-engine host could regress without any test
 // noticing. Exclusions are per test method and must state why.
+val assistPolicyExecutable = rootProject.file("../engine/rust/target/debug/examples/assist_policy" +
+    if (System.getProperty("os.name").startsWith("Windows")) ".exe" else "")
+val buildAssistPolicyTestHost by tasks.registering(Exec::class) {
+    workingDir(rootProject.file(".."))
+    commandLine("cargo", "build", "--locked", "--manifest-path", "engine/rust/Cargo.toml", "--example", "assist_policy")
+    inputs.dir(rootProject.file("../engine/rust/src"))
+    inputs.dir(rootProject.file("../engine/rust/examples"))
+    inputs.dir(rootProject.file("../windows/crates/server/src/ai_assist"))
+    inputs.files(rootProject.file("../windows/crates/shared/src/assist_policy.rs"),
+        rootProject.file("../windows/crates/shared/src/conversion_policy.rs"),
+        rootProject.file("../engine/rust/Cargo.toml"), rootProject.file("../engine/rust/Cargo.lock"))
+    outputs.file(assistPolicyExecutable)
+}
+
 tasks.withType<Test>().configureEach {
+    dependsOn(buildAssistPolicyTestHost)
+    systemProperty("zerocon.assistPolicyExecutable", assistPolicyExecutable.absolutePath)
     filter {
         // These assert the legacy Kotlin correction/prediction pipeline, which
         // `WINDOWS_ENGINE=true` bypasses: the shared engine owns that behaviour

@@ -7,10 +7,10 @@ class ModelCorrector(
     private val sameReading: (String, String) -> Boolean = ReadingCheck::hasSameReading,
     private val fallback: (String) -> String? = { TypoCorrectionEngine.findCorrection(it) }
 ) {
-    fun suggest(context: String, input: String, baseline: String): AiAssistResult? {
+    fun suggest(context: String, input: String, baseline: String, baselineReading: String = ""): AiAssistResult? {
         if (input.hasPendingRomaji()) return null
         if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
-            return com.zeroconvert.ime.engine.WindowsEngine.assist("correction", context, input, baseline, inference)
+            return com.zeroconvert.ime.engine.WindowsEngine.assist("correction", context, input, baseline, inference, baselineReading)
         }
         if (input.codePointSize() !in 2..512 || input.hasUnsafeTokens()) return null
         var prefix = ""

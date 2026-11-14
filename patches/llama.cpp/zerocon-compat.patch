@@ -24,6 +24,29 @@ index 06dff9e..c1dd6fe 100644
  
  
  @ModelBase.register("RuGPT3XLForCausalLM")
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 9ee64b5..584ffcc 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -328,6 +328,18 @@ llama_context::llama_context(
+     cparams.fused_dsv4_hc_post = true;
+     cparams.auto_fhc           = true;
+ 
++    // ZeroCon GPT-2 models never use GDN, Lightning Indexer, or DeepSeek V4 HC ops;
++    // skip probing those unused fused graphs during context reservation.
++    if (model.arch == LLM_ARCH_GPT2) {
++        cparams.fused_gdn_ar       = false;
++        cparams.fused_gdn_ch       = false;
++        cparams.fused_lid          = false;
++        cparams.fused_dsv4_hc_pre  = false;
++        cparams.fused_dsv4_hc_comb = false;
++        cparams.fused_dsv4_hc_post = false;
++        cparams.auto_fhc           = false;
++    }
++
+     // with causal attention, the batch size is limited by the context size
+     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
+ 
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
 index 84f50d7..34d8922 100644
 --- a/src/llama-vocab.cpp

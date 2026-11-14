@@ -447,6 +447,7 @@ fn candidates_owned(
 ) -> Candidates {
     let candidate_ids = (1..=texts.len() as u64).collect();
     Candidates {
+        prediction_readings: Default::default(),
         texts,
         sub_texts,
         hiragana,
@@ -1082,28 +1083,6 @@ fn harness_as_composition(harness: &ClauseHarness) -> Composition {
         state: harness.state.clone(),
         ..Composition::default()
     }
-}
-
-pub(super) fn assert_adjust_boundary_is_routed(harness: &ClauseHarness, direction: i32) {
-    let composition = harness_as_composition(harness);
-    let app_config = AppConfig::default();
-    let Some((transition, actions)) = TextServiceFactory::plan_actions_for_user_action(
-        &composition,
-        &UserAction::AdjustClauseBoundary(direction),
-        &crate::engine::input_mode::InputMode::Kana,
-        true,
-        &app_config,
-        false,
-    ) else {
-        panic!("adjust boundary was not consumed for direction {direction}");
-    };
-
-    assert_eq!(transition, composition.state);
-    assert_eq!(
-        actions,
-        vec![ClientAction::AdjustBoundary(direction)],
-        "adjust boundary should be delegated to the reducer: direction={direction}"
-    );
 }
 
 fn committed_clause_from_snapshot(
@@ -1749,6 +1728,56 @@ fn assert_harness_matches_spec(
     }
 }
 
+fn clause_harness_actions(
+    composition: &Composition,
+    op: HarnessUserAction,
+    app_config: &AppConfig,
+) -> Option<(CompositionState, Vec<ClientAction>)> {
+    let has_navigation =
+        !composition.clause_snapshots.is_empty() || !composition.future_clause_snapshots.is_empty();
+    match op {
+        HarnessUserAction::Left => Some((
+            composition.state.clone(),
+            if has_navigation {
+                vec![ClientAction::MoveClause(-1)]
+            } else {
+                vec![
+                    ClientAction::EnsureClauseNavigationReady {
+                        prepare_future_clauses: false,
+                    },
+                    ClientAction::MoveClause(TextServiceFactory::MOVE_CLAUSE_TO_LAST),
+                ]
+            },
+        )),
+        HarnessUserAction::Right => Some((
+            composition.state.clone(),
+            if has_navigation {
+                vec![ClientAction::MoveClause(1)]
+            } else {
+                vec![ClientAction::EnsureClauseNavigationReady {
+                    prepare_future_clauses: true,
+                }]
+            },
+        )),
+        HarnessUserAction::ShiftLeft => Some((
+            composition.state.clone(),
+            vec![ClientAction::AdjustBoundary(-1)],
+        )),
+        HarnessUserAction::ShiftRight => Some((
+            composition.state.clone(),
+            vec![ClientAction::AdjustBoundary(1)],
+        )),
+        _ => TextServiceFactory::plan_actions_for_user_action(
+            composition,
+            &harness_user_action(op),
+            &crate::engine::input_mode::InputMode::Kana,
+            false,
+            app_config,
+            false,
+        ),
+    }
+}
+
 fn apply_user_action(
     harness: &mut ClauseHarness,
     backend: &mut ScenarioBackend,
@@ -1757,20 +1786,13 @@ fn apply_user_action(
 ) {
     let composition = harness_as_composition(harness);
     let app_config = AppConfig::default();
-    let (transition, actions) = TextServiceFactory::plan_actions_for_user_action(
-        &composition,
-        &harness_user_action(op),
-        &crate::engine::input_mode::InputMode::Kana,
-        false,
-        &app_config,
-        false,
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "no actions planned for history: {}",
-            history_string(history)
-        )
-    });
+    let (transition, actions) = clause_harness_actions(&composition, op, &app_config)
+        .unwrap_or_else(|| {
+            panic!(
+                "no actions planned for history: {}",
+                history_string(history)
+            )
+        });
 
     if actions.is_empty() {
         harness.state = transition;

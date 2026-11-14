@@ -372,7 +372,6 @@ if ([string]::IsNullOrWhiteSpace($BuildBaseVersion)) {
 }
 $env:GITHUB_REF_NAME = $BuildBranch
 
-$LLAMA_CUDA_URL = "https://github.com/fkunn1326/llama.cpp/releases/download/b4846/llama-b4846-bin-win-cuda-cu12.4-x64.zip"
 $LLAMA_VULKAN_URL = "https://github.com/fkunn1326/llama.cpp/releases/download/b4846/llama-b4846-bin-win-vulkan-x64.zip"
 $ZENZ_MODEL_URL = "https://huggingface.co/Miwa-Keita/zenz-v3-small-gguf/resolve/main/ggml-model-Q5_K_M.gguf"
 $downloadAllAssets = $env:DOWNLOAD_ALL_ASSETS -eq "1"
@@ -455,7 +454,6 @@ Sync-GuestClock -TimestampUtc $HostTimestampUtc
 . (Join-Path $SourceDir 'scripts\vm-runtime.ps1')
 
 $llamaCpuDir = Join-Path $SourceDir "llama_cpu"
-$llamaCudaDir = Join-Path $SourceDir "llama_cuda"
 $llamaVulkanDir = Join-Path $SourceDir "llama_vulkan"
 $zenzPath = Join-Path $SourceDir "zenz.gguf"
 $emojiDictDir = Join-Path $SourceDir "server-swift\\azooKey_emoji_dictionary_storage\\EmojiDictionary"
@@ -465,14 +463,6 @@ $llamaCpuDir = Copy-LlamaCpuRuntimeForBuild -CacheRoot $cacheRoot -SourceDir $So
 Write-Host "prepared validated llama cpu assets"
 
 if ($downloadAllAssets) {
-  if (!(Test-Path (Join-Path $llamaCudaDir "llama.dll"))) {
-    if (Copy-TreeIfExists -SourceDir (Join-Path $cacheRoot "llama_cuda") -DestDir $llamaCudaDir) {
-      Write-Host "reused llama cuda assets from cache"
-    } else {
-      Write-Host "downloading llama cuda assets"
-      Download-Extract -Url $LLAMA_CUDA_URL -DestFolder $llamaCudaDir
-    }
-  }
   if (!(Test-Path (Join-Path $llamaVulkanDir "llama.dll"))) {
     if (Copy-TreeIfExists -SourceDir (Join-Path $cacheRoot "llama_vulkan") -DestDir $llamaVulkanDir) {
       Write-Host "reused llama vulkan assets from cache"
@@ -493,14 +483,8 @@ if ($downloadAllAssets) {
   }
 } else {
   # Fast local build mode: create minimum assets required by post_build copy steps.
-  New-Item -Path $llamaCudaDir -ItemType Directory -Force | Out-Null
   New-Item -Path $llamaVulkanDir -ItemType Directory -Force | Out-Null
 
-  if (!(Test-Path (Join-Path $llamaCudaDir "llama.dll"))) {
-    if (!(Copy-TreeIfExists -SourceDir (Join-Path $cacheRoot "llama_cuda") -DestDir $llamaCudaDir)) {
-      Copy-Item (Join-Path $llamaCpuDir "llama.dll") -Destination (Join-Path $llamaCudaDir "llama.dll") -Force
-    }
-  }
   if (!(Test-Path (Join-Path $llamaVulkanDir "llama.dll"))) {
     if (!(Copy-TreeIfExists -SourceDir (Join-Path $cacheRoot "llama_vulkan") -DestDir $llamaVulkanDir)) {
       Copy-Item (Join-Path $llamaCpuDir "llama.dll") -Destination (Join-Path $llamaVulkanDir "llama.dll") -Force

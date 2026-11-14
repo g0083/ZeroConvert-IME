@@ -47,7 +47,7 @@ def main():
     if args.name not in ('keyboard-prior.exe', 'keyboard_prior_score_masked.exe'):
         raise ValueError('Unsupported executable name')
     executable = args.output/args.name
-    command = [compiler, '-std=c++17', '-O2', '-Wno-deprecated-declarations', '-DLLAMA_SHARED', '-I', str(include),
+    command = [compiler, '-std=c++17', '-O3', '-Wno-deprecated-declarations', '-DLLAMA_SHARED', '-I', str(include),
                str(source), str(args.runtime/'llama.lib'), str(args.runtime/'ggml.lib'), '-o', str(executable)]
     subprocess.run(command, check=True, timeout=120, creationflags=subprocess.CREATE_NO_WINDOW)
     if not executable.is_file():

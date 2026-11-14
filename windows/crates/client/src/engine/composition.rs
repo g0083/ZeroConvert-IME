@@ -340,6 +340,7 @@ pub struct Composition {
     pub fixed_prefix: String,
 
     pub corresponding_count: i32, // corresponding count of the preview
+    pub cursor_position: Option<usize>,
 
     pub selection_index: i32,
     pub candidates: Candidates,
@@ -797,6 +798,7 @@ impl TextServiceFactory {
         start_temporary_latin: bool,
     ) -> bool {
         start_temporary_latin
+            && composition.suffix.is_empty()
             && composition.raw_input.ends_with('n')
             && composition.raw_hiragana.ends_with('ん')
             && Self::current_raw_input_suffix(
@@ -1476,6 +1478,7 @@ impl TextServiceFactory {
         corresponding_count: i32,
     ) -> FutureClauseSnapshot {
         let candidates = Candidates {
+            prediction_readings: Default::default(),
             texts: vec![clause_preview.to_string()],
             sub_texts: vec![suffix.to_string()],
             hiragana: raw_hiragana.to_string(),
@@ -1896,6 +1899,7 @@ impl TextServiceFactory {
             ClientAction::UndoTypoCorrection => "UndoTypoCorrection",
             ClientAction::RestoreReconversionOriginal => "RestoreReconversionOriginal",
             ClientAction::RemoveText => "RemoveText",
+            ClientAction::DeleteForwardText => "DeleteForwardText",
             ClientAction::MoveCursor(_) => "MoveCursor",
             ClientAction::EnsureClauseNavigationReady { .. } => "EnsureClauseNavigationReady",
             ClientAction::MoveClause(_) => "MoveClause",
@@ -2096,27 +2100,7 @@ impl TextServiceFactory {
         candidate_ids: &[u64],
         preferred: Option<u64>,
     ) -> Option<(usize, u64)> {
-        if let Some(id) = preferred {
-            if let Some(index) = candidate_ids.iter().position(|candidate| *candidate == id) {
-                return Some((index, id));
-            }
-        }
-        if let Some(index) = candidate_ids
-            .iter()
-            .position(|&id| id == shared::ai_candidate::TRANSLATION)
-        {
-            return Some((index, shared::ai_candidate::TRANSLATION));
-        }
-        if let Some(index) = candidate_ids
-            .iter()
-            .position(|&id| id == shared::ai_candidate::TYPO_CORRECTION)
-        {
-            return Some((index, shared::ai_candidate::TYPO_CORRECTION));
-        }
-        candidate_ids
-            .iter()
-            .position(|&id| id == shared::ai_candidate::PREDICTIVE)
-            .map(|index| (index, shared::ai_candidate::PREDICTIVE))
+        shared::assist_policy::priority_index(candidate_ids, preferred)
     }
 
     #[inline]
@@ -2653,13 +2637,19 @@ impl TextServiceFactory {
         live_conversion_history: &mut VecDeque<String>,
         ipc_service: &mut IPCService,
     ) -> Result<()> {
-        if self.borrow()?.borrow_composition()?.typo.hold_auto_commit
+        if self
+            .borrow()?
+            .borrow_composition()?
+            .typo
+            .correction
+            .hold_auto_commit
             || app_config.general.experimental_translation
             || app_config.general.jev_conversion
             || *transition != CompositionState::Composing
             || temporary_latin
             || has_reconversion_original
             || !fixed_prefix.is_empty()
+            || !suffix.is_empty()
             || !clause_snapshots.is_empty()
             || !future_clause_snapshots.is_empty()
             || *selection_index != 0
@@ -2818,6 +2808,7 @@ impl TextServiceFactory {
 
         let appended_len = appended_text.chars().count() as i32;
         appended_len > 0
+            && appended_candidates.sub_texts.iter().all(String::is_empty)
             && appended_candidates
                 .corresponding_count
                 .iter()
@@ -4951,40 +4942,132 @@ impl TextServiceFactory {
     }
 
     #[inline]
+    pub(super) fn effective_cursor_and_total(composition: &Composition) -> (usize, usize) {
+        let reading_len = composition.raw_hiragana.chars().count();
+        let suffix_len = composition.suffix.chars().count();
+        let prefix_len = if reading_len > 0 {
+            reading_len
+        } else {
+            composition.preview.chars().count()
+        };
+        let fallback_total = if prefix_len > 0 || suffix_len > 0 {
+            prefix_len + suffix_len
+        } else {
+            composition.raw_input.chars().count()
+        };
+        if let Some(cursor) = composition.cursor_position {
+            let total = fallback_total.max(cursor);
+            (cursor.min(total), total)
+        } else {
+            let total = fallback_total;
+            let cursor = if suffix_len <= total {
+                total - suffix_len
+            } else {
+                0
+            };
+            (cursor, total)
+        }
+    }
+
+    #[inline]
+    fn cursor_delete_actions(
+        composition: &Composition,
+        forward: bool,
+    ) -> (CompositionState, Vec<ClientAction>) {
+        let (cursor, total) = Self::effective_cursor_and_total(composition);
+        let decision = if forward {
+            shared::conversion_policy::decide_delete_forward_action(cursor, total)
+        } else {
+            shared::conversion_policy::decide_backspace_action(cursor, total)
+        };
+        match decision {
+            shared::conversion_policy::CursorDeleteAction::NoOp => {
+                (composition.state.clone(), Vec::new())
+            }
+            shared::conversion_policy::CursorDeleteAction::DeleteBackward => {
+                if composition.suffix.is_empty() && composition.raw_input.chars().count() <= 1 {
+                    (
+                        CompositionState::None,
+                        vec![ClientAction::RemoveText, ClientAction::EndComposition],
+                    )
+                } else {
+                    (CompositionState::Composing, vec![ClientAction::RemoveText])
+                }
+            }
+            shared::conversion_policy::CursorDeleteAction::DeleteForward => {
+                if total <= 1 {
+                    (
+                        CompositionState::None,
+                        vec![
+                            ClientAction::DeleteForwardText,
+                            ClientAction::EndComposition,
+                        ],
+                    )
+                } else {
+                    (
+                        CompositionState::Composing,
+                        vec![ClientAction::DeleteForwardText],
+                    )
+                }
+            }
+        }
+    }
+
+    #[inline]
     fn commit_current_clause_actions(
         composition: &Composition,
     ) -> (CompositionState, Vec<ClientAction>) {
-        if composition.suffix.is_empty() {
-            (CompositionState::None, vec![ClientAction::EndComposition])
-        } else {
-            (
+        match shared::conversion_policy::decide_cursor_commit_action(
+            !composition.preview.is_empty(),
+            !composition.suffix.is_empty(),
+        ) {
+            shared::conversion_policy::CursorCommitAction::CommitWholeAndEnd => {
+                (CompositionState::None, vec![ClientAction::EndComposition])
+            }
+            shared::conversion_policy::CursorCommitAction::CommitSuffixAndEnd => (
+                CompositionState::None,
+                vec![
+                    ClientAction::CommitWithText(composition.suffix.clone()),
+                    ClientAction::EndComposition,
+                ],
+            ),
+            shared::conversion_policy::CursorCommitAction::CommitPrefixKeepSuffix => (
                 CompositionState::Composing,
                 vec![ClientAction::ShrinkText("".to_string())],
-            )
+            ),
         }
     }
 
     #[inline]
     fn commit_enter_actions(composition: &Composition) -> (CompositionState, Vec<ClientAction>) {
-        // Clause navigation must keep the text after the selected boundary editable.
-        let (state, mut actions) = Self::commit_current_clause_actions(composition);
-        let kind = if composition.suffix.is_empty() {
-            LearningCommitKind::Normal
-        } else {
-            LearningCommitKind::Partial
-        };
-        actions.insert(
-            0,
-            ClientAction::CommitLearning {
-                scope: if composition.suffix.is_empty() {
-                    LearningCommitScope::Composition
-                } else {
-                    LearningCommitScope::CurrentClause
-                },
-                kind,
-                was_temporary_latin: composition.temporary_latin,
-            },
+        let decision = shared::conversion_policy::decide_cursor_commit_action(
+            !composition.preview.is_empty(),
+            !composition.suffix.is_empty(),
         );
+        let (state, mut actions) = Self::commit_current_clause_actions(composition);
+        match decision {
+            shared::conversion_policy::CursorCommitAction::CommitWholeAndEnd => {
+                actions.insert(
+                    0,
+                    ClientAction::CommitLearning {
+                        scope: LearningCommitScope::Composition,
+                        kind: LearningCommitKind::Normal,
+                        was_temporary_latin: composition.temporary_latin,
+                    },
+                );
+            }
+            shared::conversion_policy::CursorCommitAction::CommitPrefixKeepSuffix => {
+                actions.insert(
+                    0,
+                    ClientAction::CommitLearning {
+                        scope: LearningCommitScope::CurrentClause,
+                        kind: LearningCommitKind::Partial,
+                        was_temporary_latin: composition.temporary_latin,
+                    },
+                );
+            }
+            shared::conversion_policy::CursorCommitAction::CommitSuffixAndEnd => {}
+        }
         (state, actions)
     }
 
@@ -5166,28 +5249,75 @@ impl TextServiceFactory {
     }
 
     #[inline]
-    fn clause_navigation_actions(composition: &Composition, direction: i32) -> Vec<ClientAction> {
-        if ClauseState::is_active_for_composition(composition) || !composition.suffix.is_empty() {
-            return vec![
-                ClientAction::EnsureClauseNavigationReady {
-                    prepare_future_clauses: true,
-                },
-                ClientAction::MoveClause(direction),
-            ];
+    fn punctuation_commit_cursor_allowed(composition: &Composition) -> bool {
+        let (cursor, total) = Self::effective_cursor_and_total(composition);
+        shared::conversion_policy::should_allow_punctuation_commit(cursor, total)
+    }
+
+    #[inline]
+    fn should_insert_at_cursor_while_previewing_composition(composition: &Composition) -> bool {
+        let (cursor, total) = Self::effective_cursor_and_total(composition);
+        shared::conversion_policy::should_insert_at_cursor_while_previewing(cursor, total)
+    }
+
+    #[inline]
+    fn cursor_has_prefix_for_candidates(composition: &Composition) -> bool {
+        let (cursor, _) = Self::effective_cursor_and_total(composition);
+        cursor > 0 || composition.suffix.is_empty() || !composition.candidates.texts.is_empty()
+    }
+
+    #[inline]
+    fn cursor_insert_actions_for_active_composition(
+        composition: &Composition,
+        action: &UserAction,
+        mode: &InputMode,
+        app_config: &AppConfig,
+        start_temporary_latin: bool,
+    ) -> Option<(Vec<ClientAction>, ClientAction, bool)> {
+        if (composition.temporary_latin || start_temporary_latin)
+            && Self::direct_text_for_action(action).is_some()
+        {
+            let text = Self::direct_text_for_action(action)?;
+            let mut actions = Vec::new();
+            if start_temporary_latin {
+                actions.push(ClientAction::SetTemporaryLatin(true));
+            }
+            let append_action =
+                if Self::should_shrink_before_direct_append(composition, start_temporary_latin) {
+                    ClientAction::ShrinkTextDirect(text.clone())
+                } else {
+                    ClientAction::AppendTextDirect(text.clone())
+                };
+            actions.push(append_action);
+            return Some((
+                actions,
+                ClientAction::AppendTextDirect(text),
+                composition.temporary_latin || start_temporary_latin,
+            ));
         }
 
-        if direction < 0 {
-            vec![
-                ClientAction::EnsureClauseNavigationReady {
-                    prepare_future_clauses: false,
-                },
-                ClientAction::MoveClause(Self::MOVE_CLAUSE_TO_LAST),
-            ]
-        } else {
-            vec![ClientAction::EnsureClauseNavigationReady {
-                prepare_future_clauses: true,
-            }]
-        }
+        let append_action = match action {
+            UserAction::NumpadSymbol(symbol) if *mode == InputMode::Kana => {
+                let text =
+                    Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, false)
+                        .unwrap_or_else(|| symbol.to_string());
+                ClientAction::AppendTextRaw(text)
+            }
+            UserAction::Input(ch) => ClientAction::AppendText(Self::input_text_for_mode(*ch, mode)),
+            UserAction::Number {
+                value,
+                is_numpad: true,
+            } if *mode == InputMode::Kana => {
+                let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
+                let text =
+                    Self::numpad_text_for_mode(digit, app_config.general.numpad_input, false)
+                        .unwrap_or_else(|| digit.to_string());
+                ClientAction::AppendTextRaw(text)
+            }
+            UserAction::Number { value, .. } => ClientAction::AppendText(value.to_string()),
+            _ => return None,
+        };
+        Some((vec![append_action.clone()], append_action, false))
     }
 
     #[inline]
@@ -5299,7 +5429,16 @@ impl TextServiceFactory {
                 composition.typo.primary_assist,
             ) {
                 if let Some(text) = composition.candidates.texts.get(idx) {
-                    if kind == shared::ai_candidate::TYPO_CORRECTION {
+                    let adoption = shared::assist_policy::adoption_action(
+                        kind,
+                        true,
+                        false,
+                        composition.typo.correction.is_applied(),
+                    );
+                    if adoption == shared::assist_policy::AdoptionAction::Ignore {
+                        return Some((composition.state.clone(), Vec::new()));
+                    }
+                    if adoption == shared::assist_policy::AdoptionAction::ReplaceComposition {
                         return Some((
                             CompositionState::Composing,
                             vec![ClientAction::ApplyTypoCorrection(text.clone())],
@@ -5439,6 +5578,7 @@ impl TextServiceFactory {
             CompositionState::Composing => match action {
                 _ if !composition.temporary_latin
                     && !start_temporary_latin
+                    && Self::punctuation_commit_cursor_allowed(composition)
                     && Self::punctuation_commit_action_target_enabled(
                         action,
                         mode,
@@ -5456,64 +5596,26 @@ impl TextServiceFactory {
                     )?;
                     Some(Self::punctuation_commit_actions(text))
                 }
-                _ if (composition.temporary_latin || start_temporary_latin)
-                    && Self::direct_text_for_action(action).is_some() =>
+                _ if Self::cursor_insert_actions_for_active_composition(
+                    composition,
+                    action,
+                    mode,
+                    app_config,
+                    start_temporary_latin,
+                )
+                .is_some() =>
                 {
-                    let text = Self::direct_text_for_action(action)?;
-                    let mut actions = vec![];
-                    if start_temporary_latin {
-                        actions.push(ClientAction::SetTemporaryLatin(true));
-                    }
-                    if Self::should_shrink_before_direct_append(composition, start_temporary_latin)
-                    {
-                        actions.push(ClientAction::ShrinkTextDirect(text));
-                    } else {
-                        actions.push(ClientAction::AppendTextDirect(text));
-                    }
+                    let (actions, _, _) = Self::cursor_insert_actions_for_active_composition(
+                        composition,
+                        action,
+                        mode,
+                        app_config,
+                        start_temporary_latin,
+                    )?;
                     Some((CompositionState::Composing, actions))
                 }
-                UserAction::NumpadSymbol(symbol) if *mode == InputMode::Kana => {
-                    let text =
-                        Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, false)
-                            .unwrap_or_else(|| symbol.to_string());
-                    Some((
-                        CompositionState::Composing,
-                        vec![ClientAction::AppendTextRaw(text)],
-                    ))
-                }
-                UserAction::Input(char) => Some((
-                    CompositionState::Composing,
-                    vec![ClientAction::AppendText(Self::input_text_for_mode(
-                        *char, mode,
-                    ))],
-                )),
-                UserAction::Number {
-                    value,
-                    is_numpad: true,
-                } if *mode == InputMode::Kana => {
-                    let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
-                    let text =
-                        Self::numpad_text_for_mode(digit, app_config.general.numpad_input, false)
-                            .unwrap_or_else(|| digit.to_string());
-                    Some((
-                        CompositionState::Composing,
-                        vec![ClientAction::AppendTextRaw(text)],
-                    ))
-                }
-                UserAction::Number { value, .. } => Some((
-                    CompositionState::Composing,
-                    vec![ClientAction::AppendText(value.to_string())],
-                )),
-                UserAction::Backspace | UserAction::Delete => {
-                    if composition.raw_input.chars().count() <= 1 {
-                        Some((
-                            CompositionState::None,
-                            vec![ClientAction::RemoveText, ClientAction::EndComposition],
-                        ))
-                    } else {
-                        Some((CompositionState::Composing, vec![ClientAction::RemoveText]))
-                    }
-                }
+                UserAction::Backspace => Some(Self::cursor_delete_actions(composition, false)),
+                UserAction::Delete => Some(Self::cursor_delete_actions(composition, true)),
                 UserAction::Enter => Some(Self::commit_enter_actions(composition)),
                 UserAction::CommitAndNextClause => {
                     Some(Self::commit_current_clause_actions(composition))
@@ -5523,7 +5625,7 @@ impl TextServiceFactory {
                 }
                 UserAction::AdjustClauseBoundary(direction) => Some((
                     CompositionState::Composing,
-                    vec![ClientAction::AdjustBoundary(*direction)],
+                    vec![ClientAction::MoveCursor(direction.signum())],
                 )),
                 UserAction::Escape => Some((
                     CompositionState::None,
@@ -5539,20 +5641,27 @@ impl TextServiceFactory {
                 UserAction::Navigation(direction) => match direction {
                     Navigation::Right => Some((
                         CompositionState::Composing,
-                        Self::clause_navigation_actions(composition, 1),
+                        vec![ClientAction::MoveCursor(1)],
                     )),
                     Navigation::Left => Some((
                         CompositionState::Composing,
-                        Self::clause_navigation_actions(composition, -1),
+                        vec![ClientAction::MoveCursor(-1)],
                     )),
-                    Navigation::Up => Some((
-                        CompositionState::Previewing,
-                        vec![ClientAction::SetSelection(SetSelectionType::Up)],
-                    )),
-                    Navigation::Down => Some((
-                        CompositionState::Previewing,
-                        vec![ClientAction::SetSelection(SetSelectionType::Down)],
-                    )),
+                    Navigation::Up if Self::cursor_has_prefix_for_candidates(composition) => {
+                        Some((
+                            CompositionState::Previewing,
+                            vec![ClientAction::SetSelection(SetSelectionType::Up)],
+                        ))
+                    }
+                    Navigation::Down if Self::cursor_has_prefix_for_candidates(composition) => {
+                        Some((
+                            CompositionState::Previewing,
+                            vec![ClientAction::SetSelection(SetSelectionType::Down)],
+                        ))
+                    }
+                    Navigation::Up | Navigation::Down => {
+                        Some((CompositionState::Composing, Vec::new()))
+                    }
                 },
                 UserAction::ToggleInputMode if app_config.general.experimental_translation => {
                     Some((
@@ -5583,21 +5692,34 @@ impl TextServiceFactory {
                         ClientAction::SetIMEMode(InputMode::Latin),
                     ],
                 )),
-                UserAction::Space | UserAction::Tab | UserAction::Reconvert => Some((
-                    CompositionState::Previewing,
-                    Self::candidate_preview_actions(app_config),
-                )),
-                UserAction::Function(key) => Some((
-                    CompositionState::Previewing,
-                    vec![ClientAction::SetTextWithType(
-                        Self::set_text_type_for_function(*key),
-                    )],
-                )),
+                UserAction::Space | UserAction::Tab | UserAction::Reconvert => {
+                    if Self::cursor_has_prefix_for_candidates(composition) {
+                        Some((
+                            CompositionState::Previewing,
+                            Self::candidate_preview_actions(app_config),
+                        ))
+                    } else {
+                        Some((CompositionState::Composing, Vec::new()))
+                    }
+                }
+                UserAction::Function(key) => {
+                    if Self::cursor_has_prefix_for_candidates(composition) {
+                        Some((
+                            CompositionState::Previewing,
+                            vec![ClientAction::SetTextWithType(
+                                Self::set_text_type_for_function(*key),
+                            )],
+                        ))
+                    } else {
+                        Some((CompositionState::Composing, Vec::new()))
+                    }
+                }
                 _ => None,
             },
             CompositionState::Previewing => match action {
                 _ if !composition.temporary_latin
                     && !start_temporary_latin
+                    && Self::punctuation_commit_cursor_allowed(composition)
                     && Self::punctuation_commit_action_target_enabled(
                         action,
                         mode,
@@ -5615,55 +5737,34 @@ impl TextServiceFactory {
                     )?;
                     Some(Self::punctuation_commit_actions(text))
                 }
-                _ if (composition.temporary_latin || start_temporary_latin)
-                    && Self::direct_text_for_action(action).is_some() =>
+                _ if Self::cursor_insert_actions_for_active_composition(
+                    composition,
+                    action,
+                    mode,
+                    app_config,
+                    start_temporary_latin,
+                )
+                .is_some() =>
                 {
-                    let text = Self::direct_text_for_action(action)?;
-                    Some(Self::commit_preview_then_append_actions(
-                        ClientAction::AppendTextDirect(text),
-                        composition.temporary_latin || start_temporary_latin,
-                    ))
-                }
-                UserAction::NumpadSymbol(symbol) if *mode == InputMode::Kana => {
-                    let text =
-                        Self::numpad_text_for_mode(*symbol, app_config.general.numpad_input, false)
-                            .unwrap_or_else(|| symbol.to_string());
-                    Some(Self::commit_preview_then_append_actions(
-                        ClientAction::AppendTextRaw(text),
-                        false,
-                    ))
-                }
-                UserAction::Input(char) => Some(Self::commit_preview_then_append_actions(
-                    ClientAction::AppendText(Self::input_text_for_mode(*char, mode)),
-                    false,
-                )),
-                UserAction::Number {
-                    value,
-                    is_numpad: true,
-                } if *mode == InputMode::Kana => {
-                    let digit = char::from_digit(*value as u32, 10).unwrap_or('0');
-                    let text =
-                        Self::numpad_text_for_mode(digit, app_config.general.numpad_input, false)
-                            .unwrap_or_else(|| digit.to_string());
-                    Some(Self::commit_preview_then_append_actions(
-                        ClientAction::AppendTextRaw(text),
-                        false,
-                    ))
-                }
-                UserAction::Number { value, .. } => Some(Self::commit_preview_then_append_actions(
-                    ClientAction::AppendText(value.to_string()),
-                    false,
-                )),
-                UserAction::Backspace | UserAction::Delete => {
-                    if composition.raw_input.chars().count() <= 1 {
-                        Some((
-                            CompositionState::None,
-                            vec![ClientAction::RemoveText, ClientAction::EndComposition],
-                        ))
+                    let (actions, append_action, temp_latin) =
+                        Self::cursor_insert_actions_for_active_composition(
+                            composition,
+                            action,
+                            mode,
+                            app_config,
+                            start_temporary_latin,
+                        )?;
+                    if Self::should_insert_at_cursor_while_previewing_composition(composition) {
+                        Some((CompositionState::Composing, actions))
                     } else {
-                        Some((CompositionState::Composing, vec![ClientAction::RemoveText]))
+                        Some(Self::commit_preview_then_append_actions(
+                            append_action,
+                            temp_latin,
+                        ))
                     }
                 }
+                UserAction::Backspace => Some(Self::cursor_delete_actions(composition, false)),
+                UserAction::Delete => Some(Self::cursor_delete_actions(composition, true)),
                 UserAction::Enter => Some(Self::commit_enter_actions(composition)),
                 UserAction::CommitAndNextClause => {
                     Some(Self::commit_current_clause_actions(composition))
@@ -5672,8 +5773,8 @@ impl TextServiceFactory {
                     Some(Self::commit_first_clause_actions(composition))
                 }
                 UserAction::AdjustClauseBoundary(direction) => Some((
-                    CompositionState::Previewing,
-                    vec![ClientAction::AdjustBoundary(*direction)],
+                    CompositionState::Composing,
+                    vec![ClientAction::MoveCursor(direction.signum())],
                 )),
                 UserAction::Escape => Some((
                     CompositionState::None,
@@ -5689,20 +5790,27 @@ impl TextServiceFactory {
                 UserAction::Navigation(direction) => match direction {
                     Navigation::Right => Some((
                         CompositionState::Composing,
-                        Self::clause_navigation_actions(composition, 1),
+                        vec![ClientAction::MoveCursor(1)],
                     )),
                     Navigation::Left => Some((
                         CompositionState::Composing,
-                        Self::clause_navigation_actions(composition, -1),
+                        vec![ClientAction::MoveCursor(-1)],
                     )),
-                    Navigation::Up => Some((
-                        CompositionState::Previewing,
-                        vec![ClientAction::SetSelection(SetSelectionType::Up)],
-                    )),
-                    Navigation::Down => Some((
-                        CompositionState::Previewing,
-                        vec![ClientAction::SetSelection(SetSelectionType::Down)],
-                    )),
+                    Navigation::Up if Self::cursor_has_prefix_for_candidates(composition) => {
+                        Some((
+                            CompositionState::Previewing,
+                            vec![ClientAction::SetSelection(SetSelectionType::Up)],
+                        ))
+                    }
+                    Navigation::Down if Self::cursor_has_prefix_for_candidates(composition) => {
+                        Some((
+                            CompositionState::Previewing,
+                            vec![ClientAction::SetSelection(SetSelectionType::Down)],
+                        ))
+                    }
+                    Navigation::Up | Navigation::Down => {
+                        Some((CompositionState::Composing, Vec::new()))
+                    }
                 },
                 UserAction::ToggleInputMode if app_config.general.experimental_translation => {
                     Some((
@@ -5733,16 +5841,28 @@ impl TextServiceFactory {
                         ClientAction::SetIMEMode(InputMode::Latin),
                     ],
                 )),
-                UserAction::Space | UserAction::Tab | UserAction::Reconvert => Some((
-                    CompositionState::Previewing,
-                    Self::candidate_preview_actions(app_config),
-                )),
-                UserAction::Function(key) => Some((
-                    CompositionState::Previewing,
-                    vec![ClientAction::SetTextWithType(
-                        Self::set_text_type_for_function(*key),
-                    )],
-                )),
+                UserAction::Space | UserAction::Tab | UserAction::Reconvert => {
+                    if Self::cursor_has_prefix_for_candidates(composition) {
+                        Some((
+                            CompositionState::Previewing,
+                            Self::candidate_preview_actions(app_config),
+                        ))
+                    } else {
+                        Some((CompositionState::Composing, Vec::new()))
+                    }
+                }
+                UserAction::Function(key) => {
+                    if Self::cursor_has_prefix_for_candidates(composition) {
+                        Some((
+                            CompositionState::Previewing,
+                            vec![ClientAction::SetTextWithType(
+                                Self::set_text_type_for_function(*key),
+                            )],
+                        ))
+                    } else {
+                        Some((CompositionState::Composing, Vec::new()))
+                    }
+                }
                 _ => None,
             },
             CompositionState::Selecting => None,
@@ -5819,6 +5939,9 @@ impl TextServiceFactory {
                     projection.raw_input.pop();
                     // A mapped kana can consume more than one raw input element.
                     // Execution will replace this estimate with the server identity.
+                    projection.reliable = false;
+                }
+                ClientAction::DeleteForwardText | ClientAction::MoveCursor(_) => {
                     projection.reliable = false;
                 }
                 ClientAction::ShrinkText(text)
@@ -7597,6 +7720,7 @@ impl TextServiceFactory {
             let mut raw_hiragana = composition.raw_hiragana.clone();
             let mut fixed_prefix = composition.fixed_prefix.clone();
             let mut corresponding_count = composition.corresponding_count;
+            let mut cursor_position = composition.cursor_position;
             let mut candidates = composition.candidates.clone();
             let mut clause_snapshots = composition.clause_snapshots.clone();
             let mut future_clause_snapshots = composition.future_clause_snapshots.clone();
@@ -7655,6 +7779,19 @@ impl TextServiceFactory {
                 }};
             }
 
+            macro_rules! apply_cursor_zero_suffix_only {
+                ($default_cursor:expr) => {{
+                    selection_index = 0;
+                    corresponding_count = 0;
+                    preview = fixed_prefix.clone();
+                    suffix = candidates.hiragana.clone();
+                    raw_hiragana = candidates.hiragana.clone();
+                    cursor_position = cursor_position.or($default_cursor);
+                    render_local_text!();
+                    let _ = self.hide_candidate_window_ui(&mut ipc_service)?;
+                }};
+            }
+
             macro_rules! persist_local_state {
                 () => {{
                     let text_service = self.borrow()?;
@@ -7687,6 +7824,7 @@ impl TextServiceFactory {
                     persisted.next_split_group_id = next_split_group_id;
                     persisted.suffix = suffix.clone();
                     persisted.corresponding_count = corresponding_count;
+                    persisted.cursor_position = cursor_position;
                     persisted.temporary_latin = temporary_latin;
                     persisted.temporary_latin_shift_pending = temporary_latin_shift_pending;
                     persisted.reconversion_original = reconversion_original.clone();
@@ -7707,6 +7845,8 @@ impl TextServiceFactory {
                     live_conversion_history.clear();
                     selection_index = 0;
                     corresponding_count = 0;
+                    cursor_position = None;
+                    let _ = cursor_position;
                     temporary_latin = false;
                     temporary_latin_shift_pending = false;
                     preview.clear();
@@ -7755,6 +7895,8 @@ impl TextServiceFactory {
                     live_conversion_snapshots.clear();
                     live_conversion_history.clear();
                     corresponding_count = 0;
+                    cursor_position = None;
+                    let _ = cursor_position;
                     temporary_latin = false;
                     temporary_latin_shift_pending = false;
                     preview.clear();
@@ -7816,6 +7958,11 @@ impl TextServiceFactory {
                 current_clause_consumed_prefix_restore = None;
                 current_clause_remainder_origin = None;
                 next_split_group_id = 0;
+                let sync = ipc_service.latest_composition_sync();
+                cursor_position = sync.cursor;
+                if let Some(synced_raw_input) = sync.raw_input {
+                    raw_input = synced_raw_input;
+                }
                 selection_index = 0;
                 if let Some(selected) = Self::select_candidate(&candidates, selection_index) {
                     corresponding_count = selected.corresponding_count;
@@ -7831,6 +7978,16 @@ impl TextServiceFactory {
                             app_config,
                             &transition,
                         )?;
+                    }
+                } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                    if composition.tip_composition.is_some() {
+                        apply_cursor_zero_suffix_only!(Some(0));
+                    } else {
+                        corresponding_count = 0;
+                        preview = fixed_prefix.clone();
+                        suffix = candidates.hiragana.clone();
+                        raw_hiragana = candidates.hiragana.clone();
+                        cursor_position = cursor_position.or(Some(0));
                     }
                 }
             }
@@ -7965,6 +8122,7 @@ impl TextServiceFactory {
                                 matches!(
                                     entry.action,
                                     ClientAction::RemoveText
+                                        | ClientAction::DeleteForwardText
                                         | ClientAction::RestoreReconversionOriginal
                                 )
                             }) {
@@ -7981,6 +8139,7 @@ impl TextServiceFactory {
                         self.borrow()?.borrow_mut_composition()?.typo = Default::default();
                         selection_index = 0;
                         corresponding_count = 0;
+                        cursor_position = None;
                         temporary_latin = false;
                         temporary_latin_shift_pending = false;
                         reconversion_original = None;
@@ -8058,9 +8217,15 @@ impl TextServiceFactory {
                             reset_stale_composition_before_fresh_append!(
                                 "append_text recovered after server reset"
                             );
-                            selection_index = 0;
                         }
-                        raw_input.push_str(&text);
+                        selection_index = 0;
+                        let sync = ipc_service.latest_composition_sync();
+                        if let Some(synced_raw_input) = sync.raw_input {
+                            raw_input = synced_raw_input;
+                        } else {
+                            raw_input.push_str(&text);
+                        }
+                        cursor_position = sync.cursor;
                         if let Some(selected) = Self::select_candidate(&candidates, selection_index)
                         {
                             selection_index = selected.index;
@@ -8102,6 +8267,8 @@ impl TextServiceFactory {
                                 app_config,
                                 &transition,
                             )?;
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            apply_cursor_zero_suffix_only!(Some(0));
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
                                 "append_text returned empty composition"
@@ -8146,9 +8313,15 @@ impl TextServiceFactory {
                             reset_stale_composition_before_fresh_append!(
                                 "append_text_raw recovered after server reset"
                             );
-                            selection_index = 0;
                         }
-                        raw_input.push_str(text);
+                        selection_index = 0;
+                        let sync = ipc_service.latest_composition_sync();
+                        if let Some(synced_raw_input) = sync.raw_input {
+                            raw_input = synced_raw_input;
+                        } else {
+                            raw_input.push_str(text);
+                        }
+                        cursor_position = sync.cursor;
                         if let Some(selected) = Self::select_candidate(&candidates, selection_index)
                         {
                             selection_index = selected.index;
@@ -8190,6 +8363,8 @@ impl TextServiceFactory {
                                 app_config,
                                 &transition,
                             )?;
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            apply_cursor_zero_suffix_only!(Some(0));
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
                                 "append_text_raw returned empty composition"
@@ -8253,9 +8428,15 @@ impl TextServiceFactory {
                             reset_stale_composition_before_fresh_append!(
                                 "append_text_direct recovered after server reset"
                             );
-                            selection_index = 0;
                         }
-                        raw_input.push_str(text);
+                        selection_index = 0;
+                        let sync = ipc_service.latest_composition_sync();
+                        if let Some(synced_raw_input) = sync.raw_input {
+                            raw_input = synced_raw_input;
+                        } else {
+                            raw_input.push_str(text);
+                        }
+                        cursor_position = sync.cursor;
                         if let Some(selected) = Self::select_candidate(&candidates, selection_index)
                         {
                             selection_index = selected.index;
@@ -8297,6 +8478,8 @@ impl TextServiceFactory {
                                 app_config,
                                 &transition,
                             )?;
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            apply_cursor_zero_suffix_only!(Some(0));
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
                                 "append_text_direct returned empty composition"
@@ -8357,26 +8540,29 @@ impl TextServiceFactory {
                             suffix.clear();
                         }
                     }
-                    ClientAction::RemoveText => {
+                    ClientAction::RemoveText | ClientAction::DeleteForwardText => {
+                        let is_delete_forward = matches!(action, ClientAction::DeleteForwardText);
                         if mode == InputMode::Latin {
-                            raw_input.pop();
-                            candidates = english::candidates(&raw_input);
-                            selection_index = 0;
-                            corresponding_count = raw_input.len() as i32;
-                            raw_hiragana = raw_input.clone();
-                            preview = raw_input.clone();
-                            suffix.clear();
-                            if raw_input.is_empty() {
-                                ipc_service.clear_pending_conversion_continuation();
+                            if !is_delete_forward {
+                                raw_input.pop();
+                                candidates = english::candidates(&raw_input);
+                                selection_index = 0;
+                                corresponding_count = raw_input.len() as i32;
+                                raw_hiragana = raw_input.clone();
+                                preview = raw_input.clone();
+                                suffix.clear();
+                                if raw_input.is_empty() {
+                                    ipc_service.clear_pending_conversion_continuation();
+                                }
+                                self.set_text(&preview, "")?;
+                                self.sync_candidate_window_after_text_update(
+                                    &mut ipc_service,
+                                    &candidates,
+                                    selection_index,
+                                    app_config,
+                                    &transition,
+                                )?;
                             }
-                            self.set_text(&preview, "")?;
-                            self.sync_candidate_window_after_text_update(
-                                &mut ipc_service,
-                                &candidates,
-                                selection_index,
-                                app_config,
-                                &transition,
-                            )?;
                             persist_local_state!();
                             continue;
                         }
@@ -8404,16 +8590,25 @@ impl TextServiceFactory {
                                 &candidates,
                             )
                         {
-                            reset_after_empty_server_composition!(
+                            reset_after_empty_server_composition!(if is_delete_forward {
+                                "server session changed before delete_forward_text"
+                            } else {
                                 "server session changed before remove_text"
-                            );
+                            });
                             ipc_service.clear_pending_conversion_continuation();
                             persist_local_state!();
                             continue;
                         }
-                        let removal = ipc_service.remove_text()?;
+                        let removal = if is_delete_forward {
+                            ipc_service.delete_forward_text()?
+                        } else {
+                            ipc_service.remove_text()?
+                        };
                         raw_input = removal.raw_input;
                         candidates = removal.candidates;
+                        selection_index = 0;
+                        let sync = ipc_service.latest_composition_sync();
+                        cursor_position = sync.cursor;
                         if ipc_service.take_server_reset_recovered()
                             && Self::has_client_composition_state(
                                 &raw_input,
@@ -8423,9 +8618,11 @@ impl TextServiceFactory {
                                 &candidates,
                             )
                         {
-                            reset_after_empty_server_composition!(
+                            reset_after_empty_server_composition!(if is_delete_forward {
+                                "delete_forward_text detected server session change"
+                            } else {
                                 "remove_text detected server session change"
-                            );
+                            });
                             ipc_service.clear_pending_conversion_continuation();
                             persist_local_state!();
                             continue;
@@ -8462,6 +8659,11 @@ impl TextServiceFactory {
                                     &transition,
                                 ),
                             )?;
+                        } else if transition != CompositionState::None
+                            && candidates.texts.is_empty()
+                            && !candidates.hiragana.is_empty()
+                        {
+                            apply_cursor_zero_suffix_only!(Some(0));
                         } else {
                             // The requested final state is authoritative even if the server
                             // returns stale non-empty candidates. Never materialize that stale
@@ -8475,6 +8677,7 @@ impl TextServiceFactory {
                             live_conversion_history.clear();
                             selection_index = 0;
                             corresponding_count = 0;
+                            cursor_position = None;
                             temporary_latin = false;
                             temporary_latin_shift_pending = false;
                             suffix.clear();
@@ -8518,6 +8721,21 @@ impl TextServiceFactory {
                     }
                     ClientAction::MoveCursor(offset) => {
                         ipc_service.clear_pending_conversion_continuation();
+                        Self::clear_clause_caches(
+                            &mut clause_snapshots,
+                            &mut future_clause_snapshots,
+                            &mut ipc_service,
+                            &candidates,
+                        )?;
+                        current_clause_is_split_derived = false;
+                        current_clause_is_direct_split_remainder = false;
+                        current_clause_is_pending_remainder = false;
+                        current_clause_has_split_left_neighbor = false;
+                        current_clause_right_boundary_displacement = 0;
+                        current_clause_right_boundary_origin = None;
+                        current_clause_split_group_id = None;
+                        current_clause_consumed_prefix_restore = None;
+                        current_clause_remainder_origin = None;
                         if ipc_service.take_server_reset_recovered()
                             && Self::has_client_composition_state(
                                 &raw_input,
@@ -8534,6 +8752,12 @@ impl TextServiceFactory {
                             continue;
                         }
                         candidates = ipc_service.move_cursor(*offset)?;
+                        selection_index = 0;
+                        let sync = ipc_service.latest_composition_sync();
+                        if let Some(synced_raw_input) = sync.raw_input {
+                            raw_input = synced_raw_input;
+                        }
+                        cursor_position = sync.cursor;
                         if ipc_service.take_server_reset_recovered()
                             && Self::has_client_composition_state(
                                 &raw_input,
@@ -8577,6 +8801,8 @@ impl TextServiceFactory {
                                     &transition,
                                 ),
                             )?;
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            apply_cursor_zero_suffix_only!(Some(0));
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
                                 "move_cursor returned empty composition"
@@ -9080,6 +9306,7 @@ impl TextServiceFactory {
                         self.borrow()?.borrow_mut_composition()?.typo = Default::default();
                         selection_index = 0;
                         corresponding_count = 0;
+                        cursor_position = None;
                         temporary_latin = false;
                         temporary_latin_shift_pending = false;
                         preview.clear();
@@ -9278,7 +9505,9 @@ impl TextServiceFactory {
                             updated_raw_input.push_str(&text);
                             fresh_append_after_server_reset = true;
                         }
-                        raw_input = updated_raw_input;
+                        let sync = ipc_service.latest_composition_sync();
+                        raw_input = sync.raw_input.unwrap_or(updated_raw_input);
+                        cursor_position = sync.cursor;
                         selection_index = 0;
 
                         let recovered = if let Some(selected) =
@@ -9296,6 +9525,9 @@ impl TextServiceFactory {
                                 ipc_service.clear_pending_conversion_continuation();
                             } else {
                                 self.shift_start(&previous_preview, &selected.text)?;
+                                if !suffix.is_empty() {
+                                    render_local_text!();
+                                }
                                 let committed_surface = if text.is_empty() {
                                     previous_preview
                                         .strip_suffix(&selected.text)
@@ -9333,6 +9565,14 @@ impl TextServiceFactory {
                                     &transition,
                                 ),
                             )?;
+                            true
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            let previous_preview = preview.clone();
+                            if !fresh_append_after_server_reset && !previous_preview.is_empty() {
+                                self.shift_start(&previous_preview, "")?;
+                            }
+                            apply_cursor_zero_suffix_only!(Some(0));
+                            ipc_service.clear_pending_conversion_continuation();
                             true
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
@@ -9414,7 +9654,9 @@ impl TextServiceFactory {
                             updated_raw_input.push_str(text);
                             fresh_append_after_server_reset = true;
                         }
-                        raw_input = updated_raw_input;
+                        let sync = ipc_service.latest_composition_sync();
+                        raw_input = sync.raw_input.unwrap_or(updated_raw_input);
+                        cursor_position = sync.cursor;
                         selection_index = 0;
 
                         let recovered = if let Some(selected) =
@@ -9432,6 +9674,9 @@ impl TextServiceFactory {
                                 ipc_service.clear_pending_conversion_continuation();
                             } else {
                                 self.shift_start(&previous_preview, &selected.text)?;
+                                if !suffix.is_empty() {
+                                    render_local_text!();
+                                }
                                 let committed_surface = if text.is_empty() {
                                     previous_preview
                                         .strip_suffix(&selected.text)
@@ -9469,6 +9714,14 @@ impl TextServiceFactory {
                                     &transition,
                                 ),
                             )?;
+                            true
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            let previous_preview = preview.clone();
+                            if !fresh_append_after_server_reset && !previous_preview.is_empty() {
+                                self.shift_start(&previous_preview, "")?;
+                            }
+                            apply_cursor_zero_suffix_only!(Some(0));
+                            ipc_service.clear_pending_conversion_continuation();
                             true
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
@@ -9550,7 +9803,9 @@ impl TextServiceFactory {
                             updated_raw_input.push_str(text);
                             fresh_append_after_server_reset = true;
                         }
-                        raw_input = updated_raw_input;
+                        let sync = ipc_service.latest_composition_sync();
+                        raw_input = sync.raw_input.unwrap_or(updated_raw_input);
+                        cursor_position = sync.cursor;
                         selection_index = 0;
 
                         let recovered = if let Some(selected) =
@@ -9568,6 +9823,9 @@ impl TextServiceFactory {
                                 ipc_service.clear_pending_conversion_continuation();
                             } else {
                                 self.shift_start(&previous_preview, &selected.text)?;
+                                if !suffix.is_empty() {
+                                    render_local_text!();
+                                }
                                 let committed_surface = if text.is_empty() {
                                     previous_preview
                                         .strip_suffix(&selected.text)
@@ -9605,6 +9863,14 @@ impl TextServiceFactory {
                                     &transition,
                                 ),
                             )?;
+                            true
+                        } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
+                            let previous_preview = preview.clone();
+                            if !fresh_append_after_server_reset && !previous_preview.is_empty() {
+                                self.shift_start(&previous_preview, "")?;
+                            }
+                            apply_cursor_zero_suffix_only!(Some(0));
+                            ipc_service.clear_pending_conversion_continuation();
                             true
                         } else if candidates.is_empty_composition() {
                             reset_after_empty_server_composition!(
@@ -9698,9 +9964,6 @@ impl TextServiceFactory {
                 if let Ok(mut state) = service.borrow_mut_composition() {
                     if state.state == CompositionState::None {
                         state.typo = Default::default();
-                    }
-                    if state.typo.applied.is_none() {
-                        state.typo.hold_auto_commit = false;
                     }
                 }
             }

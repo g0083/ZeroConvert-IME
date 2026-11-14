@@ -1,5 +1,4 @@
 mod benchmark_runtime;
-mod cuda_backend;
 mod ipc;
 mod jev_api;
 mod model_catalog;
@@ -532,44 +531,18 @@ fn restart_server_connection(
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct Capability {
     cpu: bool,
-    cuda: bool,
     vulkan: bool,
 }
 
 #[tauri::command]
-fn cuda_backend_status() -> cuda_backend::Status {
-    cuda_backend::status()
-}
-
-#[tauri::command]
-async fn install_cuda_backend(
-    app: tauri::AppHandle,
-    confirmed: bool,
-) -> Result<cuda_backend::Status, String> {
-    cuda_backend::install(app, confirmed)
-        .await
-        .map_err(|error| format!("{error:#}"))
-}
-
-#[tauri::command]
 fn check_capability() -> Capability {
-    // cuda:
-    // cudart64_12.dll
-    // cublas64_12.dll
-
     // vulkan:
     // vulkan-1.dllの存在確認
 
     let mut capability = Capability {
         cpu: shared::zenzai_cpu_backend_supported(),
-        cuda: false,
         vulkan: false,
     };
-
-    // The optional download includes CUDA runtime DLLs; only the NVIDIA driver is required here.
-    capability.cuda = std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .is_some_and(|root| root.join("System32/nvcuda.dll").is_file());
 
     // Check for Vulkan availability
     capability.vulkan = vulkan_available();
@@ -983,9 +956,13 @@ async fn run_benchmark_item(
     // Android と同様に空白によるトークナイザー文字化け（[UNK]化）を防ぐためスペースを詰めて推論
     let clean_target = target.replace(' ', "").replace('　', "");
     let target_katakana = to_katakana(&clean_target);
+    let (masked_context, _) =
+        azookey_server::ai_assist::corrector::mask_digits_with_nam(effective_context);
+    let (masked_katakana, target_digits) =
+        azookey_server::ai_assist::corrector::mask_digits_with_nam(&target_katakana);
     let prompt = format!(
         "\u{EE02}{}\u{EE00}{}\u{EE01}",
-        effective_context, target_katakana
+        masked_context, masked_katakana
     );
 
     let client = reqwest::Client::builder()
@@ -1025,6 +1002,7 @@ async fn run_benchmark_item(
         .trim_end_matches(|c: char| ('\u{E000}'..='\u{F8FF}').contains(&c))
         .trim()
         .to_string();
+    cleaned = azookey_server::ai_assist::corrector::restore_nam_digits(&cleaned, &target_digits);
 
     if cleaned.is_empty() {
         cleaned = target_katakana;
@@ -1081,9 +1059,13 @@ async fn run_ai_assist_benchmark_item(
     };
     let clean_target = input.replace(' ', "").replace('　', "");
     let target_katakana = to_katakana(&clean_target);
+    let (masked_context, _) =
+        azookey_server::ai_assist::corrector::mask_digits_with_nam(effective_context);
+    let (masked_katakana, target_digits) =
+        azookey_server::ai_assist::corrector::mask_digits_with_nam(&target_katakana);
     let prompt = format!(
         "\u{EE02}{}\u{EE00}{}\u{EE01}",
-        effective_context, target_katakana
+        masked_context, masked_katakana
     );
 
     let t0 = std::time::Instant::now();
@@ -1102,11 +1084,12 @@ async fn run_ai_assist_benchmark_item(
     let main_output = match resp {
         Ok(r) => {
             if let Ok(json) = r.json::<serde_json::Value>().await {
-                json.get("content")
+                let raw = json
+                    .get("content")
                     .and_then(|c| c.as_str())
                     .unwrap_or(&input)
-                    .trim()
-                    .to_string()
+                    .trim();
+                azookey_server::ai_assist::corrector::restore_nam_digits(raw, &target_digits)
             } else {
                 input.clone()
             }
@@ -1114,12 +1097,12 @@ async fn run_ai_assist_benchmark_item(
         Err(_) => input.clone(),
     };
 
-    // 2. 💡 もしかして (誤字補正: 実IMEと同じ corrector::suggest_composition)
+    // 2. 💡 もしかして (誤字補正: 実IMEと同じ corrector::suggest_composition、ベンチマーク中は port 8090 の選択中メインモデルを使用)
     let t_assist = std::time::Instant::now();
     let corrector_port = if config.general.experimental_ai_engine == "lm_studio" {
         1234
     } else {
-        config.general.experimental_ai_engine_port
+        8090
     };
     let assist_config = azookey_server::ai_assist::AiAssistConfig {
         enabled: true,
@@ -1136,7 +1119,7 @@ async fn run_ai_assist_benchmark_item(
     .map(|suggestion| suggestion.surface);
 
     // 3. ZeroCon only: use the same bounded reading -> surface path as the IME.
-    // Benchmark owns port 8090 and does not send prompts to the corrector.
+    // Benchmark owns port 8090 cleanly using bounded assist inference.
     let prediction_context = effective_context.to_owned();
     let prediction_reading = clean_target.clone();
     let prediction_surface = main_output.clone();
@@ -1313,8 +1296,6 @@ pub fn run() {
             take_config_startup_notice,
             update_config,
             check_capability,
-            cuda_backend_status,
-            install_cuda_backend,
             get_default_romaji_rows,
             check_for_updates,
             start_update,

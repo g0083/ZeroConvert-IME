@@ -52,7 +52,7 @@ export const About = () => {
             </SettingsSection>
 
             <SettingsSection title="搭載モデルと動作環境">
-                <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4：省メモリのIQ4_NL_emb8（18.7 MiB）と高精度のQ8_0（27.7 MiB）。タイポ補正・先読みも1モデルで統合処理">
+                <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4の省メモリ版IQ4_NL_emb8（18.7 MiB）と高精度版Q8_0（27.7 MiB）を使用できます。利用モデルは「変換と候補」で選べます。">
                     <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-md border border-border/50">
                         ZeroCon Model Nano v4 IQ4_emb8 / Q8
                     </span>
@@ -63,7 +63,7 @@ export const About = () => {
                 <SettingsRow label="推論バックエンド" description="設定とPCの対応状況に応じて選択">
                     <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
                         <Zap className="size-3.5" />
-                        <span>CPU / Vulkan / NVIDIA CUDA</span>
+                        <span>CPU / Vulkan</span>
                     </div>
                 </SettingsRow>
                 <SettingsRow label="通信アーキテクチャ" description="プロセス間高速通信">

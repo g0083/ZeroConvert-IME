@@ -140,7 +140,7 @@ function Read-PreparedPackage([string]$Directory) {
     if ($actual.Count -ne @($manifest.files).Count) { throw 'Unexpected files in prepared payload.' }
     foreach ($required in @('frontend.exe','launcher.exe','ui.exe','azookey-server.exe','azookey-server.dll',
         'azookey.dll','azookey32.dll','settings.json','build-info.json',
-        'models/zerocon-nano-v4-q8_0.gguf','models/zerocon-nano-v4-iq4nl-emb8.gguf','models/zerocon-model-corrector.gguf',
+        'models/zerocon-nano-v4-q8_0.gguf','models/zerocon-nano-v4-iq4nl-emb8.gguf',
         'llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe')) {
         if ($required -notin @($manifest.files.path)) { throw "Incomplete package: $required" }
     }

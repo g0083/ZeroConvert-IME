@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type QuickBackendId = "cpu" | "vulkan" | "cuda";
+export type QuickBackendId = "cpu" | "vulkan";
 
 export type QuickBackendResult = {
     backend: QuickBackendId;

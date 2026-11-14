@@ -2,7 +2,7 @@
 
 このディレクトリは配布スクリプトのソースです。ビルド時にバイナリと同じ配布先へコピーされます。以下の操作は、必要なバイナリが揃った配布フォルダで実行してください。
 
-**ZeroCon IME (Windows)** は、Android 版で実証済みの **ZeroCon AI**（`ZeroCon Model v3.2` ニューラルかな漢字変換モデル）と、GPU アクセラレーション（NVIDIA CUDA / Vulkan）およびストリーミング自動確定（長文の自動確定）を統合した次世代 Windows TSF 日本語入力システムです。
+**ZeroCon IME (Windows)** は、Android 版で実証済みの **ZeroCon AI**（`ZeroCon Model v3.2` ニューラルかな漢字変換モデル）と、GPU アクセラレーション（Vulkan）およびストリーミング自動確定（長文の自動確定）を統合した次世代 Windows TSF 日本語入力システムです。
 
 ---
 
@@ -16,7 +16,7 @@
 - **ストリーミング自動確定（長文の自動確定）**:
   - 16 文字以上の連続入力中、先頭側の漢字変換が直近 5 打鍵連続で安定した文節境界を自動的に確定し、左文脈（Left Context）へ引き継ぎます。スペースキーや Enter キーを押さずに長文をノンストップで快適に入力可能です。
 - **GPU フルオフロード対応**:
-  - NVIDIA CUDA 12 (`llama_cuda`) / Vulkan (`llama_vulkan`) による全レイヤー GPU オフロード推論に対応。
+  - Vulkan (`llama_vulkan`) による全レイヤー GPU オフロード推論に対応。
 
 ---
 
