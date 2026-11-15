@@ -4,15 +4,15 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 ## 📥 すぐに試す（最新リリース）
 
-最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.5.0)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
+最新版のインストーラーおよびAPKは、**[GitHub Releases (v0.7.0)](https://github.com/g0083/ZeroConvert-IME/releases/latest)** からダウンロードしてすぐにお試しいただけます。
 
 | プラットフォーム | 配布ファイル | 説明 |
 |---|---|---|
-| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.5.0.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.5.0/ZeroConvert-IME-setup-v0.5.0.exe) | エンジン一式を自動セットアップ（翻訳モデルは初回ON時に別途ダウンロード） |
-| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.5.0-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.5.0/ZeroConvert-IME-v0.5.0-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK。翻訳モデルは初回ON時に別途ダウンロード |
-| **Android (実機推奨)** | [**ZeroConvert-IME-v0.5.0-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.5.0/ZeroConvert-IME-v0.5.0-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK。翻訳モデルは初回ON時に別途ダウンロード |
+| **Windows 10 / 11** | [**ZeroConvert-IME-setup-v0.7.0.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-setup-v0.7.0.exe) | エンジン一式を自動セットアップ（翻訳モデルは初回ON時に別途ダウンロード） |
+| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.7.0-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-v0.7.0-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK。翻訳モデルは初回ON時に別途ダウンロード |
+| **Android (実機推奨)** | [**ZeroConvert-IME-v0.7.0-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-v0.7.0-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK。翻訳モデルは初回ON時に別途ダウンロード |
 
-> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.5.0)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.5.0) をご覧ください。
+> 詳しい改善点、ベンチマーク詳細、モデル学習の解説は [リリースノート (v0.7.0)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.7.0) をご覧ください。
 
 ## 🌐 翻訳入力（v0.3.0・試験機能）
 
@@ -22,18 +22,18 @@ Windowsでは `Ctrl+T` の翻訳バーから日本語→英語／英語→日本
 
 モデルはPLaMo Community Licenseで提供されます。ライセンス条件は [Androidの表示](android/THIRD_PARTY_LICENSES.md) / [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) を確認してください。
 
-## 変換操作を減らす、独自のZeroCon Model Nano v4
+## 変換操作を減らす、独自のZeroCon Model Nano v4.1
 
-ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall** を出発点に、文脈に応じた漢字選択、専門語・四字熟語、複合文節、英数字や空白の保持を強化した派生モデルです。Windows・Androidともに通常変換モデルを次の2種類に統一しています。
+ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall** を出発点に、文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、`nam` 数値置換と連携した数字変換を強化した派生モデルです。Windows・Androidともに通常変換モデルを次の2種類に統一しています。
 
 | モデル | サイズ | 特徴 |
 |---|---:|---|
-| **Nano v4 IQ4_emb8**（既定） | **18.7 MiB** | 内部をIQ4_NL、入力埋め込み・出力をQ8_0にした省メモリ版 |
-| **Nano v4 Q8** | **27.7 MiB** | Q8_0で学習成果を保持した高精度版 |
+| **Nano v4.1 IQ4_emb8**（既定） | **18.7 MiB** | 内部をIQ4_NL、入力埋め込み・出力をQ8_0にした省メモリ版 |
+| **Nano v4.1 Q8** | **27.7 MiB** | Q8_0で学習成果を保持した高精度版 |
 
-6層・約26.7Mパラメータの構造を保ちながら、rank-64 DoRA、Standard v3教師と元Nanoの二重アンカー蒸留、教師の誤答ピークを正解へ入れ替える補正KL、文節間の誤った自己コピーを抑えるマージン学習を組み合わせました。さらにEOSの不要な句点・タグ生成を抑え、推論器と実IMEで異なる空白の符号化を両方学習しています。学習時のadapterは重みに統合するため、推論時に追加の層やadapter実行は必要ありません。
+6層・約26.7Mパラメータの構造を保ちながら、v4のrank-64 DoRA・二重アンカー蒸留・自己コピー/EOS抑止学習を土台に、v4.1では日常会話・口語・過剰漢字抑止および数値マスク（`nam`）互換の追加学習を施しました。学習時のadapterは重みに統合するため、推論時に追加の層やadapter実行は必要ありません。
 
-### ベースzenzからどこまで進んだか
+### ベースzenzからどこまで進んだか（Nano v4 開発評価480問の記録）
 
 同じ開発評価480問（基本・文脈230問＋高難度250問）のモデル単体評価です。
 
@@ -49,7 +49,7 @@ CPUのみ・4スレッドのi5-14500HXでは、IQ4_emb8は平均38.7ms、Q8は40
 
 ## 🎯 タイポ補正の劇的進化：メインモデル統合（v0.2.3）
 
-v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（Nano v4）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
+v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（Nano v4、現行は Nano v4.1）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
 
 これにより、**常駐 `llama-server` プロセス数を半減（2→1）** させてメモリと起動負荷を削減しながら、タイポ補正正解率は **20.8% → 78.0%（実質正解 86.7% / +57.2pt / 約4倍）** という圧倒的な進化を遂げました。
 
