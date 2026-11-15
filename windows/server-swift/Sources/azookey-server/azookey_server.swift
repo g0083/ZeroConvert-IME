@@ -787,9 +787,9 @@ private func converterModelURL() -> URL {
     if let embeddedPath = config["embeddedModelPath"] as? String {
         return URL(filePath: embeddedPath)
     }
-    let model = (config["model"] as? String) ?? "nano_v4_iq4_emb8"
-    let isQ8 = ["nano_v4_q8", "standard", "standard_q4km"].contains(model)
-    let filename = isQ8 ? "zerocon-nano-v4-q8_0.gguf" : "zerocon-nano-v4-iq4nl-emb8.gguf"
+    let model = (config["model"] as? String) ?? "nano_v4_1_iq4_emb8"
+    let isQ8 = ["nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km"].contains(model)
+    let filename = isQ8 ? "zerocon-nano-v4.1-q8_0.gguf" : "zerocon-nano-v4.1-iq4nl-emb8.gguf"
     return execURL.appendingPathComponent("models/" + filename)
 }
 
@@ -2815,7 +2815,7 @@ public func load_config() {
 
         if let zenzai = settings.zenzai {
             config["gpuLayers"] = Int(resolvedGpuLayerCount(zenzai.gpu_layers))
-            config["model"] = zenzai.model ?? "nano_v4_iq4_emb8"
+            config["model"] = zenzai.model ?? "nano_v4_1_iq4_emb8"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
             }

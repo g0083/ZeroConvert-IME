@@ -35,13 +35,13 @@ SOFTWARE.
 
 ---
 
-## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model Nano v4)
+## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model Nano v4.1)
 - **Upstream Model**: `Miwa-Keita/zenz-v3.2-xsmall` (base), with a fine-tuned `Miwa-Keita/zenz-v3.2-small` teacher
 - **Author**: Miwa Keita (ensan-hcl)
 - **License**: Apache License 2.0
 - **Notice**:
-  - `models/zerocon-nano-v4-iq4nl-emb8.gguf` and `models/zerocon-nano-v4-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall`, trained with rank-64 DoRA and target-corrected dual-anchor distillation from a fine-tuned Standard v3 teacher.
-  - The IQ4_NL variant blends the learned update at 85% and protects input/output tensors with Q8_0. The Q8_0 variant uses the full learned update.
+  - `models/zerocon-nano-v4.1-iq4nl-emb8.gguf` and `models/zerocon-nano-v4.1-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall`, trained with rank-64 DoRA, target-corrected dual-anchor distillation from a fine-tuned Standard v3 teacher, and v4.1 conversational/anti-over-kanji & numeral robustness tuning (`nam` digit-masking compatibility).
+  - The IQ4_NL variant protects input/output tensors with Q8_0 (`IQ4_NL` body with `Q8_0` embeddings/output). The Q8_0 variant preserves full precision quantization across all tensors.
   - Both models are distributed under the terms of the [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
 ---

@@ -33,12 +33,16 @@ class ModelCorrector(
             val modelInput = decoded ?: target
             val left = (context + prefix).filterNot { it in '\uEE00'..'\uEE0F' }
                 .map { if (it == ' ' || it.isISOControl()) '　' else it }.joinToString("").tailCodePoints(512)
-            val prompt = (if (left.isEmpty()) "" else "\uEE02$left") + "\uEE00${KanaKanjiConverter.toKatakana(modelInput)}\uEE01"
-            val response = inference.complete(AssistModel.CORRECTOR, prompt, (modelInput.codePointSize() * 3 + 16).coerceIn(32, 384), 1200)
+            val maskedLeft = NamMasking.mask(left).text
+            val katakanaTarget = KanaKanjiConverter.toKatakana(modelInput)
+            val maskedTarget = NamMasking.mask(katakanaTarget)
+            val prompt = (if (maskedLeft.isEmpty()) "" else "\uEE02$maskedLeft") + "\uEE00${maskedTarget.text}\uEE01"
+            val maxPredict = (maxOf(modelInput.codePointSize(), maskedTarget.text.codePointSize()) * 3 + 16).coerceIn(32, 384)
+            val response = inference.complete(AssistModel.CORRECTOR, prompt, maxPredict, 1200)
             if (response.stopReason in setOf("cancelled", "busy")) return null
             val completed = response.text.trim().takeIf {
-                response.finished && it.isNotEmpty() && !it.hasUnsafeTokens() && it.codePointSize() <= modelInput.codePointSize() * 3 + 16
-            }
+                response.finished && it.isNotEmpty() && !it.hasUnsafeTokens() && it.codePointSize() <= maxPredict
+            }?.let { NamMasking.restore(it, maskedTarget.digits) }
             surface = if (decoded != null) {
                 val expected = TypoCorrectionEngine.surfaceForReading(decoded)
                 completed?.takeIf { it == expected || it == decoded } ?: expected

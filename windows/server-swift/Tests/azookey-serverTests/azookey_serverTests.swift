@@ -3996,3 +3996,126 @@ private func testCandidate(
         #expect(startLength == 0)
     }
 }
+
+@Test func zenzDigitMaskingMasksAndRestoresWithoutCorruptingEnglishAndPartialBytes() {
+    let candy = ZenzDigitMasking.mask("１００えんのあめ")
+    #expect(candy.text == "namえんのあめ")
+    #expect(candy.asciiDigits == ["100"])
+    #expect(candy.rawDigits == ["１００"])
+    #expect(ZenzDigitMasking.restore("nam円の飴", digits: candy.asciiDigits) == "100円の飴")
+
+    let limited = ZenzDigitMasking.mask("Wi-Fi 6EとBluetooth 5.4", maxRuns: 2)
+    #expect(limited.text == "Wi-Fi namEとBluetooth nam.4")
+    #expect(limited.asciiDigits == ["6", "5"])
+    #expect(limited.rawDigits == ["6", "5"])
+
+    #expect(
+        ZenzDigitMasking.restore("SELECT name FROM customers dynamic", digits: ["10"])
+            == "SELECT name FROM customers dynamic"
+    )
+    #expect(ZenzDigitMasking.restore("namxnam", digits: ["3", "2"]) == "3x2")
+    #expect(ZenzDigitMasking.restore("nambonまとめて持つ", digits: ["3"]) == "3bonまとめて持つ")
+
+    #expect(ZenzDigitMasking.restoreBytes(Array("na".utf8), digits: ["3"], completePartialTrailingNam: true) == Array("3".utf8))
+    #expect(ZenzDigitMasking.restoreBytes(Array("n".utf8), digits: ["3"], completePartialTrailingNam: true) == Array("3".utf8))
+    #expect(ZenzDigitMasking.restoreBytes(Array("dyna".utf8), digits: ["3"], completePartialTrailingNam: true) == Array("dyna".utf8))
+
+    let truncatedKanji = Array("nam円".utf8).dropLast()
+    let restoredTruncated = ZenzDigitMasking.restoreBytes(Array(truncatedKanji), digits: ["100"])
+    #expect(restoredTruncated == Array("100".utf8) + Array("円".utf8).dropLast())
+}
+
+@Test func zenzDigitMaskingConvertsNumericInputsAndContextWithRealNanoV41() async throws {
+    let packageRoot = URL(filePath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let repoRoot = packageRoot
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let envModel = ProcessInfo.processInfo.environment["ZEROCON_TYPO_EVALUATION_MODEL"]
+        .flatMap { $0.isEmpty ? nil : URL(filePath: $0) }
+    let defaultModel = repoRoot.appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+    let modelURL = [envModel, defaultModel].compactMap { $0 }.first {
+        FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
+    }
+    let resolvedModel = try #require(modelURL)
+
+    let dictionaryURL = packageRoot.appending(path: "azooKey_dictionary_storage/Dictionary")
+    let emojiURL = packageRoot.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
+
+    let topResults: [(reading: String, context: String, zenzai: [String], merged: [String])] = await MainActor.run {
+        let testConverter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+        let cases: [(String, String)] = [
+            ("2026ねん", ""),
+            ("２０２６ねん", ""),
+            ("3かいだて", ""),
+            ("2027ねんどのよさん", ""),
+            ("3ぼんまとめてもつ", ""),
+            ("１００えんのあめ", ""),
+            ("3にちのよてい", "2026ねん10がつ"),
+            ("なまえをかく", "123ばんめの"),
+        ]
+        return cases.map { reading, context in
+            testConverter.stopComposition()
+            var composing = ComposingText()
+            composing.insertAtCursorPosition(reading, inputStyle: .direct)
+            let baseOptions = makeConvertRequestOptions(
+                context: context,
+                zenzaiEnabled: true,
+                runtimeDirectoryURL: packageRoot,
+                emojiDictionaryURL: emojiURL,
+                zenzaiWeightURL: resolvedModel,
+                profile: "",
+                learningType: .nothing,
+                experimentalKeyboardTypoCorrection: false
+            )
+            let results = testConverter.requestCandidates(
+                composing,
+                options: optionsForZenzaiConversion(from: baseOptions)
+            ).mainResults
+            let normalResults = testConverter.requestCandidates(
+                composing,
+                options: makeConvertRequestOptions(
+                    context: context,
+                    zenzaiEnabled: false,
+                    runtimeDirectoryURL: packageRoot,
+                    emojiDictionaryURL: emojiURL,
+                    zenzaiWeightURL: resolvedModel,
+                    profile: "",
+                    learningType: .nothing,
+                    experimentalKeyboardTypoCorrection: false
+                )
+            ).mainResults
+            let merged = mergeZenzaiMainResultsWithNormalNBest(
+                zenzaiResults: results,
+                normalNBestResults: normalResults,
+                hiragana: composing.convertTarget
+            )
+            return (reading, context, results.map(\.text), merged.map(\.text))
+        }
+    }
+
+    let expectedTop: [(String, [String])] = [
+        ("2026ねん", ["2026年"]),
+        ("２０２６ねん", ["2026年", "２０２６年"]),
+        ("3かいだて", ["3階建て", "3階建"]),
+        ("2027ねんどのよさん", ["2027年度の予算"]),
+        ("3ぼんまとめてもつ", ["3本まとめて持つ"]),
+        ("１００えんのあめ", ["100円の飴", "１００円の飴", "100円の雨", "１００円の雨"]),
+        ("3にちのよてい", ["3日の予定"]),
+        ("なまえをかく", ["名前を書く"]),
+    ]
+    for (entry, expectation) in zip(topResults, expectedTop) {
+        #expect(entry.reading == expectation.0)
+        #expect(!entry.zenzai.isEmpty, "reading=\(entry.reading) produced empty zenzai results")
+        for cand in entry.zenzai {
+            #expect(!cand.contains("nam"), "unrestored nam in zenzai candidate=\(cand) for reading=\(entry.reading)")
+        }
+        let zenzaiTop = entry.zenzai.first ?? ""
+        #expect(expectation.1.contains(zenzaiTop), "zenzai reading=\(entry.reading) context=\(entry.context) top=\(zenzaiTop) all=\(Array(entry.zenzai.prefix(5)))")
+        let top = entry.merged.first ?? ""
+        #expect(expectation.1.contains(top), "merged reading=\(entry.reading) context=\(entry.context) top=\(top) all=\(Array(entry.merged.prefix(5)))")
+    }
+}
+

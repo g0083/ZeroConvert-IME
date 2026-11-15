@@ -16,17 +16,17 @@ struct Choice {
 
 const CHOICES: [Choice; 2] = [
     Choice {
-        id: "nano_v4_iq4_emb8",
-        name: "ZeroCon Model Nano v4 IQ4_emb8",
+        id: "nano_v4_1_iq4_emb8",
+        name: "ZeroCon Model Nano v4.1 IQ4_emb8",
         filename: shared::runtime_assets::NANO_IQ4,
-        legacy: "zerocon-nano-v4-blend85-iq4nl-emb8.gguf",
+        legacy: "nano-v4-cap-nam-r3-iq4nl-emb8.gguf",
         description: "省メモリ · IQ4_NL / 入出力Q8_0 · 18.7 MiB",
     },
     Choice {
-        id: "nano_v4_q8",
-        name: "ZeroCon Model Nano v4 Q8",
+        id: "nano_v4_1_q8",
+        name: "ZeroCon Model Nano v4.1 Q8",
         filename: shared::runtime_assets::NANO_Q8,
-        legacy: shared::runtime_assets::NANO_Q8,
+        legacy: "nano-v4-cap-nam-r3-q8_0.gguf",
         description: "高精度 · Q8_0 · 27.7 MiB",
     },
 ];

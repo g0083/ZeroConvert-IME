@@ -24,7 +24,7 @@ function Get-TrialInputGroups {
         dictionary = @('windows/server-swift/azooKey_dictionary_storage/Dictionary','windows/scripts/generate-reverse-dictionary.mjs')
         emoji = @('windows/server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary')
         deployment = @('windows/deployment')
-        models = @('artifacts/models/zerocon/zerocon-nano-v4-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4-iq4nl-emb8.gguf')
+        models = @('artifacts/models/zerocon/zerocon-nano-v4.1-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf')
         tooling = @('windows/scripts/build-trial.ps1','windows/scripts/incremental-trial.psm1')
     }
 }

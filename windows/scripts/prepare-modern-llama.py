@@ -242,12 +242,14 @@ def check_converter():
     with zipfile.ZipFile(archive) as package:
         modulemap = package.read(prefix + converter_patch.MODULEMAP_PATH).decode('utf-8')
         context = package.read(prefix + converter_patch.ZENZ_CONTEXT_PATH).decode('utf-8')
+        prompt_builder = package.read(prefix + converter_patch.ZENZ_PROMPT_BUILDER_PATH).decode('utf-8')
         evaluator = package.read(prefix + converter_patch.ZENZ_EVALUATOR_PATH).decode('utf-8')
         learning_memory = package.read(prefix + converter_patch.LEARNING_MEMORY_PATH).decode('utf-8')
         converter_api = package.read(prefix + converter_patch.CONVERTER_API_PATH).decode('utf-8')
         lattice = package.read(prefix + converter_patch.LATTICE_PATH).decode('utf-8')
     converter_patch.patch_modulemap(modulemap)
     converter_patch.patch_zenz_context(context)
+    converter_patch.patch_zenz_prompt_builder(prompt_builder)
     converter_patch.patch_zenz_evaluator(evaluator)
     converter_patch.patch_learning_memory(learning_memory)
     converter_patch.patch_converter_api(converter_api)
@@ -283,6 +285,11 @@ def prepare_converter(converter_root):
     context = converter / converter_patch.ZENZ_CONTEXT_PATH
     context.write_text(
         converter_patch.patch_zenz_context(context.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
+    prompt_builder = converter / converter_patch.ZENZ_PROMPT_BUILDER_PATH
+    prompt_builder.write_text(
+        converter_patch.patch_zenz_prompt_builder(prompt_builder.read_text(encoding='utf-8')),
         encoding='utf-8',
     )
     evaluator = converter / converter_patch.ZENZ_EVALUATOR_PATH

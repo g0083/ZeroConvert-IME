@@ -262,6 +262,101 @@ static jstring safe_new_string(JNIEnv *env, const std::string & utf8_str, const 
     return env->NewString(utf16.data(), static_cast<jsize>(utf16.size()));
 }
 
+static std::string mask_digits_with_nam(
+    const std::string & text,
+    std::vector<std::string> * out_digits = nullptr
+) {
+    if (out_digits != nullptr) {
+        out_digits->clear();
+    }
+    std::string masked;
+    masked.reserve(text.size());
+    std::string current;
+    const auto * bytes = reinterpret_cast<const unsigned char *>(text.data());
+    const size_t len = text.size();
+    for (size_t i = 0; i < len;) {
+        const unsigned char b = bytes[i];
+        if (b >= '0' && b <= '9') {
+            current.push_back(static_cast<char>(b));
+            ++i;
+            continue;
+        }
+        // Fullwidth digits U+FF10..U+FF19 encode as EF BC 90..99 in UTF-8.
+        if (i + 2 < len && b == 0xEF && bytes[i + 1] == 0xBC && bytes[i + 2] >= 0x90 && bytes[i + 2] <= 0x99) {
+            current.push_back(static_cast<char>('0' + (bytes[i + 2] - 0x90)));
+            i += 3;
+            continue;
+        }
+        if (!current.empty()) {
+            if (out_digits != nullptr) {
+                out_digits->push_back(std::move(current));
+            }
+            current.clear();
+            masked += "nam";
+        }
+        masked.push_back(text[i]);
+        ++i;
+    }
+    if (!current.empty()) {
+        if (out_digits != nullptr) {
+            out_digits->push_back(std::move(current));
+        }
+        masked += "nam";
+    }
+    return masked;
+}
+
+static std::string restore_nam_digits(
+    const std::string & surface,
+    const std::vector<std::string> & digits
+) {
+    if (digits.empty() || surface.find("nam") == std::string::npos) {
+        return surface;
+    }
+    auto replace_pass = [&digits](const std::string & input, size_t start_idx, bool fallback) {
+        std::string out;
+        out.reserve(input.size());
+        size_t cursor = 0;
+        size_t digit_idx = start_idx;
+        while (digit_idx < digits.size()) {
+            const size_t pos = input.find("nam", cursor);
+            if (pos == std::string::npos) {
+                break;
+            }
+            out.append(input, cursor, pos - cursor);
+            const size_t after_pos = pos + 3;
+            bool keep_literal = false;
+            if (!fallback) {
+                if (after_pos < input.size()) {
+                    const char next = input[after_pos];
+                    keep_literal = (next >= 'a' && next <= 'w') || (next >= 'y' && next <= 'z');
+                }
+            } else {
+                const bool prev_is_lower = !out.empty() && out.back() >= 'a' && out.back() <= 'z';
+                const bool after_starts_e = after_pos < input.size() && input[after_pos] == 'e';
+                const bool after_starts_ing = after_pos + 3 <= input.size() &&
+                    input.compare(after_pos, 3, "ing") == 0 &&
+                    (after_pos + 3 >= input.size() || !(input[after_pos + 3] >= 'a' && input[after_pos + 3] <= 'z'));
+                keep_literal = prev_is_lower || after_starts_e || after_starts_ing;
+            }
+            if (keep_literal) {
+                out += "nam";
+            } else {
+                out += digits[digit_idx++];
+            }
+            cursor = after_pos;
+        }
+        out.append(input, cursor, input.size() - cursor);
+        return std::make_pair(std::move(out), digit_idx);
+    };
+
+    auto [first_pass, consumed] = replace_pass(surface, 0, false);
+    if (consumed < digits.size() && first_pass.find("nam") != std::string::npos) {
+        return replace_pass(first_pass, consumed, true).first;
+    }
+    return first_pass;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this */, jstring left_context, jstring reading_katakana, jstring profile_str) {
     const auto request_epoch = assist_epoch();
@@ -276,8 +371,11 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
     const auto context_utf8 = assist_from_java(env, left_context);
     const auto reading_utf8 = assist_from_java(env, reading_katakana);
     const auto profile_utf8 = assist_from_java(env, profile_str);
-    const char * lc = context_utf8.c_str();
-    const char * rk = reading_utf8.c_str();
+    const std::string masked_context = mask_digits_with_nam(context_utf8);
+    std::vector<std::string> reading_digits;
+    const std::string masked_reading = mask_digits_with_nam(reading_utf8, &reading_digits);
+    const char * lc = masked_context.c_str();
+    const char * rk = masked_reading.c_str();
     const char * pr = profile_utf8.c_str();
 
     // Format: optional \uEE03{profile} followed by \uEE02{leftContext}\uEE00{reading}\uEE01
@@ -297,15 +395,13 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
     }
     prompt += "\xEE\xB8\x81";
 
-    std::string reading_str = (rk != nullptr ? rk : "");
-
-
     if (assist_epoch() != request_epoch || prompt.size() > 8192) return assist_to_java(env, "");
     g_normal_epoch = request_epoch;
     g_abort_flag.store(false);
     g_normal_deadline = start_time + std::chrono::milliseconds(1200);
     llama_sampler_reset(g_sampler);
-    const int max_generate_tokens = std::clamp(static_cast<int>(count_utf8_chars(reading_str) * 3 + 16), 32, 384);
+    const size_t max_chars = std::max(count_utf8_chars(reading_utf8), count_utf8_chars(masked_reading));
+    const int max_generate_tokens = std::clamp(static_cast<int>(max_chars * 3 + 16), 32, 384);
     std::vector<llama_token> tokens(prompt.size() + 32);
     const int n_tokens = llama_tokenize(g_vocab, prompt.data(), static_cast<int>(prompt.size()), tokens.data(), static_cast<int>(tokens.size()), false, true);
     if (n_tokens <= 0 || n_tokens + max_generate_tokens > static_cast<int>(llama_n_ctx(g_ctx))) return assist_to_java(env, "");
@@ -347,7 +443,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
     for (int i = 0; i < max_generate_tokens; ++i) {
         if (normal_cancelled()) return assist_to_java(env, "");
         auto token = llama_sampler_sample(g_sampler, g_ctx, -1);
-        if (llama_vocab_is_eog(g_vocab, token)) return assist_to_java(env, result);
+        if (llama_vocab_is_eog(g_vocab, token)) return assist_to_java(env, restore_nam_digits(result, reading_digits));
         llama_sampler_accept(g_sampler, token);
         std::vector<char> piece(256);
         int size = llama_token_to_piece(g_vocab, token, piece.data(), static_cast<int>(piece.size()), 0, false);
@@ -361,7 +457,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeConvert(JNIEnv *env, jobject /* this *
         for (const auto * marker : {"</s>", "<s>", "\n", "\r", "\xEE\xB8\x80", "\xEE\xB8\x81", "\xEE\xB8\x82", "\xEE\xB8\x83"}) {
             stop = std::min(stop, result.find(marker));
         }
-        if (stop != std::string::npos) return assist_to_java(env, result.substr(0, stop));
+        if (stop != std::string::npos) return assist_to_java(env, restore_nam_digits(result.substr(0, stop), reading_digits));
         if (result.size() > 8192 || std::any_of(result.begin(), result.end(), [](unsigned char c) { return c < 32; })) return assist_to_java(env, "");
         auto next = llama_batch_get_one(&token, 1);
         if (llama_decode(g_ctx, next) != 0) { invalidate_cache(); return assist_to_java(env, ""); }

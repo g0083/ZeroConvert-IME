@@ -237,17 +237,116 @@ class LatticePatchTests(unittest.TestCase):
             converter_patch.patch_lattice(patched)
 
 
+ZENZ_PROMPT_BUILDER = r'''enum ZenzPromptBuilder {
+    static func inputPredictionPrompt(
+        leftSideContext: String,
+        composingText: String,
+        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode
+    ) -> String? {
+        guard case let .v3(mode) = versionDependentConfig else {
+            return nil
+        }
+        let conditions = self.v3Conditions(mode)
+        let trimmedLeftContext = self.trimmedContext(leftSideContext, maxLength: mode.maxLeftSideContextLength)
+        let input = composingText.toKatakana()
+        if trimmedLeftContext.isEmpty {
+            return conditions.joined(separator: "") + inputTag + input
+        } else {
+            return conditions.joined(separator: "") + contextTag + trimmedLeftContext + inputTag + input
+        }
+    }
+
+    static func typoCorrectionPromptPrefix(leftSideContext: String) -> String {
+        if leftSideContext.isEmpty {
+            return inputTag
+        } else {
+            return contextTag + leftSideContext + inputTag
+        }
+    }
+
+    static func candidateEvaluationPrompt(
+        input: String,
+        userDictionaryPrompt: String,
+        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode
+    ) -> String {
+        var conditions: [String] = []
+        if !userDictionaryPrompt.isEmpty {
+            conditions.append("辞書:\(userDictionaryPrompt)")
+        }
+
+        let leftSideContext: String
+        switch versionDependentConfig {
+        case .v2(let mode):
+            if let profile = mode.profile, !profile.isEmpty {
+                let pf = profile.suffix(25)
+                conditions.append("プロフィール:\(pf)")
+            }
+            leftSideContext = self.trimmedModeContext(mode.leftSideContext, maxLength: mode.maxLeftSideContextLength)
+        case .v3(let mode):
+            conditions.append(contentsOf: self.v3Conditions(mode))
+            leftSideContext = self.trimmedModeContext(mode.leftSideContext, maxLength: mode.maxLeftSideContextLength)
+        }
+
+        switch versionDependentConfig {
+        case .v2:
+            if !conditions.isEmpty {
+                return inputTag + input + contextTag + conditions.joined(separator: "・") + "・発言:\(leftSideContext)" + outputTag
+            } else if !leftSideContext.isEmpty {
+                return inputTag + input + contextTag + leftSideContext + outputTag
+            } else {
+                return inputTag + input + outputTag
+            }
+        case .v3:
+            if !leftSideContext.isEmpty {
+                return conditions.joined(separator: "") + contextTag + leftSideContext + inputTag + input + outputTag
+            } else {
+                return conditions.joined(separator: "") + inputTag + input + outputTag
+            }
+        }
+    }
+}
+'''
+
+
+class ZenzPromptBuilderTests(unittest.TestCase):
+    def test_masks_digits_in_prompts_and_exposes_shared_masking_helper(self):
+        patched = converter_patch.patch_zenz_prompt_builder(ZENZ_PROMPT_BUILDER)
+        self.assertIn('public enum ZenzDigitMasking', patched)
+        self.assertIn('ZenzDigitMasking.mask(input).text', patched)
+        self.assertIn('ZenzDigitMasking.mask(composingText.toKatakana()).text', patched)
+        self.assertIn('ZenzDigitMasking.mask(leftSideContext).text', patched)
+        self.assertEqual(patched.count('enum ZenzPromptBuilder {'), 1)
+
+    def test_rejects_broken_anchor_or_double_patching(self):
+        patched = converter_patch.patch_zenz_prompt_builder(ZENZ_PROMPT_BUILDER)
+        with self.assertRaises(ValueError):
+            converter_patch.patch_zenz_prompt_builder(patched)
+        with self.assertRaises(ValueError):
+            converter_patch.patch_zenz_prompt_builder('changed prompt builder')
+
+
 class ZenzEvaluatorTests(unittest.TestCase):
-    def test_uses_single_pass_argmax_and_delays_logsumexp(self):
-        patched = converter_patch.patch_zenz_evaluator(converter_patch.ZENZ_EVALUATOR_LOOP_ANCHOR)
+    @staticmethod
+    def _evaluator_fixture():
+        return (
+            converter_patch.ZENZ_EVALUATOR_SETUP_ANCHOR
+            + '\n'
+            + converter_patch.ZENZ_EVALUATOR_LOOP_ANCHOR
+        )
+
+    def test_uses_single_pass_argmax_masks_digits_and_delays_logsumexp(self):
+        patched = converter_patch.patch_zenz_evaluator(self._evaluator_fixture())
         self.assertIn('func stabilizedLogSumExp', patched)
         self.assertIn('var richHeap: FixedSizeHeap<TokenAndLogprob>?', patched)
-        self.assertIn('logits[startIndex + Int(tokenID)] + isLearnedToken[i].priority > maxRawLogit', patched)
+        self.assertIn('ZenzDigitMasking.mask(input)', patched)
+        self.assertIn('ZenzDigitMasking.mask(candidate.text, maxRuns: inputMask.rawDigits.count)', patched)
+        self.assertIn('func restoreConstraintBytes', patched)
+        self.assertIn('i < isLearnedToken.count ? isLearnedToken[i] : (isLearned: false, priority: Float(0))', patched)
         self.assertLess(patched.rindex('return .fixRequired'), patched.rindex('let logsumexp = stabilizedLogSumExp'))
         self.assertNotIn('tokenHeap.insertIfPossible(TokenAndLogprob(token: llama_token(index - startIndex), logprob: logp))', patched)
 
     def test_rejects_broken_anchor_or_double_patching(self):
-        patched = converter_patch.patch_zenz_evaluator(converter_patch.ZENZ_EVALUATOR_LOOP_ANCHOR)
+        patched = converter_patch.patch_zenz_evaluator(self._evaluator_fixture())
         with self.assertRaises(ValueError):
             converter_patch.patch_zenz_evaluator(patched)
         with self.assertRaises(ValueError):

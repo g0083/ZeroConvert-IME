@@ -78,19 +78,18 @@ fn resolve_runtime_preferences_from_str(settings_json: &str) -> (String, String,
     let model = zenzai
         .and_then(|z| z.get("model"))
         .and_then(Value::as_str)
-        .unwrap_or("nano_v4_iq4_emb8")
+        .unwrap_or("nano_v4_1_iq4_emb8")
         .to_owned();
     let raw_backend = zenzai
         .and_then(|z| z.get("backend"))
         .and_then(Value::as_str)
         .unwrap_or("vulkan");
-    let backend = if raw_backend.eq_ignore_ascii_case("vulkan")
-        || raw_backend.eq_ignore_ascii_case("cuda")
-    {
-        "vulkan".to_owned()
-    } else {
-        "cpu".to_owned()
-    };
+    let backend =
+        if raw_backend.eq_ignore_ascii_case("vulkan") || raw_backend.eq_ignore_ascii_case("cuda") {
+            "vulkan".to_owned()
+        } else {
+            "cpu".to_owned()
+        };
     let configured_layers = zenzai
         .and_then(|z| z.get("gpu_layers"))
         .and_then(Value::as_u64)
@@ -159,13 +158,15 @@ fn find_runtime_dir_and_layers(
 
 fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
     let filename = match selected_id {
-        "nano_v4_q8" | "standard" | "standard_q4km" => "zerocon-nano-v4-q8_0.gguf",
-        _ => "zerocon-nano-v4-iq4nl-emb8.gguf",
+        "nano_v4_1_q8" | "nano_v4_q8" | "standard" | "standard_q4km" => {
+            "zerocon-nano-v4.1-q8_0.gguf"
+        }
+        _ => "zerocon-nano-v4.1-iq4nl-emb8.gguf",
     };
     for candidate in [
         root.join("models").join(filename),
-        root.join("models/zerocon-nano-v4-iq4nl-emb8.gguf"),
-        root.join("models/zerocon-nano-v4-q8_0.gguf"),
+        root.join("models/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
+        root.join("models/zerocon-nano-v4.1-q8_0.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -178,8 +179,8 @@ fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
         repo_root
             .join("ZeroConvertIME-windows/models")
             .join(filename),
-        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4-iq4nl-emb8.gguf"),
-        repo_root.join("artifacts/models/zerocon-nano-v4-iq4nl-emb8.gguf"),
+        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
+        repo_root.join("artifacts/models/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -416,10 +417,11 @@ pub fn repair_readings(
     } else {
         ""
     };
+    let (masked_context, _) = super::corrector::mask_digits_with_nam(context);
     let response = if let Some(hosted) = runtime::keyboard_repair_override(
         valid_raw,
         &norm,
-        context,
+        &masked_context,
         if wait_for_worker { 30000 } else { 350 },
     ) {
         // The host scores on its own loaded model; no child process exists here.
@@ -433,7 +435,9 @@ pub fn repair_readings(
                 *slot = Worker::start(&root, &dictionary);
             }
         }
-        let result = slot.as_mut()?.request(valid_raw, &norm, context, 30000);
+        let result = slot
+            .as_mut()?
+            .request(valid_raw, &norm, &masked_context, 30000);
         if result.is_none() {
             *slot = None;
         }
@@ -448,7 +452,9 @@ pub fn repair_readings(
             prewarm();
             return None;
         }
-        let result = slot.as_mut()?.request(valid_raw, &norm, context, 350);
+        let result = slot
+            .as_mut()?
+            .request(valid_raw, &norm, &masked_context, 350);
         if result.is_none() {
             *slot = None;
             drop(slot);
@@ -567,6 +573,37 @@ mod tests {
             assert_eq!(validated_reading(&response, "ああた"), None);
         }
     }
+
+    #[test]
+    fn repair_readings_masks_digits_in_context_before_model_call() {
+        struct CaptureBackend(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+        impl super::runtime::CompletionBackend for CaptureBackend {
+            fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+                None
+            }
+            fn keyboard_repair(
+                &self,
+                _raw: &str,
+                _input: &str,
+                context: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                *self.0.lock().unwrap() = Some(context.to_owned());
+                Some(None)
+            }
+        }
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let backend = CaptureBackend(std::sync::Arc::clone(&captured));
+        let result = super::runtime::with_backend(Box::new(backend), || {
+            repair_readings("２０２６ねん10がつに", "ああた", "", false)
+        });
+        assert!(result.is_none());
+        assert_eq!(
+            captured.lock().unwrap().as_deref(),
+            Some("namねんnamがつに")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -588,7 +625,10 @@ mod deployment_tests {
         std::fs::create_dir(&legacy_runtime).unwrap();
         let legacy_executable = legacy_runtime.join("keyboard-prior.exe");
         std::fs::write(&legacy_executable, b"test fixture").unwrap();
-        assert_eq!(find_worker_executable(&root), Some(legacy_executable.clone()));
+        assert_eq!(
+            find_worker_executable(&root),
+            Some(legacy_executable.clone())
+        );
         assert_eq!(
             find_runtime_dir_and_layers(&root, &legacy_executable, "vulkan", 99),
             (legacy_runtime.clone(), 0)
@@ -616,9 +656,10 @@ mod deployment_tests {
             expected_vulkan
         );
 
-        let (_, parsed_backend, parsed_layers) = resolve_runtime_preferences_from_str(
-            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_q8"}}"#,
+        let (parsed_model, parsed_backend, parsed_layers) = resolve_runtime_preferences_from_str(
+            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_1_q8"}}"#,
         );
+        assert_eq!(parsed_model, "nano_v4_1_q8");
         assert_eq!(parsed_backend, "vulkan");
         assert_eq!(parsed_layers, 16);
 

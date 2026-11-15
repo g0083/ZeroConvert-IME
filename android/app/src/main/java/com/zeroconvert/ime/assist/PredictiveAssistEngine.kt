@@ -15,17 +15,19 @@ class ModelPredictor(private val inference: AssistInference, private val restore
             context.any { it in '\uEE00'..'\uEE0F' } || (reading + surface).hasUnsafeTokens()) return null
         val modelReading = if (reading.any { it in '\u3400'..'\u9FFF' }) restore(surface) ?: return null else reading
         val left = context.map { if (it == ' ' || it.isISOControl()) '　' else it }.joinToString("").tailCodePoints(256)
+        val maskedLeft = NamMasking.mask(left).text
         val target = KanaKanjiConverter.toKatakana(modelReading)
-        val extension = inference.complete(AssistModel.PREDICTION, "\uEE02$left\uEE00$target", 24, 800)
+        val maskedTarget = NamMasking.mask(target)
+        val extension = inference.complete(AssistModel.PREDICTION, "\uEE02$maskedLeft\uEE00${maskedTarget.text}", 24, 800)
         if (extension.stopReason in setOf("cancelled", "busy", "error", "unavailable", "timeout")) return null
         val generated = extension.text.trim()
         val boundary = generated.indices.firstOrNull { index -> generated[index] in "、。！？!?" && generated.take(index).count { it.isLetterOrDigit() } >= 2 }
         val continuation = if (boundary != null) generated.take(boundary + 1) else generated.takeIf { extension.finished } ?: return null
         if (!useful(continuation) || !continuation.all { it in 'ぁ'..'ゖ' || it in 'ァ'..'ヶ' || it in "ー、。！？!?・" }) return null
-        val extended = target + KanaKanjiConverter.toKatakana(continuation)
-        val conversion = inference.complete(AssistModel.PREDICTION, "\uEE02$left\uEE00$extended\uEE01", (extended.codePointSize() * 3 + 16).coerceIn(32, 256), 1000)
-        val completed = conversion.text.trim()
+        val extended = maskedTarget.text + KanaKanjiConverter.toKatakana(continuation)
+        val conversion = inference.complete(AssistModel.PREDICTION, "\uEE02$maskedLeft\uEE00$extended\uEE01", (extended.codePointSize() * 3 + 16).coerceIn(32, 256), 1000)
         if (!conversion.finished) return null
+        val completed = NamMasking.restore(conversion.text.trim(), maskedTarget.digits)
         val suffix = validatePredictionSuffix(context, surface, completed) ?: return null
         return AiAssistResult(AiAssistType.PREDICTION, surface + suffix, "🔮 ${(surface + suffix).take(30)}", 60, reading, suffix)
     }

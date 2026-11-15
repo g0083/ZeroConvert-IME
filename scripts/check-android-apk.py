@@ -51,7 +51,7 @@ def main():
                 raise ValueError(f'{apk.name}: packaged engine lock differs from engine/shared-engine.lock.json')
             engine_lock = json.loads(packaged_lock)
             catalog = json.loads((ROOT / 'windows/deployment/model-catalog.json').read_text(encoding='utf-8'))
-            specs = [m for m in catalog['models'] if m['id'].startswith('nano_v4_')]
+            specs = [m for m in catalog['models'] if m['id'].startswith('nano_v4_1_')]
             expected_models = {'assets/models/' + m['filename'] for m in specs}
             actual_models = {name for name in names if name.endswith('.gguf')}
             if actual_models != expected_models:

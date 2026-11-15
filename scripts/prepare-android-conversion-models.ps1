@@ -6,7 +6,7 @@ $root = Split-Path $PSScriptRoot
 $catalog = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'windows/deployment/model-catalog.json') | ConvertFrom-Json
 $destination = Join-Path $root 'android/app/src/main/assets/models'
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
-foreach ($model in $catalog.models | Where-Object { $_.id -like 'nano_v4_*' }) {
+foreach ($model in $catalog.models | Where-Object { $_.id -like 'nano_v4_1_*' }) {
     $candidates = @(
         (Join-Path $root "artifacts/models/zerocon/$($model.filename)"),
         (Join-Path $root "artifacts/models/$($model.filename)")

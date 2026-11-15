@@ -200,4 +200,36 @@ class ModelAssistTest {
         }
         assertNotNull(ModelPredictor(fixture).suggest("前文\n続き", "がっこう", "学校"))
     }
+
+    @Test fun namMaskingMasksPromptsAndRestoresDigitsWithoutCorruptingEnglish() {
+        val masked = NamMasking.mask("１００えんのあめ")
+        assertEquals("namえんのあめ", masked.text)
+        assertEquals(listOf("100"), masked.digits)
+        assertEquals("100円の飴", NamMasking.restore("nam円の飴", masked.digits))
+        assertEquals("SELECT name FROM customers", NamMasking.restore("SELECT name FROM customers", listOf("10")))
+        assertEquals("SELECT nameです dynamic", NamMasking.restore("SELECT nameです dynamic", listOf("10")))
+        assertEquals("3bonまとめて持つ", NamMasking.restore("nambonまとめて持つ", listOf("3")))
+        assertEquals("Wi-Fi 6EとBluetooth 5.4", NamMasking.restore("Wi-Fi namEとBluetooth nam.nam", listOf("6", "5", "4")))
+
+        if (!BuildConfig.WINDOWS_ENGINE) {
+            val seenCorrectorPrompts = mutableListOf<String>()
+            val correctorFixture = Fixture { _, prompt ->
+                seenCorrectorPrompts += prompt
+                ModelCompletion("nam円", "eos")
+            }
+            val correction = ModelCorrector(correctorFixture, { _, _ -> false }, { null })
+                .suggest("２０２６ねんに", "１００えん", "１００えん")
+            assertEquals("100円", correction?.text)
+            assertEquals(listOf("\uEE02namねんに\uEE00namエン\uEE01"), seenCorrectorPrompts)
+
+            val seenPredictorPrompts = mutableListOf<String>()
+            val predictorFixture = Fixture { _, prompt ->
+                seenPredictorPrompts += prompt
+                if (prompt.endsWith('\uEE01')) ModelCompletion("nam月に開催", "eos") else ModelCompletion("ニカイサイ", "eos")
+            }
+            val prediction = ModelPredictor(predictorFixture).suggest("２０２６ねん", "4がつ", "4月")
+            assertEquals("4月に開催", prediction?.text)
+            assertEquals(listOf("\uEE02namねん\uEE00namガツ", "\uEE02namねん\uEE00namガツニカイサイ\uEE01"), seenPredictorPrompts)
+        }
+    }
 }

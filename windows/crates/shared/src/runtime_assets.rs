@@ -1,8 +1,8 @@
 //! Asset names and locations shared by launcher and settings. No downloads here.
 use std::path::{Path, PathBuf};
 
-pub const NANO_IQ4: &str = "zerocon-nano-v4-iq4nl-emb8.gguf";
-pub const NANO_Q8: &str = "zerocon-nano-v4-q8_0.gguf";
+pub const NANO_IQ4: &str = "zerocon-nano-v4.1-iq4nl-emb8.gguf";
+pub const NANO_Q8: &str = "zerocon-nano-v4.1-q8_0.gguf";
 pub const TRANSLATION_0_8B: &str = "plamo-3-translate-0.8b-Q4_K_M.gguf";
 pub const TRANSLATION_2B: &str = "plamo-3-translate-2b-Q4_K_M.gguf";
 pub const TRANSLATION: &str = TRANSLATION_0_8B;
@@ -73,21 +73,23 @@ pub fn default_translation_model() -> &'static str {
 }
 
 pub fn default_model() -> String {
-    "nano_v4_iq4_emb8".into()
+    "nano_v4_1_iq4_emb8".into()
 }
 
 pub fn canonical_model_id(id: &str) -> Option<&'static str> {
     match id {
-        "nano_v4_iq4_emb8" | "nano" | "nano_q4km" => Some("nano_v4_iq4_emb8"),
-        "nano_v4_q8" | "standard" | "standard_q4km" => Some("nano_v4_q8"),
+        "nano_v4_1_iq4_emb8" | "nano_v4_iq4_emb8" | "nano" | "nano_q4km" => {
+            Some("nano_v4_1_iq4_emb8")
+        }
+        "nano_v4_1_q8" | "nano_v4_q8" | "standard" | "standard_q4km" => Some("nano_v4_1_q8"),
         _ => None,
     }
 }
 
 pub fn model_filename(id: &str) -> Option<&'static str> {
     match canonical_model_id(id) {
-        Some("nano_v4_iq4_emb8") => Some(NANO_IQ4),
-        Some("nano_v4_q8") => Some(NANO_Q8),
+        Some("nano_v4_1_iq4_emb8") => Some(NANO_IQ4),
+        Some("nano_v4_1_q8") => Some(NANO_Q8),
         _ => None,
     }
 }
@@ -127,8 +129,11 @@ mod tests {
     #[test]
     fn roles_are_distinct_and_unknown_models_are_rejected() {
         assert_eq!(model_filename("nano_q4km"), Some(NANO_IQ4));
+        assert_eq!(model_filename("nano_v4_iq4_emb8"), Some(NANO_IQ4));
+        assert_eq!(model_filename("nano_v4_1_iq4_emb8"), Some(NANO_IQ4));
         assert_eq!(model_filename("standard"), Some(NANO_Q8));
         assert_eq!(model_filename("nano_v4_q8"), Some(NANO_Q8));
+        assert_eq!(model_filename("nano_v4_1_q8"), Some(NANO_Q8));
         assert_eq!(model_filename("corrector"), None);
         assert_eq!(model_filename("../arbitrary"), None);
         assert_ne!(NANO_IQ4, NANO_Q8);
@@ -157,10 +162,10 @@ mod tests {
     }
 
     #[test]
-    fn settings_without_model_load_with_nano_v4_default() {
+    fn settings_without_model_load_with_nano_v4_1_default() {
         let config: crate::ZenzaiConfig =
             serde_json::from_str(r#"{"enable":true,"profile":"","backend":"vulkan"}"#).unwrap();
-        assert_eq!(config.model, "nano_v4_iq4_emb8");
+        assert_eq!(config.model, "nano_v4_1_iq4_emb8");
     }
 
     #[test]
@@ -195,8 +200,7 @@ mod tests {
 
     #[test]
     fn zerocon_backend_prefers_dedicated_directory_while_translation_keeps_standard_backend() {
-        let root =
-            std::env::temp_dir().join(format!("zerocon-dual-llama-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("zerocon-dual-llama-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("llama_cpu")).unwrap();
         std::fs::write(root.join("llama_cpu/llama-server.exe"), []).unwrap();

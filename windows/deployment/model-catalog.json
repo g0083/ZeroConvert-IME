@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "models": [
     {
-      "id": "nano_v4_iq4_emb8",
-      "name": "ZeroCon Model Nano v4 IQ4_emb8",
-      "filename": "zerocon-nano-v4-iq4nl-emb8.gguf",
-      "legacyFilename": "zerocon-nano-v4-blend85-iq4nl-emb8.gguf",
-      "sha256": "31724c4189d8f8fcec90544d1695d42a8c4e7a870d645384e7284f2cc8891f30",
+      "id": "nano_v4_1_iq4_emb8",
+      "name": "ZeroCon Model Nano v4.1 IQ4_emb8",
+      "filename": "zerocon-nano-v4.1-iq4nl-emb8.gguf",
+      "legacyFilename": "nano-v4-cap-nam-r3-iq4nl-emb8.gguf",
+      "sha256": "6a99ca4e1c46b3f6fb86dcf884ea0652c967d86d606c12268b33d894d3853b24",
       "bytes": 19602048
     },
     {
-      "id": "nano_v4_q8",
-      "name": "ZeroCon Model Nano v4 Q8",
-      "filename": "zerocon-nano-v4-q8_0.gguf",
-      "legacyFilename": "zerocon-nano-v4-q8_0.gguf",
-      "sha256": "a89fe90fc29431279834773cdbe7c9afeba30722ee986327b300bf4b334c0e0f",
+      "id": "nano_v4_1_q8",
+      "name": "ZeroCon Model Nano v4.1 Q8",
+      "filename": "zerocon-nano-v4.1-q8_0.gguf",
+      "legacyFilename": "nano-v4-cap-nam-r3-q8_0.gguf",
+      "sha256": "001d2cf3acd75343d2dd4ea11472e28258bc7429d7d46091b50a78776dead378",
       "bytes": 29039232
     }
   ]

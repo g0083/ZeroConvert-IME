@@ -45,16 +45,16 @@ object ModelManager {
         BuiltInModelSpec(
             assetPath = "models/${ConversionModelSelection.IQ4}",
             fileName = ConversionModelSelection.IQ4,
-            displayName = "ZeroCon Model Nano v4 IQ4_emb8 (18.7 MiB)",
+            displayName = "ZeroCon Model Nano v4.1 IQ4_emb8 (18.7 MiB)",
             expectedSize = 19602048L,
-            sha256 = "31724c4189d8f8fcec90544d1695d42a8c4e7a870d645384e7284f2cc8891f30"
+            sha256 = "6a99ca4e1c46b3f6fb86dcf884ea0652c967d86d606c12268b33d894d3853b24"
         ),
         BuiltInModelSpec(
             assetPath = "models/${ConversionModelSelection.Q8}",
             fileName = ConversionModelSelection.Q8,
-            displayName = "ZeroCon Model Nano v4 Q8 (27.7 MiB)",
+            displayName = "ZeroCon Model Nano v4.1 Q8 (27.7 MiB)",
             expectedSize = 29039232L,
-            sha256 = "a89fe90fc29431279834773cdbe7c9afeba30722ee986327b300bf4b334c0e0f"
+            sha256 = "001d2cf3acd75343d2dd4ea11472e28258bc7429d7d46091b50a78776dead378"
         )
     )
 
@@ -114,7 +114,7 @@ object ModelManager {
             builtInFiles.add(file.name)
 
             val isSel = if (selectedPath == null) {
-                // Default to Nano v4 IQ4_emb8 if no selection yet
+                // Default to Nano v4.1 IQ4_emb8 if no selection yet
                 spec.fileName == DEFAULT_MODEL_SPEC.fileName
             } else {
                 selectedPath == file.absolutePath

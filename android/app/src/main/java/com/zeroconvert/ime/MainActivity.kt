@@ -2096,7 +2096,7 @@ fun MainScreen(
                     }
                 }
                 Text(
-                    text = "ZeroCon Model Nano v4 によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
+                    text = "ZeroCon Model Nano v4.1 によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
                     color = palette.textMuted,
                     fontSize = 12.sp,
                     lineHeight = 17.sp
