@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZeroConvert IME · ブラウザ実行テスト</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./check.js"></script>
+</head>
+<body>
+  <main>
+    <p class="brand">ZeroConvert IME</p>
+    <h1>ブラウザ実行テスト</h1>
+    <p>共有エンジンの入力アシスト判定を、配信された WebAssembly で実行します。かな漢字変換とモデル推論は移植中です。</p>
+    <section aria-labelledby="heading">
+      <h2 id="heading">共有ポリシーの判定</h2>
+      <p id="status" role="status">WebAssembly を読み込み中…</p>
+      <ul id="results"></ul>
+      <button id="run" type="button" disabled>もう一度実行</button>
+    </section>
+  </main>
+</body>
+</html>

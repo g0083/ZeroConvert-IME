@@ -1,0 +1,48 @@
+name: Browser Wasm smoke test
+
+on:
+  push:
+    branches: [web-pages-smoke]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages-smoke
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and check the shared engine
+        run: |
+          cargo rustc --locked --manifest-path engine/rust/Cargo.toml --target wasm32-wasip1 --release --lib --crate-type cdylib -- -C link-arg=--export=malloc -C link-arg=--export=free
+          node web/check-assist-wasm.cjs engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm
+          mkdir -p dist/pages-smoke
+          cp web/pages/index.html web/pages/style.css web/pages/check.js dist/pages-smoke/
+          cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages-smoke/
+          cp windows/LICENSE dist/pages-smoke/LICENSE.txt
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/pages-smoke
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
