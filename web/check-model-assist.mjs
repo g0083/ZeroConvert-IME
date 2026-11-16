@@ -6,9 +6,11 @@ import { pathToFileURL } from 'node:url';
 if (!process.argv[2]) throw new Error('Pass the staged site directory');
 const base = pathToFileURL(resolve(process.argv[2]) + '/');
 const { loadAssistEngine } = await import(new URL('dictionary-engine.mjs', base));
+// Check the model's output independently of CPU scheduling on shared CI runners.
+const completionBudgetScale = 3;
 const request = await loadAssistEngine(undefined, async url => new Response(await readFile(url), {
     headers: { 'Content-Type': url.pathname.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' },
-}));
+}), completionBudgetScale);
 
 const correctionStart = performance.now();
 const miskey = request({ op: 'correction', raw: 'okseri', input: 'おkせり', baseline: 'おkせり', context: '' });
