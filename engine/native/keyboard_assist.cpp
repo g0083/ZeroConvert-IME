@@ -12,18 +12,22 @@
 #include <iomanip>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <stdexcept>
-#include <thread>
 #include <vector>
+#ifndef __wasi__
+#include <mutex>
+#include <thread>
+#endif
 
 long long assist_epoch();
 
 namespace {
 using Clock = std::chrono::steady_clock;
 
+#ifndef __wasi__
 std::mutex run_mutex; // guards model/context and serializes scoring
+#endif
 llama_model *model = nullptr;
 llama_context *context = nullptr;
 std::vector<llama_token> cached_prefix_tokens;
@@ -32,11 +36,13 @@ int n_threads_batch = 4;
 long long request_epoch = 0;
 Clock::time_point deadline = Clock::time_point::max();
 
-std::mutex dictionary_mutex;
 std::shared_ptr<ChannelDictionary> dictionary;
 std::string dictionary_path;
+#ifndef __wasi__
+std::mutex dictionary_mutex;
 std::string failed_path;
 bool loading = false;
+#endif
 
 bool cancelled() {
   return assist_epoch() != request_epoch || Clock::now() >= deadline;
@@ -53,6 +59,16 @@ std::string field(const std::string &payload, const char *name) {
                                   : payload.substr(start, end - start);
 }
 
+#ifdef __wasi__
+std::shared_ptr<ChannelDictionary> ready_dictionary(const std::string &path) {
+  if (path.empty()) return nullptr;
+  if (!dictionary || dictionary_path != path) {
+    dictionary = std::make_shared<ChannelDictionary>(path);
+    dictionary_path = path;
+  }
+  return dictionary;
+}
+#else
 void ensure_dictionary_loading(const std::string &path) {
   std::lock_guard<std::mutex> lock(dictionary_mutex);
   if (loading || path.empty() || path == failed_path)
@@ -86,12 +102,16 @@ std::shared_ptr<ChannelDictionary> ready_dictionary(const std::string &path) {
   ensure_dictionary_loading(path);
   return nullptr;
 }
+#endif
 
 bool ensure_context() {
   if (context)
     return true;
   if (!model)
     return false;
+#ifdef __wasi__
+  n_threads_decode = n_threads_batch = 1;
+#else
   const int logical_cores =
       int(std::max(1u, std::thread::hardware_concurrency()));
   n_threads_decode =
@@ -99,6 +119,7 @@ bool ensure_context() {
   n_threads_batch = logical_cores <= 1
                         ? 1
                         : std::clamp(logical_cores - 2, n_threads_decode, 6);
+#endif
   auto cp = llama_context_default_params();
   cp.n_ctx = 512;
   cp.n_batch = 512;
@@ -124,7 +145,7 @@ std::vector<llama_token> tokenize(const llama_vocab *vocab,
   const int n = llama_tokenize(vocab, text.data(), int(text.size()),
                                tokens.data(), int(tokens.size()), false, true);
   if (n < 1 || n > 384)
-    throw std::runtime_error("invalid tokenized sequence");
+    return {};
   tokens.resize(n);
   return tokens;
 }
@@ -135,10 +156,10 @@ score_sequences(const llama_vocab *vocab,
                 const std::vector<int> &prefix_lengths) {
   const int nv = llama_vocab_n_tokens(vocab);
   const int count = int(sequences.size());
-  if (count == 0)
+  if (count == 0 || count > 32 ||
+      std::any_of(sequences.begin(), sequences.end(),
+                  [](const auto &sequence) { return sequence.empty(); }))
     return {};
-  if (count > 32)
-    throw std::runtime_error("sequence count exceeds n_seq_max");
 
   int max_shared = int(sequences[0].size()) - 1;
   for (int i = 0; i < count; ++i) {
@@ -198,7 +219,7 @@ score_sequences(const llama_vocab *vocab,
   if (nodes.empty())
     return std::vector<double>(count, 0.0);
   if (shared_unscored_len + int(nodes.size()) > 512)
-    throw std::runtime_error("batch size");
+    return {};
 
   auto *mem = llama_get_memory(context);
   int lcp = 0;
@@ -239,7 +260,7 @@ score_sequences(const llama_vocab *vocab,
       if (pfx_rc != 0) {
         llama_memory_clear(mem, true);
         cached_prefix_tokens.clear();
-        throw std::runtime_error("llama_decode prefix failed");
+        return {};
       }
     }
     for (int s = 1; s < count; ++s) {
@@ -268,7 +289,7 @@ score_sequences(const llama_vocab *vocab,
   if (rc != 0) {
     llama_memory_clear(mem, true);
     cached_prefix_tokens.clear();
-    throw std::runtime_error("llama_decode failed");
+    return {};
   }
   std::vector<double> scores(count, 0.0), normalizers(nodes.size(), 0.0);
   for (int i = 0; i < int(nodes.size()); ++i) {
@@ -278,7 +299,7 @@ score_sequences(const llama_vocab *vocab,
     if (!logits) {
       llama_memory_clear(mem, true);
       cached_prefix_tokens.clear();
-      throw std::runtime_error("missing logits");
+      return {};
     }
     const float max_value = *std::max_element(logits, logits + nv);
     double denom = 0.0;
@@ -333,12 +354,16 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
   const std::u32string prompt_prefix =
       ctx_u32.empty() ? U"\uee00" : (U"\uee02" + ctx_u32 + U"\uee00");
   const auto pfx_tokens = tokenize(vocab, encode_utf8(prompt_prefix));
+  if (pfx_tokens.empty())
+    return "null";
   std::vector<std::vector<llama_token>> sequences;
   std::vector<int> lengths(candidates.size(), int(pfx_tokens.size()));
   for (const auto &c : candidates)
     sequences.push_back(tokenize(
         vocab, encode_utf8(prompt_prefix + katakana(c.reading) + U"\uee01")));
   const auto scores = score_sequences(vocab, sequences, lengths);
+  if (scores.empty())
+    return "null";
   const auto &orig = candidates[0];
   const double baseline = orig.path.score + 8.0 * scores[0];
   const int orig_tokens = int(sequences[0].size());
@@ -390,6 +415,8 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
     if (surf_sequences.size() >= 2) {
       const auto surf_scores =
           score_sequences(vocab, surf_sequences, surf_prefixes);
+      if (surf_scores.empty())
+        return "null";
       for (size_t j = 0; j < valid_k.size(); ++j) {
         const int n_surf = int(surf_sequences[j].size()) - surf_prefixes[j];
         ranked[valid_k[j]].final_score =
@@ -416,7 +443,9 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
 } // namespace
 
 void keyboard_assist_attach(llama_model *value) {
+#ifndef __wasi__
   std::lock_guard<std::mutex> lock(run_mutex);
+#endif
   if (value != model && context) {
     llama_free(context);
     context = nullptr;
@@ -426,7 +455,9 @@ void keyboard_assist_attach(llama_model *value) {
 }
 
 void keyboard_assist_detach() {
+#ifndef __wasi__
   std::lock_guard<std::mutex> lock(run_mutex);
+#endif
   if (context) {
     llama_free(context);
     context = nullptr;
@@ -444,14 +475,17 @@ std::string keyboard_assist_request(const char *payload_text,
   const auto input = field(payload, "input");
   const auto ctx = field(payload, "context");
   const auto path = field(payload, "dictionary");
-  // The dictionary builds on its own thread; this request just yields nothing.
+  // Android can defer dictionary loading. The single-threaded WASI host calls
+  // this on its separate assistance Worker.
   const auto dict = ready_dictionary(path);
   if (!dict)
     return "null";
+#ifndef __wasi__
   std::unique_lock<std::mutex> lock(run_mutex, std::try_to_lock);
   if (!lock.owns_lock())
     return "null";
   try {
+#endif
     request_epoch = assist_epoch();
     deadline =
         Clock::now() + std::chrono::milliseconds(
@@ -459,7 +493,9 @@ std::string keyboard_assist_request(const char *payload_text,
     if (!ensure_context())
       return "null";
     return run(*dict, raw, input, ctx);
+#ifndef __wasi__
   } catch (...) {
     return "null";
   }
+#endif
 }

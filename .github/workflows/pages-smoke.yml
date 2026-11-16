@@ -1,4 +1,4 @@
-name: Browser Wasm smoke test
+name: Build and deploy ZeroConvert IME website
 
 on:
   push:
@@ -44,8 +44,17 @@ jobs:
           cargo rustc --locked --manifest-path engine/rust/Cargo.toml --target wasm32-wasip1 --release --lib --crate-type cdylib -- -C link-arg=--export=malloc -C link-arg=--export=free
           node web/check-assist-wasm.cjs engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm
           cargo rustc --locked --manifest-path web/live-policy/Cargo.toml --target wasm32-wasip1 --release -- -C link-arg=--export=malloc -C link-arg=--export=free
+          node web/check-session-wasm.cjs web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm
+          node web/check-worker-session.mjs
+          node web/check-worker-assist.mjs
+          node web/check-assist-session.mjs
+          node web/check-learning-store.mjs
+          node web/check-settings-store.mjs
+          node web/check-load-progress.mjs
           mkdir -p dist/pages-smoke
-          cp web/pages/index.html web/pages/style.css web/pages/check.js web/pages/dictionary-engine.mjs web/pages/model-*.mjs dist/pages-smoke/
+          cp web/pages/index.html web/pages/style.css web/pages/dictionary-engine.mjs web/pages/model-*.mjs web/pages/assist-session.mjs web/pages/learning-store.mjs web/pages/load-progress.mjs web/pages/settings-store.mjs dist/pages-smoke/
+          cp windows/crates/ui/src/correction_diff.js dist/pages-smoke/
+          cp windows/frontend/public/favicon.png dist/pages-smoke/
           cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages-smoke/
           cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages-smoke/
           cp windows/LICENSE dist/pages-smoke/LICENSE.txt
@@ -66,6 +75,8 @@ jobs:
             -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_IS_DEV=OFF
           cmake --build "$RUNNER_TEMP/llama-build" --target llama --parallel 4
+          python3 web/build-completion.py "$bin" "${sdk%/WASI.sdk}" \
+            "$RUNNER_TEMP/llama-source" "$RUNNER_TEMP/llama-build" dist/pages-smoke/zerocon_completion.wasm
       - name: Build and check the Windows Swift model route
         run: |
           set -o pipefail
@@ -85,7 +96,10 @@ jobs:
           test -n "$wasm"
           cp "$wasm" dist/pages-smoke/
           dictionary=windows/server-swift/azooKey_dictionary_storage
-          python3 web/pack-dictionary.py "$dictionary/Dictionary" dist/pages-smoke/dictionary.gz
+          node windows/scripts/generate-reverse-dictionary.mjs --source "$dictionary/Dictionary/louds" \
+            --output "$RUNNER_TEMP/reverse-v2.bin"
+          python3 web/pack-dictionary.py "$dictionary/Dictionary" dist/pages-smoke/dictionary.gz \
+            --reverse "$RUNNER_TEMP/reverse-v2.bin"
           cp "$dictionary/LICENSE" dist/pages-smoke/DICTIONARY-LICENSE.txt
           cp "$converter/LICENSE" dist/pages-smoke/CONVERTER-LICENSE.txt
           cp "$RUNNER_TEMP/llama-source/LICENSE" dist/pages-smoke/LLAMA-LICENSE.txt
@@ -96,6 +110,8 @@ jobs:
           (cd web && npm ci --ignore-scripts --no-audit)
           cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages-smoke/wasi
           node web/check-model-wasm.mjs dist/pages-smoke
+          node web/check-model-assist.mjs dist/pages-smoke
+          node web/check-model-learning.mjs dist/pages-smoke
       - uses: actions/upload-pages-artifact@v4
         with:
           path: dist/pages-smoke

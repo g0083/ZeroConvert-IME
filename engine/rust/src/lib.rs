@@ -13,3 +13,9 @@ pub mod conversion_policy;
 
 #[path = "../../../windows/crates/shared/src/assist_policy.rs"]
 pub mod assist_policy;
+
+#[path = "../../../windows/crates/shared/src/session_policy.rs"]
+pub mod session_policy;
+
+#[path = "../../../windows/crates/shared/src/learning_policy.rs"]
+pub mod learning_policy;

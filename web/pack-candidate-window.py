@@ -17,11 +17,18 @@ def main():
     theme = theme.replace("__COLOR_PALETTES__", palettes)
     theme = theme.replace("__INITIAL_THEME__", json.dumps(settings["appearance"]["ime_theme"]))
     host = '''
-        window.ipc = { postMessage(message) { parent.postMessage(message, location.origin); } };
-        // The web session has no persistent learning store.
+        window.ipc = { postMessage(message) {
+            const data = JSON.parse(message);
+            if (data.type === 'select' || data.type === 'forget') {
+                data.revision = window.zeroconRows?.revision;
+                data.id = window.zeroconRows?.ids[data.index];
+            }
+            parent.postMessage(JSON.stringify(data), location.origin);
+        } };
         document.addEventListener('contextmenu', event => {
             event.preventDefault();
-            event.stopImmediatePropagation();
+            const index = event.target.closest('li.candidate-item')?.dataset.index;
+            if (!window.zeroconRows?.forget[index]) event.stopImmediatePropagation();
         }, { capture: true });
         document.addEventListener('pointerdown', event => event.preventDefault(), { capture: true });
     '''

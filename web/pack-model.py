@@ -26,7 +26,7 @@ def main():
         raise ValueError("Released model differs from the Windows catalog")
     (args.output / model["filename"]).write_bytes(payload)
     zenzai.update(backend="cpu", gpu_layers=0)
-    settings["learning"]["mode"] = "none"
+    settings["learning"]["mode"] = "disabled"
     (args.output / "ime-settings.json").write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
 
 

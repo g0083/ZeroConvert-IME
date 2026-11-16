@@ -4,6 +4,7 @@ import argparse
 import gzip
 import json
 from pathlib import Path
+import shutil
 import struct
 
 
@@ -11,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dictionary", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--reverse", type=Path, help="Windows-generated reverse dictionary for keyboard repair")
     args = parser.parse_args()
 
     for directory in ("cb", "louds", "p"):
@@ -28,6 +30,10 @@ def main():
             archive.write(manifest)
             for path in paths:
                 archive.write(path.read_bytes())
+    if args.reverse:
+        with args.reverse.open("rb") as source, (args.output.parent / "reverse-v2.bin.gz").open("wb") as output:
+            with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as archive:
+                shutil.copyfileobj(source, archive)
 
 
 if __name__ == "__main__":
