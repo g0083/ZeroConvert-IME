@@ -22,6 +22,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Fetch the pinned dictionary
         run: git submodule update --init --depth 1 windows/server-swift/azooKey_dictionary_storage
       - name: Fetch Swift and its WASI SDK
@@ -46,6 +49,7 @@ jobs:
           cp windows/LICENSE dist/pages-smoke/LICENSE.txt
       - name: Build and check the shared Swift dictionary
         run: |
+          set -o pipefail
           swift_root="$RUNNER_TEMP/zerocon-swift"
           converter=$(python3 windows/scripts/prepare-modern-llama.py --converter-only | python3 -c 'import json,sys; print(json.load(sys.stdin)["converter"])')
           python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/dictionary-source"
