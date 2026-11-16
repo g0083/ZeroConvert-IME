@@ -5,7 +5,7 @@
 ## 確認結果
 
 - `engine/rust` は既存ソースのまま `wasm32-wasip1` 向けにビルドできた。Node の WASI 環境で、同じ読みを使う補正・先読みの判定と、Swift 側が読みを補正したときに追加補正を抑える判定を検証した。
-- Ubuntu 22.04 の WSL と Swift 6.4.2 Wasm SDK で共有 Swift コンバーターを試験ビルドした。辞書ビルダーが使う `Data.WritingOptions.atomic` は WASI で利用できない。試験コピーでこれを外すと、Zenzai を外した辞書単体構成でも llama.cpp の代替型に現行の変換コードが参照するフィールドがなく、コンパイルが止まった。
+- Ubuntu 22.04 の WSL と Swift 6.4.2 Wasm SDK で、共有 Swift コンバーターの辞書変換を確認した。Web 向けのステージング時にモデル依存部分を分離し、WASI で使えない辞書ビルダーのアトミック書き込み指定を取り除く。ブラウザは共有辞書をメモリに展開し、学習を無効にした状態で変換を実行する。
 - リポジトリ内の llama.cpp は単一スレッド WASI 向けの CMake 構成まで通った。元のソースでは `ggml-threading.cpp` の `std::mutex` でコンパイルが止まった。試験コピーでロックとモデルローダーの `std::async` を単一スレッド向けに変えると、次に AMX ソースの `std::thread` で止まった。ブラウザ用の C++ ビルドでは、CPU バックエンドのソース選択とスレッド依存の整理が必要になる。
 
 Rust の判定はリポジトリルートから再実行できる。出力先は Git 管理外の `artifacts/web-engine/`。
@@ -24,6 +24,6 @@ Cloudflare Pages の上限は 1 ファイル 25 MiB。既定の Nano v4.1 IQ4_em
 
 ## GitHub Pages の試験ページ
 
-[`web-pages-smoke` ブランチ](https://github.com/g0083/ZeroConvert-IME/tree/web-pages-smoke) の push で [検証ワークフロー](../../.github/workflows/pages-smoke.yml) が動く。共有 Rust Wasm をビルドし、Node で判定確認を通したあと、[`web/pages/`](../../web/pages/) と組み合わせて GitHub Pages に配信する。Pages の公開元は GitHub Actions。Wasm は Actions の成果物で配信する。
+[`web-pages-smoke` ブランチ](https://github.com/g0083/ZeroConvert-IME/tree/web-pages-smoke) の push で [検証ワークフロー](../../.github/workflows/pages-smoke.yml) が動く。共有 Rust Wasm、共有 Swift の辞書変換 Wasm、固定リビジョンの辞書を作り、Node で判定と変換を確認してから [`web/pages/`](../../web/pages/) と組み合わせて配信する。Pages の公開元は GitHub Actions。Wasm と辞書は Actions の成果物で配信する。
 
-[試験ページ](https://g0083.github.io/ZeroConvert-IME/) は配信された Wasm の `application/wasm` ヘッダーを確認してから、実際に `WebAssembly.compileStreaming` と共有エンジンの判定を呼ぶ。画面には二件の判定結果が表示される。辞書変換とモデル推論の検証には、それぞれの Wasm ビルドが必要になる。
+[試験ページ](https://g0083.github.io/ZeroConvert-IME/) は Wasm と辞書を読み込むと入力欄を有効にする。`ashitanokaigi` を入力すると読みと候補が表示される。Space または上下キーで候補を移動し、Enter か候補クリックで確定できる。Rust 側の補正・先読み依頼の判定は独立した動作確認欄に表示する。ZeroCon Model を使った推論は未接続。

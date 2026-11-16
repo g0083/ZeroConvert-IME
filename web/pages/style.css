@@ -12,3 +12,13 @@ ul { padding-left: 1.3rem; line-height: 1.8; }
 ul:empty { display: none; }
 button { background: #ccbbff; color: #1e142f; border: 0; padding: .55rem .85rem; border-radius: 6px; font: inherit; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
+label { display: block; font-size: .9rem; margin-bottom: .4rem; }
+.input-bar { display: flex; gap: .55rem; }
+input, textarea { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid #615b76; border-radius: 7px; background: #14131e; color: inherit; font: inherit; padding: .65rem .75rem; }
+.input-bar button { flex: none; }
+.hint { font-size: .8rem; }
+#reading { color: #ccbbff; min-height: 1.6em; margin: .75rem 0 .35rem; overflow-wrap: anywhere; }
+#candidates { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0; list-style: none; }
+#candidates button { background: #302a42; color: inherit; overflow-wrap: anywhere; max-width: 100%; text-align: left; }
+#candidates li { min-width: 0; max-width: 100%; }
+#candidates button[data-selected="true"] { background: #ccbbff; color: #1e142f; }

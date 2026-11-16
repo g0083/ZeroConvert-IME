@@ -6,14 +6,29 @@
   <title>ZeroConvert IME · ブラウザ実行テスト</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./check.js"></script>
+  <script type="module" src="./input.mjs"></script>
 </head>
 <body>
   <main>
     <p class="brand">ZeroConvert IME</p>
-    <h1>ブラウザ実行テスト</h1>
-    <p>共有エンジンの入力アシスト判定を、配信された WebAssembly で実行します。かな漢字変換とモデル推論は移植中です。</p>
+    <h1>ブラウザでかな漢字変換</h1>
+    <p>ローマ字で入力すると、ZeroConvert IME と共通の辞書エンジンが候補を出します。モデル推論は移植中です。</p>
+    <section aria-labelledby="input-heading">
+      <h2 id="input-heading">入力を試す</h2>
+      <p id="conversion-status" role="status">変換エンジンと辞書を読み込み中…</p>
+      <label for="romaji">ローマ字</label>
+      <div class="input-bar">
+        <input id="romaji" type="text" placeholder="ashitanokaigi" maxlength="256" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="keyboard-help" disabled>
+        <button id="sample" type="button" disabled>入力例</button>
+      </div>
+      <p id="keyboard-help" class="hint">Space で候補切替、Enter で確定、Esc で取消</p>
+      <p id="reading" aria-live="polite"></p>
+      <ul id="candidates" aria-label="変換候補"></ul>
+      <label for="confirmed">確定した文章</label>
+      <textarea id="confirmed" rows="3" readonly></textarea>
+    </section>
     <section aria-labelledby="heading">
-      <h2 id="heading">共有ポリシーの判定</h2>
+      <h2 id="heading">ブラウザ実行テスト</h2>
       <p id="status" role="status">WebAssembly を読み込み中…</p>
       <ul id="results"></ul>
       <button id="run" type="button" disabled>もう一度実行</button>
