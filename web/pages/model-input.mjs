@@ -33,13 +33,20 @@ function render() {
     candidates();
 }
 
+function attachCandidateWindow() {
+    frameReady = typeof frame.contentWindow?.updateCandidates === 'function';
+    if (frameReady) candidates();
+}
+
+frame.addEventListener('load', attachCandidateWindow);
+attachCandidateWindow();
+
 window.addEventListener('message', event => {
     if (event.origin !== location.origin || event.source !== frame.contentWindow || typeof event.data !== 'string') return;
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
     if (message.type === 'candidate-ready') {
-        frameReady = true;
-        candidates();
+        attachCandidateWindow();
     } else if (message.type === 'resize' && Number.isFinite(message.height)) {
         frame.style.height = `${Math.min(450, Math.max(1, message.height))}px`;
     } else if (message.type === 'select' && Number.isInteger(message.index)) {
