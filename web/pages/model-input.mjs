@@ -1,7 +1,12 @@
 import { assistLine } from './assist-session.mjs';
+import { createAndroidKeyboard, defaultPresentation } from './android-keyboard.mjs';
 import { readSettings, writeSettings } from './settings-store.mjs';
 
 const editor = document.querySelector('#romaji');
+const editorLabel = document.querySelector('label[for="romaji"]');
+const demo = document.querySelector('#demo');
+const presentationPicker = document.querySelector('#demo-presentation');
+const androidRoot = document.querySelector('#android-keyboard');
 const status = document.querySelector('#conversion-status');
 const loader = document.querySelector('#loader');
 const retryModel = document.querySelector('#retry-model');
@@ -42,6 +47,27 @@ let readingRequest = 0;
 const session = 1; // The preview has one editor; blur does not clear its text.
 const graphemes = new Intl.Segmenter('ja', { granularity: 'grapheme' });
 const byteFormat = new Intl.NumberFormat('ja', { maximumFractionDigits: 1 });
+const renderAndroidKeyboard = createAndroidKeyboard(androidRoot, (key, value) => {
+    if (key === 'select' && (renderedRevision !== revision || state?.candidates[value.index]?.id !== value.id)) return;
+    editor.focus({ preventScroll: true });
+    send(key, value);
+});
+let presentation;
+
+function updateReadyMessage() {
+    status.textContent = presentation === 'android' ? '準備完了。12キーで入力できます。' : '準備完了。ローマ字を入力できます。';
+}
+
+function setPresentation(value) {
+    presentation = value;
+    demo.dataset.presentation = value;
+    presentationPicker.value = value;
+    androidRoot.hidden = value !== 'android';
+    editor.inputMode = value === 'android' ? 'none' : 'text';
+    editorLabel.textContent = value === 'android' ? '入力欄' : 'ローマ字入力';
+    if (loader.dataset.state === 'ready') updateReadyMessage();
+    render();
+}
 
 function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -92,7 +118,7 @@ function send(key, value) {
     if (editor.disabled) return;
     const hadOffer = Boolean(assistOffer);
     assistOffer = null;
-    if (hadOffer || key === 'blur') renderReadingWindow();
+    if (hadOffer || key === 'blur') render();
     worker.postMessage({ revision: ++revision, key, value, session });
 }
 
@@ -133,8 +159,9 @@ function positionWindows() {
 }
 
 function candidates() {
-    frame.hidden = !frameReady || !state?.candidates.length || !editing
+    frame.hidden = presentation !== 'windows' || !frameReady || !state?.candidates.length || !editing
         || (settings.showCandidatesAfterSpace && selection === null);
+    if (presentation !== 'windows') return;
     if (frameReady) {
         const rows = state?.candidates ?? [];
         frame.contentWindow.zeroconRows = {
@@ -160,6 +187,7 @@ function render() {
     }
     reading.textContent = state?.reading ?? '';
     display.dataset.empty = String(!confirmed.textContent && !state?.reading);
+    if (presentation === 'android') renderAndroidKeyboard(state, selection, assistOffer, editor.disabled);
     renderReadingWindow();
     candidates();
 }
@@ -168,7 +196,7 @@ function renderReadingWindow() {
     const update = readingFrame.contentWindow?.updateReading;
     if (typeof update !== 'function') return;
     let value = '';
-    if (editing && state?.reading) {
+    if (presentation === 'windows' && editing && state?.reading) {
         const applied = state.appliedCorrection;
         if (assistOffer) {
             value = JSON.stringify({ reading: state.reading, assist: { ...assistOffer, undoAvailable: Boolean(applied) } });
@@ -248,7 +276,8 @@ worker.addEventListener('message', ({ data }) => {
         learningSetting.value = settings.learning;
         for (const control of [correctionSetting, predictionSetting, learningSetting, clearLearning]) control.disabled = false;
         worker.postMessage({ key: 'settings', value: settings });
-        status.textContent = '準備完了。ローマ字を入力できます。';
+        updateReadyMessage();
+        render();
     } else if (data.type === 'failed') {
         loadFailed(`読み込みに失敗しました。${data.message}`);
     } else if (data.type === 'error' && data.revision === revision) {
@@ -316,9 +345,9 @@ editor.addEventListener('focus', () => {
     editing = true;
     render();
 });
-editor.addEventListener('blur', () => {
+editor.addEventListener('blur', event => {
     editing = false;
-    send('blur');
+    if (event.relatedTarget !== presentationPicker && !androidRoot.contains(event.relatedTarget)) send('blur');
     render();
 });
 window.addEventListener('resize', () => {
@@ -346,3 +375,10 @@ for (const control of [correctionSetting, predictionSetting, learningSetting]) {
     });
 }
 clearLearning.addEventListener('click', () => send('forgetAll'));
+androidRoot.querySelector('.android-settings').addEventListener('click', () => {
+    const panel = document.querySelector('#demo-settings');
+    panel.open = true;
+    panel.querySelector('summary').focus();
+});
+presentationPicker.addEventListener('change', () => setPresentation(presentationPicker.value));
+setPresentation(defaultPresentation());

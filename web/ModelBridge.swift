@@ -51,7 +51,7 @@ public func modelRequest(_ address: UnsafePointer<CChar>?) -> UnsafeMutablePoint
     var result: UnsafeMutablePointer<CChar>?
     var learningChanged: Bool?
     var adjustedInputCount: Int32?
-    if ["append", "backspace", "delete", "move", "adjustClause", "shrink", "clear"].contains(command.key) {
+    if ["append", "appendDirect", "replacePreviousDirect", "backspace", "delete", "move", "adjustClause", "shrink", "clear"].contains(command.key) {
         correctionUndo = nil
     }
     switch command.key {
@@ -60,6 +60,13 @@ public func modelRequest(_ address: UnsafePointer<CChar>?) -> UnsafeMutablePoint
     case "append":
         guard let value = command.value, !value.contains("\0"), value.count <= 256 else { return nil }
         result = value.withCString { append_text(input: $0, cursorPtr: &cursor) }
+    case "appendDirect", "replacePreviousDirect":
+        guard let value = command.value, !value.contains("\0"), value.count == 1 else { return nil }
+        if command.key == "replacePreviousDirect" {
+            guard get_cursor_position() > 0 else { return nil }
+            free_c_string(remove_text(cursorPtr: &cursor))
+        }
+        result = value.withCString { append_text_direct(input: $0, cursorPtr: &cursor) }
     case "applyCorrection":
         guard correctionUndo == nil, let value = command.value, !value.isEmpty,
               !value.contains("\0"), value.count <= 256 else { return nil }

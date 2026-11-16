@@ -48,6 +48,88 @@ const server = createServer(async (request, response) => {
     }
 });
 
+async function checkAndroid(browser, siteUrl, channel) {
+    const page = await browser.newPage({
+        viewport: { width: 390, height: 820 }, isMobile: true, hasTouch: true,
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+    });
+    try {
+        await page.goto(`${siteUrl}#demo`);
+        await page.waitForFunction(() => !document.querySelector('#romaji').disabled);
+        const presentation = page.locator('#demo-presentation');
+        const keyboard = page.locator('#android-keyboard');
+        const input = page.locator('#romaji');
+        const reading = page.locator('.android-original bdi');
+        const candidates = page.locator('.android-content');
+        const key = text => keyboard.getByRole('button', { name: `${text}を入力`, exact: true });
+        const cdp = await page.context().newCDPSession(page);
+        async function flick(label, dx, dy) {
+            const target = key(label);
+            await target.scrollIntoViewIfNeeded();
+            const { x, y, width, height } = await target.boundingBox();
+            const start = { x: x + width / 2, y: y + height / 2 };
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: start.x + dx, y: start.y + dy }] });
+            await keyboard.locator('.android-flick-guide').waitFor({ state: 'visible' });
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        }
+        const waitReading = value => page.waitForFunction(value => document.querySelector('.android-original bdi').textContent === value, value);
+        const waitConfirmed = value => page.waitForFunction(value => document.querySelector('#confirmed').textContent === value, value);
+        assert.equal(await presentation.inputValue(), 'android');
+        assert.equal(await input.getAttribute('inputmode'), 'none');
+        assert.equal(await keyboard.locator('.android-key-row').count(), 4);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+        await key('あ').tap();
+        await waitReading('あ');
+        await keyboard.getByRole('button', { name: '削除', exact: true }).tap();
+        await waitReading('');
+        await flick('な', -30, 0);
+        await flick('は', 0, 30);
+        await flick('わ', 0, -30);
+        await flick('か', 0, 30);
+        await key('小゛゜').tap();
+        await waitReading('にほんご');
+        assert.equal(await page.locator('#composition-before').textContent(), '日本語');
+        assert.equal(await page.locator('#candidate-window').isVisible(), false);
+
+        const height = (await candidates.boundingBox()).height;
+        await keyboard.getByRole('button', { name: '候補一覧を開く' }).tap();
+        assert.equal((await candidates.boundingBox()).height, height);
+        await keyboard.getByRole('button', { name: '候補一覧を閉じる' }).tap();
+        await presentation.selectOption('windows');
+        assert.equal(await keyboard.isVisible(), false);
+        await input.focus();
+        await page.locator('#reading-window').waitFor({ state: 'visible' });
+        assert.equal(await page.locator('#reading').textContent(), 'にほんご');
+        await presentation.selectOption('android');
+        await waitReading('にほんご');
+        const screenshotDir = process.env.ZEROCON_BROWSER_SCREENSHOTS;
+        if (screenshotDir) {
+            await mkdir(screenshotDir, { recursive: true });
+            await keyboard.screenshot({ path: join(screenshotDir, `${channel ?? 'chromium'}-android.png`) });
+        }
+        await keyboard.locator('.android-candidates').getByRole('button', { name: '日本語', exact: true }).first().tap();
+        await waitConfirmed('日本語');
+
+        await page.getByRole('button', { name: '補正の例「okseri」' }).tap();
+        await waitReading('おかえり');
+        await keyboard.getByRole('button', { name: '補正を取り消す' }).tap();
+        await waitReading('おkせり');
+        await page.getByRole('button', { name: '先読みの例「よろしくお願いし」' }).tap();
+        await keyboard.getByRole('button', { name: '先読み ます。 を採用' }).tap();
+        await waitConfirmed('よろしくお願いします。');
+
+        await keyboard.getByRole('button', { name: '入力モード: 日本語' }).tap();
+        await key('abc').tap();
+        await keyboard.getByRole('button', { name: '入力モード: 英語' }).tap();
+        await key('1').tap();
+        await waitConfirmed('よろしくお願いします。a1');
+        console.log(`${channel ?? 'Chromium'}: mobile default, direct kana, flicks, mode switching and inline Android assist passed`);
+    } finally {
+        await page.close();
+    }
+}
+
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 try {
@@ -59,10 +141,12 @@ try {
             const errors = [];
             page.on('pageerror', error => errors.push(error.message));
             const siteUrl = `http://127.0.0.1:${server.address().port}/`;
+            await checkAndroid(browser, siteUrl, channel);
             const modelRoute = '**/*.gguf';
             const blockModel = route => route.abort('failed');
             await page.route(modelRoute, blockModel);
             await page.goto(siteUrl);
+            assert.equal(await page.locator('#demo-presentation').inputValue(), 'windows');
             const retry = page.locator('#retry-model');
             await retry.waitFor({ state: 'visible' });
             assert.equal(await page.locator('#romaji').isDisabled(), true);

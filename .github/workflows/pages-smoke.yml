@@ -53,7 +53,9 @@ jobs:
           node web/check-load-progress.mjs
           node web/check-release-downloads.mjs
           mkdir -p dist/pages-smoke
-          cp web/pages/index.html web/pages/style.css web/pages/dictionary-engine.mjs web/pages/model-*.mjs web/pages/assist-session.mjs web/pages/learning-store.mjs web/pages/load-progress.mjs web/pages/release-downloads.mjs web/pages/settings-store.mjs dist/pages-smoke/
+          cp web/pages/index.html web/pages/style.css web/pages/android-keyboard.css web/pages/android-keyboard.mjs web/pages/dictionary-engine.mjs web/pages/model-*.mjs web/pages/assist-session.mjs web/pages/learning-store.mjs web/pages/load-progress.mjs web/pages/release-downloads.mjs web/pages/settings-store.mjs dist/pages-smoke/
+          python3 web/pack-android-keyboard.py dist/pages-smoke/android-keyboard-layout.mjs
+          cp web/unicode-emoji-license.txt dist/pages-smoke/
           cp windows/frontend/public/favicon.png dist/pages-smoke/
           cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages-smoke/
           cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages-smoke/

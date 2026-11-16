@@ -23,6 +23,13 @@ assert.equal(request('move', { offset: 1 }).cursor, 7);
 assert.equal(request('backspace').reading, 'あしたのかい');
 assert.equal(request('clear').reading, '');
 
+assert.equal(request('appendDirect', { value: 'か' }).reading, 'か');
+assert.equal(request('appendDirect', { value: 'な' }).reading, 'かな');
+assert.equal(request('move', { offset: -1 }).cursor, 1);
+assert.equal(request('replacePreviousDirect', { value: 'が' }).reading, 'がな');
+assert.equal(request('backspace').reading, 'な');
+assert.equal(request('clear').reading, '');
+
 const live = await loadLivePolicy(base, read);
 const fixtures = await readFile(new URL('../tests/input-policy/auto-commit-cases.tsv', import.meta.url), 'utf8');
 const stable = fixtures.split(/\r?\n/).find(line => line.startsWith('auto_commit_stable_clause\t'));

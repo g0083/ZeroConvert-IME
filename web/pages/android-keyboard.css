@@ -1,0 +1,147 @@
+.demo-editor > .demo-presentation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+.demo-presentation select {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 9px;
+  color: #352842;
+  background: #fff;
+}
+#demo[data-presentation="android"] :is(.touch-controls, .keyboard-help) { display: none; }
+#demo[data-presentation="android"] .composition-field:not(:focus-within) .composition-display[data-empty="true"]::before {
+  content: "12キーで入力";
+  font: inherit;
+  font-size: 1rem;
+}
+#android-keyboard {
+  display: block;
+  min-inline-size: 0;
+  margin: 6px 0 0;
+  padding: 0;
+  border: 1px solid var(--android-borderSubtle);
+  border-radius: 8px 8px 0 0;
+  background: var(--android-canvas);
+  color: var(--android-textPrimary);
+  font-family: Roboto, "Noto Sans JP", system-ui, sans-serif;
+  user-select: none;
+}
+#android-keyboard button {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+#android-keyboard button:focus-visible { outline-offset: -2px; }
+.android-assist-bar, .android-candidate-bar {
+  display: flex;
+  align-items: stretch;
+  height: var(--android-bar-height);
+  background: var(--android-surface);
+}
+.android-assist-bar { border-radius: 8px 8px 0 0; }
+.android-original {
+  display: flex;
+  align-items: center;
+  flex: 0 0 50%;
+  min-width: 0;
+  padding: 0 8px;
+  color: var(--android-textSecondary);
+  font-size: 13px;
+  white-space: pre;
+}
+.android-original.corrected { color: var(--android-warningAmber); }
+.android-original bdi { overflow: hidden; text-overflow: ellipsis; direction: rtl; }
+.android-assist-slot { min-width: 0; flex: 1; padding: 0 2px; }
+#android-keyboard .android-proposal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  border-radius: 8px;
+  --proposal-color: var(--android-warningAmber);
+  background: color-mix(in srgb, var(--proposal-color) 12%, var(--android-surface));
+}
+#android-keyboard .android-proposal[data-kind="prediction"] { --proposal-color: var(--android-primaryAccentSoft); }
+.android-proposal span { flex: none; font-size: 12px; color: var(--proposal-color); }
+.android-proposal bdi { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+#android-keyboard .android-undo { flex: none; width: min(80px, 22%); font-size: 13px; color: var(--android-warningAmber); }
+.android-candidates { display: flex; flex: 1; min-width: 0; overflow: auto hidden; scrollbar-width: none; }
+#android-keyboard .android-settings {
+  align-self: center;
+  margin-inline-start: 4px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  color: var(--android-textSecondary);
+  background: color-mix(in srgb, var(--android-keyModifier) 60%, var(--android-surface));
+  font-size: 11.5px;
+  font-weight: 600;
+}
+#android-keyboard .android-candidate { flex: none; padding: 0 10px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+#android-keyboard .android-candidate[aria-pressed="true"] { font-weight: 600; }
+#android-keyboard .android-candidates > button + button { border-inline-start: 1px solid var(--android-borderSubtle); }
+#android-keyboard .android-expand { flex: 0 0 38px; color: var(--android-textSecondary); }
+.android-content { position: relative; height: var(--android-content-height); }
+.android-keys { position: relative; height: 100%; display: grid; grid-template-rows: repeat(4, minmax(0, 1fr)); }
+.android-key-row { display: grid; grid-template-columns: var(--android-columns); gap: 6px; min-height: 0; padding: 2.5px 6px; }
+.android-key-row:first-child { padding-top: 6px; }
+.android-key-row:last-child { padding-bottom: 7.5px; }
+#android-keyboard .android-cap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border: 1px solid var(--android-borderSubtle);
+  border-radius: 8px;
+  background: var(--android-keyNormal);
+  box-shadow: inset 0 -2px color-mix(in srgb, var(--android-borderSubtle) 70%, transparent);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.13;
+  touch-action: none;
+}
+#android-keyboard .android-cap small { color: var(--android-textSecondary); font-size: 8.5px; font-weight: 400; }
+#android-keyboard .android-cap .compact-label { font-size: 14px; }
+#android-keyboard .android-action { background: var(--android-keyModifier); font-size: 16px; font-weight: 500; }
+#android-keyboard .android-enter { background: var(--android-primaryAccent); color: var(--android-onAccent); font-size: 15px; font-weight: 700; }
+#android-keyboard .android-mode { flex-direction: row; color: var(--android-textMuted); font-size: 14px; }
+.android-mode .active { color: var(--android-textPrimary); font-weight: 700; }
+#android-keyboard .android-cap[data-pressed], #android-keyboard .android-cap:active { filter: brightness(.9); }
+.android-flick-guide {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  grid-template: repeat(3, 32px) / repeat(3, 32px);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px #0004);
+}
+.android-flick-guide span { display: grid; place-items: center; border-radius: 5px; background: var(--android-keyNormal); color: var(--android-textPrimary); }
+.android-flick-guide .up { grid-area: 1 / 2; }
+.android-flick-guide .left { grid-area: 2 / 1; }
+.android-flick-guide .center { grid-area: 2 / 2; font-size: 14px; }
+.android-flick-guide .right { grid-area: 2 / 3; }
+.android-flick-guide .down { grid-area: 3 / 2; }
+.android-flick-guide[data-direction="up"] .up, .android-flick-guide[data-direction="left"] .left,
+.android-flick-guide[data-direction="center"] .center, .android-flick-guide[data-direction="right"] .right,
+.android-flick-guide[data-direction="down"] .down { background: var(--android-primaryAccent); color: var(--android-onAccent); }
+.android-panel { display: flex; flex-direction: column; height: 100%; padding: 4px 3px 6px; background: var(--android-surface); }
+.android-panel-heading { padding: 3px 8px; color: var(--android-textSecondary); font-size: 12px; }
+.android-candidate-grid, .android-picker-grid { display: grid; gap: 3px; flex: 1; overflow: auto; align-content: start; }
+.android-candidate-grid { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); }
+.android-picker-grid { grid-template-columns: repeat(10, minmax(0, 1fr)); }
+#android-keyboard :is(.android-candidate-grid .android-candidate, .android-picker-value) { height: 38px; border-radius: 6px; background: var(--android-keyModifier); }
+.android-picker-tabs { display: flex; gap: 4px; overflow: auto hidden; padding: 2px 0 5px; }
+#android-keyboard .android-picker-tabs button { flex: none; min-width: 36px; padding: 4px 7px; border-radius: 7px; background: var(--android-keyModifier); touch-action: auto; }
+#android-keyboard .android-picker-tabs button[aria-pressed="true"] { background: var(--android-primaryAccent); color: var(--android-onAccent); }

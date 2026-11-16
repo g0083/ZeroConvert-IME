@@ -35,6 +35,7 @@ let primaryAssist = null;
 let appliedCorrection = null;
 let offerRevision = null;
 let clauseBoundary = null;
+const graphemes = new Intl.Segmenter('ja', { granularity: 'grapheme' });
 
 const readingLength = () => state.readingCount ?? [...state.reading].length;
 const inputLength = () => state.inputCount ?? [...state.raw].length;
@@ -296,10 +297,10 @@ self.addEventListener('message', async ({ data }) => {
             postMessage({ type: 'state', revision, session, state, selection, committed });
             return;
         }
-        if (key !== 'append' || selection !== null) live.reset();
+        if (!['append', 'appendKana'].includes(key) || selection !== null) live.reset();
         if (!['adjustClause', 'space', 'up', 'down'].includes(key)) clauseBoundary = null;
-        if (key === 'append' || key === 'sample') {
-            if (key === 'append' && selection !== null && state.reading) {
+        if (['append', 'appendKana', 'sample'].includes(key)) {
+            if (key !== 'sample' && selection !== null && state.reading) {
                 commit(request, selectedBeforeEdit ?? state.candidates[0], false);
             }
             appliedCorrection = null;
@@ -313,8 +314,22 @@ self.addEventListener('message', async ({ data }) => {
             }
             for (const char of value) {
                 if (inputLength() >= 256) break;
-                state = request('append', { value: char });
-                if (key === 'append') autoCommit(request, live);
+                state = request(key === 'appendKana' ? 'appendDirect' : 'append', { value: char });
+                if (key !== 'sample') autoCommit(request, live);
+            }
+        } else if (key === 'kanaModifier') {
+            const previous = [...graphemes.segment(state.reading)][state.cursor - 1]?.segment;
+            const replacement = value?.[previous];
+            if (replacement && replacement !== previous) {
+                selection = null;
+                appliedCorrection = null;
+                state = request('replacePreviousDirect', { value: replacement });
+            }
+        } else if (key === 'literal' || key === 'modeChange') {
+            if (state.reading) commit(request, selectedBeforeEdit ?? state.candidates[0], false);
+            if (key === 'literal') {
+                committed += value;
+                state = request('context', { value: [...committed].slice(-256).join('') });
             }
         } else if (key === 'space' || key === 'up' || key === 'down') {
             appliedCorrection = null;
@@ -381,7 +396,8 @@ self.addEventListener('message', async ({ data }) => {
                 if (deletion === 'backward') state = request('backspace');
                 else if (deletion === 'forward') state = request('delete');
                 else if (key === 'backspace' && !state.reading) {
-                    committed = [...committed].slice(0, -1).join('');
+                    const last = graphemes.segment(committed).containing(committed.length - 1);
+                    if (last) committed = committed.slice(0, last.index);
                     state = request('context', { value: [...committed].slice(-256).join('') });
                 }
             }
@@ -391,7 +407,7 @@ self.addEventListener('message', async ({ data }) => {
             primaryAssist = null;
         }
         postMessage({ type: 'state', revision, session, state: snapshot(), selection, committed });
-        if (['append', 'sample', 'backspace', 'delete', 'left', 'right', 'autoApply'].includes(key)
+        if (['append', 'appendKana', 'kanaModifier', 'sample', 'backspace', 'delete', 'left', 'right', 'autoApply'].includes(key)
             || (appliedCorrection && ['tab', 'select'].includes(key))) {
             scheduleAssist(request, live, revision);
         }
