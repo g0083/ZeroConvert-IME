@@ -1,4 +1,4 @@
-"""Generate the Web demo's 12-key layouts from the Android Compose sources."""
+"""Generate the Web demo's key layouts from the Android Compose sources."""
 
 import json
 from pathlib import Path
@@ -48,6 +48,24 @@ def palettes(theme):
     return result
 
 
+def qwerty_layout(compose):
+    layout = section(compose, "private fun SharedQwertyLayout(", "\n@Composable")
+    numbers = (SOURCE / "QwertyNumberRow.kt").read_text(encoding="utf-8")
+    first = re.search(r"val row1 = listOf\(([^\n]+)\)", layout)[1]
+    middle = re.search(r"val row2 = if \(isJapanese\) \{\s*listOf\(([^\n]+)\)\s*\} else \{\s*listOf\(([^\n]+)\)", layout)
+    third = re.search(r"val row3 = listOf\(([^\n]+)\)", layout)[1]
+
+    def rows(center):
+        return [re.findall(r"'(.)'", row) for row in (first, center, third)]
+
+    return {
+        "japanese": rows(middle[1]),
+        "english": rows(middle[2]),
+        "digits": re.search(r'val DIGITS = "([0-9]+)"', numbers)[1],
+        "shiftedSymbols": re.search(r'val SHIFTED_SYMBOLS = "([^\"]+)"', numbers)[1],
+    }
+
+
 def picker_data(compose):
     categories = section(compose, "val symbolCategories = listOf(", "\n@Composable")
     symbols = [{"label": json.loads(title), "values": [json.loads(value) for value in re.findall(STRING, body)]}
@@ -79,6 +97,11 @@ def main():
             "english": flick_layout(flick, "English12KeyFlickLayout", english),
             "shifted": flick_layout(flick, "English12KeyFlickLayout", english, shifted=True),
             "numeric": flick_layout(flick, "FlickNumericPadLayout", numeric),
+        },
+        "qwerty": qwerty_layout(compose),
+        "vibration": {
+            "enabled": re.search(r"prefs.getBoolean\(KEY_VIBRATION_ENABLED, (true|false)\)", service)[1] == "true",
+            "duration": int(re.search(r"prefs.getInt\(KEY_VIBRATION_DURATION, (\d+)\)", service)[1]),
         },
         "palettes": palettes((SOURCE / "ZeroConTheme.kt").read_text(encoding="utf-8")),
         "modifiers": {

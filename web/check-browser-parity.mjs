@@ -54,6 +54,13 @@ async function checkAndroid(browser, siteUrl, channel) {
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
     });
     try {
+        await page.addInitScript(() => {
+            window.vibrationCalls = [];
+            Object.defineProperty(navigator, 'vibrate', { configurable: true, value(duration) {
+                window.vibrationCalls.push(duration);
+                return true;
+            } });
+        });
         await page.goto(`${siteUrl}#demo`);
         await page.waitForFunction(() => !document.querySelector('#romaji').disabled);
         const presentation = page.locator('#demo-presentation');
@@ -70,7 +77,7 @@ async function checkAndroid(browser, siteUrl, channel) {
             const start = { x: x + width / 2, y: y + height / 2 };
             await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
             await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: start.x + dx, y: start.y + dy }] });
-            await keyboard.locator('.android-flick-guide').waitFor({ state: 'visible' });
+            await keyboard.locator('.android-flick-guide, .android-qwerty-guide').waitFor({ state: 'visible' });
             await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         }
         const waitReading = value => page.waitForFunction(value => document.querySelector('.android-original bdi').textContent === value, value);
@@ -79,8 +86,10 @@ async function checkAndroid(browser, siteUrl, channel) {
         assert.equal(await input.getAttribute('inputmode'), 'none');
         assert.equal(await keyboard.locator('.android-key-row').count(), 4);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+        assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor), 'rgb(16, 23, 34)');
         await key('あ').tap();
         await waitReading('あ');
+        assert.deepEqual(await page.evaluate(() => window.vibrationCalls), [15]);
         await keyboard.getByRole('button', { name: '削除', exact: true }).tap();
         await waitReading('');
         await flick('な', -30, 0);
@@ -91,6 +100,8 @@ async function checkAndroid(browser, siteUrl, channel) {
         await waitReading('にほんご');
         assert.equal(await page.locator('#composition-before').textContent(), '日本語');
         assert.equal(await page.locator('#candidate-window').isVisible(), false);
+        const layoutToggle = keyboard.locator('.android-layout-toggle');
+        assert.equal(await layoutToggle.isVisible(), false);
 
         const height = (await candidates.boundingBox()).height;
         await keyboard.getByRole('button', { name: '候補一覧を開く' }).tap();
@@ -110,6 +121,31 @@ async function checkAndroid(browser, siteUrl, channel) {
         }
         await keyboard.locator('.android-candidates').getByRole('button', { name: '日本語', exact: true }).first().tap();
         await waitConfirmed('日本語');
+
+        await layoutToggle.waitFor({ state: 'visible' });
+        assert.match(await layoutToggle.textContent(), /QWERTY/);
+        await layoutToggle.tap();
+        assert.equal(await keyboard.locator('.android-qwerty-row').count(), 4);
+        await key('k').tap();
+        await key('a').tap();
+        await waitReading('か');
+        await input.press('Escape');
+        await waitReading('');
+        await flick('q', 0, -30);
+        await waitReading('1');
+        await input.press('Escape');
+        assert.match(await layoutToggle.textContent(), /12キー/);
+        if (screenshotDir) await keyboard.screenshot({ path: join(screenshotDir, `${channel ?? 'chromium'}-qwerty.png`) });
+        await layoutToggle.tap();
+        assert.equal(await keyboard.locator('.android-key-row').count(), 4);
+
+        await keyboard.getByRole('button', { name: /ZeroCon AI/ }).tap();
+        await page.locator('#android-vibration').uncheck();
+        const pulseCount = await page.evaluate(() => window.vibrationCalls.length);
+        await key('あ').tap();
+        await waitReading('あ');
+        assert.equal(await page.evaluate(() => window.vibrationCalls.length), pulseCount);
+        await input.press('Escape');
 
         await page.getByRole('button', { name: '補正の例「okseri」' }).tap();
         await waitReading('おかえり');

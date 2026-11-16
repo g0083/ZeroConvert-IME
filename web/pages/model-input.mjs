@@ -1,5 +1,5 @@
 import { assistLine } from './assist-session.mjs';
-import { createAndroidKeyboard, defaultPresentation } from './android-keyboard.mjs';
+import { androidVibrationDefault, createAndroidKeyboard, defaultPresentation } from './android-keyboard.mjs';
 import { readSettings, writeSettings } from './settings-store.mjs';
 
 const editor = document.querySelector('#romaji');
@@ -24,6 +24,7 @@ const frame = document.querySelector('#candidate-window');
 const readingFrame = document.querySelector('#reading-window');
 const correctionSetting = document.querySelector('#enable-correction');
 const predictionSetting = document.querySelector('#enable-prediction');
+const vibrationSetting = document.querySelector('#android-vibration');
 const learningSetting = document.querySelector('#learning-mode');
 const clearLearning = document.querySelector('#clear-learning');
 const learningStatus = document.querySelector('#learning-status');
@@ -51,11 +52,11 @@ const renderAndroidKeyboard = createAndroidKeyboard(androidRoot, (key, value) =>
     if (key === 'select' && (renderedRevision !== revision || state?.candidates[value.index]?.id !== value.id)) return;
     editor.focus({ preventScroll: true });
     send(key, value);
-});
+}, () => settings.vibration);
 let presentation;
 
 function updateReadyMessage() {
-    status.textContent = presentation === 'android' ? '準備完了。12キーで入力できます。' : '準備完了。ローマ字を入力できます。';
+    status.textContent = presentation === 'android' ? '準備完了。画面のキーボードで入力できます。' : '準備完了。ローマ字を入力できます。';
 }
 
 function setPresentation(value) {
@@ -63,6 +64,7 @@ function setPresentation(value) {
     demo.dataset.presentation = value;
     presentationPicker.value = value;
     androidRoot.hidden = value !== 'android';
+    vibrationSetting.closest('label').hidden = value !== 'android' || typeof navigator.vibrate !== 'function';
     editor.inputMode = value === 'android' ? 'none' : 'text';
     editorLabel.textContent = value === 'android' ? '入力欄' : 'ローマ字入力';
     if (loader.dataset.state === 'ready') updateReadyMessage();
@@ -270,9 +272,11 @@ worker.addEventListener('message', ({ data }) => {
         for (const button of editorButtons) button.disabled = false;
         assistIds = data.assist ?? {};
         learning = data.learning ?? null;
-        settings = readSettings(localStorage, { ...data.settings, learning: learning?.mode ?? 'disabled' });
+        settings = readSettings(localStorage, { ...data.settings, learning: learning?.mode ?? 'disabled', vibration: androidVibrationDefault });
         correctionSetting.checked = settings.correction;
         predictionSetting.checked = settings.prediction;
+        vibrationSetting.checked = settings.vibration;
+        vibrationSetting.disabled = false;
         learningSetting.value = settings.learning;
         for (const control of [correctionSetting, predictionSetting, learningSetting, clearLearning]) control.disabled = false;
         worker.postMessage({ key: 'settings', value: settings });
@@ -375,6 +379,10 @@ for (const control of [correctionSetting, predictionSetting, learningSetting]) {
     });
 }
 clearLearning.addEventListener('click', () => send('forgetAll'));
+vibrationSetting.addEventListener('change', () => {
+    settings.vibration = vibrationSetting.checked;
+    writeSettings(localStorage, settings);
+});
 androidRoot.querySelector('.android-settings').addEventListener('click', () => {
     const panel = document.querySelector('#demo-settings');
     panel.open = true;

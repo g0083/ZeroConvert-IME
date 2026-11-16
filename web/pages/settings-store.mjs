@@ -7,7 +7,7 @@
 
 export const SETTINGS_STORE_KEY = 'zerocon-settings-v1';
 
-const BOOLEAN_KEYS = ['correction', 'prediction'];
+const BOOLEAN_KEYS = ['correction', 'prediction', 'vibration'];
 const LEARNING_MODES = ['enabled', 'read_only', 'disabled'];
 
 /// Reads the effective settings: staged defaults, then any stored override.

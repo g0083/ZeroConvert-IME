@@ -1,6 +1,7 @@
 import native from './android-keyboard-layout.mjs';
 
-const { geometry, layouts, modifiers, pickers, palettes } = native;
+const { geometry, layouts, modifiers, pickers, palettes, qwerty, vibration } = native;
+export const androidVibrationDefault = vibration.enabled;
 const modes = ['japanese', 'english', 'numeric'];
 const modeLabels = ['日本語', '英語', '数字'];
 const sides = {
@@ -11,7 +12,7 @@ const sides = {
 const actionKeys = {
     symbols: ['!?#', '記号'], backspace: ['⌫', '削除'], left: ['◀', 'カーソルを左へ'],
     right: ['▶', 'カーソルを右へ'], space: ['␣', '空白'], emoji: ['☺', '絵文字'],
-    enter: ['確定', '確定'], undo: ['↶', '削除'],
+    enter: ['確定', '確定'], undo: ['↶', '削除'], shift: ['⇧', 'Shift'],
 };
 
 export function defaultPresentation(device = navigator) {
@@ -48,7 +49,7 @@ function button(className, label, action, description) {
     return node;
 }
 
-export function createAndroidKeyboard(root, dispatch) {
+export function createAndroidKeyboard(root, dispatch, vibrationEnabled) {
     const original = root.querySelector('.android-original');
     const originalValue = original.querySelector('bdi');
     const originalPrefix = original.querySelector('span');
@@ -57,12 +58,15 @@ export function createAndroidKeyboard(root, dispatch) {
     const proposalValue = proposal.querySelector('bdi');
     const undo = root.querySelector('.android-undo');
     const settings = root.querySelector('.android-settings');
+    const layoutToggle = root.querySelector('.android-layout-toggle');
     const strip = root.querySelector('.android-candidates');
     const expand = root.querySelector('.android-expand');
     const board = root.querySelector('.android-keys');
     const panel = root.querySelector('.android-panel');
     let mode = 'japanese';
+    let keyboardLayout = 'flick';
     let shifted = false;
+    let composing = false;
     let picker = '';
     let expanded = false;
     let rows = [];
@@ -83,6 +87,18 @@ export function createAndroidKeyboard(root, dispatch) {
 
     root.addEventListener('pointerdown', event => {
         if (event.target.closest('button')) event.preventDefault();
+    });
+    // Touch pointerup is a trusted activation, including the first key pressed.
+    root.addEventListener('pointerup', event => {
+        if (event.pointerType === 'touch' && !root.disabled && vibrationEnabled() && event.target.closest('button:enabled')) {
+            navigator.vibrate?.(vibration.duration);
+        }
+    }, { capture: true });
+    layoutToggle.addEventListener('click', () => {
+        keyboardLayout = keyboardLayout === 'flick' ? 'qwerty' : 'flick';
+        shifted = false;
+        layoutToggle.textContent = keyboardLayout === 'flick' ? '↻ QWERTY' : '↻ 12キー';
+        renderKeys();
     });
     proposal.addEventListener('click', () => dispatch('tab'));
     undo.addEventListener('click', () => dispatch('cancel'));
@@ -135,6 +151,9 @@ export function createAndroidKeyboard(root, dispatch) {
             mode = modes[(modes.indexOf(mode) + 1) % modes.length];
             shifted = false;
             renderKeys();
+        } else if (action === 'shift') {
+            shifted = !shifted;
+            renderKeys();
         } else if (action in pickers) {
             picker = action;
             renderPanel();
@@ -149,11 +168,15 @@ export function createAndroidKeyboard(root, dispatch) {
             key.append(...['あ', 'a', '1'].map((value, index) => element('span', index === modeIndex ? 'active' : '', value)));
             return key;
         }
-        const [label, description] = actionKeys[action];
+        const [defaultLabel, description] = actionKeys[action];
+        const isQwerty = keyboardLayout === 'qwerty' && mode !== 'numeric';
+        const label = isQwerty && action === 'space' ? (mode === 'japanese' ? '日本語' : 'English')
+            : isQwerty && action === 'enter' ? '↵' : defaultLabel;
         const repeats = ['left', 'right', 'backspace', 'undo'].includes(action);
         const key = button(`android-cap android-action${action === 'enter' ? ' android-enter' : ''}`, label, event => {
             if (!repeats || event.detail === 0) perform(action);
         }, description);
+        if (action === 'shift') key.setAttribute('aria-pressed', String(shifted));
         if (repeats) {
             let timer;
             key.addEventListener('pointerdown', event => {
@@ -192,10 +215,24 @@ export function createAndroidKeyboard(root, dispatch) {
         } else dispatch(mode === 'japanese' ? 'appendKana' : 'literal', value);
     }
 
-    function flickKey(def) {
+    function characterKey(def, isQwerty = false) {
+        function commit(direction) {
+            if (!isQwerty) {
+                keyInput(def, direction);
+                return;
+            }
+            const value = def[direction];
+            if (!value) return;
+            if (mode === 'english') dispatch('literal', value);
+            else dispatch(/^[、。？ー]$/u.test(value) ? 'appendKana' : 'append', value);
+            if (shifted) {
+                shifted = false;
+                renderKeys();
+            }
+        }
         const special = def.center === 'TOGGLE' || def.center === 'CASE_TOGGLE';
         const key = button(`android-cap${special ? ' android-action' : ''}`, '', event => {
-            if (event.detail === 0) keyInput(def, 'center');
+            if (event.detail === 0) commit('center');
         }, `${def.label}を入力`);
         key.append(element('span', def.label.length > 2 ? 'compact-label' : '', def.label));
         if (def.subText) key.append(element('small', '', def.subText));
@@ -205,14 +242,21 @@ export function createAndroidKeyboard(root, dispatch) {
             key.setPointerCapture(event.pointerId);
             const keyBounds = key.getBoundingClientRect();
             const boardBounds = board.getBoundingClientRect();
-            const guide = element('div', 'android-flick-guide');
+            const guide = element('div', isQwerty ? 'android-qwerty-guide' : 'android-flick-guide');
             guide.setAttribute('aria-hidden', 'true');
-            guide.style.left = `${Math.max(48, Math.min(boardBounds.width - 48, keyBounds.left + keyBounds.width / 2 - boardBounds.left))}px`;
-            guide.style.top = `${Math.max(48, Math.min(boardBounds.height - 48, keyBounds.top + keyBounds.height / 2 - boardBounds.top))}px`;
-            for (const direction of ['up', 'left', 'center', 'right', 'down']) {
-                const cell = element('span', direction, direction === 'center' ? def.label : def[direction]);
-                cell.hidden = !cell.textContent;
-                guide.append(cell);
+            const center = keyBounds.left + keyBounds.width / 2 - boardBounds.left;
+            if (isQwerty) {
+                guide.style.left = `${Math.max(20, Math.min(boardBounds.width - 20, center))}px`;
+                guide.style.top = `${keyBounds.top - boardBounds.top}px`;
+                guide.textContent = def.label;
+            } else {
+                guide.style.left = `${Math.max(48, Math.min(boardBounds.width - 48, center))}px`;
+                guide.style.top = `${Math.max(48, Math.min(boardBounds.height - 48, keyBounds.top + keyBounds.height / 2 - boardBounds.top))}px`;
+                for (const direction of ['up', 'left', 'center', 'right', 'down']) {
+                    const cell = element('span', direction, direction === 'center' ? def.label : def[direction]);
+                    cell.hidden = !cell.textContent;
+                    guide.append(cell);
+                }
             }
             guide.dataset.direction = 'center';
             board.append(guide);
@@ -221,7 +265,15 @@ export function createAndroidKeyboard(root, dispatch) {
         });
         function follow(event) {
             if (gesture?.id !== event.pointerId) return;
-            gesture.direction = flickDirection(event.clientX - gesture.x, event.clientY - gesture.y, gesture.direction);
+            const dx = event.clientX - gesture.x;
+            const dy = event.clientY - gesture.y;
+            if (isQwerty) {
+                const up = def.up && (gesture.direction === 'up'
+                    ? dy <= -geometry.flickThreshold * geometry.returnRatio
+                    : dy <= -geometry.flickThreshold && -dy >= Math.abs(dx) * 0.6);
+                gesture.direction = up ? 'up' : 'center';
+                gesture.guide.textContent = def[gesture.direction];
+            } else gesture.direction = flickDirection(dx, dy, gesture.direction);
             gesture.guide.dataset.direction = gesture.direction;
         }
         function finish(event) {
@@ -230,7 +282,7 @@ export function createAndroidKeyboard(root, dispatch) {
             gesture = null;
             guide.remove();
             delete key.dataset.pressed;
-            if (event.type === 'pointerup') keyInput(def, direction);
+            if (event.type === 'pointerup') commit(direction);
         }
         key.addEventListener('pointermove', follow);
         key.addEventListener('pointerup', event => {
@@ -242,12 +294,48 @@ export function createAndroidKeyboard(root, dispatch) {
         return key;
     }
 
+    function qwertyExtraKey() {
+        const key = composing ? qwertyCharacter(mode === 'japanese' ? '？' : '?') : sideKey('emoji');
+        key.classList.add('android-qwerty-extra');
+        return key;
+    }
+
+    function qwertyCharacter(character, up) {
+        const label = shifted ? character.toUpperCase() : character;
+        return characterKey({ label, center: label, up, subText: up }, true);
+    }
+
+    function renderQwerty() {
+        const numberHints = shifted ? qwerty.shiftedSymbols : qwerty.digits;
+        const rows = qwerty[mode].map((letters, index) => {
+            const row = element('div', `android-qwerty-row android-qwerty-row-${index + 1}`);
+            const characters = letters.map((letter, column) => qwertyCharacter(letter, index === 0 ? numberHints[column] : undefined));
+            if (index === 2) row.append(sideKey('shift'), ...characters, sideKey('backspace'));
+            else row.append(...characters);
+            return row;
+        });
+        const footer = element('div', 'android-qwerty-row android-qwerty-footer');
+        const comma = qwertyCharacter(mode === 'japanese' ? '、' : ',');
+        const extra = qwertyExtraKey();
+        footer.append(sideKey('mode'), ...(mode === 'japanese' ? [comma, extra] : [extra, comma]), sideKey('space'),
+            qwertyCharacter(mode === 'japanese' ? '。' : '.'), sideKey('left'), sideKey('right'), sideKey('enter'));
+        board.replaceChildren(...rows, footer);
+    }
+
     function renderKeys() {
+        const isQwerty = keyboardLayout === 'qwerty' && mode !== 'numeric';
+        board.dataset.layout = isQwerty ? 'qwerty' : 'flick';
+        root.setAttribute('aria-label', `Android ${isQwerty ? 'QWERTY' : '12キー'}キーボード`);
+        layoutToggle.hidden = mode === 'numeric' || Boolean(rows.length);
+        if (isQwerty) {
+            renderQwerty();
+            return;
+        }
         const layout = layouts[mode === 'english' && shifted ? 'shifted' : mode];
         const keyRows = layout.map((keys, index) => {
             const row = element('div', 'android-key-row');
             const [left, right] = sides[mode][index];
-            row.append(sideKey(left), ...keys.map(flickKey), sideKey(right));
+            row.append(sideKey(left), ...keys.map(key => characterKey(key)), sideKey(right));
             return row;
         });
         board.replaceChildren(...keyRows);
@@ -257,6 +345,10 @@ export function createAndroidKeyboard(root, dispatch) {
     return function render(state, selection, offer, disabled) {
         root.disabled = disabled;
         const reading = state?.reading ?? '';
+        if (Boolean(reading) !== composing) {
+            composing = Boolean(reading);
+            board.querySelector('.android-qwerty-extra')?.replaceWith(qwertyExtraKey());
+        }
         const corrected = Boolean(state?.appliedCorrection);
         originalPrefix.textContent = reading ? (corrected ? '補正済み: ' : '原文: ') : '入力待ち';
         originalValue.textContent = reading;
@@ -281,6 +373,7 @@ export function createAndroidKeyboard(root, dispatch) {
         strip.replaceChildren(...rows.map(candidate));
         strip.scrollLeft = scroll;
         settings.hidden = Boolean(rows.length);
+        layoutToggle.hidden = mode === 'numeric' || Boolean(rows.length);
         expand.hidden = !rows.length;
         if (!rows.length) expanded = false;
         if (!picker) renderPanel();

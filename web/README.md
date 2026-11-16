@@ -8,7 +8,9 @@
 
 候補一覧と原文フローティングは、Windows の WebView をブラウザの iframe に組み込んで表示する。`pack-candidate-window.py` と `pack-reading-window.py` が配信用 HTML を生成する。原文の上に補正差分や先読みの続きが出たら、キー操作か表示のクリックで採用・取消ができる。
 
-デモの「表示方法」で Windows と Android を切り替えられる。スマートフォンとタブレットでは初期表示が Android になる。Android の12キー配列、かな修飾、配色、記号・絵文字は `pack-android-keyboard.py` が Android 版のソースと資産から生成する。キーをタップするか、押した位置からフリックすると入力できる。 [Unicode 絵文字データのライセンス](unicode-emoji-license.txt)
+デモの「表示方法」で Windows と Android を切り替えられる。スマートフォンとタブレットでは初期表示が Android になる。Android の候補バーには、候補が空のときに「QWERTY」と「12キー」の切り替えが出る。キー配列、かな修飾、振動の既定値、配色、記号・絵文字は `pack-android-keyboard.py` が Android 版のソースと資産から生成する。振動に対応するブラウザでは「入力設定」から振動を切り替えられる。 [Unicode 絵文字データのライセンス](unicode-emoji-license.txt)
+
+サイトの配色は `pack-site-theme.py` が Windows 版の配色一覧と配布設定から生成する。
 
 ローカルでの確認には、ワークフローと同じ構成に組み立てたサイトのディレクトリを指定する。
 
