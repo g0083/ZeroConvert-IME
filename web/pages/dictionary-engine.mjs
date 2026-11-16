@@ -200,7 +200,7 @@ function get(api, address) {
 
 // Construct this only inside the assistant worker. The key-handling worker
 // can continue processing edits while this instance runs synchronous Wasm.
-export async function loadAssistEngine(base = import.meta.url, request = fetch, completionBudgetScale = 1) {
+export async function loadAssistEngine(base = import.meta.url, request = fetch, predictionBudgetScale = 1) {
     const asset = name => request(new URL(name, base));
     const [policy, completion, model, reverse] = await Promise.all([
         WebAssembly.compileStreaming(asset('./zerocon_web_live_policy.wasm')),
@@ -233,6 +233,7 @@ export async function loadAssistEngine(base = import.meta.url, request = fetch, 
 
     const wasi = new WASI([], [], [], { debug: false });
     let rawKeys = '';
+    let budgetScale = 1;
     function complete(address, timeout) {
         const api = engine.exports;
         try {
@@ -258,7 +259,7 @@ export async function loadAssistEngine(base = import.meta.url, request = fetch, 
             try {
                 const markers = encoder.encode(stop.map(s => `${s}\0`).join(''));
                 stopsAddress = put(modelApi, markers.length ? markers : new Uint8Array(1));
-                const budget = Math.min(5000, Math.round(timeout * completionBudgetScale));
+                const budget = Math.min(5000, Math.round(timeout * budgetScale));
                 const result = modelApi.zerocon_complete(promptAddress, limit, budget, stopsAddress, markers.length);
                 if (!result) return 0;
                 const reason = ['error', 'eos', 'stop', 'limit'][modelApi.zerocon_completion_stop()];
@@ -285,10 +286,12 @@ export async function loadAssistEngine(base = import.meta.url, request = fetch, 
     if (paths?.error) throw new Error(paths.error);
     return payload => {
         rawKeys = /^[a-z]{4,64}$/u.test(payload.raw ?? '') ? payload.raw : '';
+        budgetScale = payload.op === 'prediction' ? predictionBudgetScale : 1;
         try {
             return call(JSON.stringify(payload));
         } finally {
             rawKeys = '';
+            budgetScale = 1;
         }
     };
 }

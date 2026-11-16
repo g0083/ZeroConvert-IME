@@ -78,9 +78,11 @@ try {
     next.resolve(prediction);
     await delay(30);
     assert.deepEqual(assist().map(m => m.answer.id), [predictionId]);
+    assert.deepEqual(assist().at(-1).state.candidates, normal);
     typo.resolve(correction);
     await delay(0);
     assert.deepEqual(assist().map(m => m.answer.id), [predictionId, correctionId]);
+    assert.deepEqual(assist().at(-1).state.candidates.map(row => row.id), ['a', String(correctionId), 'b']);
 
     // An assist identical to any normal row never replaces either row.
     [typo, next] = await start('あした', 2);

@@ -40,9 +40,11 @@ const readingLength = () => state.readingCount ?? [...state.reading].length;
 const inputLength = () => state.inputCount ?? [...state.raw].length;
 
 function candidatesWithAssist() {
-    return [...state.candidates, ...offered.map(answer => ({
-        text: answer.text, suffix: '', id: String(answer.id), inputCount: inputLength(), answer,
-    }))];
+    const answer = offered.find(row => row.id === assist.typoCorrection);
+    if (!answer) return state.candidates;
+    const rows = state.candidates.slice();
+    rows.splice(1, 0, { text: answer.text, suffix: '', id: String(answer.id), inputCount: inputLength(), answer });
+    return rows;
 }
 
 function snapshot() {
@@ -133,8 +135,7 @@ function commit(request, candidate, partial) {
 // The accept boundary comes from the shared policy: a suffix-bearing reading
 // commits only the converted prefix, so the browser keeps the same editable
 // remainder the Windows client keeps.
-function accept(request, live) {
-    const candidate = state.candidates[selection ?? 0];
+function accept(request, live, candidate) {
     const decision = live.decide({
         action: 'accept',
         cursor: state.cursor,
@@ -164,9 +165,11 @@ function adopt(request, live, answer, explicit = true) {
         applied: Boolean(appliedCorrection),
     });
     if (action === 'replaceComposition') {
-        const source = answer.tokenReading || state.reading;
+        const { reading } = state;
+        const top = state.candidates[0];
+        const source = top ? top.text + top.suffix : reading;
         state = request('applyCorrection', { value: answer.text });
-        appliedCorrection = { text: answer.text, source };
+        appliedCorrection = { text: answer.text, source, reading };
         selection = null;
     } else if (action === 'commitText') {
         commit(request, { text: answer.text, suffix: '', inputCount: inputLength(), answer }, false);
@@ -270,6 +273,7 @@ self.addEventListener('message', async ({ data }) => {
         }
         if (messageSession !== session && key === 'blur') return;
         const sameSession = messageSession === session;
+        const selectedBeforeEdit = sameSession && selection !== null ? candidatesWithAssist()[selection] : null;
         const selectionKey = ['space', 'up', 'down', 'select', 'enter', 'tab', 'autoApply'].includes(key);
         invalidateAssist(sameSession && selectionKey);
         if (messageSession !== session) {
@@ -282,7 +286,7 @@ self.addEventListener('message', async ({ data }) => {
             return;
         }
         if (key === 'forgetAll' || key === 'forget') {
-            const row = state.candidates[value?.index];
+            const row = state.candidates.find(row => row.id === value?.id);
             const cleared = key === 'forgetAll';
             if ((cleared && learning?.clear) || (!cleared && learning?.forget && row?.learningAllowed && row.id === value.id)) {
                 state = cleared ? request('clearLearning') : request('forgetLearning', { candidateId: row.id });
@@ -296,7 +300,7 @@ self.addEventListener('message', async ({ data }) => {
         if (!['adjustClause', 'space', 'up', 'down'].includes(key)) clauseBoundary = null;
         if (key === 'append' || key === 'sample') {
             if (key === 'append' && selection !== null && state.reading) {
-                commit(request, state.candidates[selection] ?? state.candidates[0], false);
+                commit(request, selectedBeforeEdit ?? state.candidates[0], false);
             }
             appliedCorrection = null;
             selection = null;
@@ -313,7 +317,8 @@ self.addEventListener('message', async ({ data }) => {
                 if (key === 'append') autoCommit(request, live);
             }
         } else if (key === 'space' || key === 'up' || key === 'down') {
-            const count = state.candidates.length + offered.length;
+            appliedCorrection = null;
+            const count = candidatesWithAssist().length;
             if (count) {
                 selection = live.select({
                     current: selection ?? 0,
@@ -341,12 +346,12 @@ self.addEventListener('message', async ({ data }) => {
         } else if (key === 'enter') {
             const selected = candidatesWithAssist()[selection ?? 0];
             if (selected?.answer) adopt(request, live, selected.answer);
-            else if (state.reading) accept(request, live);
+            else if (state.reading) accept(request, live, selected);
             else {
                 committed += '\n';
                 state = request('context', { value: [...committed].slice(-256).join('') });
             }
-        } else if ((key === 'cancel' || key === 'backspace') && appliedCorrection) {
+        } else if (key === 'cancel' && appliedCorrection) {
             state = request('undoCorrection');
             appliedCorrection = null;
             selection = null;
@@ -357,7 +362,7 @@ self.addEventListener('message', async ({ data }) => {
         } else if (key === 'cancel') {
             state = request('clear');
         } else if (key === 'adjustClause' && state.reading && (value === -1 || value === 1)) {
-            const boundary = clauseBoundary ?? state.candidates[selection ?? 0]?.inputCount ?? inputLength();
+            const boundary = clauseBoundary ?? selectedBeforeEdit?.inputCount ?? state.candidates[0]?.inputCount ?? inputLength();
             state = request('adjustClause', { inputCount: boundary, offset: value, value: state.raw });
             clauseBoundary = state.adjustedInputCount ?? boundary;
             selection = null;
@@ -386,7 +391,8 @@ self.addEventListener('message', async ({ data }) => {
             primaryAssist = null;
         }
         postMessage({ type: 'state', revision, session, state: snapshot(), selection, committed });
-        if (['append', 'sample', 'backspace', 'delete', 'left', 'right', 'autoApply'].includes(key)) {
+        if (['append', 'sample', 'backspace', 'delete', 'left', 'right', 'autoApply'].includes(key)
+            || (appliedCorrection && ['tab', 'select'].includes(key))) {
             scheduleAssist(request, live, revision);
         }
     } catch (error) {

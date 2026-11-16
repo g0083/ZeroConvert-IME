@@ -46,22 +46,19 @@ export function mergeAssist(live, generation, requested, answers, displayed, bas
     return eligible.find(answer => answer.id === selected) ?? null;
 }
 
-/// Describes the assist line shown beside the reading.
-///
-/// A correction renders as a diff from the reading it replaced; the correction
-/// answer already carries the token reading/surface pair the Windows ruby view
-/// diffs. A prediction renders as a plain continuation. Anything that arrived
-/// for another session or another composition is dropped.
+/// Maps a current offer to the Windows reading window's presentation envelope.
 export function assistLine(message, ids, session, reading) {
     if (!message || message.session !== session || message.reading !== reading) return null;
-    if (ids.typoCorrection !== undefined && message.displayedAssist === ids.typoCorrection) {
-        const correction = message.answer;
-        if (!correction?.text || correction.text === reading) return null;
-        return { kind: 'correction', text: correction.text, source: correction.tokenReading || reading };
+    const { answer } = message;
+    if (!answer?.text || message.displayedAssist !== answer.id) return null;
+    if (answer.id === ids.typoCorrection) {
+        const baseline = message.state?.candidates[0];
+        const source = baseline ? baseline.text + baseline.suffix : reading;
+        if (answer.text === source) return null;
+        return { status: 'proposal', replacement: answer.text, source };
     }
-    if (ids.predictive !== undefined && message.displayedAssist === ids.predictive) {
-        const text = message.answer?.continuation;
-        return text ? { kind: 'prediction', text, source: null } : null;
+    if (answer.id === ids.predictive && answer.continuation) {
+        return { status: 'prediction', replacement: answer.text, continuation: answer.continuation };
     }
     return null;
 }

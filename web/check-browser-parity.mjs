@@ -12,8 +12,26 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const root = resolve(site);
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
     '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
+// Use the actual conversion engine and control only the nested assist Worker.
+const assistFixture = `
+    postMessage({ loadState: 'ready' });
+    self.onmessage = ({ data: { id, input } }) => {
+        let answer = null;
+        if (input.op === 'correction' && input.raw === 'okseri') {
+            answer = { text: 'おかえり', relevance: 30, autoApply: false };
+        } else if (input.op === 'prediction' && input.input === 'おかえり') {
+            answer = { text: 'おかえりなさい。', continuation: 'なさい。', relevance: 60 };
+        }
+        postMessage({ id, answer });
+    };
+`;
+let useAssistFixture = false;
 const server = createServer(async (request, response) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
+    if (useAssistFixture && pathname === '/model-assist-worker.mjs') {
+        response.writeHead(200, { 'Content-Type': mime['.mjs'], 'Cache-Control': 'no-store' }).end(assistFixture);
+        return;
+    }
     const file = resolve(join(root, pathname === '/' ? 'index.html' : pathname));
     if (!file.startsWith(root + sep)) {
         response.writeHead(404).end();
@@ -34,6 +52,7 @@ server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 try {
     for (const channel of channels.length ? channels : [undefined]) {
+        useAssistFixture = false;
         const browser = await chromium.launch({ channel });
         try {
             const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
@@ -65,6 +84,10 @@ try {
             const input = page.locator('#romaji');
             const reading = page.locator('#reading');
             const frame = page.locator('#candidate-window');
+            const readingWindow = page.locator('#reading-window');
+            const overlay = page.frameLocator('#reading-window');
+            const original = overlay.locator('#reading .reading-text');
+            const pill = overlay.locator('#reading .ai-assist-pill');
             const before = page.locator('#composition-before');
             const caret = page.locator('#composition-caret');
             const waitText = (selector, expected) => page.waitForFunction(
@@ -74,12 +97,15 @@ try {
             await input.click();
             await input.pressSequentially('ashitanok', { delay: 12 });
             await waitText('#reading', 'あしたのk');
+            await original.waitFor({ state: 'visible' });
+            assert.equal(await original.textContent(), 'あしたのk');
             await input.press('Backspace');
             await waitText('#reading', 'あしたの');
             await input.pressSequentially('kaigi', { delay: 12 });
             await waitText('#reading', 'あしたのかいぎ');
             assert.equal(await before.textContent(), '明日の会議');
-            assert.equal(await page.locator('#reading-ruby').isVisible(), true);
+            assert.equal(await original.textContent(), 'あしたのかいぎ');
+            assert.ok((await readingWindow.boundingBox()).y < (await caret.boundingBox()).y);
             await frame.waitFor({ state: 'visible' });
             const start = await caret.boundingBox();
             await input.press('Shift+ArrowLeft');
@@ -95,16 +121,19 @@ try {
             await waitText('#reading', 'あしたのかい');
             await input.press('Escape');
             await waitText('#reading', '');
+            await readingWindow.waitFor({ state: 'hidden' });
 
             await input.pressSequentially('nihongo', { delay: 12 });
             await waitText('#reading', 'にほんご');
             await input.press('Space');
+            assert.equal(await original.isVisible(), true);
             await input.press('ArrowUp');
             await page.frameLocator('#candidate-window').locator('.candidate-item').first().click();
             await waitText('#confirmed', '日本語');
             assert.equal(await input.evaluate(element => element === document.activeElement), true);
             await page.locator('summary').focus();
             await frame.waitFor({ state: 'hidden' });
+            await readingWindow.waitFor({ state: 'hidden' });
             await input.focus();
             assert.equal(await page.locator('#confirmed').textContent(), '日本語');
 
@@ -113,8 +142,12 @@ try {
             await input.click();
             await input.pressSequentially('okseri', { delay: 12 });
             await waitText('#reading', 'おかえり');
-            await page.waitForFunction(() => document.querySelector('#assist').textContent.includes('おかえり'));
-            const badge = await page.locator('#assist').boundingBox();
+            await pill.waitFor({ state: 'visible' });
+            assert.equal(await original.textContent(), 'おkせり');
+            assert.equal(await overlay.locator('#reading .assist-original').textContent(), 'おkせり');
+            assert.equal(await overlay.locator('#reading mark').textContent(), 'かえ');
+            assert.equal(await overlay.locator('#reading .assist-action').textContent(), '補正済み · Esc戻す');
+            const badge = await readingWindow.boundingBox();
             const nearbyPopup = await frame.boundingBox();
             assert.ok(nearbyPopup.y >= badge.y + badge.height - 1 || nearbyPopup.y + nearbyPopup.height <= badge.y + 1,
                 'candidate popup keeps the correction visible');
@@ -123,15 +156,47 @@ try {
                 await mkdir(screenshots, { recursive: true });
                 await page.screenshot({ path: join(screenshots, `${channel ?? 'chromium'}-assist.png`) });
             }
-            await input.press('Backspace');
+            await pill.click();
             await waitText('#reading', 'おkせり');
+            assert.equal(await input.evaluate(element => element === document.activeElement), true);
+            await pill.waitFor({ state: 'hidden' });
             await input.press('Escape');
             await waitText('#reading', '');
+
+            await page.getByRole('button', { name: '補正の例「okseri」' }).click();
+            await waitText('#reading', 'おかえり');
+            await input.press('Escape');
+            await waitText('#reading', 'おkせり');
+
+            await page.getByRole('button', { name: '補正の例「okseri」' }).click();
+            await waitText('#reading', 'おかえり');
+            await input.press('Backspace');
+            await waitText('#reading', 'おかえ');
+            await pill.waitFor({ state: 'hidden' });
+
+            await page.getByRole('button', { name: '先読みの例「よろしくお願いし」' }).click();
+            await waitText('#composition-before', 'よろしくお願いし');
+            await overlay.locator('#reading .assist-change').getByText('ます。', { exact: true }).waitFor();
+            assert.equal(await original.textContent(), 'よろしくおねがいし');
+            assert.equal(await overlay.locator('#reading .assist-action').textContent(), 'Tabで確定');
+            assert.equal(await page.frameLocator('#candidate-window').locator('.candidate-item').filter({ hasText: 'よろしくお願いします。' }).count(), 0);
+            if (screenshots) await page.screenshot({ path: join(screenshots, `${channel ?? 'chromium'}-prediction.png`) });
+            await input.press('Tab');
+            await waitText('#confirmed', 'よろしくお願いします。');
+            await readingWindow.waitFor({ state: 'hidden' });
 
             await page.locator('summary').click();
             await page.locator('#enable-correction').uncheck();
             await page.locator('#enable-prediction').uncheck();
             await page.locator('#learning-mode').selectOption('enabled');
+            await input.focus();
+            await input.press('Escape');
+            await page.locator('#sample').click();
+            await waitText('#reading', 'あしたのかいぎ');
+            await page.getByRole('button', { name: '補正の例「okseri」' }).focus();
+            await readingWindow.waitFor({ state: 'hidden' });
+            await page.reload();
+            await page.waitForFunction(() => !document.querySelector('#romaji').disabled);
             await input.focus();
             await input.pressSequentially('hashi', { delay: 12 });
             await waitText('#reading', 'はし');
@@ -169,8 +234,30 @@ try {
                 return { saved: first === v1 + 1, stale, byte: files[0]?.[1][0] };
             });
             assert.deepEqual(storage, { saved: true, stale: null, byte: 42 });
+
+            // Control completion results to test both the manual proposal and a
+            // prediction that appears while an applied correction can be undone.
+            useAssistFixture = true;
+            await page.evaluate(() => localStorage.removeItem('zerocon-settings-v1'));
+            await page.setViewportSize({ width: 390, height: 700 });
+            await page.reload();
+            await page.waitForFunction(() => !document.querySelector('#romaji').disabled);
+            await page.getByRole('button', { name: '補正の例「okseri」' }).click();
+            await waitText('#reading', 'おkせり');
+            await pill.waitFor({ state: 'visible' });
+            assert.equal(await overlay.locator('#reading .assist-action').textContent(), 'Tabで補正');
+            assert.match(await candidateRows.nth(1).textContent(), /おかえり 〔補正〕/u);
+            await pill.click();
+            await waitText('#reading', 'おかえり');
+            await overlay.locator('#reading .assist-change').getByText('なさい。', { exact: true }).waitFor();
+            assert.deepEqual(await overlay.locator('#reading .assist-action').allTextContents(), ['Tabで確定', '補正済み · Escで戻す']);
+            const narrowOverlay = await readingWindow.boundingBox();
+            assert.ok(narrowOverlay.x >= 0 && narrowOverlay.x + narrowOverlay.width <= 390);
+            await input.press('Escape');
+            await waitText('#reading', 'おkせり');
+            await pill.waitFor({ state: 'hidden' });
             assert.deepEqual(errors, []);
-            console.log(`${channel ?? 'Chromium'}: load and retry, typing, correction undo, candidates, and IndexedDB passed`);
+            console.log(`${channel ?? 'Chromium'}: loading, native reading popup, correction and undo, prediction adoption, candidates, and IndexedDB passed`);
         } finally {
             await browser.close();
         }

@@ -1,6 +1,7 @@
 import { loadAssistEngine } from './dictionary-engine.mjs';
 
-const ready = loadAssistEngine();
+// The single-threaded Wasm backend needs more time than the native backend.
+const ready = loadAssistEngine(undefined, undefined, 3);
 ready.then(
     () => postMessage({ loadState: 'ready' }),
     () => postMessage({ loadState: 'failed' }),

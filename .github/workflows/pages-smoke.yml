@@ -53,7 +53,6 @@ jobs:
           node web/check-load-progress.mjs
           mkdir -p dist/pages-smoke
           cp web/pages/index.html web/pages/style.css web/pages/dictionary-engine.mjs web/pages/model-*.mjs web/pages/assist-session.mjs web/pages/learning-store.mjs web/pages/load-progress.mjs web/pages/settings-store.mjs dist/pages-smoke/
-          cp windows/crates/ui/src/correction_diff.js dist/pages-smoke/
           cp windows/frontend/public/favicon.png dist/pages-smoke/
           cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages-smoke/
           cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages-smoke/
@@ -106,6 +105,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 3 https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-v0.7.0-arm64-debug.apk -o "$RUNNER_TEMP/zerocon.apk"
           python3 web/pack-model.py "$RUNNER_TEMP/zerocon.apk" dist/pages-smoke
           python3 web/pack-candidate-window.py dist/pages-smoke/candidate-window.html
+          python3 web/pack-reading-window.py dist/pages-smoke/reading-window.html
           node --test --test-name-pattern='^(empty candidates|short candidate lists|long candidate lists|render ranges|render range|selection indices|selection scrolling)' windows/crates/ui/tests/candidate_scroller.test.cjs
           (cd web && npm ci --ignore-scripts --no-audit)
           cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages-smoke/wasi

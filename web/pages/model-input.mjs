@@ -14,17 +14,15 @@ const caret = document.querySelector('#composition-caret');
 const afterCaret = document.querySelector('#composition-after');
 const confirmed = document.querySelector('#confirmed');
 const reading = document.querySelector('#reading');
-const ruby = document.querySelector('#reading-ruby');
-const assist = document.querySelector('#assist');
 const editorButtons = document.querySelectorAll('[data-sample], [data-command]');
 const frame = document.querySelector('#candidate-window');
+const readingFrame = document.querySelector('#reading-window');
 const correctionSetting = document.querySelector('#enable-correction');
 const predictionSetting = document.querySelector('#enable-prediction');
 const learningSetting = document.querySelector('#learning-mode');
 const clearLearning = document.querySelector('#clear-learning');
 const learningStatus = document.querySelector('#learning-status');
 const worker = new Worker(new URL('./model-worker.mjs', import.meta.url), { type: 'module' });
-const { CorrectionDiff } = globalThis;
 // The Worker reports assist candidate identities and learning capabilities in
 // its ready message.
 let assistIds = {};
@@ -38,7 +36,9 @@ let selection = null;
 let frameReady = false;
 let candidateHeight = 150;
 let editing = false;
-let canAdopt = false;
+let assistOffer = null;
+let readingValue = '';
+let readingRequest = 0;
 const session = 1; // The preview has one editor; blur does not clear its text.
 const graphemes = new Intl.Segmenter('ja', { granularity: 'grapheme' });
 const byteFormat = new Intl.NumberFormat('ja', { maximumFractionDigits: 1 });
@@ -90,9 +90,22 @@ function loadFailed(message) {
 
 function send(key, value) {
     if (editor.disabled) return;
-    canAdopt = false;
-    renderAssist(null);
+    const hadOffer = Boolean(assistOffer);
+    assistOffer = null;
+    if (hadOffer || key === 'blur') renderReadingWindow();
     worker.postMessage({ revision: ++revision, key, value, session });
+}
+
+function positionReadingWindow() {
+    if (readingFrame.hidden) return;
+    const anchor = caret.getBoundingClientRect();
+    const margin = 8;
+    const width = readingFrame.offsetWidth;
+    const height = readingFrame.offsetHeight;
+    const above = anchor.top + Math.max(0, Math.min(18, anchor.height / 2) - 4) - height - 2;
+    const top = above >= margin ? above : anchor.bottom + 2;
+    readingFrame.style.left = `${Math.max(margin, Math.min(anchor.left - 20, innerWidth - width - margin))}px`;
+    readingFrame.style.top = `${Math.max(margin, Math.min(top, innerHeight - height - margin))}px`;
 }
 
 function positionCandidates() {
@@ -100,8 +113,10 @@ function positionCandidates() {
     const anchor = caret.getBoundingClientRect();
     const margin = 8;
     const width = frame.offsetWidth;
-    const above = (assist.textContent ? Math.min(anchor.top, assist.getBoundingClientRect().top) : anchor.top) - 4;
-    const below = anchor.bottom + 4;
+    const overlay = readingFrame.hidden ? null : readingFrame.getBoundingClientRect();
+    const overlayAbove = overlay && overlay.top < anchor.top;
+    const above = (overlayAbove ? overlay.top : anchor.top) - 4;
+    const below = (overlay && !overlayAbove ? Math.max(anchor.bottom, overlay.bottom) : anchor.bottom) + 4;
     const roomBelow = window.innerHeight - margin - below;
     const roomAbove = above - margin;
     const placeAbove = roomBelow < candidateHeight && roomAbove > roomBelow;
@@ -110,6 +125,11 @@ function positionCandidates() {
     frame.style.height = `${height}px`;
     frame.style.left = `${Math.max(margin, Math.min(anchor.left, window.innerWidth - width - margin))}px`;
     frame.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - height - margin))}px`;
+}
+
+function positionWindows() {
+    positionReadingWindow();
+    positionCandidates();
 }
 
 function candidates() {
@@ -121,7 +141,7 @@ function candidates() {
             revision: renderedRevision, ids: rows.map(row => row.id),
             forget: rows.map(row => learning?.forget && row.learningAllowed === true),
         };
-        frame.contentWindow.updateCandidates(rows.map(row => row.text + row.suffix), selection ?? 0);
+        frame.contentWindow.updateCandidates(rows.map(row => row.text + row.suffix + (row.answer ? ' 〔補正〕' : '')), selection ?? 0);
     }
     positionCandidates();
 }
@@ -140,36 +160,29 @@ function render() {
     }
     reading.textContent = state?.reading ?? '';
     display.dataset.empty = String(!confirmed.textContent && !state?.reading);
-    ruby.textContent = reading.textContent;
-    ruby.hidden = !settings.showReading || !editing || selection !== null
-        || !ruby.textContent || ruby.textContent === beforeCaret.textContent + afterCaret.textContent;
-    if (editing && state?.appliedCorrection) {
-        const { text, source } = state.appliedCorrection;
-        renderAssist(text, source);
-    }
+    renderReadingWindow();
     candidates();
 }
 
-// Assist text is shown beside the reading: a correction as the shared diff, a
-// prediction as its continuation. Nothing here changes the composition text.
-function renderAssist(text, diffSource) {
-    if (!assist) return;
-    assist.replaceChildren();
-    if (!text) return;
-    if (diffSource && CorrectionDiff) {
-        const diff = CorrectionDiff.correctionDiff(diffSource, text);
-        const original = document.createElement('span');
-        original.className = 'assist-source';
-        original.textContent = diff.original;
-        const arrow = document.createElement('span');
-        arrow.className = 'assist-arrow';
-        arrow.textContent = ' → ';
-        const replacement = document.createElement('span');
-        replacement.innerHTML = diff.replacement;
-        assist.append(original, arrow, replacement);
+function renderReadingWindow() {
+    const update = readingFrame.contentWindow?.updateReading;
+    if (typeof update !== 'function') return;
+    let value = '';
+    if (editing && state?.reading) {
+        const applied = state.appliedCorrection;
+        if (assistOffer) {
+            value = JSON.stringify({ reading: state.reading, assist: { ...assistOffer, undoAvailable: Boolean(applied) } });
+        } else if (applied) {
+            value = JSON.stringify({ reading: applied.reading, assist: { status: 'applied', source: applied.source, replacement: applied.text } });
+        } else if (settings.showReading) value = state.reading;
+    }
+    if (value === readingValue) {
+        positionReadingWindow();
         return;
     }
-    assist.textContent = text;
+    readingValue = value;
+    if (!value) readingFrame.hidden = true;
+    update(value, ++readingRequest);
 }
 
 function attachCandidateWindow() {
@@ -179,12 +192,29 @@ function attachCandidateWindow() {
 
 frame.addEventListener('load', attachCandidateWindow);
 attachCandidateWindow();
+readingFrame.addEventListener('load', () => {
+    readingValue = '';
+    renderReadingWindow();
+});
 
 window.addEventListener('message', event => {
-    if (event.origin !== location.origin || event.source !== frame.contentWindow || typeof event.data !== 'string') return;
+    if (event.origin !== location.origin || typeof event.data !== 'string') return;
+    const fromReading = event.source === readingFrame.contentWindow;
+    if (!fromReading && event.source !== frame.contentWindow) return;
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
-    if (message.type === 'candidate-ready') {
+    if (fromReading) {
+        if (!readingValue || message.requestId !== readingRequest) return;
+        if (message.type === 'ruby-resize' && Number.isFinite(message.width) && Number.isFinite(message.height)) {
+            readingFrame.style.width = `${Math.min(innerWidth - 16, message.width)}px`;
+            readingFrame.style.height = `${Math.min(innerHeight - 16, message.height)}px`;
+            readingFrame.hidden = false;
+            positionWindows();
+        } else if (message.type === 'ruby-assist-click' && editing && renderedRevision === revision) {
+            if (assistOffer) send('tab');
+            else if (state?.appliedCorrection) send('cancel');
+        }
+    } else if (message.type === 'candidate-ready') {
         attachCandidateWindow();
     } else if (message.type === 'resize' && Number.isFinite(message.height)) {
         candidateHeight = Math.min(450, Math.max(1, message.height));
@@ -246,9 +276,8 @@ worker.addEventListener('message', ({ data }) => {
             return;
         }
         state = data.state;
-        canAdopt = true;
-        renderAssist(line?.text ?? null, line?.source ?? null);
-        candidates();
+        assistOffer = line;
+        render();
     } else if (data.type === 'learning') {
         if (data.result === 'conflict') learningStatus.textContent = '別のタブで学習が更新されました。保存するにはこのページを再読み込みしてください。';
         else if (data.result === 'memoryOnly') learningStatus.textContent = '学習を保存できませんでした。このタブを閉じると、今回の変更は失われます。';
@@ -270,7 +299,7 @@ editor.addEventListener('keydown', event => {
     if (event.shiftKey && state?.reading && (key === 'left' || key === 'right')) {
         send('adjustClause', key === 'left' ? -1 : 1);
     } else if (numbered) send('select', { index, id: numbered.id });
-    else if (event.key === 'Tab' && !event.shiftKey && canAdopt) send('tab');
+    else if (event.key === 'Tab' && !event.shiftKey && (assistOffer || state?.appliedCorrection)) send('tab');
     else if (key) send(key);
     else if ([...event.key].length === 1) send('append', event.key);
     else return;
@@ -292,8 +321,11 @@ editor.addEventListener('blur', () => {
     send('blur');
     render();
 });
-window.addEventListener('resize', positionCandidates);
-window.addEventListener('scroll', positionCandidates, { capture: true, passive: true });
+window.addEventListener('resize', () => {
+    if (!readingFrame.hidden) readingFrame.contentWindow.measureRuby();
+    positionWindows();
+});
+window.addEventListener('scroll', positionWindows, { capture: true, passive: true });
 for (const button of editorButtons) {
     button.addEventListener('pointerdown', event => {
         if (document.activeElement === editor) event.preventDefault();

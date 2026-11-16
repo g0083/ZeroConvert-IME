@@ -59,8 +59,8 @@ assert.equal(mergeAssist(live, 4, 3, [correction({})], null, 'しますた'), nu
 assert.equal(mergeAssist(live, 5, 5, [correction({ text: 'しました' })], null, 'しました'), null);
 assert.equal(mergeAssist(live, 5, 5, [correction({ text: 'しました' }), prediction({})], null, 'しました').id, 999902);
 
-// The assist line shows a correction as a diff from its token reading, and a
-// prediction as a plain continuation, only for the current session.
+// The native reading envelope diffs the ordinary surface and shows just the
+// prediction continuation for the current session.
 const ids = { typoCorrection: 999901, predictive: 999902 };
 const correctionMessage = {
     type: 'assist',
@@ -68,10 +68,11 @@ const correctionMessage = {
     reading: 'しますた',
     displayedAssist: 999901,
     answer: { id: 999901, text: 'しました', tokenReading: 'しますた' },
+    state: { candidates: [{ text: 'します', suffix: 'た' }] },
 };
 assert.deepEqual(assistLine(correctionMessage, ids, 2, 'しますた'), {
-    kind: 'correction',
-    text: 'しました',
+    status: 'proposal',
+    replacement: 'しました',
     source: 'しますた',
 });
 assert.equal(assistLine(correctionMessage, ids, 3, 'しますた'), null);
@@ -79,7 +80,7 @@ assert.equal(assistLine(correctionMessage, ids, 2, 'しました'), null);
 assert.deepEqual(
     assistLine({ ...correctionMessage, reading: 'あしたのかいぎ', displayedAssist: 999902,
         answer: { id: 999902, text: '明日の会議です。', continuation: 'です。' } }, ids, 2, 'あしたのかいぎ'),
-    { kind: 'prediction', text: 'です。', source: null },
+    { status: 'prediction', replacement: '明日の会議です。', continuation: 'です。' },
 );
 assert.equal(assistLine({ ...correctionMessage, displayedAssist: null }, ids, 2, 'しますた'), null);
 

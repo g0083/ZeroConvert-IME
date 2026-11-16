@@ -102,11 +102,7 @@ h2 { font-size: clamp(1.65rem, 3vw, 2.65rem); line-height: 1.32; letter-spacing:
 #romaji { position: absolute; inset: 0; border: 0; width: 100%; height: 100%; opacity: 0; resize: none; font-size: 16px; cursor: text; }
 #composition { border-bottom: 1px solid #8663af; }
 .composition-field:focus-within #composition-caret { display: inline-block; height: 1em; width: 2px; background: var(--purple); vertical-align: -.1em; }
-#reading-ruby { color: var(--purple-dark); font-size: .64em; }
-.assist { padding: .4rem 16px 0; color: #523078; font-size: .88rem; overflow-wrap: anywhere; }
-.assist:empty { padding: 0; }
-.assist mark { color: #542184; background: #eddbff; border-radius: 3px; padding: 0 .16em; font-weight: 750; }
-.assist-arrow { color: #756184; }
+#reading-window { position: fixed; z-index: 3; width: 0; height: 0; border: 0; }
 #candidate-window { position: fixed; z-index: 2; width: min(420px, calc(100vw - 16px)); border: 0; }
 .example-buttons, .touch-controls { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .example-buttons button, .touch-controls button, .demo-settings button, #retry-model {
