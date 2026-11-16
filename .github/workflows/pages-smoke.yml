@@ -92,7 +92,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 3 https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-v0.7.0-arm64-debug.apk -o "$RUNNER_TEMP/zerocon.apk"
           python3 web/pack-model.py "$RUNNER_TEMP/zerocon.apk" dist/pages-smoke
           python3 web/pack-candidate-window.py dist/pages-smoke/candidate-window.html
-          node --test --test-name-pattern='^(?!candidate spacing declarations)' windows/crates/ui/tests/candidate_scroller.test.cjs
+          node --test --test-name-pattern='^(empty candidates|short candidate lists|long candidate lists|render ranges|render range|selection indices|selection scrolling)' windows/crates/ui/tests/candidate_scroller.test.cjs
           (cd web && npm ci --ignore-scripts --no-audit)
           cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages-smoke/wasi
           node web/check-model-wasm.mjs dist/pages-smoke
