@@ -50,15 +50,17 @@ export async function loadDictionaryEngine(base = import.meta.url, request = fet
     ], { debug: false });
     const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
     wasi.initialize(instance);
-    const api = instance.exports;
+    return requestJSON(instance.exports, instance.exports.zerocon_dictionary_convert);
+}
 
-    return raw => {
-        const input = encoder.encode(`${raw}\0`);
+function requestJSON(api, call, release = api.free) {
+    return payload => {
+        const input = encoder.encode(`${payload}\0`);
         const address = api.malloc(input.length);
         if (!address) throw new Error('入力用メモリを確保できませんでした。');
         try {
             new Uint8Array(api.memory.buffer).set(input, address);
-            const result = api.zerocon_dictionary_convert(address);
+            const result = call(address);
             if (!result) throw new Error('変換エンジンが入力を処理できませんでした。');
             try {
                 const memory = new Uint8Array(api.memory.buffer);
@@ -66,10 +68,59 @@ export async function loadDictionaryEngine(base = import.meta.url, request = fet
                 if (end === -1) throw new Error('変換結果を読み取れませんでした。');
                 return JSON.parse(decoder.decode(memory.subarray(result, end)));
             } finally {
-                api.free(result);
+                release(result);
             }
         } finally {
             api.free(address);
         }
     };
+}
+
+async function readAsset(response) {
+    if (!response.ok) throw new Error(`モデル用のファイルを取得できませんでした（HTTP ${response.status}）。`);
+    return new Uint8Array(await response.arrayBuffer());
+}
+
+export async function loadModelEngine(base = import.meta.url, request = fetch) {
+    const modelName = 'zerocon-nano-v4.1-iq4nl-emb8.gguf';
+    const asset = name => request(new URL(name, base));
+    const [module, dictionary, model, settings] = await Promise.all([
+        WebAssembly.compileStreaming(asset('./zerocon_model.wasm')),
+        asset('./dictionary.gz').then(dictionaryFiles),
+        asset(`./${modelName}`).then(readAsset),
+        asset('./ime-settings.json').then(readAsset),
+    ]);
+    const runtime = new Map([
+        ['Dictionary', dictionary],
+        ['models', new Directory(new Map([[modelName, new File(model)]]))],
+        ['Azookey', new Directory(new Map([['settings.json', new File(settings)]]))],
+    ]);
+    const wasi = new WASI(['/runtime/zerocon_model.wasm'], ['APPDATA=/runtime'], [
+        new OpenFile(new File([])),
+        ConsoleStdout.lineBuffered(() => {}),
+        ConsoleStdout.lineBuffered(() => {}),
+        new PreopenDirectory('/runtime', runtime),
+    ], { debug: false });
+    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
+    wasi.initialize(instance);
+    const call = requestJSON(instance.exports, instance.exports.zerocon_model_request);
+    const send = (key, fields = {}) => call(JSON.stringify({ key, ...fields }));
+    send.autoCommit = JSON.parse(decoder.decode(settings)).general.auto_commit_live_conversion;
+    send('initialize');
+    const warmup = send('append', { value: 'nihongo' });
+    if (warmup.modelStatus !== `load file:///runtime/models/${modelName}`) {
+        throw new Error(`ZeroCon Model を読み込めませんでした。${warmup.modelStatus}`);
+    }
+    send('clear');
+    return send;
+}
+
+export async function loadLivePolicy(base = import.meta.url, request = fetch) {
+    const module = await WebAssembly.compileStreaming(request(new URL('./zerocon_web_live_policy.wasm', base)));
+    const wasi = new WASI([], [], [], { debug: false });
+    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
+    wasi.initialize(instance);
+    const api = instance.exports;
+    const call = requestJSON(api, api.zerocon_live_observe, api.zerocon_live_free);
+    return { observe: observation => call(JSON.stringify(observation)), reset: api.zerocon_live_reset };
 }

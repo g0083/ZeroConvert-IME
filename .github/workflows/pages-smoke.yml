@@ -43,31 +43,59 @@ jobs:
         run: |
           cargo rustc --locked --manifest-path engine/rust/Cargo.toml --target wasm32-wasip1 --release --lib --crate-type cdylib -- -C link-arg=--export=malloc -C link-arg=--export=free
           node web/check-assist-wasm.cjs engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm
+          cargo rustc --locked --manifest-path web/live-policy/Cargo.toml --target wasm32-wasip1 --release -- -C link-arg=--export=malloc -C link-arg=--export=free
           mkdir -p dist/pages-smoke
-          cp web/pages/* dist/pages-smoke/
+          cp web/pages/index.html web/pages/style.css web/pages/check.js web/pages/dictionary-engine.mjs web/pages/model-*.mjs dist/pages-smoke/
           cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages-smoke/
+          cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages-smoke/
           cp windows/LICENSE dist/pages-smoke/LICENSE.txt
-      - name: Build and check the shared Swift dictionary
+      - name: Build the pinned llama.cpp for WASI
+        run: |
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          bin="$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin"
+          sdk="$swift_root/swift-6.4.2-RELEASE_wasm.artifactbundle/swift-6.4.2-RELEASE_wasm/wasm32-unknown-wasip1/WASI.sdk"
+          python3 web/stage-llama.py "$RUNNER_TEMP/llama-source" --windows-source "$RUNNER_TEMP/llama-windows-source"
+          flags='-msimd128 -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS'
+          cmake -G Ninja -S "$RUNNER_TEMP/llama-source" -B "$RUNNER_TEMP/llama-build" \
+            -DCMAKE_SYSTEM_NAME=WASI -DCMAKE_SYSTEM_PROCESSOR=wasm32 \
+            -DCMAKE_C_COMPILER_TARGET=wasm32-wasip1 -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip1 \
+            -DCMAKE_SYSROOT="$sdk" -DCMAKE_C_COMPILER="$bin/clang" -DCMAKE_CXX_COMPILER="$bin/clang++" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_RPC=OFF \
+            -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_IS_DEV=OFF
+          cmake --build "$RUNNER_TEMP/llama-build" --target llama --parallel 4
+      - name: Build and check the Windows Swift model route
         run: |
           set -o pipefail
           swift_root="$RUNNER_TEMP/zerocon-swift"
           converter=$(python3 windows/scripts/prepare-modern-llama.py --converter-only | python3 -c 'import json,sys; print(json.load(sys.stdin)["converter"])')
-          python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/dictionary-source"
+          python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/model-source" --llama-source "$RUNNER_TEMP/llama-source"
+          llama_lib="$RUNNER_TEMP/llama-build"
           "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/swift" build -c release \
             --swift-sdks-path "$swift_root" --swift-sdk swift-6.4.2-RELEASE_wasm \
-            --package-path "$RUNNER_TEMP/dictionary-source/app" --scratch-path "$RUNNER_TEMP/dictionary-build" \
+            --package-path "$RUNNER_TEMP/model-source/app" --scratch-path "$RUNNER_TEMP/model-build" \
             -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor \
-            -Xlinker --export=malloc -Xlinker --export=free -Xlinker --export=zerocon_dictionary_convert
-          wasm=$(find "$RUNNER_TEMP/dictionary-build" -name zerocon_dictionary.wasm -type f -print -quit)
+            -Xlinker --export=malloc -Xlinker --export=free -Xlinker --export=zerocon_model_request \
+            -Xlinker "-L$llama_lib/src" -Xlinker "-L$llama_lib/ggml/src" \
+            -Xlinker -lggml-cpu -Xlinker -lc++ -Xlinker -lc++abi \
+            -Xlinker -lwasi-emulated-signal -Xlinker -lwasi-emulated-mman -Xlinker -lwasi-emulated-process-clocks
+          wasm=$(find "$RUNNER_TEMP/model-build" -name zerocon_model.wasm -type f -print -quit)
           test -n "$wasm"
           cp "$wasm" dist/pages-smoke/
           dictionary=windows/server-swift/azooKey_dictionary_storage
           python3 web/pack-dictionary.py "$dictionary/Dictionary" dist/pages-smoke/dictionary.gz
           cp "$dictionary/LICENSE" dist/pages-smoke/DICTIONARY-LICENSE.txt
           cp "$converter/LICENSE" dist/pages-smoke/CONVERTER-LICENSE.txt
+          cp "$RUNNER_TEMP/llama-source/LICENSE" dist/pages-smoke/LLAMA-LICENSE.txt
+          curl --fail --silent --show-error --location --retry 3 https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-v0.7.0-arm64-debug.apk -o "$RUNNER_TEMP/zerocon.apk"
+          python3 web/pack-model.py "$RUNNER_TEMP/zerocon.apk" dist/pages-smoke
+          python3 web/pack-candidate-window.py dist/pages-smoke/candidate-window.html
+          node --test --test-name-pattern='^(?!candidate spacing declarations)' windows/crates/ui/tests/candidate_scroller.test.cjs
           (cd web && npm ci --ignore-scripts --no-audit)
           cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages-smoke/wasi
-          node web/check-dictionary-wasm.mjs dist/pages-smoke
+          node web/check-model-wasm.mjs dist/pages-smoke
       - uses: actions/upload-pages-artifact@v4
         with:
           path: dist/pages-smoke

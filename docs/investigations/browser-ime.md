@@ -24,6 +24,6 @@ Cloudflare Pages の上限は 1 ファイル 25 MiB。既定の Nano v4.1 IQ4_em
 
 ## GitHub Pages の試験ページ
 
-[`web-pages-smoke` ブランチ](https://github.com/g0083/ZeroConvert-IME/tree/web-pages-smoke) の push で [検証ワークフロー](../../.github/workflows/pages-smoke.yml) が動く。共有 Rust Wasm、共有 Swift の辞書変換 Wasm、固定リビジョンの辞書を作り、Node で判定と変換を確認してから [`web/pages/`](../../web/pages/) と組み合わせて配信する。Pages の公開元は GitHub Actions。Wasm と辞書は Actions の成果物で配信する。
+[`web-pages-smoke` ブランチ](https://github.com/g0083/ZeroConvert-IME/tree/web-pages-smoke) の push で [検証ワークフロー](../../.github/workflows/pages-smoke.yml) が動く。Windows と同じ Swift 変換ソース、同じ llama.cpp リビジョン・パッチ、固定リビジョンの辞書を、単一スレッドの CPU Wasm としてビルドする。v0.7.0 の公開 APK に同梱されたモデルから取り出した GGUF を Windows のモデルカタログと SHA-256 で照合する。Wasm・辞書・モデルは Actions の成果物から配信する。
 
-[試験ページ](https://g0083.github.io/ZeroConvert-IME/) は Wasm と辞書を読み込むと入力欄を有効にする。`ashitanokaigi` を入力すると読みと候補が表示される。Space または上下キーで候補を移動し、Enter か候補クリックで確定できる。Rust 側の補正・先読み依頼の判定は独立した動作確認欄に表示する。ZeroCon Model を使った推論は未接続。
+[試験ページ](https://g0083.github.io/ZeroConvert-IME/) は Web Worker 内でモデルを読み込み、テスト変換でロード成功を確かめてから入力欄を有効にする。`ashitanokaigi` を入力すると、Windows 版と同じ Swift の `AppendText` と `GetComposedText` を経由し、読みと候補が表示される。先頭部分の自動確定の判定には共有 Rust ポリシーを使う。候補一覧のマークアップ、配色、スクロールは Windows の候補 WebView を再利用する。OS のキャレット連携、永続学習、Windows Rust サーバーの非同期補正・先読み候補生成は対象外。

@@ -18,7 +18,11 @@ input, textarea { width: 100%; min-width: 0; box-sizing: border-box; border: 1px
 .input-bar button { flex: none; }
 .hint { font-size: .8rem; }
 #reading { color: #ccbbff; min-height: 1.6em; margin: .75rem 0 .35rem; overflow-wrap: anywhere; }
-#candidates { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0; list-style: none; }
-#candidates button { background: #302a42; color: inherit; overflow-wrap: anywhere; max-width: 100%; text-align: left; }
-#candidates li { min-width: 0; max-width: 100%; }
-#candidates button[data-selected="true"] { background: #ccbbff; color: #1e142f; }
+.composition-field { position: relative; flex: 1; min-width: 0; background: #14131e; border: 1px solid #615b76; border-radius: 7px; }
+.composition-field:focus-within { outline: 2px solid #ccbbff; }
+.composition-display { min-height: 5rem; padding: .65rem .75rem; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+#romaji { position: absolute; inset: 0; height: 100%; opacity: 0; resize: none; }
+#composition { border-bottom: 1px solid #ccbbff; }
+.composition-field:focus-within #composition::after { content: ''; display: inline-block; height: 1em; width: 2px; background: #ccbbff; margin-left: 2px; vertical-align: -.1em; }
+#candidate-window { width: min(420px, 100%); display: block; border: 0; }
+#candidate-window[hidden] { display: none; }

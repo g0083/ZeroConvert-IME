@@ -6,26 +6,27 @@
   <title>ZeroConvert IME · ブラウザ実行テスト</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./check.js"></script>
-  <script type="module" src="./input.mjs"></script>
+  <script type="module" src="./model-input.mjs"></script>
 </head>
 <body>
   <main>
     <p class="brand">ZeroConvert IME</p>
     <h1>ブラウザでかな漢字変換</h1>
-    <p>ローマ字で入力すると、ZeroConvert IME と共通の辞書エンジンが候補を出します。モデル推論は移植中です。</p>
+    <p>ローマ字で入力すると、Windows 版と同じ ZeroCon Model Nano v4.1 と Swift 変換エンジンが候補を出します。</p>
     <section aria-labelledby="input-heading">
       <h2 id="input-heading">入力を試す</h2>
-      <p id="conversion-status" role="status">変換エンジンと辞書を読み込み中…</p>
+      <p id="conversion-status" role="status">変換エンジン、辞書、モデルを読み込み中…</p>
       <label for="romaji">ローマ字</label>
       <div class="input-bar">
-        <input id="romaji" type="text" placeholder="ashitanokaigi" maxlength="256" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="keyboard-help" disabled>
+        <div class="composition-field">
+          <div class="composition-display" aria-hidden="true"><span id="confirmed"></span><span id="composition"></span></div>
+          <textarea id="romaji" rows="3" maxlength="256" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="keyboard-help" disabled></textarea>
+        </div>
         <button id="sample" type="button" disabled>入力例</button>
       </div>
       <p id="keyboard-help" class="hint">Space で候補切替、Enter で確定、Esc で取消</p>
       <p id="reading" aria-live="polite"></p>
-      <ul id="candidates" aria-label="変換候補"></ul>
-      <label for="confirmed">確定した文章</label>
-      <textarea id="confirmed" rows="3" readonly></textarea>
+      <iframe id="candidate-window" title="変換候補" src="./candidate-window.html" hidden></iframe>
     </section>
     <section aria-labelledby="heading">
       <h2 id="heading">ブラウザ実行テスト</h2>
