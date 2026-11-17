@@ -114,6 +114,7 @@ h2 { font-size: clamp(1.65rem, 3vw, 2.65rem); line-height: 1.32; letter-spacing:
 button:not(:disabled):hover { filter: brightness(.96); }
 .touch-controls { display: none; }
 .hint { font-size: .8rem; color: var(--muted); }
+.demo-performance-note { margin: 8px 0 12px; }
 .keyboard-help { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 7px; align-items: center; }
 kbd { display: inline-block; border: 1px solid var(--line); border-radius: 4px; background: var(--ime-selection); color: var(--ime-text); padding: 1px 4px; font: .72rem ui-monospace, monospace; }
 #assist-status { margin-top: 8px; }

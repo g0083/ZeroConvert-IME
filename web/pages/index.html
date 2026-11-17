@@ -65,10 +65,11 @@
                 <option value="android">Android</option>
               </select>
             </label>
+            <p id="demo-performance-note" class="hint demo-performance-note">ブラウザ上で変換するため、特に長文ではインストール版の IME より候補の表示に時間がかかることがあります。</p>
             <label for="romaji">ローマ字入力</label>
             <div class="composition-field">
               <div id="composition-display" class="composition-display" data-empty="true" aria-hidden="true"><span id="confirmed"></span><span id="composition"><span id="composition-before"></span><span id="composition-caret"></span><span id="composition-after"></span></span></div>
-              <textarea id="romaji" rows="3" maxlength="256" inputmode="text" lang="en" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="keyboard-help" disabled></textarea>
+              <textarea id="romaji" rows="3" maxlength="256" inputmode="text" lang="en" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="demo-performance-note keyboard-help" disabled></textarea>
             </div>
           </div>
           <fieldset id="android-keyboard" aria-label="Android 12キーキーボード" hidden disabled>
