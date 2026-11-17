@@ -1,4 +1,4 @@
-.demo-editor > .demo-presentation {
+.demo-input > .demo-presentation {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -14,18 +14,65 @@
   background: var(--ime-surface);
 }
 #demo[data-presentation="android"] :is(.touch-controls, .keyboard-help) { display: none; }
+#demo[data-presentation="android"] .demo-shell {
+  --demo-width: min(var(--page-max), calc(100% - 2 * var(--page-gutter)));
+  --loader-width: max(255px, calc(var(--demo-width) * .32));
+  width: 100%;
+  grid-template-columns: 1fr calc(var(--demo-width) - var(--loader-width)) var(--loader-width) 1fr;
+  grid-template-areas: ". input loader ." "keyboard keyboard keyboard keyboard" ". actions actions .";
+  border: 0;
+  background: none;
+}
+#demo[data-presentation="android"] .demo-editor { display: contents; }
+#demo[data-presentation="android"] :is(.demo-input, .demo-actions) {
+  min-width: 0;
+  padding: var(--demo-padding);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+#demo[data-presentation="android"] .demo-input {
+  grid-area: input;
+  border-radius: 19px 0 0 0;
+}
+#demo[data-presentation="android"] .loader {
+  grid-area: loader;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 19px 0 0;
+}
+#demo[data-presentation="android"] .demo-actions {
+  grid-area: actions;
+  border-radius: 0 0 19px 19px;
+}
+#demo[data-presentation="android"] .example-buttons { margin-top: 0; }
+@media (max-width: 810px) {
+  #demo[data-presentation="android"] .demo-shell { --loader-width: max(225px, calc(var(--demo-width) * .34)); }
+}
+@media (max-width: 650px) {
+  #demo[data-presentation="android"] .demo-shell {
+    grid-template-columns: 1fr var(--demo-width) 1fr;
+    grid-template-areas: ". loader ." ". input ." "keyboard keyboard keyboard" ". actions .";
+  }
+  #demo[data-presentation="android"] .loader {
+    border-left: 1px solid var(--line);
+    border-bottom: 0;
+    border-radius: 19px 19px 0 0;
+  }
+  #demo[data-presentation="android"] .demo-input { border-radius: 0; }
+}
 #demo[data-presentation="android"] .composition-field:not(:focus-within) .composition-display[data-empty="true"]::before {
   content: "画面のキーボードで入力";
   font: inherit;
   font-size: 1rem;
 }
 #android-keyboard {
+  grid-area: keyboard;
   display: block;
   min-inline-size: 0;
-  margin: 6px 0 0;
+  margin: 0;
   padding: 0;
-  border: 1px solid var(--android-borderSubtle);
-  border-radius: 8px 8px 0 0;
+  border-block: 1px solid var(--android-borderSubtle);
+  border-inline: 0;
   background: var(--android-canvas);
   color: var(--android-textPrimary);
   font-family: Roboto, "Noto Sans JP", system-ui, sans-serif;
@@ -47,7 +94,6 @@
   height: var(--android-bar-height);
   background: var(--android-surface);
 }
-.android-assist-bar { border-radius: 8px 8px 0 0; }
 .android-original {
   display: flex;
   align-items: center;

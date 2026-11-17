@@ -26,8 +26,8 @@
     </nav>
   </header>
 
-  <main class="page-width">
-    <section class="hero" aria-labelledby="hero-title">
+  <main>
+    <section class="hero page-width" aria-labelledby="hero-title">
       <div class="hero-copy">
         <p class="eyebrow"><span class="brand-dot"></span> ZeroCon Model を搭載した日本語 IME</p>
         <h1 id="hero-title">オンデバイス AI で、<br>日本語入力を軽く。</h1>
@@ -51,23 +51,25 @@
     </section>
 
     <section id="demo" class="section-block" aria-labelledby="input-heading" tabindex="-1">
-      <div class="section-heading">
+      <div class="section-heading page-width">
         <p class="eyebrow">インストール不要</p>
         <h2 id="input-heading">ブラウザで試す</h2>
         <p>初回にモデルと辞書を取得すると、変換・補正・先読みの処理はブラウザ内で完結します。ローマ字入力、12キーフリック、QWERTY で試せます。</p>
       </div>
-      <div class="demo-shell">
+      <div class="demo-shell page-width">
         <div class="demo-editor">
-          <label class="demo-presentation">表示方法
-            <select id="demo-presentation">
-              <option value="windows">Windows</option>
-              <option value="android">Android</option>
-            </select>
-          </label>
-          <label for="romaji">ローマ字入力</label>
-          <div class="composition-field">
-            <div id="composition-display" class="composition-display" data-empty="true" aria-hidden="true"><span id="confirmed"></span><span id="composition"><span id="composition-before"></span><span id="composition-caret"></span><span id="composition-after"></span></span></div>
-            <textarea id="romaji" rows="3" maxlength="256" inputmode="text" lang="en" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="keyboard-help" disabled></textarea>
+          <div class="demo-input">
+            <label class="demo-presentation">表示方法
+              <select id="demo-presentation">
+                <option value="windows">Windows</option>
+                <option value="android">Android</option>
+              </select>
+            </label>
+            <label for="romaji">ローマ字入力</label>
+            <div class="composition-field">
+              <div id="composition-display" class="composition-display" data-empty="true" aria-hidden="true"><span id="confirmed"></span><span id="composition"><span id="composition-before"></span><span id="composition-caret"></span><span id="composition-after"></span></span></div>
+              <textarea id="romaji" rows="3" maxlength="256" inputmode="text" lang="en" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="keyboard-help" disabled></textarea>
+            </div>
           </div>
           <fieldset id="android-keyboard" aria-label="Android 12キーキーボード" hidden disabled>
             <div class="android-assist-bar">
@@ -86,37 +88,39 @@
               <div id="android-panel" class="android-panel" hidden></div>
             </div>
           </fieldset>
-          <div class="example-buttons">
-            <button id="sample" type="button" data-sample="ashitanokaigi" disabled>入力例「明日の会議」</button>
-            <button type="button" data-sample="okseri" disabled>補正の例「okseri」</button>
-            <button type="button" data-sample="yorosikuonegaisi" disabled>先読みの例「よろしくお願いし」</button>
-          </div>
-          <div class="touch-controls" aria-label="入力操作">
-            <button type="button" data-command="space" disabled>候補切替</button>
-            <button type="button" data-command="enter" disabled>確定</button>
-            <button type="button" data-command="cancel" disabled>取消</button>
-          </div>
-          <p id="keyboard-help" class="hint keyboard-help"><kbd>Space</kbd> 候補切替 <kbd>Enter</kbd> 確定 <kbd>Esc</kbd> 取消 <kbd>Tab</kbd> 補正・先読みの採用</p>
-          <p id="reading" class="sr-only" aria-live="polite"></p>
-          <p id="assist-status" class="hint" role="status" hidden></p>
-          <iframe id="reading-window" title="入力中の原文と提案" src="./reading-window.html" tabindex="-1" hidden></iframe>
-          <iframe id="candidate-window" title="変換候補" src="./candidate-window.html" hidden></iframe>
-          <details id="demo-settings" class="demo-settings">
-            <summary>入力設定</summary>
-            <div class="settings-grid">
-              <label><input id="enable-correction" type="checkbox" disabled> タイポ補正</label>
-              <label><input id="enable-prediction" type="checkbox" disabled> 先読み</label>
-              <label hidden><input id="android-vibration" type="checkbox" disabled> タッチ時に振動</label>
-              <label for="learning-mode">候補の学習</label>
-              <select id="learning-mode" disabled>
-                <option value="enabled">学習する</option>
-                <option value="read_only">保存済みの学習だけ使う</option>
-                <option value="disabled">学習を使わない</option>
-              </select>
-              <button id="clear-learning" type="button" disabled>このサイトの学習を消去</button>
-              <p id="learning-status" class="hint" role="status"></p>
+          <div class="demo-actions">
+            <div class="example-buttons">
+              <button id="sample" type="button" data-sample="ashitanokaigi" disabled>入力例「明日の会議」</button>
+              <button type="button" data-sample="okseri" disabled>補正の例「okseri」</button>
+              <button type="button" data-sample="yorosikuonegaisi" disabled>先読みの例「よろしくお願いし」</button>
             </div>
-          </details>
+            <div class="touch-controls" aria-label="入力操作">
+              <button type="button" data-command="space" disabled>候補切替</button>
+              <button type="button" data-command="enter" disabled>確定</button>
+              <button type="button" data-command="cancel" disabled>取消</button>
+            </div>
+            <p id="keyboard-help" class="hint keyboard-help"><kbd>Space</kbd> 候補切替 <kbd>Enter</kbd> 確定 <kbd>Esc</kbd> 取消 <kbd>Tab</kbd> 補正・先読みの採用</p>
+            <p id="reading" class="sr-only" aria-live="polite"></p>
+            <p id="assist-status" class="hint" role="status" hidden></p>
+            <iframe id="reading-window" title="入力中の原文と提案" src="./reading-window.html" tabindex="-1" hidden></iframe>
+            <iframe id="candidate-window" title="変換候補" src="./candidate-window.html" hidden></iframe>
+            <details id="demo-settings" class="demo-settings">
+              <summary>入力設定</summary>
+              <div class="settings-grid">
+                <label><input id="enable-correction" type="checkbox" disabled> タイポ補正</label>
+                <label><input id="enable-prediction" type="checkbox" disabled> 先読み</label>
+                <label hidden><input id="android-vibration" type="checkbox" disabled> タッチ時に振動</label>
+                <label for="learning-mode">候補の学習</label>
+                <select id="learning-mode" disabled>
+                  <option value="enabled">学習する</option>
+                  <option value="read_only">保存済みの学習だけ使う</option>
+                  <option value="disabled">学習を使わない</option>
+                </select>
+                <button id="clear-learning" type="button" disabled>このサイトの学習を消去</button>
+                <p id="learning-status" class="hint" role="status"></p>
+              </div>
+            </details>
+          </div>
         </div>
         <aside id="loader" class="loader" data-state="loading" aria-labelledby="loader-heading">
           <div class="loader-heading"><span class="loader-indicator" aria-hidden="true"></span><h3 id="loader-heading">読み込み状況</h3></div>
@@ -142,7 +146,7 @@
       </div>
     </section>
 
-    <section id="features" class="section-block" aria-labelledby="features-heading">
+    <section id="features" class="section-block page-width" aria-labelledby="features-heading">
       <div class="section-heading">
         <p class="eyebrow">ZeroConvert IME の特徴</p>
         <h2 id="features-heading">端末内の AI が入力を支える。</h2>
@@ -166,7 +170,7 @@
       </div>
     </section>
 
-    <section id="download" class="section-block download" aria-labelledby="download-heading">
+    <section id="download" class="section-block download page-width" aria-labelledby="download-heading">
       <div>
         <p class="eyebrow">デスクトップ・スマートフォン</p>
         <h2 id="download-heading">普段のアプリで使う。</h2>

@@ -48,6 +48,22 @@ const server = createServer(async (request, response) => {
     }
 });
 
+async function checkKeyboardWidth(page) {
+    const layout = await page.locator('#android-keyboard').evaluate(keyboard => {
+        const { left, right, top, bottom } = keyboard.getBoundingClientRect();
+        return {
+            left, right, top, bottom,
+            viewport: document.documentElement.clientWidth,
+            scrollWidth: document.documentElement.scrollWidth,
+            loaderBottom: document.querySelector('.loader').getBoundingClientRect().bottom,
+            actionsTop: document.querySelector('.demo-actions').getBoundingClientRect().top,
+        };
+    });
+    assert.ok(Math.abs(layout.left) <= 1 && Math.abs(layout.right - layout.viewport) <= 1, JSON.stringify(layout));
+    assert.equal(layout.scrollWidth, layout.viewport);
+    assert.ok(layout.loaderBottom <= layout.top && layout.bottom <= layout.actionsTop, JSON.stringify(layout));
+}
+
 async function checkAndroid(browser, siteUrl, channel) {
     const page = await browser.newPage({
         viewport: { width: 390, height: 820 }, isMobile: true, hasTouch: true,
@@ -85,7 +101,7 @@ async function checkAndroid(browser, siteUrl, channel) {
         assert.equal(await presentation.inputValue(), 'android');
         assert.equal(await input.getAttribute('inputmode'), 'none');
         assert.equal(await keyboard.locator('.android-key-row').count(), 4);
-        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+        await checkKeyboardWidth(page);
         assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor), 'rgb(16, 23, 34)');
         await key('あ').tap();
         await waitReading('あ');
@@ -126,6 +142,7 @@ async function checkAndroid(browser, siteUrl, channel) {
         assert.match(await layoutToggle.textContent(), /QWERTY/);
         await layoutToggle.tap();
         assert.equal(await keyboard.locator('.android-qwerty-row').count(), 4);
+        await checkKeyboardWidth(page);
         await key('k').tap();
         await key('a').tap();
         await waitReading('か');
@@ -201,6 +218,12 @@ try {
             await page.unroute(modelRoute, delayModel);
             assert.equal(await page.locator('#loader').getAttribute('data-state'), 'ready');
             assert.equal(await page.locator('.progress-items [data-state="done"]').count(), 3);
+            const presentation = page.locator('#demo-presentation');
+            const windowsWidth = await page.locator('.demo-shell').evaluate(shell => shell.offsetWidth);
+            await presentation.selectOption('android');
+            await checkKeyboardWidth(page);
+            await presentation.selectOption('windows');
+            assert.equal(await page.locator('.demo-shell').evaluate(shell => shell.offsetWidth), windowsWidth);
             const input = page.locator('#romaji');
             const reading = page.locator('#reading');
             const frame = page.locator('#candidate-window');

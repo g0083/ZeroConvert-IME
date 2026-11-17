@@ -8,6 +8,9 @@
   --surface: var(--ime-surface);
   --success: #34d399;
   --error: #f87171;
+  --page-max: 1168px;
+  --page-gutter: 32px;
+  --demo-padding: clamp(17px, 3vw, 32px);
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
@@ -19,7 +22,7 @@ button:disabled { cursor: default; opacity: .5; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
 p { margin: 0; line-height: 1.8; }
 h1, h2, h3 { margin: 0; }
-.page-width { width: min(1168px, calc(100% - 64px)); margin-inline: auto; }
+.page-width { width: min(var(--page-max), calc(100% - 2 * var(--page-gutter))); margin-inline: auto; }
 .skip-link { position: absolute; z-index: 3; top: 8px; left: 8px; padding: 10px 16px; background: var(--surface); transform: translateY(-160%); }
 .skip-link:focus { transform: none; }
 .site-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 78px; }
@@ -90,9 +93,9 @@ h2 { font-size: clamp(1.65rem, 3vw, 2.65rem); line-height: 1.32; letter-spacing:
   border-radius: 19px;
   background: var(--surface);
 }
-.demo-editor, .loader { padding: clamp(17px, 3vw, 32px); }
+.demo-editor, .loader { padding: var(--demo-padding); }
 .demo-editor { min-width: 0; }
-.demo-editor > label { display: block; margin-bottom: 8px; font-size: .88rem; font-weight: 720; }
+.demo-input > label { display: block; margin-bottom: 8px; font-size: .88rem; font-weight: 720; }
 .composition-field { position: relative; border: 1px solid var(--line); border-radius: 10px; background: var(--ime-background); }
 .composition-field:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 .composition-display { padding: 16px; min-height: 102px; line-height: 1.64; font-size: 1.27rem; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -162,12 +165,12 @@ progress::-moz-progress-bar { background: var(--progress-fill, var(--accent)); b
 .site-footer nav { display: flex; gap: 12px 19px; flex-wrap: wrap; }
 
 @media (max-width: 810px) {
-  .page-width { width: min(1168px, calc(100% - 40px)); }
+  :root { --page-gutter: 20px; }
   .hero { gap: 24px; }
   .demo-shell { grid-template-columns: minmax(0, 1fr) minmax(225px, 34%); }
 }
 @media (max-width: 650px) {
-  .page-width { width: calc(100% - 32px); }
+  :root { --page-gutter: 16px; }
   .site-header { min-height: 66px; }
   .site-nav { font-size: .78rem; gap: 12px; }
   .site-nav a:first-child { display: none; }
