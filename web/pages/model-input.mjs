@@ -29,6 +29,8 @@ const learningSetting = document.querySelector('#learning-mode');
 const clearLearning = document.querySelector('#clear-learning');
 const learningStatus = document.querySelector('#learning-status');
 const worker = new Worker(new URL('./model-worker.mjs', import.meta.url), { type: 'module' });
+// Bound each worker task even if a long burst of typing is queued.
+const MAX_QUEUED_APPEND = 16;
 // The Worker reports assist candidate identities and learning capabilities in
 // its ready message.
 let assistIds = {};
@@ -37,6 +39,9 @@ let settings = {};
 
 let revision = 0;
 let renderedRevision = 0;
+let inFlightRevision = null;
+const pendingEdits = [];
+let committedUpdate;
 let state = null;
 let selection = null;
 let frameReady = false;
@@ -121,7 +126,30 @@ function send(key, value) {
     const hadOffer = Boolean(assistOffer);
     assistOffer = null;
     if (hadOffer || key === 'blur') render();
-    worker.postMessage({ revision: ++revision, key, value, session });
+    const edit = { revision: ++revision, key, value, session };
+    const previous = pendingEdits.at(-1);
+    if (previous?.key === key && isBatchableAppend(edit)
+        && (previous.batch || isBatchableAppend(previous))
+        && previous.value.length < MAX_QUEUED_APPEND) {
+        previous.value += value;
+        previous.revision = edit.revision;
+        previous.batch = true;
+    } else {
+        pendingEdits.push(edit);
+    }
+    sendNextEdit();
+}
+
+function isBatchableAppend({ key, value }) {
+    return key === 'append' && /^[a-z]$/u.test(value)
+        || key === 'appendKana' && /^[ぁ-ゖ]$/u.test(value);
+}
+
+function sendNextEdit() {
+    if (inFlightRevision !== null || !pendingEdits.length) return;
+    const edit = pendingEdits.shift();
+    inFlightRevision = edit.revision;
+    worker.postMessage(edit);
 }
 
 function positionReadingWindow() {
@@ -188,7 +216,7 @@ function render() {
         afterCaret.textContent = state?.reading.slice(offset) ?? '';
     }
     reading.textContent = state?.reading ?? '';
-    display.dataset.empty = String(!confirmed.textContent && !state?.reading);
+    display.dataset.empty = String(!confirmed.hasChildNodes() && !state?.reading);
     if (presentation === 'android') renderAndroidKeyboard(state, selection, assistOffer, editor.disabled);
     renderReadingWindow();
     candidates();
@@ -258,6 +286,13 @@ window.addEventListener('message', event => {
 });
 
 worker.addEventListener('message', ({ data }) => {
+    if (data.revision === inFlightRevision && ['state', 'settings', 'error'].includes(data.type)) {
+        inFlightRevision = null;
+        sendNextEdit();
+    }
+    // A commit can arrive while another edit is queued. Its text still belongs
+    // to this session even when the composition snapshot is already obsolete.
+    if (data.session === session && typeof data.committed === 'string') committedUpdate = data.committed;
     if (data.type === 'load-progress') {
         renderLoadProgress(data.progress);
     } else if (data.type === 'assist-load') {
@@ -286,17 +321,19 @@ worker.addEventListener('message', ({ data }) => {
         loadFailed(`読み込みに失敗しました。${data.message}`);
     } else if (data.type === 'error' && data.revision === revision) {
         status.textContent = `変換に失敗しました。${data.message}`;
-    } else if (data.type === 'state' && data.session === session && data.revision === revision) {
+    } else if (data.type === 'state' && data.session === session) {
+        // Show acknowledged edits while typing continues. Candidate clicks
+        // still require the displayed revision to match the latest input.
         ({ state, selection } = data);
-        renderedRevision = revision;
-        confirmed.textContent = data.committed;
+        renderedRevision = data.revision;
+        applyCommittedUpdate();
         render();
-    } else if (data.type === 'settings' && (data.revision === undefined || data.revision === revision)) {
+    } else if (data.type === 'settings') {
         learning = data.learning;
-        if (data.session === session) {
+        if (data.session === session && (data.revision === undefined || data.revision === revision)) {
             ({ state, selection } = data);
             renderedRevision = revision;
-            confirmed.textContent = data.committed;
+            applyCommittedUpdate();
             render();
         }
     } else if (data.type === 'assist' && editing && data.revision === revision) {
@@ -318,6 +355,12 @@ worker.addEventListener('message', ({ data }) => {
         else if (data.action === 'forget') learningStatus.textContent = '選んだ候補の学習を消去しました。';
     }
 });
+
+function applyCommittedUpdate() {
+    if (committedUpdate === undefined) return;
+    confirmed.textContent = committedUpdate;
+    committedUpdate = undefined;
+}
 worker.addEventListener('error', () => loadFailed('変換エンジンを読み込めませんでした。'));
 
 const keys = new Map([

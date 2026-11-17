@@ -17,6 +17,8 @@ const rows = [
 ];
 const engineState = { reading: '', raw: '', cursor: 0, candidates: [], modelStatus: 'ok' };
 const learningCalls = [];
+const appends = [];
+let context = '';
 const clone = () => structuredClone(engineState);
 function request(key, fields = {}) {
     switch (key) {
@@ -26,6 +28,8 @@ function request(key, fields = {}) {
             learningCalls.push({ key, ...fields });
             return { ...clone(), learningChanged: true };
         case 'append':
+        case 'appendDirect':
+            appends.push({ key, value: fields.value });
             engineState.raw += fields.value;
             engineState.reading += fields.value;
             engineState.cursor = [...engineState.reading].length;
@@ -44,7 +48,9 @@ function request(key, fields = {}) {
             engineState.candidates = engineState.raw ? rows : [];
             return clone();
         case 'delete':
+            return clone();
         case 'context':
+            context = fields.value;
             return clone();
         case 'shrink':
             engineState.raw = [...engineState.raw].slice(fields.offset).join('');
@@ -143,9 +149,9 @@ await new Promise(resolvePending => setTimeout(resolvePending, 0));
 assert.equal(engineMessages[0].type, 'ready');
 
 let revision = 0;
-async function send(key, value, session = 1) {
+async function send(key, value, session = 1, batch = false) {
     const before = engineMessages.length;
-    await listeners[0]({ data: { revision: ++revision, key, value, session } });
+    await listeners[0]({ data: { revision: ++revision, key, value, session, batch } });
     const reply = engineMessages.slice(before).find(message => message.revision === revision);
     assert.ok(reply, `no reply for ${key}`);
     if (reply.type === 'error') throw new Error(`${key}: ${reply.message}`);
@@ -185,7 +191,7 @@ assert.deepEqual(learningCalls.at(-1), { key: 'recordLearning', candidateId: '2'
 // removes one committed character only when the composition is empty.
 reply = await send('cancel');
 assert.equal(reply.state.reading, '');
-assert.equal(reply.committed, '明日の懐疑');
+assert.equal(reply.committed, undefined, 'cancel does not resend the confirmed document');
 reply = await send('backspace');
 assert.equal([...reply.committed].length, [...'明日の懐疑'].length - 1);
 reply = await send('backspace');
@@ -232,5 +238,29 @@ assert.ok(
     'read_only must not write learning on commit',
 );
 assert.deepEqual(learningCalls.at(-1), { key: 'clearLearning' });
+
+// Queued edits are combined only at the tail. The cursor split continues to
+// use one composition edit for each character.
+const oldAppendCount = appends.length;
+reply = await send('append', 'ashita', 3, true);
+assert.equal(reply.state.raw, 'ashita');
+assert.deepEqual(appends.slice(oldAppendCount), [{ key: 'append', value: 'ashita' }]);
+await send('left', undefined, 3);
+const splitAppendCount = appends.length;
+await send('appendKana', 'あした', 3, true);
+assert.deepEqual(appends.slice(splitAppendCount), [...'あした'].map(value => ({ key: 'appendDirect', value })));
+
+const document = '語🏠'.repeat(400);
+await send('literal', document, 4);
+assert.equal(context, [...document].slice(-256).join(''), 'context includes the last 256 whole code points');
+reply = await send('appendKana', 'にほんご', 4, true);
+assert.deepEqual(appends.at(-1), { key: 'appendDirect', value: 'にほんご' });
+assert.equal(reply.committed, undefined, 'ordinary typing does not resend a long confirmed document');
+
+request.autoCommit = true;
+const autoCommitAppendCount = appends.length;
+await send('append', 'kannpaik', 5, true);
+assert.deepEqual(appends.slice(autoCommitAppendCount).map(edit => edit.value), ['ka', 'nn', 'pa', 'i', 'k'],
+    'completed readings remain visible to the auto-commit policy');
 
 process.stdout.write('Web Worker session behaviour matches the shared transitions.\n');

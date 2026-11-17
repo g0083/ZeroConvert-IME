@@ -23,12 +23,23 @@ assert.equal(request('move', { offset: 1 }).cursor, 7);
 assert.equal(request('backspace').reading, 'あしたのかい');
 assert.equal(request('clear').reading, '');
 
+const batch = request('append', { value: 'ashitanokaigi' });
+assert.equal(batch.raw, 'ashitanokaigi');
+assert.equal(batch.reading, 'あしたのかいぎ');
+assert.equal(batch.candidates[0].text + batch.candidates[0].suffix, '明日の会議');
+assert.equal(request('clear').reading, '');
+
 assert.equal(request('appendDirect', { value: 'か' }).reading, 'か');
 assert.equal(request('appendDirect', { value: 'な' }).reading, 'かな');
 assert.equal(request('move', { offset: -1 }).cursor, 1);
 assert.equal(request('replacePreviousDirect', { value: 'が' }).reading, 'がな');
 assert.equal(request('backspace').reading, 'な');
 assert.equal(request('clear').reading, '');
+const kanaBatch = request('appendDirect', { value: 'にほんご' });
+assert.equal(kanaBatch.raw, 'にほんご');
+assert.equal(kanaBatch.reading, 'にほんご');
+assert.equal(kanaBatch.candidates[0].text, '日本語');
+assert.equal(request('backspace').reading, 'にほん');
 
 const live = await loadLivePolicy(base, read);
 const fixtures = await readFile(new URL('../tests/input-policy/auto-commit-cases.tsv', import.meta.url), 'utf8');

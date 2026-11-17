@@ -23,6 +23,7 @@ async function loadModel() {
 const loading = Promise.all([loadModel(), loadLivePolicy()]);
 let state;
 let committed = '';
+let publishedCommitted = null;
 let selection = null;
 let session = null;
 // An edit, selection, settings change or focus change invalidates a request.
@@ -41,6 +42,17 @@ const graphemes = new Intl.Segmenter('ja', { granularity: 'grapheme' });
 
 const readingLength = () => state.readingCount ?? [...state.reading].length;
 const inputLength = () => state.inputCount ?? [...state.raw].length;
+// 256 Unicode code points always fit in the last 512 UTF-16 code units.
+const conversionContext = () => [...committed.slice(-512)].slice(-256).join('');
+
+function publishState(type, revision, fields = {}) {
+    const reply = { type, revision, session, state: snapshot(), selection, ...fields };
+    if (publishedCommitted !== committed) {
+        reply.committed = committed;
+        publishedCommitted = committed;
+    }
+    postMessage(reply);
+}
 
 function candidatesWithAssist() {
     const answer = offered.find(row => row.id === assist.typoCorrection);
@@ -111,8 +123,33 @@ function autoCommit(request, live) {
     const next = state.candidates[0]?.text;
     const boundary = next && top.text.endsWith(next) ? top.text.length - next.length : 0;
     committed += boundary ? top.text.slice(0, boundary) : prefix.surface;
-    state = request('context', { value: [...committed].slice(-256).join('') });
+    state = request('context', { value: conversionContext() });
     live.reset();
+}
+
+function* queuedAppends(value, key, trackAutoCommit) {
+    if (!trackAutoCommit) {
+        yield value;
+        return;
+    }
+    if (key === 'appendKana') {
+        yield* value;
+        return;
+    }
+    // The shared policy ignores snapshots with a pending romaji tail. Convert
+    // at every possible completed reading so a burst still supplies evidence
+    // for the same stable prefixes as separate keystrokes.
+    let previous = state.raw.at(-1);
+    let pending = '';
+    for (const char of value) {
+        pending += char;
+        if (/[aiueo]/u.test(char) || (char === 'n' && /[n']/iu.test(previous ?? ''))) {
+            yield pending;
+            pending = '';
+        }
+        previous = char;
+    }
+    if (pending) yield pending;
 }
 
 function commit(request, candidate, partial) {
@@ -132,7 +169,7 @@ function commit(request, candidate, partial) {
         state = request('clear');
     }
     appliedCorrection = null;
-    state = request('context', { value: [...committed].slice(-256).join('') });
+    state = request('context', { value: conversionContext() });
 }
 
 // The accept boundary comes from the shared policy: a suffix-bearing reading
@@ -154,6 +191,7 @@ function accept(request, live, candidate) {
 function startSession(request, live) {
     selection = null;
     committed = '';
+    publishedCommitted = null;
     appliedCorrection = null;
     clauseBoundary = null;
     state = request('clear');
@@ -197,7 +235,7 @@ function scheduleAssist(request, live, revision) {
     const baseline = top ? top.text + top.suffix : '';
     const input = {
         input: reading, raw: state.raw, baseline, baselineReading,
-        context: [...committed].slice(-256).join(''), revision: requested,
+        context: conversionContext(), revision: requested,
         readLearning: false,
     };
     const answers = new Map();
@@ -266,7 +304,8 @@ function scheduleAssist(request, live, revision) {
 }
 
 self.addEventListener('message', async ({ data }) => {
-    const { revision, key, value, session: messageSession } = data;
+    const { revision, key, session: messageSession, batch } = data;
+    let { value } = data;
     try {
         const [request, live] = await loading;
         if (key === 'settings' && value) {
@@ -282,10 +321,13 @@ self.addEventListener('message', async ({ data }) => {
             }
             settings = { ...settings, correction, prediction };
             learning = next;
-            postMessage({ type: 'settings', revision, settings, learning, session, state, selection, committed });
+            publishState('settings', revision, { settings, learning });
             return;
         }
-        if (messageSession !== session && key === 'blur') return;
+        if (messageSession !== session && key === 'blur') {
+            publishState('state', revision);
+            return;
+        }
         const sameSession = messageSession === session;
         const selectedBeforeEdit = sameSession && selection !== null ? candidatesWithAssist()[selection] : null;
         const selectionKey = ['space', 'up', 'down', 'select', 'enter', 'tab', 'autoApply'].includes(key);
@@ -296,7 +338,7 @@ self.addEventListener('message', async ({ data }) => {
         }
         if (key === 'blur') {
             selection = null;
-            postMessage({ type: 'state', revision, session, state, selection, committed });
+            publishState('state', revision);
             return;
         }
         if (key === 'forgetAll' || key === 'forget') {
@@ -307,7 +349,7 @@ self.addEventListener('message', async ({ data }) => {
                 selection = null;
                 if (state.learningChanged) persistLearning(request, cleared ? 'clear' : 'forget');
             }
-            postMessage({ type: 'state', revision, session, state, selection, committed });
+            publishState('state', revision);
             return;
         }
         if (!['append', 'appendKana'].includes(key) || selection !== null) live.reset();
@@ -325,9 +367,15 @@ self.addEventListener('message', async ({ data }) => {
                 live.reset();
                 if (typeof value !== 'string' || !/^[a-z]{1,32}$/u.test(value)) value = 'ashitanokaigi';
             }
-            for (const char of value) {
+            const op = key === 'appendKana' ? 'appendDirect' : 'append';
+            // Keep individual edits around a cursor split or where auto-commit
+            // can free capacity before the rest of the run is appended.
+            const canBatch = batch && key !== 'sample' && state.cursor === readingLength()
+                && inputLength() + value.length <= 256;
+            const edits = canBatch ? queuedAppends(value, key, request.autoCommit) : value;
+            for (const text of edits) {
                 if (inputLength() >= 256) break;
-                state = request(key === 'appendKana' ? 'appendDirect' : 'append', { value: char });
+                state = request(op, { value: text });
                 if (key !== 'sample') autoCommit(request, live);
             }
         } else if (key === 'kanaModifier') {
@@ -342,7 +390,7 @@ self.addEventListener('message', async ({ data }) => {
             if (state.reading) commit(request, selectedBeforeEdit ?? state.candidates[0], false);
             if (key === 'literal') {
                 committed += value;
-                state = request('context', { value: [...committed].slice(-256).join('') });
+                state = request('context', { value: conversionContext() });
             }
         } else if (key === 'space' || key === 'up' || key === 'down') {
             appliedCorrection = null;
@@ -355,7 +403,7 @@ self.addEventListener('message', async ({ data }) => {
                 });
             } else if (key === 'space' && !state.reading) {
                 committed += ' ';
-                state = request('context', { value: [...committed].slice(-256).join('') });
+                state = request('context', { value: conversionContext() });
             }
         } else if (key === 'select' && value) {
             const row = candidatesWithAssist()[value.index];
@@ -377,13 +425,13 @@ self.addEventListener('message', async ({ data }) => {
             else if (state.reading) accept(request, live, selected);
             else {
                 committed += '\n';
-                state = request('context', { value: [...committed].slice(-256).join('') });
+                state = request('context', { value: conversionContext() });
             }
         } else if (key === 'cancel' && appliedCorrection) {
             state = request('undoCorrection');
             appliedCorrection = null;
             selection = null;
-            postMessage({ type: 'state', revision, session, state, selection, committed });
+            publishState('state', revision);
             return;
         } else if (key === 'cancel' && selection !== null) {
             selection = null;
@@ -411,7 +459,7 @@ self.addEventListener('message', async ({ data }) => {
                 else if (key === 'backspace' && !state.reading) {
                     const last = graphemes.segment(committed).containing(committed.length - 1);
                     if (last) committed = committed.slice(0, last.index);
-                    state = request('context', { value: [...committed].slice(-256).join('') });
+                    state = request('context', { value: conversionContext() });
                 }
             }
         }
@@ -419,7 +467,7 @@ self.addEventListener('message', async ({ data }) => {
             offered = [];
             primaryAssist = null;
         }
-        postMessage({ type: 'state', revision, session, state: snapshot(), selection, committed });
+        publishState('state', revision);
         if (['append', 'appendKana', 'kanaModifier', 'sample', 'backspace', 'delete', 'left', 'right', 'autoApply'].includes(key)
             || (appliedCorrection && ['tab', 'select'].includes(key))) {
             scheduleAssist(request, live, revision);

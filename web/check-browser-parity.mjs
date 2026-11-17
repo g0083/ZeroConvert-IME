@@ -201,6 +201,14 @@ try {
             const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
             const errors = [];
             page.on('pageerror', error => errors.push(error.message));
+            await page.addInitScript(() => {
+                window.queuedConversions = [];
+                const post = Worker.prototype.postMessage;
+                Worker.prototype.postMessage = function (message, ...args) {
+                    if (message.key === 'append') window.queuedConversions.push(message);
+                    return post.call(this, message, ...args);
+                };
+            });
             const siteUrl = `http://127.0.0.1:${server.address().port}/`;
             await checkAndroid(browser, siteUrl, channel);
             const modelRoute = '**/*.gguf';
@@ -244,6 +252,25 @@ try {
             const waitText = (selector, expected) => page.waitForFunction(
                 ([selector, expected]) => document.querySelector(selector).textContent === expected, [selector, expected],
             );
+
+            // Blur before the first composition also releases the input queue.
+            await input.focus();
+            await page.locator('summary').focus();
+            await input.focus();
+            const phrase = 'kinounoame';
+            await input.evaluate((editor, phrase) => {
+                for (const key of [...phrase, 'Enter', ...'nihongo', 'Backspace']) {
+                    editor.dispatchEvent(new KeyboardEvent('keydown', { key }));
+                }
+            }, phrase);
+            await waitText('#reading', 'にほん');
+            assert.equal(await page.locator('#confirmed').textContent(), '昨日の雨');
+            const queued = await page.evaluate(() => window.queuedConversions.map(edit => edit.value));
+            assert.ok(queued.length < phrase.length + 'nihongo'.length, 'queued typing uses fewer conversions than keystrokes');
+            assert.equal(queued.join(''), phrase + 'nihongo', 'no input is lost when submitting queued typing');
+            // Start the ordinary parity cases with a clean composition and context.
+            await page.reload();
+            await page.waitForFunction(() => !document.querySelector('#romaji').disabled);
 
             await input.click();
             await input.pressSequentially('ashitanok', { delay: 12 });
