@@ -14,8 +14,11 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
     '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 // Use the actual conversion engine and control only the nested assist Worker.
 const assistFixture = `
-    postMessage({ loadState: 'ready' });
-    self.onmessage = ({ data: { id, input } }) => {
+    self.onmessage = ({ data: { type, id, input } }) => {
+        if (type === 'initialize') {
+            postMessage({ loadState: 'ready' });
+            return;
+        }
         let answer = null;
         if (input.op === 'correction' && input.raw === 'okseri') {
             answer = { text: 'おかえり', relevance: 30, autoApply: false };
@@ -70,6 +73,10 @@ async function checkAndroid(browser, siteUrl, channel) {
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
     });
     try {
+        const downloads = [];
+        page.context().on('request', request => {
+            if (request.url().endsWith('.gguf')) downloads.push(request.url());
+        });
         await page.addInitScript(() => {
             window.vibrationCalls = [];
             Object.defineProperty(navigator, 'vibrate', { configurable: true, value(duration) {
@@ -171,6 +178,7 @@ async function checkAndroid(browser, siteUrl, channel) {
         await page.getByRole('button', { name: '先読みの例「よろしくお願いし」' }).tap();
         await keyboard.getByRole('button', { name: '先読み ます。 を採用' }).tap();
         await waitConfirmed('よろしくお願いします。');
+        assert.equal(downloads.length, 1, 'the assist Worker reuses the conversion Worker’s model download');
 
         await keyboard.getByRole('button', { name: '入力モード: 日本語' }).tap();
         await key('abc').tap();

@@ -3,6 +3,8 @@ import { assistIds, mergeAssist, planAssist } from './assist-session.mjs';
 import { openLearningStore } from './learning-store.mjs';
 import { createAssistClient } from './model-assist-client.mjs';
 
+const ASSIST_IDLE_MS = 120;
+
 let store = null;
 let storeVersion = 0;
 let storeConflict = false;
@@ -190,12 +192,9 @@ function scheduleAssist(request, live, revision) {
     const baselineReading = top?.reading ?? '';
     const plan = planAssist(live, settings, appliedCorrection, reading, baselineReading);
     if (!plan.correction && !plan.prediction) return;
-    const complete = request.assist ?? (assistClient ??= createAssistClient(state => postMessage({ type: 'assist-load', state })));
     const requested = generation;
     const requestSession = session;
     const baseline = top ? top.text + top.suffix : '';
-    const normalSurfaces = new Set(state.candidates.map(row => row.text + row.suffix));
-    const started = performance.now();
     const input = {
         input: reading, raw: state.raw, baseline, baselineReading,
         context: [...committed].slice(-256).join(''), revision: requested,
@@ -205,6 +204,7 @@ function scheduleAssist(request, live, revision) {
     let correctionDone = !plan.correction;
     let predictionDone = !plan.prediction;
     let displayed = null;
+    let started;
 
     function show() {
         if (requested !== generation) return;
@@ -218,7 +218,10 @@ function scheduleAssist(request, live, revision) {
         if (!answer) return;
         // Rows arrive after the normal list; a late correction can take the
         // inline slot without moving any ordinary candidate.
-        offered = [...answers.values()].filter(row => row.text !== answer.text || row.id === answer.id);
+        const nextOffered = [...answers.values()].filter(row => row.text !== answer.text || row.id === answer.id);
+        if (answer === primaryAssist && nextOffered.length === offered.length
+            && nextOffered.every((row, index) => row === offered[index])) return;
+        offered = nextOffered;
         displayed = answer.id;
         primaryAssist = answer;
         offerRevision = revision;
@@ -228,7 +231,7 @@ function scheduleAssist(request, live, revision) {
             displayedAssist: displayed, autoApply, reading, state: snapshot() });
     }
 
-    async function run(op, id) {
+    async function run(complete, op, id) {
         let value;
         try {
             value = await complete({ ...input, op });
@@ -238,18 +241,28 @@ function scheduleAssist(request, live, revision) {
         if (requested !== generation) return;
         if (op === 'correction') correctionDone = true;
         else predictionDone = true;
-        if (value?.text && !normalSurfaces.has(value.text)) answers.set(id, { ...value, id });
+        if (value?.text && !state.candidates.some(row => row.text + row.suffix === value.text)) answers.set(id, { ...value, id });
         if (correctionDone && predictionDone) clearTimeout(assistTimer);
         show();
     }
 
     const { waitMs } = live.assist({ op: 'ready', predictionDone, correctionDone });
-    // Yield to the worker event loop before calling the assistance backend.
+    // Avoid starting model work for intermediate readings during continuous input.
     assistTimer = setTimeout(() => {
+        if (requested !== generation) return;
+        let complete;
+        try {
+            complete = request.assist ?? (assistClient ??= createAssistClient(request.copyModel(),
+                state => postMessage({ type: 'assist-load', state })));
+        } catch {
+            postMessage({ type: 'assist-load', state: 'failed' });
+            return;
+        }
+        started = performance.now();
         assistTimer = setTimeout(show, waitMs);
-        if (plan.correction) void run('correction', assist.typoCorrection);
-        if (plan.prediction) void run('prediction', assist.predictive);
-    }, 0);
+        if (plan.correction) void run(complete, 'correction', assist.typoCorrection);
+        if (plan.prediction) void run(complete, 'prediction', assist.predictive);
+    }, ASSIST_IDLE_MS);
 }
 
 self.addEventListener('message', async ({ data }) => {

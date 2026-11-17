@@ -107,9 +107,10 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         ['settings.json', settingsFile],
         ['LearningMemory', new Directory(new Map(learningFiles.map(([name, bytes]) => [name, new File(bytes)])))],
     ]));
+    const modelFile = new File(model.buffer, { readonly: true });
     const runtime = new Map([
         ['Dictionary', dictionary],
-        ['models', new Directory(new Map([[modelName, new File(model)]]))],
+        ['models', new Directory(new Map([[modelName, modelFile]]))],
         ['Azookey', app],
     ]);
     const wasi = new WASI(['/runtime/zerocon_model.wasm'], ['APPDATA=/runtime'], [
@@ -136,6 +137,8 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
     send.autoCommit = autoCommit;
     send.stagedSettings = staged;
     send.settings = defaults;
+    // Preserve the conversion instance's backing file and transfer just one copy to the assist Worker.
+    send.copyModel = () => modelFile.data.slice().buffer;
     let mode = send.settings.learning;
     let general = staged.general;
     send.applySettings = options => {
@@ -200,12 +203,12 @@ function get(api, address) {
 
 // Construct this only inside the assistant worker. The key-handling worker
 // can continue processing edits while this instance runs synchronous Wasm.
-export async function loadAssistEngine(base = import.meta.url, request = fetch, predictionBudgetScale = 1) {
+export async function loadAssistEngine(base = import.meta.url, request = fetch, predictionBudgetScale = 1, modelBuffer) {
     const asset = name => request(new URL(name, base));
     const [policy, completion, model, reverse] = await Promise.all([
         WebAssembly.compileStreaming(asset('./zerocon_web_live_policy.wasm')),
         WebAssembly.compileStreaming(asset('./zerocon_completion.wasm')),
-        asset(`./${modelName}`).then(readAsset),
+        modelBuffer ?? asset(`./${modelName}`).then(readAsset).then(bytes => bytes.buffer),
         asset(`./${reverseName}.gz`).then(async response => {
             if (!response.ok || !response.body) throw new Error('キーボード補正用の辞書を読み込めませんでした。');
             const bytes = new Uint8Array(await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());

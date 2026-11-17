@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createAssistClient } from './pages/model-assist-client.mjs';
 
 const messages = [];
 const messagesByKey = [];
@@ -65,13 +66,22 @@ try {
     async function start(value, session) {
         const state = await send('append', value, session);
         assert.deepEqual(state.state.candidates, normal);
-        await delay(0);
+        await delay(140);
         const jobs = pending.splice(0);
         assert.deepEqual(jobs.map(job => job.op), ['correction', 'prediction']);
         return jobs;
     }
     const correction = { text: 'あした会議', tokenReading: 'あしたのかいぎ', autoApply: false };
     const prediction = { text: '明日の会議があります', continuation: 'があります' };
+
+    // Consecutive edits only submit the last reading after the idle window.
+    await send('append', 'あし');
+    await send('append', 'た');
+    assert.equal(pending.length, 0);
+    await delay(140);
+    assert.deepEqual(pending.map(job => job.input), ['あした', 'あした']);
+    for (const job of pending.splice(0)) job.resolve(null);
+    await send('cancel');
 
     // Showing a prediction must not prevent a later, higher-priority correction.
     let [typo, next] = await start('あしたのかいぎ');
@@ -107,7 +117,26 @@ try {
         for (const job of pending.splice(0)) job.resolve(null);
     }
     await send('blur');
-    console.log('Worker assist handled progressive results, protected normal rows, and retired stale edits.');
+    console.log('Worker assist waits for idle input, protects normal rows, and retires stale edits.');
 } finally {
     await rm(temp, { recursive: true });
 }
+
+// The first edit can become stale while model initialization is still in progress.
+const requests = [];
+let receive;
+globalThis.Worker = class {
+    postMessage(message) { requests.push(message); }
+    addEventListener(type, listener) { if (type === 'message') receive = data => listener({ data }); }
+};
+const client = createAssistClient(new ArrayBuffer(1));
+const stale = client({ revision: 1, input: 'あした' });
+const latest = client({ revision: 2, input: 'あしたの' });
+assert.equal(await stale, null);
+assert.equal(requests.length, 1);
+assert.equal(requests[0].type, 'initialize');
+receive({ loadState: 'ready' });
+assert.equal(requests.length, 2);
+assert.equal(requests[1].input.input, 'あしたの');
+receive({ id: requests[1].id, answer: '明日の' });
+assert.equal(await latest, '明日の');

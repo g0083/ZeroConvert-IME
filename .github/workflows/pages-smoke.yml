@@ -97,7 +97,8 @@ jobs:
             -Xlinker -lwasi-emulated-signal -Xlinker -lwasi-emulated-mman -Xlinker -lwasi-emulated-process-clocks
           wasm=$(find "$RUNNER_TEMP/model-build" -name zerocon_model.wasm -type f -print -quit)
           test -n "$wasm"
-          cp "$wasm" dist/pages-smoke/
+          "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/llvm-objcopy" \
+            --strip-debug --remove-section=name "$wasm" dist/pages-smoke/zerocon_model.wasm
           dictionary=windows/server-swift/azooKey_dictionary_storage
           node windows/scripts/generate-reverse-dictionary.mjs --source "$dictionary/Dictionary/louds" \
             --output "$RUNNER_TEMP/reverse-v2.bin"
