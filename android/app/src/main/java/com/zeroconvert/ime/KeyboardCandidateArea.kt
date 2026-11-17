@@ -33,9 +33,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -257,15 +261,74 @@ fun KeyboardAssistBar(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(text = title, color = color, fontSize = 12.sp, maxLines = 1, softWrap = false)
-                        Text(
-                            text = if (isTypo) assist.text else assist.continuation.ifEmpty { assist.text },
-                            color = palette.textPrimary,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (isTypo) {
+                            val sourceText = assist.sourceSurface.ifEmpty {
+                                assist.sourceReading.ifEmpty { reading }
+                            }
+                            val textFontSize = 14.sp
+                            val baseStyle = LocalTextStyle.current.copy(fontSize = textFontSize)
+                            val highlightBg = color.copy(alpha = 0.24f)
+                            val originalColor = palette.textPrimary.copy(alpha = 0.72f)
+                            BoxWithConstraints(
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                val availableWidth = if (constraints.hasBoundedWidth) {
+                                    with(density) { maxWidth.roundToPx() }
+                                } else {
+                                    -1
+                                }
+                                val rendered = remember(
+                                    sourceText,
+                                    assist.text,
+                                    availableWidth,
+                                    baseStyle,
+                                    density.density,
+                                    density.fontScale,
+                                    originalColor,
+                                    palette.textPrimary,
+                                    highlightBg
+                                ) {
+                                    val toAnnotated: (FocusedCorrectionParts) -> AnnotatedString = { parts ->
+                                        parts.toAnnotatedString(
+                                            originalColor = originalColor,
+                                            targetColor = palette.textPrimary,
+                                            highlightBackground = highlightBg
+                                        )
+                                    }
+                                    val parts = if (availableWidth < 0) {
+                                        FocusedCorrectionFormat.fit(sourceText, assist.text) { true }
+                                    } else {
+                                        FocusedCorrectionFormat.fit(sourceText, assist.text) { candidate ->
+                                            measurer.measure(
+                                                toAnnotated(candidate),
+                                                baseStyle,
+                                                softWrap = false,
+                                                maxLines = 1
+                                            ).size.width <= availableWidth
+                                        }
+                                    }
+                                    toAnnotated(parts)
+                                }
+                                Text(
+                                    text = rendered,
+                                    fontSize = textFontSize,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Clip
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = assist.continuation.ifEmpty { assist.text },
+                                color = palette.textPrimary,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }

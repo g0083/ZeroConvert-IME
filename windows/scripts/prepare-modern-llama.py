@@ -247,6 +247,9 @@ def check_converter():
         learning_memory = package.read(prefix + converter_patch.LEARNING_MEMORY_PATH).decode('utf-8')
         converter_api = package.read(prefix + converter_patch.CONVERTER_API_PATH).decode('utf-8')
         lattice = package.read(prefix + converter_patch.LATTICE_PATH).decode('utf-8')
+        dicdata_store = package.read(prefix + converter_patch.DICDATA_STORE_PATH).decode('utf-8')
+        zenz_input_generator = package.read(prefix + converter_patch.ZENZ_INPUT_GENERATOR_PATH).decode('utf-8')
+        zenz = package.read(prefix + converter_patch.ZENZ_PATH).decode('utf-8')
     converter_patch.patch_modulemap(modulemap)
     converter_patch.patch_zenz_context(context)
     converter_patch.patch_zenz_prompt_builder(prompt_builder)
@@ -254,6 +257,9 @@ def check_converter():
     converter_patch.patch_learning_memory(learning_memory)
     converter_patch.patch_converter_api(converter_api)
     converter_patch.patch_lattice(lattice)
+    converter_patch.patch_dicdata_store(dicdata_store)
+    converter_patch.patch_zenz_input_generator(zenz_input_generator)
+    converter_patch.patch_zenz(zenz)
     print(json.dumps({'converter': CONVERTER, 'anchors': 'ok'}))
 
 
@@ -310,6 +316,21 @@ def prepare_converter(converter_root):
     lattice = converter / converter_patch.LATTICE_PATH
     lattice.write_text(
         converter_patch.patch_lattice(lattice.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
+    dicdata_store = converter / converter_patch.DICDATA_STORE_PATH
+    dicdata_store.write_text(
+        converter_patch.patch_dicdata_store(dicdata_store.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
+    zenz_input_generator = converter / converter_patch.ZENZ_INPUT_GENERATOR_PATH
+    zenz_input_generator.write_text(
+        converter_patch.patch_zenz_input_generator(zenz_input_generator.read_text(encoding='utf-8')),
+        encoding='utf-8',
+    )
+    zenz = converter / converter_patch.ZENZ_PATH
+    zenz.write_text(
+        converter_patch.patch_zenz(zenz.read_text(encoding='utf-8')),
         encoding='utf-8',
     )
     marker.write_text(json.dumps({'stamp': stamp, 'converter': CONVERTER}))

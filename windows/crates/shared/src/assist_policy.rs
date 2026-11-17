@@ -55,14 +55,29 @@ pub fn first_result_ready(
     automatic || (prediction_done && (correction_done || elapsed_ms >= FIRST_PRESENTATION_WAIT_MS))
 }
 
-/// Keep the displayed target stable while late results are added to the list.
+fn assist_rank(id: u64) -> u8 {
+    match id {
+        TRANSLATION => 3,
+        TYPO_CORRECTION => 2,
+        PREDICTIVE => 1,
+        _ => 0,
+    }
+}
+
+/// Force correction (and translation) priority over predictive continuations
+/// even when prediction scored higher or arrived first, while keeping
+/// equal/lower-rank late arrivals from displacing the current target.
 pub fn choose_primary(choices: &[(u32, u64)], displayed: Option<u64>) -> Option<u64> {
-    displayed.or_else(|| {
-        choices
-            .iter()
-            .max_by_key(|(score, id)| (*score, *id == PREDICTIVE))
-            .map(|(_, id)| *id)
-    })
+    let best = choices
+        .iter()
+        .max_by_key(|(score, id)| (assist_rank(*id), *score))
+        .map(|(_, id)| *id);
+    match (displayed, best) {
+        (Some(current), Some(candidate)) if assist_rank(candidate) > assist_rank(current) => {
+            Some(candidate)
+        }
+        _ => displayed.or(best),
+    }
 }
 
 pub fn priority_index(ids: &[u64], displayed: Option<u64>) -> Option<(usize, u64)> {
@@ -226,6 +241,13 @@ pub fn dispatch(value: &str) -> Result<serde_json::Value, String> {
     }
     let request: Value = serde_json::from_str(value).map_err(|error| error.to_string())?;
     let operation = request["op"].as_str().ok_or("missing policy operation")?;
+    if operation == "ids" {
+        return Ok(json!({
+            "typoCorrection": TYPO_CORRECTION,
+            "predictive": PREDICTIVE,
+            "translation": TRANSLATION,
+        }));
+    }
     if operation == "plan" {
         return Ok(json!(request_plan(
             request["correctionEnabled"].as_bool().unwrap_or(false),
@@ -335,18 +357,38 @@ mod tests {
     }
 
     #[test]
-    fn late_correction_keeps_displayed_prediction_and_ties_prefer_prediction() {
+    fn assist_ids_expose_the_single_candidate_identity_source() {
+        assert_eq!(
+            dispatch(r#"{"op":"ids"}"#).unwrap(),
+            serde_json::json!({
+                "typoCorrection": TYPO_CORRECTION,
+                "predictive": PREDICTIVE,
+                "translation": TRANSLATION,
+            })
+        );
+    }
+
+    #[test]
+    fn correction_always_wins_priority_and_replaces_displayed_prediction() {
         assert_eq!(
             choose_primary(&[(60, PREDICTIVE), (80, TYPO_CORRECTION)], None),
             Some(TYPO_CORRECTION)
         );
         assert_eq!(
-            choose_primary(&[(60, PREDICTIVE), (80, TYPO_CORRECTION)], Some(PREDICTIVE)),
-            Some(PREDICTIVE)
+            choose_primary(&[(60, PREDICTIVE), (30, TYPO_CORRECTION)], None),
+            Some(TYPO_CORRECTION)
+        );
+        assert_eq!(
+            choose_primary(&[(60, PREDICTIVE), (30, TYPO_CORRECTION)], Some(PREDICTIVE)),
+            Some(TYPO_CORRECTION)
+        );
+        assert_eq!(
+            choose_primary(&[(60, PREDICTIVE)], Some(TYPO_CORRECTION)),
+            Some(TYPO_CORRECTION)
         );
         assert_eq!(
             choose_primary(&[(60, PREDICTIVE), (60, TYPO_CORRECTION)], None),
-            Some(PREDICTIVE)
+            Some(TYPO_CORRECTION)
         );
         assert!(!first_result_ready(true, false, false, 199));
         assert!(first_result_ready(true, false, false, 200));

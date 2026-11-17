@@ -844,25 +844,9 @@ private fun KeyboardTopBars(
                         )
                     }
                 } else {
-                    // While converting (candidates are displayed), hide layout switcher & clipboard to maximize candidate space!
-                    // Keep only the translation toggle and the Down chevron.
-                    if (imeService.translationEnabledState.value) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .pointerDownHaptic()
-                                .clickable { imeService.toggleTranslationMode() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Translate,
-                                contentDescription = "Translate",
-                                tint = if (imeService.translationModelReadyState.value) accentColor else palette.textMuted,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
+                    // While converting (candidates are displayed), hide the layout switcher,
+                    // the clipboard toggle, and the translation toggle to maximize candidate
+                    // space. Keep only the Down chevron.
                     Box(
                         modifier = Modifier
                             .size(48.dp)

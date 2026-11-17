@@ -1,0 +1,13 @@
+[
+  {"name":"meeting","steps":[{"type":"ashitanokaigi"}]},
+  {"name":"japanese","steps":[{"type":"nihongo"}]},
+  {"name":"send-materials","steps":[{"type":"siryouwookurimasu"}]},
+  {"name":"typo","steps":[{"type":"okseri"}]},
+  {"name":"typo-control","steps":[{"type":"okaeri"}]},
+  {"name":"pending-roma-order","steps":[{"type":"okuri"}]},
+  {"name":"pending-romaji","steps":[{"type":"ashitanok"},{"key":"backspace"},{"type":"kaigi"}]},
+  {"name":"mid-reading-edit","steps":[{"type":"nihongo"},{"key":"move","offset":-1},{"key":"delete"},{"type":"ga"},{"key":"move","offset":1}]},
+  {"name":"clause-length","steps":[{"type":"nihongo"},{"key":"adjustClause","offset":-1,"inputCount":7,"value":"nihongo"},{"key":"adjustClause","offset":1,"inputCount":5,"value":"nihongo"},{"key":"adjustClause","offset":-1,"inputCount":7,"value":"stale"}]},
+  {"name":"partial-commit-continuation","steps":[{"type":"ashitanokaigi"},{"key":"shrink","offset":6},{"key":"context","value":"明日"},{"type":"desu"},{"key":"clear"}]},
+  {"name":"context","steps":[{"key":"context","value":"会議のあとで、"},{"type":"siryouwookurimasu"}]}
+]

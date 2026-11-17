@@ -114,6 +114,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction"
         const val DEFAULT_DICTIONARY_TYPO_CORRECTION = true
         const val KEY_PREDICTIVE_CONVERSION = "predictive_conversion" // boolean, Android default: true, Windows default: false
+        const val KEY_POST_COMPOSITION_PREDICTION = "post_composition_prediction" // boolean, Android default: true
+        const val DEFAULT_POST_COMPOSITION_PREDICTION = true
         const val KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE = "english_space_adopts_candidate" // boolean, default false: insert space without adopting top candidate
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
         const val KEY_TRANSLATION_ENABLED = "translation_enabled" // boolean, default false
@@ -202,6 +204,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isAutoTypoCorrectionState = mutableStateOf(true)
     val isDictionaryTypoCorrectionState = mutableStateOf(DEFAULT_DICTIONARY_TYPO_CORRECTION)
     val isPredictiveConversionState = mutableStateOf(true)
+    val isPostCompositionPredictionState = mutableStateOf(DEFAULT_POST_COMPOSITION_PREDICTION)
     val isEnglishSpaceAdoptsCandidateState = mutableStateOf(false)
     val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
@@ -232,6 +235,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun isRealtimeInlineEnabled(): Boolean = isRealtimeInlineState.value
     fun isAiAssistEnabled(): Boolean = isAiAssistEnabledState.value
     fun isPredictiveConversionEnabled(): Boolean = isPredictiveConversionState.value
+    fun isPostCompositionPredictionEnabled(): Boolean = isPostCompositionPredictionState.value
     fun getPredictiveModel(): String = predictiveModelState.value
     fun isTranslationMode(): Boolean = translationState.value.active
 
@@ -839,11 +843,86 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun selectCandidate(candidate: Candidate) {
         if (candidate !in candidatesList) return
+        if (candidate.enginePostCompositionId.isNotEmpty()) {
+            selectPostCompositionCandidate(candidate)
+            return
+        }
         if (conversionRange.active && candidate !in ConversionRangeSession.candidatesForRange(composingText, candidatesList)) return
         if (candidate.assist != null) {
             aiAssistResultState.value = candidate.assist
             adoptAiAssist()
         } else commitText(candidate.text, isExplicitSelection = true, committedCandidate = candidate)
+    }
+
+    private fun selectPostCompositionCandidate(candidate: Candidate) {
+        if (isConfirming || isTranslationMode() || !composingText.isEmpty || englishComposing.isNotEmpty()) {
+            return
+        }
+        val connection = currentInputConnection ?: return
+        val sensitive = isSensitiveInput()
+        val expected = postCompositionExpectedSurface
+        val beforeCommit = if (!sensitive) {
+            readEditorLeftContext(connection, ComposingEditorState.PreviewCursor("", 0))
+        } else null
+        if (!sensitive && expected.isNotEmpty() && beforeCommit != null) {
+            val expectedTail = expected.takeLast(minOf(expected.length, MAX_LEFT_CONTEXT_LEN))
+            if (!beforeCommit.endsWith(expectedTail)) {
+                clearPostCompositionDisplay()
+                return
+            }
+        }
+        val contextBeforeSelection = beforeCommit ?: expected
+        if (!connection.commitText(candidate.text, 1)) return
+        canRewindOnNextBackspace = false
+        lastAutoCommitRewind = null
+
+        val postCompEnabled = isPostCompositionPredictionEnabled()
+        val nextExpected = (expected + candidate.text).takeLast(MAX_LEFT_CONTEXT_LEN)
+        postCompositionJob?.cancel()
+        candidatesList.clear()
+        if (sensitive || !postCompEnabled) {
+            clearPostCompositionDisplay()
+            return
+        }
+        val generation = ++postCompositionGeneration
+        postCompositionExpectedSurface = nextExpected
+        postCompositionInputConnection = connection
+        val predictionId = candidate.enginePostCompositionId
+        val allowLearning = LearningPolicy.canWrite
+        postCompositionJob = serviceScope.launch(Dispatchers.IO) {
+            val result = com.zeroconvert.ime.engine.WindowsEngine.selectPostCompositionPrediction(
+                predictionId = predictionId,
+                context = contextBeforeSelection,
+                allowLearning = allowLearning,
+                postCompositionPrediction = postCompEnabled
+            )
+            withContext(Dispatchers.Main) {
+                if (generation != postCompositionGeneration ||
+                    connection !== currentInputConnection ||
+                    !composingText.isEmpty ||
+                    englishComposing.isNotEmpty() ||
+                    isConfirming ||
+                    isTranslationMode() ||
+                    isSensitiveInput() ||
+                    !isPostCompositionPredictionEnabled()
+                ) {
+                    return@withContext
+                }
+                if (!result.accepted || result.terminal || result.predictions.isEmpty()) {
+                    clearPostCompositionDisplay()
+                    return@withContext
+                }
+                val afterCommit = readEditorLeftContext(connection, ComposingEditorState.PreviewCursor("", 0))
+                val tailCheck = result.leftSurface.takeLast(minOf(result.leftSurface.length, MAX_LEFT_CONTEXT_LEN))
+                if (afterCommit != null && tailCheck.isNotEmpty() && !afterCommit.endsWith(tailCheck)) {
+                    clearPostCompositionDisplay()
+                    return@withContext
+                }
+                postCompositionExpectedSurface = result.leftSurface.ifEmpty { nextExpected }
+                candidatesList.clear()
+                candidatesList.addAll(result.predictions)
+            }
+        }
     }
 
     /**
@@ -882,6 +961,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun performRevertAiAssist(): Boolean {
         if (!corrections.isApplied) return false
+        clearPostCompositionDisplay()
         val ic = currentInputConnection ?: return false
         cancelPendingInference(edited = false)
         // Only restore the internal snapshot after the editor accepted the undo.
@@ -1417,6 +1497,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isAutoTypoCorrectionState.value = prefs.getBoolean(KEY_AUTO_TYPO_CORRECTION, true)
         isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, DEFAULT_DICTIONARY_TYPO_CORRECTION)
         isPredictiveConversionState.value = prefs.getBoolean(KEY_PREDICTIVE_CONVERSION, true)
+        isPostCompositionPredictionState.value = prefs.getBoolean(
+            KEY_POST_COMPOSITION_PREDICTION,
+            DEFAULT_POST_COMPOSITION_PREDICTION
+        )
+        if (!isPostCompositionPredictionEnabled()) {
+            clearPostCompositionDisplay()
+        }
         isEnglishSpaceAdoptsCandidateState.value = prefs.getBoolean(KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
         predictiveModelState.value = "zerocon"
@@ -1543,6 +1630,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private val requestGate = AssistRequestGate()
     private var displayedAssistTicket: AssistRequestGate.Ticket? = null
     private var assistInputConnection: android.view.inputmethod.InputConnection? = null
+    private var postCompositionJob: Job? = null
+    private var postCompositionGeneration: Long = 0L
+    private var postCompositionExpectedSurface: String = ""
+    private var postCompositionInputConnection: android.view.inputmethod.InputConnection? = null
 
     private fun setManagedComposingText(connection: android.view.inputmethod.InputConnection?, text: CharSequence, cursor: Int): Boolean {
         if (connection == null || !connection.setComposingText(text, cursor)) return false
@@ -1555,6 +1646,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
         if (!text.endsWith(suffix)) return false
         val position = text.length - suffix.length
+        if (composingEditor.matchesPreview(text, position)) {
+            return true
+        }
         if (position == text.length) return setManagedComposingText(connection, text, 1)
         return composingEditor.write(object : ComposingEditorState.Editor {
             override fun beginBatch() { connection.beginBatchEdit() }
@@ -1615,7 +1709,82 @@ class ZeroConvertInputMethodService : InputMethodService(),
         touchCorrectionEnabled = isTouchTypoCorrectionEnabledState.value
     )
 
+    private fun clearPostCompositionDisplay(clearCandidates: Boolean = true) {
+        val hadJob = postCompositionJob != null
+        postCompositionJob?.cancel()
+        postCompositionJob = null
+        if (hadJob) {
+            ZenzNative.abort()
+        }
+        postCompositionGeneration++
+        postCompositionExpectedSurface = ""
+        postCompositionInputConnection = null
+        if (clearCandidates && candidatesList.any { it.enginePostCompositionId.isNotEmpty() }) {
+            candidatesList.clear()
+        }
+    }
+
+    private fun triggerPostCompositionPredictions(
+        connection: android.view.inputmethod.InputConnection,
+        candidateId: String,
+        committedText: String,
+        committedReading: String,
+        context: String
+    ) {
+        clearPostCompositionDisplay()
+        if (!KanaKanjiConverter.isInitialized ||
+            isSensitiveInput() ||
+            isTranslationMode() ||
+            !isPostCompositionPredictionEnabled() ||
+            committedText.isEmpty()
+        ) {
+            return
+        }
+        val generation = ++postCompositionGeneration
+        postCompositionExpectedSurface = committedText
+        postCompositionInputConnection = connection
+        val postCompEnabled = isPostCompositionPredictionEnabled()
+        postCompositionJob = serviceScope.launch(Dispatchers.IO) {
+            val result = com.zeroconvert.ime.engine.WindowsEngine.postCompositionPredictions(
+                candidateId = candidateId,
+                committedText = committedText,
+                committedReading = committedReading,
+                context = context,
+                postCompositionPrediction = postCompEnabled
+            )
+            withContext(Dispatchers.Main) {
+                if (generation != postCompositionGeneration ||
+                    connection !== currentInputConnection ||
+                    !composingText.isEmpty ||
+                    englishComposing.isNotEmpty() ||
+                    isConfirming ||
+                    isTranslationMode() ||
+                    isSensitiveInput() ||
+                    !isPostCompositionPredictionEnabled()
+                ) {
+                    return@withContext
+                }
+                if (result.predictions.isEmpty()) {
+                    postCompositionExpectedSurface = ""
+                    postCompositionInputConnection = null
+                    return@withContext
+                }
+                val expectedSurface = result.leftSurface.ifEmpty { committedText }
+                val beforeCursor = readEditorLeftContext(connection, ComposingEditorState.PreviewCursor("", 0))
+                val tailCheck = expectedSurface.takeLast(minOf(expectedSurface.length, MAX_LEFT_CONTEXT_LEN))
+                if (beforeCursor != null && tailCheck.isNotEmpty() && !beforeCursor.endsWith(tailCheck)) {
+                    clearPostCompositionDisplay()
+                    return@withContext
+                }
+                postCompositionExpectedSurface = expectedSurface
+                candidatesList.clear()
+                candidatesList.addAll(result.predictions)
+            }
+        }
+    }
+
     private fun cancelPendingInference(edited: Boolean = true) {
+        clearPostCompositionDisplay()
         requestGate.invalidate()
         ZenzNative.abort()
         inferenceJob?.cancel()
@@ -1819,6 +1988,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
         } else if (selected) {
             cancelPendingInference(edited = false)
+        } else if (composingText.isEmpty && englishComposing.isEmpty() && postCompositionExpectedSurface.isNotEmpty()) {
+            val expectedTail = postCompositionExpectedSurface.takeLast(
+                minOf(postCompositionExpectedSurface.length, MAX_LEFT_CONTEXT_LEN)
+            )
+            val beforeCursor = readEditorLeftContext(
+                currentInputConnection,
+                ComposingEditorState.PreviewCursor("", 0)
+            )
+            if (beforeCursor != null && expectedTail.isNotEmpty() && !beforeCursor.endsWith(expectedTail)) {
+                clearPostCompositionDisplay()
+            }
         }
         hasSelectionInEditor = selected
         selectionAvailableState.value = selected
@@ -1951,6 +2131,27 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private val japaneseTouchBiases = ArrayList<TouchKeyBias>(64)
     private val englishTouchBiases = ArrayList<TouchKeyBias>(64)
 
+    private fun tentativeInlineDisplay(surface: String, isRealtime: Boolean): String {
+        if (!isRealtime) {
+            lastInferredSurface = ""
+            lastInferredResult = ""
+            predictedCandidate.value = ""
+            return composingText.convertTarget
+        }
+        val tentative = InlinePreviewPolicy.tentativePrefix(
+            surface = surface,
+            lastInferredSurface = lastInferredSurface,
+            lastInferredResult = lastInferredResult,
+            history = inferenceHistory
+        )
+        if (tentative.inferredSurface != lastInferredSurface || tentative.inferredResult != lastInferredResult) {
+            lastInferredSurface = tentative.inferredSurface
+            lastInferredResult = tentative.inferredResult
+            predictedCandidate.value = ""
+        }
+        return tentative.text
+    }
+
     fun handleChar(ch: Char, touchBias: TouchKeyBias? = null) {
         if (isConfirming) return
         canRewindOnNextBackspace = false
@@ -1991,6 +2192,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (composingText.isEmpty) {
             val ic = currentInputConnection
             cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
+            leftContextConnection = ic
             inferenceHistory.clear()
             lastAutoCommitRewind = null
             japaneseTouchBiases.clear()
@@ -2026,22 +2228,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         currentComposingSurface.value = surface
 
         // Handle inline display:
-        // If realtime inline is ON: append diff to previous AI result
+        // If realtime inline is ON: keep the converted prefix matching the current reading
         // If realtime inline is OFF (default): show raw kana directly without kanji replacement
         val isRealtime = isRealtimeInlineEnabled()
-        val tentativeDisplay = if (isRealtime) {
-            if (lastInferredResult.isNotEmpty() &&
-                surface.startsWith(lastInferredSurface) &&
-                surface.length > lastInferredSurface.length
-            ) {
-                val diff = surface.substring(lastInferredSurface.length)
-                lastInferredResult + diff
-            } else {
-                surface
-            }
-        } else {
-            composingText.convertTarget
-        }
+        val tentativeDisplay = tentativeInlineDisplay(surface, isRealtime)
 
         if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
             clearCandidateList()
@@ -2081,6 +2271,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (composingText.isEmpty) {
             val ic = currentInputConnection
             cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
+            leftContextConnection = ic
             inferenceHistory.clear()
             lastAutoCommitRewind = null
         }
@@ -2095,19 +2286,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         currentComposingSurface.value = surface
 
         val isRealtime = isRealtimeInlineEnabled()
-        val tentativeDisplay = if (isRealtime) {
-            if (lastInferredResult.isNotEmpty() &&
-                surface.startsWith(lastInferredSurface) &&
-                surface.length > lastInferredSurface.length
-            ) {
-                val diff = surface.substring(lastInferredSurface.length)
-                lastInferredResult + diff
-            } else {
-                surface
-            }
-        } else {
-            composingText.convertTarget
-        }
+        val tentativeDisplay = tentativeInlineDisplay(surface, isRealtime)
 
         if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
             clearCandidateList()
@@ -2148,19 +2327,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         currentComposingSurface.value = newSurface
 
         val isRealtime = isRealtimeInlineEnabled()
-        val tentativeDisplay = if (isRealtime) {
-            if (lastInferredResult.isNotEmpty() &&
-                newSurface.startsWith(lastInferredSurface) &&
-                newSurface.length > lastInferredSurface.length
-            ) {
-                val diff = newSurface.substring(lastInferredSurface.length)
-                lastInferredResult + diff
-            } else {
-                newSurface
-            }
-        } else {
-            composingText.convertTarget
-        }
+        val tentativeDisplay = tentativeInlineDisplay(newSurface, isRealtime)
+        inferenceHistory.removeAll { it.readingHiragana.length >= newSurface.length }
 
         if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
             clearCandidateList()
@@ -2191,19 +2359,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         currentComposingSurface.value = newSurface
 
         val isRealtime = isRealtimeInlineEnabled()
-        val tentativeDisplay = if (isRealtime) {
-            if (lastInferredResult.isNotEmpty() &&
-                newSurface.startsWith(lastInferredSurface) &&
-                newSurface.length > lastInferredSurface.length
-            ) {
-                val diff = newSurface.substring(lastInferredSurface.length)
-                lastInferredResult + diff
-            } else {
-                newSurface
-            }
-        } else {
-            composingText.convertTarget
-        }
+        val tentativeDisplay = tentativeInlineDisplay(newSurface, isRealtime)
+        inferenceHistory.removeAll { it.readingHiragana.length >= newSurface.length }
 
         if (!setComposingPreview(currentInputConnection, ConversionRangeSession.preview(composingText, tentativeDisplay, isRealtime))) {
             clearCandidateList()
@@ -2218,6 +2375,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun isLastCharLetter(): Boolean {
+        clearPostCompositionDisplay()
         val ic = currentInputConnection ?: return false
         val last = ic.getTextBeforeCursor(1, 0)?.toString() ?: return false
         return last.isNotEmpty() && last.first().isLetter()
@@ -2326,11 +2484,20 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     val previousResult = lastInferredResult
                     val previousSurface = lastInferredSurface
                     val best = inlineBase()?.previewForReading(surface).orEmpty()
+                    val suppressDowngrade = (isRealtimeInlineEnabled() || rangeConversion) && best.isNotEmpty() &&
+                        InlinePreviewPolicy.shouldSuppressPreviewDowngrade(
+                            previousReading = previousSurface,
+                            reading = surface,
+                            previousPreview = previousResult,
+                            preview = best
+                        )
                     candidatesList.clear()
                     candidatesList.addAll(results)
-                    predictedCandidate.value = best
-                    lastInferredSurface = surface
-                    lastInferredResult = best
+                    if (!suppressDowngrade) {
+                        predictedCandidate.value = best
+                        lastInferredSurface = surface
+                        lastInferredResult = best
+                    }
                     if (!sensitive && !reconversion && !rangeConversion &&
                         (isDictionaryTypoCorrectionState.value || isAiAssistEnabled()) && !hasTrailingIncompleteRomaji(surface)) {
                         val allowCorrection = isDictionaryTypoCorrectionState.value && !corrections.isApplied && fixedPrefix.isEmpty()
@@ -2372,22 +2539,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
                             }
                         }
                     }
-                    if ((isRealtimeInlineEnabled() || rangeConversion) && best.isNotEmpty()) {
-                        // Only a same-reading reversion to kana is suppressed. A longer reading is
-                        // a new inference, so the tentative text from the shorter reading
-                        // (按摩 + り, 祖 + う) must not stay on screen.
-                        val downgrade = InlinePreviewPolicy.isSameReadingKanaDowngrade(
-                            previousReading = previousSurface,
-                            reading = surface,
-                            previousPreview = previousResult,
-                            preview = best
-                        )
-                        if (!downgrade) {
-                            val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
-                            if (!setComposingPreview(connection, best + suffix)) {
-                                cancelPendingInference(edited = false)
-                                clearCandidateList()
-                            }
+                    if ((isRealtimeInlineEnabled() || rangeConversion) && best.isNotEmpty() && !suppressDowngrade) {
+                        val suffix = composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
+                        if (!setComposingPreview(connection, best + suffix)) {
+                            cancelPendingInference(edited = false)
+                            clearCandidateList()
                         }
                     }
                 }
@@ -2414,6 +2570,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         connection.beginBatchEdit()
         try {
             if (!connection.commitText(prefixSurface, 1)) return
+            composingEditor.finishComposition()
             recordCommittedCorrections(prefixSurface)
 
             // 1. Save rewind state before modifying context
@@ -2561,20 +2718,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
             val surface = composingText.convertTargetBeforeCursor
             currentComposingSurface.value = surface
-            inferenceHistory.removeAll { it.readingHiragana.length >= surface.length }
             if (composingText.isEmpty) {
+                inferenceHistory.clear()
                 setManagedComposingText(currentInputConnection, "", 0)
                 currentInputConnection?.finishComposingText()
                 clearInput()
             } else {
                 val inline = isRealtimeInlineEnabled()
-                val prefix = if (inline && lastInferredResult.isNotEmpty() && surface.startsWith(lastInferredSurface)) {
-                    lastInferredResult + surface.substring(lastInferredSurface.length)
-                } else {
-                    lastInferredSurface = ""
-                    lastInferredResult = ""
-                    surface
-                }
+                val prefix = tentativeInlineDisplay(surface, inline)
+                inferenceHistory.removeAll { it.readingHiragana.length >= surface.length }
                 val preview = ConversionRangeSession.preview(composingText, prefix, inline)
                 if (setComposingPreview(currentInputConnection, preview) && surface.isNotEmpty()) {
                     triggerDebouncedConversion(surface)
@@ -2667,6 +2819,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
             return false
         }
+        clearPostCompositionDisplay()
         val ic = currentInputConnection ?: return false
         val hasSelection = try {
             !ic.getSelectedText(0).isNullOrEmpty()
@@ -2917,6 +3070,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return
         }
         if (englishComposing.isEmpty()) {
+            clearPostCompositionDisplay()
             val ic = currentInputConnection
             cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
             englishTouchBiases.clear()
@@ -2998,6 +3152,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private fun deleteDirectFromEditor(sendKeyEventFallback: Boolean = true): Boolean {
+        clearPostCompositionDisplay()
         val ic = currentInputConnection ?: return false
         val textBefore = try {
             ic.getTextBeforeCursor(1, 0)
@@ -3120,6 +3275,23 @@ class ZeroConvertInputMethodService : InputMethodService(),
         ) else null
         val learnEnglish = wasEnglish && isExplicitSelection && !isSensitiveInput() && LearningPolicy.canWrite
         val learningRevisionBefore = KanaKanjiConverter.learningHistoryRevision
+        val shouldPredictPostComposition = !wasEnglish &&
+            surfaceAfter.isEmpty() &&
+            !isSensitiveInput() &&
+            !isTranslationMode() &&
+            isPostCompositionPredictionEnabled() &&
+            trailingText.isEmpty() &&
+            (readingBefore.isNotEmpty() || committedCandidate != null)
+        val postCompCandidateId = committedCandidate?.engineCandidateId.orEmpty()
+        val postCompContext = if (shouldPredictPostComposition) {
+            val baseContext = if (leftContextConnection === connection) {
+                cachedLeftContext
+            } else {
+                readEditorLeftContext(connection).orEmpty()
+            }
+            if (baseContext.isNotEmpty()) EditorContext.bounded(baseContext + text) else text
+        } else ""
+        var committedTerminalComposition = false
         cancelPendingInference(edited = false)
         connection.beginBatchEdit()
         try {
@@ -3164,11 +3336,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 } else clearCandidateList()
             } else {
                 clearInput()
+                committedTerminalComposition = true
             }
         } finally { connection.endBatchEdit() }
+        if (committedTerminalComposition && shouldPredictPostComposition) {
+            triggerPostCompositionPredictions(
+                connection = connection,
+                candidateId = postCompCandidateId,
+                committedText = text,
+                committedReading = readingBefore,
+                context = postCompContext
+            )
+        }
     }
 
     private fun clearCandidateList() {
+        clearPostCompositionDisplay(clearCandidates = false)
         candidatesList.clear()
         predictedCandidate.value = ""
         lastInferredSurface = ""

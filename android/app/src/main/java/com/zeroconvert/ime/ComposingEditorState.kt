@@ -97,6 +97,9 @@ internal class ComposingEditorState {
         return currentSelection?.matches(selectionStart, composingStart, composingEnd) == true
     }
 
+    fun matchesPreview(text: String, cursorOffset: Int): Boolean =
+        text.isNotEmpty() && preview == text && cursor == cursorOffset
+
     fun write(editor: Editor, text: String, cursorOffset: Int): Boolean {
         if (!isBoundary(text, cursorOffset)) return false
         if (cursorOffset == text.length) {

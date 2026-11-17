@@ -2161,6 +2161,62 @@ impl TextServiceFactory {
         )
     }
 
+    fn build_assist_reading_json(
+        candidates: &Candidates,
+        reading: Option<&str>,
+        applied: Option<&typo::AppliedCorrection>,
+        primary_assist: Option<u64>,
+        prediction_continuation: &str,
+    ) -> Option<String> {
+        let base_reading = reading.unwrap_or(candidates.hiragana.as_str());
+        if let Some(applied) = applied.filter(|_| {
+            !candidates
+                .candidate_ids
+                .contains(&shared::ai_candidate::PREDICTIVE)
+        }) {
+            return Some(
+                serde_json::json!({
+                    "reading": applied.source,
+                    "assist": {
+                        "status": "applied",
+                        "source": applied.baseline_surface(),
+                        "replacement": applied.surface,
+                    }
+                })
+                .to_string(),
+            );
+        }
+        let (idx, kind) =
+            Self::ai_assist_priority_index(&candidates.candidate_ids, primary_assist)?;
+        let text = candidates.texts.get(idx)?;
+        let status = if kind == shared::ai_candidate::TRANSLATION {
+            "translation"
+        } else if kind == shared::ai_candidate::TYPO_CORRECTION {
+            "proposal"
+        } else {
+            "prediction"
+        };
+        let source = if kind == shared::ai_candidate::TYPO_CORRECTION {
+            typo::baseline_surface_from_candidates(candidates)
+                .unwrap_or_else(|| candidates.hiragana.clone())
+        } else {
+            candidates.hiragana.clone()
+        };
+        Some(
+            serde_json::json!({
+                "reading": base_reading,
+                "assist": {
+                    "status": status,
+                    "source": source,
+                    "replacement": text,
+                    "continuation": prediction_continuation,
+                    "undoAvailable": applied.is_some(),
+                }
+            })
+            .to_string(),
+        )
+    }
+
     #[inline]
     #[allow(clippy::too_many_arguments)]
     fn sync_candidate_window_update(
@@ -2174,29 +2230,22 @@ impl TextServiceFactory {
         candidate_list_visible: Option<bool>,
         reading_vertical_adjustment: Option<i32>,
     ) -> Result<()> {
-        let mut augmented_reading = None;
-        let base_reading = reading.unwrap_or(candidates.hiragana.as_str());
-
-        let applied = self.borrow()?.borrow_composition()?.typo.applied.clone();
-        if let Some(applied) = applied.as_ref().filter(|_| {
-            !candidates
-                .candidate_ids
-                .contains(&shared::ai_candidate::PREDICTIVE)
-        }) {
-            augmented_reading = Some(serde_json::json!({"reading": applied.source,
-                "assist": {"status":"applied", "source":applied.source, "replacement":applied.surface}}).to_string());
-        } else if let Some((idx, kind)) = Self::ai_assist_priority_index(
-            &candidates.candidate_ids,
-            self.borrow()?.borrow_composition()?.typo.primary_assist,
-        ) {
-            if let Some(text) = candidates.texts.get(idx) {
-                augmented_reading = Some(serde_json::json!({"reading":base_reading,
-                    "assist":{"status": if kind == shared::ai_candidate::TRANSLATION {"translation"} else if kind == shared::ai_candidate::TYPO_CORRECTION {"proposal"} else {"prediction"},
-                    "source":candidates.hiragana, "replacement":text,
-                        "continuation":self.borrow()?.borrow_composition()?.typo.prediction_continuation,
-                        "undoAvailable":applied.is_some()}}).to_string());
-            }
-        }
+        let (applied, primary_assist, prediction_continuation) = {
+            let state = self.borrow()?;
+            let comp = state.borrow_composition()?;
+            (
+                comp.typo.applied.clone(),
+                comp.typo.primary_assist,
+                comp.typo.prediction_continuation.clone(),
+            )
+        };
+        let mut augmented_reading = Self::build_assist_reading_json(
+            candidates,
+            reading,
+            applied.as_deref(),
+            primary_assist,
+            &prediction_continuation,
+        );
 
         if self.borrow()?.translation_session.is_some() {
             let translation = candidates

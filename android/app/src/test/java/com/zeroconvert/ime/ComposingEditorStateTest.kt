@@ -329,4 +329,23 @@ class ComposingEditorStateTest {
         assertTrue(range.adjust(input, 1))
         assertEquals(3, input.convertTargetCursorPosition)
     }
+
+    @Test fun matchesPreviewTracksNonEmptyPreviewAndCursorAndResetsOnFinish() {
+        val state = ComposingEditorState()
+        assertFalse(state.matchesPreview("", 0))
+
+        state.recordPreview("今日w", expectTailCursor = true)
+        assertTrue(state.matchesPreview("今日w", 3))
+        assertFalse(state.matchesPreview("今日w", 2))
+        assertFalse(state.matchesPreview("きょうw", 3))
+
+        val editor = Editor(prefix = "")
+        assertTrue(state.write(editor, "今日は", 2))
+        assertTrue(state.matchesPreview("今日は", 2))
+        assertFalse(state.matchesPreview("今日は", 3))
+
+        state.finishComposition()
+        assertFalse(state.matchesPreview("今日は", 2))
+        assertFalse(state.matchesPreview("", 0))
+    }
 }

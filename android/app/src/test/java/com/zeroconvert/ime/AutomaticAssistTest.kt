@@ -108,13 +108,14 @@ class AutomaticAssistTest {
         assertEquals(listOf(CorrectionSession.Acceptance("がこう", "学校")), session.committed("学校に行きます"))
     }
 
-    @Test fun weakCorrectionWaitsForPredictionAndDoesNotReplaceDisplayedTarget() {
+    @Test fun correctionWinsOverPredictionRegardlessOfRelevance() {
         val state = AssistPresentation(RustAssistPolicy)
         assertNull(state.complete(AiAssistType.TYPO_CORRECTION, correction()).selected)
         val shown = state.complete(AiAssistType.PREDICTION, prediction())
-        assertEquals(prediction(), shown.selected)
+        assertEquals(correction(), shown.selected)
         assertEquals(2, shown.suggestions.size)
-        assertEquals(prediction(), state.complete(AiAssistType.TYPO_CORRECTION, correction(relevance = 70)).selected)
+        val stronger = correction(relevance = 70)
+        assertEquals(correction(), state.complete(AiAssistType.TYPO_CORRECTION, stronger).selected)
     }
 
     @Test fun absentPredictionReleasesManualCorrectionAndAutomaticEvidenceDoesNotWait() {
@@ -135,21 +136,22 @@ class AutomaticAssistTest {
         assertEquals(learned, state.complete(AiAssistType.PREDICTION, prediction()).selected)
     }
 
-    @Test fun firstPredictionWaitsForCorrectionAndKeepsItsTapTargetAfterDeadline() {
+    @Test fun firstPredictionWaitsForCorrectionThenLateCorrectionReplacesTapTarget() {
         val state = AssistPresentation(RustAssistPolicy)
         assertNull(state.complete(AiAssistType.PREDICTION, prediction(), elapsedMs = 10).selected)
         assertNull(state.update(199).selected)
         assertEquals(prediction(), state.update(200).selected)
-        val late = state.complete(AiAssistType.TYPO_CORRECTION, correction(relevance = 80), elapsedMs = 250)
-        assertEquals(prediction(), late.selected)
-        assertEquals(2, late.suggestions.size)
+        val late = correction(relevance = 30)
+        val updated = state.complete(AiAssistType.TYPO_CORRECTION, late, elapsedMs = 250)
+        assertEquals(late, updated.selected)
+        assertEquals(2, updated.suggestions.size)
         assertEquals("ignore", SharedAssistPolicy.adoptionAction(prediction(), false, true, false, RustAssistPolicy))
         assertEquals("commitText", SharedAssistPolicy.adoptionAction(prediction(), true, false, true, RustAssistPolicy))
         assertEquals("replaceComposition", SharedAssistPolicy.adoptionAction(correction(), true, false, false, RustAssistPolicy))
         assertEquals("ignore", SharedAssistPolicy.adoptionAction(correction(), true, false, true, RustAssistPolicy))
     }
 
-    @Test fun fastPredictionIsPublishedWhileCorrectorIsStillWorking() = runBlocking {
+    @Test fun fastPredictionIsPublishedThenPromotedWhenLateCorrectionArrives() = runBlocking {
         val release = CountDownLatch(1)
         val inference = object : AssistInference {
             override val revision = 1L
@@ -169,7 +171,8 @@ class AutomaticAssistTest {
             }
         } finally { release.countDown() }
         assertEquals(2, updates.size)
-        assertTrue(updates.all { it.selected?.type == AiAssistType.PREDICTION })
+        assertEquals(AiAssistType.PREDICTION, updates[0].selected?.type)
+        assertEquals(AiAssistType.TYPO_CORRECTION, updates[1].selected?.type)
         assertEquals(2, updates.last().suggestions.size)
     }
 

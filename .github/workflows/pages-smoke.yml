@@ -1,0 +1,135 @@
+name: Build and deploy ZeroConvert IME website
+
+on:
+  push:
+    branches: [web-pages-smoke]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages-smoke
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch the pinned dictionary
+        run: git submodule update --init --depth 1 windows/server-swift/azooKey_dictionary_storage
+      - name: Fetch Swift and its WASI SDK
+        run: |
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          mkdir -p "$swift_root"
+          cd "$swift_root"
+          server=https://download.swift.org/swift-6.4.2-release
+          curl --fail --silent --show-error --location --retry 3 "$server/ubuntu2204/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE-ubuntu22.04.tar.gz" -o swift-linux.tar.gz
+          curl --fail --silent --show-error --location --retry 3 "$server/wasm-sdk/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE_wasm.artifactbundle.tar.gz" -o swift-wasm.tar.gz
+          echo 'c3081b1817117c66e4764d2a148357d997200048922c778b0f08c795833ae06d  swift-linux.tar.gz' | sha256sum --check
+          echo '83baca83553f8c443cda7b84800912e6e709c3acd2e7ebf277794ca5836c0da5  swift-wasm.tar.gz' | sha256sum --check
+          tar -xzf swift-linux.tar.gz
+          tar -xzf swift-wasm.tar.gz
+      - name: Build and check the shared engine
+        run: |
+          cargo rustc --locked --manifest-path engine/rust/Cargo.toml --target wasm32-wasip1 --release --lib --crate-type cdylib -- -C link-arg=--export=malloc -C link-arg=--export=free
+          node web/check-assist-wasm.cjs engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm
+          cargo rustc --locked --manifest-path web/live-policy/Cargo.toml --target wasm32-wasip1 --release -- -C link-arg=--export=malloc -C link-arg=--export=free
+          node web/check-session-wasm.cjs web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm
+          node web/check-worker-session.mjs
+          node web/check-worker-assist.mjs
+          node web/check-assist-session.mjs
+          node web/check-learning-store.mjs
+          node web/check-settings-store.mjs
+          node web/check-load-progress.mjs
+          node web/check-release-downloads.mjs
+          mkdir -p dist/pages-smoke
+          cp web/pages/index.html web/pages/style.css web/pages/android-keyboard.css web/pages/android-keyboard.mjs web/pages/dictionary-engine.mjs web/pages/model-*.mjs web/pages/assist-session.mjs web/pages/learning-store.mjs web/pages/load-progress.mjs web/pages/release-downloads.mjs web/pages/settings-store.mjs dist/pages-smoke/
+          python3 web/pack-android-keyboard.py dist/pages-smoke/android-keyboard-layout.mjs
+          python3 web/pack-site-theme.py dist/pages-smoke/ime-theme.css
+          cp web/unicode-emoji-license.txt dist/pages-smoke/
+          cp windows/frontend/public/favicon.png dist/pages-smoke/
+          cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages-smoke/
+          cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages-smoke/
+          cp windows/LICENSE dist/pages-smoke/LICENSE.txt
+      - name: Build the pinned llama.cpp for WASI
+        run: |
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          bin="$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin"
+          sdk="$swift_root/swift-6.4.2-RELEASE_wasm.artifactbundle/swift-6.4.2-RELEASE_wasm/wasm32-unknown-wasip1/WASI.sdk"
+          python3 web/stage-llama.py "$RUNNER_TEMP/llama-source" --windows-source "$RUNNER_TEMP/llama-windows-source"
+          flags='-msimd128 -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS'
+          cmake -G Ninja -S "$RUNNER_TEMP/llama-source" -B "$RUNNER_TEMP/llama-build" \
+            -DCMAKE_SYSTEM_NAME=WASI -DCMAKE_SYSTEM_PROCESSOR=wasm32 \
+            -DCMAKE_C_COMPILER_TARGET=wasm32-wasip1 -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip1 \
+            -DCMAKE_SYSROOT="$sdk" -DCMAKE_C_COMPILER="$bin/clang" -DCMAKE_CXX_COMPILER="$bin/clang++" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_RPC=OFF \
+            -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_IS_DEV=OFF
+          cmake --build "$RUNNER_TEMP/llama-build" --target llama --parallel 4
+          python3 web/build-completion.py "$bin" "${sdk%/WASI.sdk}" \
+            "$RUNNER_TEMP/llama-source" "$RUNNER_TEMP/llama-build" dist/pages-smoke/zerocon_completion.wasm
+      - name: Build and check the Windows Swift model route
+        run: |
+          set -o pipefail
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          converter=$(python3 windows/scripts/prepare-modern-llama.py --converter-only | python3 -c 'import json,sys; print(json.load(sys.stdin)["converter"])')
+          python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/model-source" --llama-source "$RUNNER_TEMP/llama-source"
+          llama_lib="$RUNNER_TEMP/llama-build"
+          "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/swift" build -c release \
+            --swift-sdks-path "$swift_root" --swift-sdk swift-6.4.2-RELEASE_wasm \
+            --package-path "$RUNNER_TEMP/model-source/app" --scratch-path "$RUNNER_TEMP/model-build" \
+            -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor \
+            -Xlinker --export=malloc -Xlinker --export=free -Xlinker --export=zerocon_model_request \
+            -Xlinker "-L$llama_lib/src" -Xlinker "-L$llama_lib/ggml/src" \
+            -Xlinker -lggml-cpu -Xlinker -lc++ -Xlinker -lc++abi \
+            -Xlinker -lwasi-emulated-signal -Xlinker -lwasi-emulated-mman -Xlinker -lwasi-emulated-process-clocks
+          wasm=$(find "$RUNNER_TEMP/model-build" -name zerocon_model.wasm -type f -print -quit)
+          test -n "$wasm"
+          "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/llvm-objcopy" \
+            --strip-debug --remove-section=name "$wasm" dist/pages-smoke/zerocon_model.wasm
+          dictionary=windows/server-swift/azooKey_dictionary_storage
+          node windows/scripts/generate-reverse-dictionary.mjs --source "$dictionary/Dictionary/louds" \
+            --output "$RUNNER_TEMP/reverse-v2.bin"
+          python3 web/pack-dictionary.py "$dictionary/Dictionary" dist/pages-smoke/dictionary.gz \
+            --reverse "$RUNNER_TEMP/reverse-v2.bin"
+          cp "$dictionary/LICENSE" dist/pages-smoke/DICTIONARY-LICENSE.txt
+          cp "$converter/LICENSE" dist/pages-smoke/CONVERTER-LICENSE.txt
+          cp "$RUNNER_TEMP/llama-source/LICENSE" dist/pages-smoke/LLAMA-LICENSE.txt
+          curl --fail --silent --show-error --location --retry 3 https://github.com/g0083/ZeroConvert-IME/releases/download/v0.7.0/ZeroConvert-IME-v0.7.0-arm64-debug.apk -o "$RUNNER_TEMP/zerocon.apk"
+          python3 web/pack-model.py "$RUNNER_TEMP/zerocon.apk" dist/pages-smoke
+          python3 web/pack-candidate-window.py dist/pages-smoke/candidate-window.html
+          python3 web/pack-reading-window.py dist/pages-smoke/reading-window.html
+          node --test --test-name-pattern='^(empty candidates|short candidate lists|long candidate lists|render ranges|render range|selection indices|selection scrolling)' windows/crates/ui/tests/candidate_scroller.test.cjs
+          (cd web && npm ci --ignore-scripts --no-audit)
+          cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages-smoke/wasi
+          node web/check-model-wasm.mjs dist/pages-smoke
+          node web/check-model-assist.mjs dist/pages-smoke
+          node web/check-model-learning.mjs dist/pages-smoke
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/pages-smoke
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

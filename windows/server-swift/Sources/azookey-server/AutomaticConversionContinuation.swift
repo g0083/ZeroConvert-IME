@@ -90,7 +90,7 @@ private func automaticConversionContinuationPath(
     return resolved
 }
 
-private func isAutomaticConversionContinuationStopCharacter(_ character: Character) -> Bool {
+func isAutomaticConversionContinuationStopCharacter(_ character: Character) -> Bool {
     if character.isNewline {
         return true
     }
@@ -103,14 +103,19 @@ private func isAutomaticConversionContinuationStopCharacter(_ character: Charact
 func makeAutomaticConversionContinuation(
     context: String,
     currentReading: String,
-    isCursorAtEnd: Bool
+    isCursorAtEnd: Bool,
+    allowPureKana: Bool = false,
+    allowUncompletedRoman: Bool = false
 ) -> ConversionContinuation? {
     guard !context.isEmpty, isCursorAtEnd else {
         return nil
     }
-    guard !currentReading.isEmpty,
+    let effectiveReading = allowUncompletedRoman
+        ? String(currentReading.prefix(while: { !($0.isASCII && $0.isLetter) }))
+        : currentReading
+    guard !effectiveReading.isEmpty,
           currentReading.count <= maxConversionContinuationCurrentReadingCount,
-          isKanaLikeConversionContinuationReading(currentReading) else {
+          isKanaLikeConversionContinuationReading(effectiveReading) else {
         return nil
     }
     guard automaticContinuationDisabledContext != context else {
@@ -151,9 +156,11 @@ func makeAutomaticConversionContinuation(
           context.hasSuffix(surface) else {
         return nil
     }
-    // A pure-hiragana prefix only rebuilds itself or converts to kanji the surface slice cannot strip.
-    guard surface.contains(where: { !isKanaLikeConversionContinuationReading(String($0)) }) else {
-        return nil
+    if !allowPureKana {
+        // A pure-hiragana prefix only rebuilds itself or converts to kanji the surface slice cannot strip.
+        guard surface.contains(where: { !isKanaLikeConversionContinuationReading(String($0)) }) else {
+            return nil
+        }
     }
     return ConversionContinuation(reading: reading, surface: surface)
 }

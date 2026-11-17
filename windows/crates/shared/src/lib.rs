@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 pub mod assist_policy;
 pub mod conversion_policy;
+pub mod learning_policy;
+pub mod session_policy;
 use std::{
     collections::HashMap,
     env, error, fmt, fs, io,

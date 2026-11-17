@@ -254,6 +254,12 @@ fun MainScreen(
     var isPredictiveConversion by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, true))
     }
+    var isPostCompositionPrediction by remember {
+        mutableStateOf(imePrefs.getBoolean(
+            ZeroConvertInputMethodService.KEY_POST_COMPOSITION_PREDICTION,
+            ZeroConvertInputMethodService.DEFAULT_POST_COMPOSITION_PREDICTION
+        ))
+    }
     var isEnglishSpaceAdoptsCandidate by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false))
     }
@@ -1120,6 +1126,19 @@ fun MainScreen(
                 onCheckedChange = { checked ->
                     isPredictiveConversion = checked
                     imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "確定後の予測変換（次の語句）",
+                description = "変換や文字を確定したあとに、続けて入力しやすい助詞や次の語句を候補バーへ表示します。",
+                checked = isPostCompositionPrediction,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isPostCompositionPrediction = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_POST_COMPOSITION_PREDICTION, checked)
+                        .apply()
                 }
             )
             SettingsDivider(palette)

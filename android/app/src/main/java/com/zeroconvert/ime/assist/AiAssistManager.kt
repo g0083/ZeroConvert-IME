@@ -23,7 +23,8 @@ data class AiAssistResult(
     val relevance: Int = 30,
     val sourceReading: String = "",
     val continuation: String = "",
-    val autoApply: Boolean = false
+    val autoApply: Boolean = false,
+    val sourceSurface: String = ""
 )
 
 object AiAssistManager {

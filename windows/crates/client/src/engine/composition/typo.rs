@@ -39,6 +39,41 @@ pub(super) struct AppliedCorrection {
     pub surface: String,
 }
 
+impl AppliedCorrection {
+    /// Returns the pre-correction displayed surface for focused diff UI,
+    /// falling back to the original baseline candidate or raw reading.
+    pub(super) fn baseline_surface(&self) -> String {
+        let preview = format!("{}{}", self.original.preview, self.original.suffix);
+        if !preview.is_empty() {
+            return preview;
+        }
+        baseline_surface_from_candidates(&self.original.candidates)
+            .unwrap_or_else(|| self.source.clone())
+    }
+}
+
+/// Extracts the non-AI baseline conversion surface from `candidates`, if present.
+pub(super) fn baseline_surface_from_candidates(candidates: &Candidates) -> Option<String> {
+    let idx = (0..candidates.texts.len()).find(|&i| {
+        !matches!(
+            candidates.candidate_ids.get(i).copied(),
+            Some(
+                shared::ai_candidate::TYPO_CORRECTION
+                    | shared::ai_candidate::PREDICTIVE
+                    | shared::ai_candidate::TRANSLATION
+            )
+        )
+    })?;
+    let text = candidates.texts.get(idx).map(String::as_str).unwrap_or("");
+    let sub_text = candidates
+        .sub_texts
+        .get(idx)
+        .map(String::as_str)
+        .unwrap_or("");
+    let surface = format!("{text}{sub_text}");
+    (!surface.is_empty()).then_some(surface)
+}
+
 struct Pending {
     translation: bool,
     generation: u64,
@@ -211,7 +246,7 @@ fn merge_results(
             choices.push((response.relevance, id));
         }
     }
-    // Keep an already displayed Tab target stable until the next edit.
+    // Prefer correction/translation over prediction even if prediction appeared first.
     state.typo.primary_assist =
         shared::assist_policy::choose_primary(&choices, state.typo.primary_assist);
     auto_apply
@@ -1077,16 +1112,17 @@ mod tests {
     }
 
     #[test]
-    fn weak_correction_cannot_hide_prediction_or_change_displayed_tab_target() {
+    fn correction_precedes_prediction_even_with_low_relevance_or_late_arrival() {
+        let base_candidates = || Candidates {
+            prediction_readings: Default::default(),
+            texts: vec!["よろしくお願い".into()],
+            sub_texts: vec![String::new()],
+            hiragana: "よろしくおねがい".into(),
+            candidate_ids: vec![0],
+            corresponding_count: vec![4],
+        };
         let mut state = Composition {
-            candidates: Candidates {
-                prediction_readings: Default::default(),
-                texts: vec!["よろしくお願い".into()],
-                sub_texts: vec![String::new()],
-                hiragana: "よろしくおねがい".into(),
-                candidate_ids: vec![0],
-                corresponding_count: vec![4],
-            },
+            candidates: base_candidates(),
             ..Default::default()
         };
         merge_results(
@@ -1112,36 +1148,67 @@ mod tests {
         );
         assert_eq!(
             state.typo.primary_assist,
-            Some(shared::ai_candidate::PREDICTIVE)
+            Some(shared::ai_candidate::TYPO_CORRECTION)
         );
         assert_eq!(state.candidates.texts[0], "よろしくお願い");
         assert!(state
             .candidates
             .candidate_ids
             .contains(&shared::ai_candidate::TYPO_CORRECTION));
+        assert!(state
+            .candidates
+            .candidate_ids
+            .contains(&shared::ai_candidate::PREDICTIVE));
+
+        // When prediction displays first, a late correction still promotes to the primary target.
+        let mut late_state = Composition {
+            candidates: base_candidates(),
+            ..Default::default()
+        };
         merge_results(
-            &mut state,
+            &mut late_state,
+            vec![(
+                2,
+                response(
+                    shared::ai_candidate::PREDICTIVE,
+                    "よろしくお願いいたします。",
+                    75,
+                ),
+            )],
+        );
+        assert_eq!(
+            late_state.typo.primary_assist,
+            Some(shared::ai_candidate::PREDICTIVE)
+        );
+        merge_results(
+            &mut late_state,
             vec![(
                 1,
                 response(
                     shared::ai_candidate::TYPO_CORRECTION,
                     "宜しくお願いします",
-                    90,
+                    30,
                 ),
             )],
         );
         assert_eq!(
-            state.typo.primary_assist,
-            Some(shared::ai_candidate::PREDICTIVE)
+            late_state.typo.primary_assist,
+            Some(shared::ai_candidate::TYPO_CORRECTION)
+        );
+        // Conversely, a late prediction never displaces an already shown correction.
+        merge_results(
+            &mut late_state,
+            vec![(
+                2,
+                response(
+                    shared::ai_candidate::PREDICTIVE,
+                    "よろしくお願いいたします。",
+                    95,
+                ),
+            )],
         );
         assert_eq!(
-            shared::assist_policy::choose_primary(
-                &[
-                    (70, shared::ai_candidate::TYPO_CORRECTION),
-                    (45, shared::ai_candidate::PREDICTIVE)
-                ],
-                None
-            ),
+            late_state.typo.primary_assist,
             Some(shared::ai_candidate::TYPO_CORRECTION)
         );
     }
@@ -1348,5 +1415,87 @@ mod tests {
     fn translation_errors_report_distinct_ui_keys() {
         assert_eq!(TranslationError::Timeout.ui_key(), "timeout");
         assert_eq!(TranslationError::Unavailable.ui_key(), "unavailable");
+    }
+
+    #[test]
+    fn assist_reading_json_uses_baseline_surface_as_correction_source() {
+        let candidates = Candidates {
+            prediction_readings: Default::default(),
+            texts: vec!["明日の会議のおkせり".into(), "明日の会議のおかえり".into()],
+            sub_texts: vec![String::new(), String::new()],
+            hiragana: "あしたのかいぎのおkせり".into(),
+            corresponding_count: vec![23; 2],
+            candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+        };
+        let proposal_json = TextServiceFactory::build_assist_reading_json(
+            &candidates,
+            Some("あしたのかいぎのおkせり"),
+            None,
+            Some(shared::ai_candidate::TYPO_CORRECTION),
+            "",
+        )
+        .expect("proposal assist json");
+        let proposal: serde_json::Value = serde_json::from_str(&proposal_json).unwrap();
+        assert_eq!(proposal["reading"], "あしたのかいぎのおkせり");
+        assert_eq!(proposal["assist"]["status"], "proposal");
+        assert_eq!(proposal["assist"]["source"], "明日の会議のおkせり");
+        assert_eq!(proposal["assist"]["replacement"], "明日の会議のおかえり");
+
+        let ipc = IPCService::recovery_for_test(false);
+        let applied = AppliedCorrection {
+            original: Composition {
+                preview: "明日の会議のおkせり".into(),
+                suffix: "です".into(),
+                candidates: candidates.clone(),
+                ..Default::default()
+            },
+            ledger: ipc.input_ledger_snapshot(),
+            source: "あしたのかいぎのおkせりです".into(),
+            surface: "明日の会議のおかえりです".into(),
+        };
+        let applied_candidates = Candidates {
+            hiragana: "あしたのかいぎのおkせりです".into(),
+            ..Default::default()
+        };
+        let applied_json = TextServiceFactory::build_assist_reading_json(
+            &applied_candidates,
+            None,
+            Some(&applied),
+            None,
+            "",
+        )
+        .expect("applied assist json");
+        let parsed: serde_json::Value = serde_json::from_str(&applied_json).unwrap();
+        assert_eq!(parsed["reading"], "あしたのかいぎのおkせりです");
+        assert_eq!(parsed["assist"]["status"], "applied");
+        assert_eq!(parsed["assist"]["source"], "明日の会議のおkせりです");
+        assert_eq!(parsed["assist"]["replacement"], "明日の会議のおかえりです");
+    }
+
+    #[test]
+    fn baseline_surface_skips_ai_candidates_and_falls_back_cleanly() {
+        let ai_first = Candidates {
+            prediction_readings: Default::default(),
+            texts: vec!["誤り補正".into(), "通常変換".into()],
+            sub_texts: vec![String::new(), "です".into()],
+            hiragana: "あやまり".into(),
+            corresponding_count: vec![4; 2],
+            candidate_ids: vec![shared::ai_candidate::TYPO_CORRECTION, 42],
+        };
+        assert_eq!(
+            baseline_surface_from_candidates(&ai_first),
+            Some("通常変換です".to_string())
+        );
+
+        let empty_preview_applied = AppliedCorrection {
+            original: Composition {
+                candidates: ai_first,
+                ..Default::default()
+            },
+            ledger: IPCService::recovery_for_test(false).input_ledger_snapshot(),
+            source: "あやまり".into(),
+            surface: "正しい変換".into(),
+        };
+        assert_eq!(empty_preview_applied.baseline_surface(), "通常変換です");
     }
 }

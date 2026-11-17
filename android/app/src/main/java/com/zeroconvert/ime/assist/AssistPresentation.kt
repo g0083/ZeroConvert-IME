@@ -3,7 +3,7 @@ package com.zeroconvert.ime.assist
 data class AssistUpdate(val selected: AiAssistResult?, val automaticCorrection: AiAssistResult? = null,
     val suggestions: List<AiAssistResult> = emptyList())
 
-/** One immutable input snapshot. Once shown, a tap target stays fixed until the next edit. */
+/** One immutable input snapshot. Correction keeps priority over prediction until the next edit. */
 class AssistPresentation(private val policy: AssistPolicyTransport = SharedAssistPolicy.native) {
     private var predictionDone = false
     private var correctionDone = false

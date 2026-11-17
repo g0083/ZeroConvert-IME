@@ -19,16 +19,20 @@ func _strdup(_ value: String) -> UnsafeMutablePointer<CChar>? { value.withCStrin
 
 @MainActor private var embeddedInitialized = false
 
+@MainActor private func embeddedDecodeJsonObject(_ pointer: UnsafeMutablePointer<CChar>?) -> [String: Any] {
+    guard let pointer else { return [:] }
+    defer { free_c_string(pointer) }
+    guard let data = String(cString: pointer).data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return [:]
+    }
+    return object
+}
+
 /// Reads the server's learning counters through its C entry point, so the bridge
 /// never grows a second copy of what counts as learned.
 @MainActor private func embeddedLearningStats() -> [String: Any] {
-    guard let json = get_learning_stats() else { return [:] }
-    defer { free_c_string(json) }
-    guard let data = String(cString: json).data(using: .utf8),
-          let stats = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        return [:]
-    }
-    return stats
+    embeddedDecodeJsonObject(get_learning_stats())
 }
 
 // Use the existing Windows performance callback; retain durations only, never
@@ -58,6 +62,7 @@ private let embeddedPerformance = EmbeddedPerformance()
         config["embeddedModelPath"] = model
         set_server_log_callbacks(nil, nil, { embeddedPerformance.isEnabled() }, nil,
             { _, _, stage, elapsed, _ in embeddedPerformance.record(stage, elapsed) }, nil, nil, nil)
+        postCompositionCancellationCheck = { zerocon_conversion_cancelled() }
         if !embeddedInitialized {
             root.withCString { initialize(path: $0, use_zenzai: true) }
             embeddedInitialized = true
@@ -108,6 +113,62 @@ private let embeddedPerformance = EmbeddedPerformance()
         return ["reset": reset, "stats": embeddedLearningStats()]
     }
     if op == "learningStats" { return embeddedLearningStats() }
+    if op == "postComposition" {
+        let epoch = (request["requestEpoch"] as? NSNumber)?.uint64Value ?? zerocon_conversion_epoch()
+        zerocon_conversion_begin(epoch)
+        defer { zerocon_conversion_end() }
+        guard !zerocon_conversion_cancelled() else { return ["cancelled": true] }
+        let candidateId = (request["candidateId"] as? String).flatMap(UInt64.init) ?? 0
+        let committedText = request["committedText"] as? String ?? ""
+        let committedReading = request["committedReading"] as? String ?? ""
+        let context = request["context"] as? String ?? ""
+        if let enabled = (request["postCompositionPrediction"] as? Bool) ?? (request["predictiveConversion"] as? Bool) {
+            config["postCompositionPrediction"] = enabled
+        }
+        let payload = committedText.withCString { textPtr in
+            committedReading.withCString { readingPtr in
+                context.withCString { contextPtr in
+                    embeddedDecodeJsonObject(get_post_composition_predictions(
+                        candidateId: candidateId,
+                        committedText: textPtr,
+                        committedReading: readingPtr,
+                        context: contextPtr
+                    ))
+                }
+            }
+        }
+        if zerocon_conversion_cancelled() {
+            clearPublishedPostCompositionPredictions()
+            return ["cancelled": true]
+        }
+        return payload
+    }
+    if op == "selectPostComposition" {
+        let epoch = (request["requestEpoch"] as? NSNumber)?.uint64Value ?? zerocon_conversion_epoch()
+        zerocon_conversion_begin(epoch)
+        defer { zerocon_conversion_end() }
+        guard !zerocon_conversion_cancelled() else { return ["cancelled": true] }
+        guard let id = request["predictionId"] as? String, let predictionId = UInt64(id) else {
+            return ["error": "invalid post-composition prediction identity"]
+        }
+        let context = request["context"] as? String ?? ""
+        let allowLearning = request["allowLearning"] as? Bool ?? true
+        if let enabled = (request["postCompositionPrediction"] as? Bool) ?? (request["predictiveConversion"] as? Bool) {
+            config["postCompositionPrediction"] = enabled
+        }
+        let payload = context.withCString { contextPtr in
+            embeddedDecodeJsonObject(select_post_composition_prediction(
+                predictionId: predictionId,
+                context: contextPtr,
+                allowLearning: allowLearning
+            ))
+        }
+        if zerocon_conversion_cancelled() {
+            clearPublishedPostCompositionPredictions()
+            return ["cancelled": true]
+        }
+        return payload
+    }
     guard op == "convert", let elements = request["elements"] as? [[String: Any]],
           elements.count <= 4096 else { return ["error": "invalid conversion request"] }
     var input: [ComposingText.InputElement] = []

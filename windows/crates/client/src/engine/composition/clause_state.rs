@@ -14,6 +14,7 @@ use crate::engine::{
     ipc_service::{Candidates, ClauseSnapshotOperation, IPCService},
 };
 use crate::trace::diagnostic_log_lazy;
+use shared::session_policy::CandidateSelectionMove;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CandidateSelection {
@@ -1320,10 +1321,21 @@ impl ClauseState {
         state: &mut ClauseActionStateMut<'_>,
         selection: &SetSelectionType,
     ) -> ClauseActionEffect {
-        let desired_index = match selection {
-            SetSelectionType::Up => *state.selection_index - 1,
-            SetSelectionType::Down => *state.selection_index + 1,
-            SetSelectionType::Number(number) => *number,
+        let movement = match selection {
+            SetSelectionType::Up => CandidateSelectionMove::Previous,
+            SetSelectionType::Down => CandidateSelectionMove::Next,
+            SetSelectionType::Number(number) => CandidateSelectionMove::Absolute(*number),
+        };
+        // The selection transition is shared with the Web Worker build, so one
+        // keystroke resolves to the same row on both targets. The clamped index
+        // is re-resolved through `select_candidate`, which remains the
+        // authority for candidate text and server counts.
+        let Some(desired_index) = shared::session_policy::resolve_candidate_index(
+            *state.selection_index,
+            state.candidates.texts.len(),
+            movement,
+        ) else {
+            return ClauseActionEffect::skipped();
         };
 
         if let Some(selected) =

@@ -59,6 +59,6 @@ class ModelCorrector(
         val autoApply = AutoCorrectionEvidence.permits(target, corrected, learned)
         return AiAssistResult(AiAssistType.TYPO_CORRECTION, full, "💡 $full",
             relevance = if (autoApply) 100 else if (learned != null) 70 else 30,
-            sourceReading = input, autoApply = autoApply)
+            sourceReading = input, autoApply = autoApply, sourceSurface = baseline)
     }
 }

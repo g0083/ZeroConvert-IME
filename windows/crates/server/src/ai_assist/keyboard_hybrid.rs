@@ -15,6 +15,8 @@ use std::{
 
 static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
 static STARTING: AtomicBool = AtomicBool::new(false);
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+const WORKER_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WorkerSpec {
@@ -26,8 +28,44 @@ struct WorkerSpec {
 struct Worker {
     child: Child,
     input: ChildStdin,
-    output: mpsc::Receiver<String>,
+    output: WorkerOutput,
     spec: WorkerSpec,
+}
+
+struct WorkerOutput {
+    lines: mpsc::Receiver<String>,
+    pending_since: Option<Instant>,
+}
+
+impl WorkerOutput {
+    fn available(&mut self) -> Result<bool, ()> {
+        let Some(sent) = self.pending_since else {
+            return Ok(true);
+        };
+        match self.lines.try_recv() {
+            Ok(_) => {
+                // The previous caller has already moved on. Drop its reply before
+                // sending another request, even when the new reading is identical.
+                self.pending_since = None;
+                Ok(true)
+            }
+            Err(mpsc::TryRecvError::Empty) if sent.elapsed() < WORKER_STALL_TIMEOUT => Ok(false),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn receive_reply(&mut self, timeout: Duration) -> Result<Option<Value>, ()> {
+        match self.lines.recv_timeout(timeout) {
+            Ok(reply) => {
+                self.pending_since = None;
+                serde_json::from_str(&reply).map(Some).map_err(|_| ())
+            }
+            // A late GPU pipeline can still finish. Keep the worker and drain its
+            // reply later rather than repeating the same cold decode on restart.
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(()),
+        }
+    }
 }
 
 impl Drop for Worker {
@@ -250,12 +288,16 @@ impl Worker {
         let worker = Self {
             child,
             input,
-            output: receive,
+            output: WorkerOutput {
+                lines: receive,
+                pending_since: None,
+            },
             spec,
         };
         worker
             .output
-            .recv_timeout(Duration::from_secs(15))
+            .lines
+            .recv_timeout(WORKER_STARTUP_TIMEOUT)
             .ok()
             .filter(|ready| ready.starts_with("ready "))?;
         Some(worker)
@@ -267,7 +309,10 @@ impl Worker {
         input_hira: &str,
         context: &str,
         timeout_ms: u64,
-    ) -> Option<Value> {
+    ) -> Result<Option<Value>, ()> {
+        if !self.output.available()? {
+            return Ok(None);
+        }
         let clean_raw: String = raw
             .chars()
             .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
@@ -280,13 +325,10 @@ impl Worker {
             .chars()
             .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
             .collect();
-        writeln!(self.input, "{clean_raw}\t{clean_input}\t{clean_ctx}").ok()?;
-        self.input.flush().ok()?;
-        let response = self
-            .output
-            .recv_timeout(Duration::from_millis(timeout_ms))
-            .ok()?;
-        serde_json::from_str(&response).ok()
+        writeln!(self.input, "{clean_raw}\t{clean_input}\t{clean_ctx}").map_err(|_| ())?;
+        self.input.flush().map_err(|_| ())?;
+        self.output.pending_since = Some(Instant::now());
+        self.output.receive_reply(Duration::from_millis(timeout_ms))
     }
 }
 
@@ -438,10 +480,10 @@ pub fn repair_readings(
         let result = slot
             .as_mut()?
             .request(valid_raw, &norm, &masked_context, 30000);
-        if result.is_none() {
+        if result.is_err() {
             *slot = None;
         }
-        result?
+        result.ok()??
     } else {
         let mut slot = WORKER.try_lock().ok()?;
         let stale = slot
@@ -455,12 +497,12 @@ pub fn repair_readings(
         let result = slot
             .as_mut()?
             .request(valid_raw, &norm, &masked_context, 350);
-        if result.is_none() {
+        if result.is_err() {
             *slot = None;
             drop(slot);
             prewarm();
         }
-        result?
+        result.ok()??
     };
     if response.get("observed")?.as_str()? != norm {
         return None;
@@ -542,6 +584,39 @@ pub fn suggest(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_late_worker_reply_is_discarded_before_the_next_request() {
+        let (send, lines) = mpsc::channel();
+        let mut output = WorkerOutput {
+            lines,
+            pending_since: Some(Instant::now()),
+        };
+        assert_eq!(output.receive_reply(Duration::ZERO), Ok(None));
+        assert_eq!(output.available(), Ok(false));
+
+        send.send("{\"reading\":\"previous\"}".into()).unwrap();
+        assert_eq!(output.available(), Ok(true));
+        output.pending_since = Some(Instant::now());
+        send.send("{\"reading\":\"current\"}".into()).unwrap();
+        assert_eq!(
+            output.receive_reply(Duration::ZERO),
+            Ok(Some(json!({"reading":"current"})))
+        );
+        assert!(output.pending_since.is_none());
+    }
+
+    #[test]
+    fn an_unresponsive_or_disconnected_worker_can_be_restarted() {
+        let (send, lines) = mpsc::channel();
+        let mut output = WorkerOutput {
+            lines,
+            pending_since: Some(Instant::now() - WORKER_STALL_TIMEOUT),
+        };
+        assert_eq!(output.available(), Err(()));
+        drop(send);
+        assert_eq!(output.receive_reply(Duration::ZERO), Err(()));
+    }
 
     #[test]
     fn existing_short_word_adjacent_and_missing_vowel_repairs_keep_their_path() {

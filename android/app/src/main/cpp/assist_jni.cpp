@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include "llama.h"
+#include "assist_inference_turn.h"
 #include "assist_jni.h"
 #include "keyboard_assist.h"
 
@@ -17,7 +18,7 @@ std::atomic<long long> translation_epoch{0};
 
 struct Runtime {
     std::atomic<long long> * epoch_counter = nullptr;
-    std::mutex mutex;
+    std::timed_mutex mutex;
     llama_model * model = nullptr;
     llama_context * context = nullptr;
     llama_sampler * sampler = nullptr;
@@ -157,8 +158,8 @@ void assist_close() {
     assist_abort();
     translation_epoch.fetch_add(1);
     keyboard_assist_detach();
-    { std::lock_guard<std::mutex> lock(prediction.mutex); prediction.clear(); }
-    { std::lock_guard<std::mutex> lock(translation.mutex); translation.clear(); }
+    { std::lock_guard lock(prediction.mutex); prediction.clear(); }
+    { std::lock_guard lock(translation.mutex); translation.clear(); }
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -168,7 +169,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeInitAssist(JNIEnv * env, jobject, jstr
     // The repair scorer borrows the converter model, so release it before a reload.
     keyboard_assist_detach();
     {
-        std::lock_guard<std::mutex> lock(prediction.mutex);
+        std::lock_guard lock(prediction.mutex);
         if (prediction.load(utf8(env, converter))) {
             ready = 3;
             keyboard_assist_attach(prediction.model);
@@ -183,18 +184,23 @@ Java_com_zeroconvert_ime_ZenzNative_nativeAssistEpoch(JNIEnv *, jobject) { retur
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeGenerate(JNIEnv * env, jobject, jint kind, jstring prompt,
                                                 jint max_tokens, jint budget_ms, jlong expected_epoch) {
-    if (kind != 0 && kind != 1) return response(env, "error");
+    if ((kind != 0 && kind != 1) || max_tokens < 1 || max_tokens > 384 || budget_ms < 1 || budget_ms > 2000) {
+        return response(env, "error");
+    }
     Runtime & run = prediction;
-    std::unique_lock<std::mutex> lock(run.mutex, std::try_to_lock);
-    if (!lock.owns_lock()) return response(env, "busy");
-    if (!run.context || !run.model || !prompt || epoch.load() != expected_epoch) return response(env, "cancelled");
+    const auto deadline = Clock::now() + std::chrono::milliseconds(budget_ms);
+    auto cancelled_reason = [&]() { return epoch.load() != expected_epoch ? "cancelled" : "timeout"; };
+    std::unique_lock lock(run.mutex, std::defer_lock);
+    if (!wait_for_assist_inference(lock, epoch, expected_epoch, deadline)) {
+        return response(env, cancelled_reason());
+    }
+    if (!run.context || !run.model || !prompt) return response(env, "cancelled");
     const auto text = utf8(env, prompt);
-    if (text.empty() || text.size() > 8192 || max_tokens < 1 || max_tokens > 384 || budget_ms < 1 || budget_ms > 2000) {
+    if (text.empty() || text.size() > 8192) {
         return response(env, "error");
     }
     run.request_epoch = expected_epoch;
-    run.deadline = Clock::now() + std::chrono::milliseconds(budget_ms);
-    auto cancelled_reason = [&]() { return epoch.load() != expected_epoch ? "cancelled" : "timeout"; };
+    run.deadline = deadline;
     const auto * vocab = llama_model_get_vocab(run.model);
     std::vector<llama_token> tokens(text.size() + 16);
     int n = llama_tokenize(vocab, text.data(), static_cast<int>(text.size()), tokens.data(), static_cast<int>(tokens.size()), false, true);
@@ -262,7 +268,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeGenerate(JNIEnv * env, jobject, jint k
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeInitTranslation(JNIEnv * env, jobject, jstring model_path) {
     translation_epoch.fetch_add(1);
-    std::lock_guard<std::mutex> lock(translation.mutex);
+    std::lock_guard lock(translation.mutex);
     const auto path = utf8(env, model_path);
     if (path.empty()) return JNI_FALSE;
     // The translation model is much larger than the conversion models. Use mmap
@@ -283,7 +289,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeAbortTranslation(JNIEnv *, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_zeroconvert_ime_ZenzNative_nativeCloseTranslation(JNIEnv *, jobject) {
     translation_epoch.fetch_add(1);
-    std::lock_guard<std::mutex> lock(translation.mutex);
+    std::lock_guard lock(translation.mutex);
     translation.clear();
 }
 
@@ -294,7 +300,7 @@ Java_com_zeroconvert_ime_ZenzNative_nativeTranslate(JNIEnv * env, jobject, jstri
     // Serialize translation requests. The caller runs on a worker coroutine, so
     // waiting for a previous aborted request to unwind is preferable to failing
     // a fresh request with "busy" during fast typing.
-    std::unique_lock<std::mutex> lock(translation.mutex);
+    std::unique_lock lock(translation.mutex);
     if (!translation.context || !translation.model || !prompt ||
         translation_epoch.load() != expected_epoch) {
         return response(env, "cancelled");

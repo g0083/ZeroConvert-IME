@@ -55,22 +55,51 @@ ZENZ_CONTEXT = '''        model_params.use_mmap = true
         if n_kv_req > n_ctx {
             debug("error: n_kv_req > n_ctx, the required KV cache size is not big enough")
         }
+        if llama_decode(context, batch) != 0 {
+            debug("llama_decode() failed")
+            return nil
+        }
 '''
+
+
+CONVERTER_API = '\n'.join(
+    [anchor for anchor, _ in converter_patch.CONVERTER_API_REPLACEMENTS[:-1]]
+    + [converter_patch.CONVERTER_API_REPLACEMENTS[-1][0]]
+)
 
 
 class ExactKeyboardLookupTests(unittest.TestCase):
     def test_exposes_bounded_existing_dictionary_lookup_without_model_inference(self):
-        patched = converter_patch.patch_converter_api(converter_patch.EXACT_KEYBOARD_LOOKUP_ANCHOR)
-        self.assertIn('public func requestExactKeyboardCorrectionCandidates', patched)
-        self.assertIn('lookupDicdata(composingText: inputData', patched)
-        self.assertIn('needTypoCorrection: false', patched)
-        self.assertIn('.prefix(8)', patched)
-        self.assertNotIn('convertToLattice', patched)
+        patched = converter_patch.patch_converter_api(CONVERTER_API)
+        lookup_start = patched.index('public func requestExactKeyboardCorrectionCandidates')
+        lookup_end = patched.index(converter_patch.EXACT_KEYBOARD_LOOKUP_ANCHOR)
+        lookup_body = patched[lookup_start:lookup_end]
+        self.assertIn('lookupDicdata(composingText: inputData', lookup_body)
+        self.assertIn('needTypoCorrection: false', lookup_body)
+        self.assertIn('.prefix(8)', lookup_body)
+        self.assertNotIn('convertToLattice', lookup_body)
         self.assertEqual(patched.count(converter_patch.EXACT_KEYBOARD_LOOKUP_ANCHOR), 1)
+        self.assertIn('public func postCompositionConnectionScore(formerRcid: Int, latterLcid: Int)', patched)
+        self.assertIn('public func requestContextualNextWordReadings(', patched)
+        self.assertIn('public func invalidateLearningMemoryCache()', patched)
+        self.assertIn('public func syncLearningConfig(', patched)
+        self.assertIn('public func predictiveRubyPrefixes(for composingText: ComposingText)', patched)
+        self.assertIn('cacheOnlyJapanesePrediction: Bool = false', patched)
+        self.assertIn('prefixConstraintSurface: String? = nil', patched)
+        self.assertIn('kana2lattice_all_with_prefix_constraint(', patched)
 
     def test_rejects_a_changed_converter_api_anchor(self):
         with self.assertRaises(ValueError):
             converter_patch.patch_converter_api('changed converter API')
+        for anchor, _ in converter_patch.CONVERTER_API_REPLACEMENTS:
+            broken = CONVERTER_API.replace(anchor, 'removed_by_upstream')
+            with self.assertRaises(ValueError):
+                converter_patch.patch_converter_api(broken)
+
+    def test_converter_api_patching_is_not_repeatable(self):
+        patched = converter_patch.patch_converter_api(CONVERTER_API)
+        with self.assertRaises(ValueError):
+            converter_patch.patch_converter_api(patched)
 
 
 class ModulemapTests(unittest.TestCase):
@@ -103,6 +132,7 @@ class ZenzContextTests(unittest.TestCase):
         self.assertIn('ggml_backend_load_all_from_path(path)', patched)
         self.assertIn('llama_memory_seq_rm(llama_get_memory(context),', patched)
         self.assertIn('llama_memory_seq_cp(llama_get_memory(context),', patched)
+        self.assertIn('self.prevInputBySeq[seqId] = Array(effectivePrevInput.prefix(prefixCacheCount))', patched)
         self.assertIn('llama_memory_seq_pos_max(llama_get_memory(self.context),', patched)
 
     def test_backend_init_is_wrapped_not_removed(self):
@@ -153,6 +183,16 @@ LEARNING_MEMORY = '''    func forgetMemory(data: [DicdataElement]) {
             debug("LearningManager reset failed", error)
         }
     }
+
+    /// - Returns: Whether cache should be reseted or not.
+    func updateConfig(_ newConfig: LearningConfig) -> Bool {
+        // 更新の必要がなければ何もしない
+        if !newConfig.learningType.needUsingMemory {
+            self.config = newConfig
+            return false
+        }
+        return false
+    }
 '''
 
 
@@ -163,6 +203,10 @@ class LearningMemoryTests(unittest.TestCase):
         patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
         self.assertIn('learningType.needUsingMemory', patched)
         self.assertNotIn('learningType.needUpdateMemory', patched)
+
+    def test_negative_max_memory_count_triggers_cache_invalidation(self):
+        patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
+        self.assertIn('if newConfig.maxMemoryCount < 0 {\n            return true', patched)
 
     def test_reset_recomputes_the_collapsed_state(self):
         # Without this the paused flag survives a reset and keeps learning off.
@@ -351,6 +395,32 @@ class ZenzEvaluatorTests(unittest.TestCase):
             converter_patch.patch_zenz_evaluator(patched)
         with self.assertRaises(ValueError):
             converter_patch.patch_zenz_evaluator('changed evaluator loop')
+
+
+class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
+    def test_splits_zero_hint_csv_on_crlf_and_lf(self):
+        source = '            let csvLines = csvString.split(separator: "\\n")\n'
+        patched = converter_patch.patch_dicdata_store(source)
+        self.assertIn('split(whereSeparator: \\.isNewline)', patched)
+        self.assertNotIn('split(separator: "\\n")', patched)
+        with self.assertRaises(ValueError):
+            converter_patch.patch_dicdata_store(patched)
+
+    def test_exposes_bounded_contextual_next_word_generator(self):
+        gen_fixture = (
+            converter_patch.ZENZ_INPUT_GENERATOR_STRUCT_ANCHOR
+            + '\n'
+            + converter_patch.ZENZ_INPUT_GENERATOR_TAIL_ANCHOR
+        )
+        patched_gen = converter_patch.patch_zenz_input_generator(gen_fixture)
+        self.assertIn('public struct ContextualNextWordReading', patched_gen)
+        self.assertIn('static func generateContextualCandidates(', patched_gen)
+        self.assertIn('shouldCancel: (() -> Bool)? = nil', patched_gen)
+        with self.assertRaises(ValueError):
+            converter_patch.patch_zenz_input_generator(patched_gen)
+
+        patched_zenz = converter_patch.patch_zenz(converter_patch.ZENZ_CONTEXTUAL_ANCHOR)
+        self.assertIn('func contextualNextWordReadings(', patched_zenz)
 
 
 if __name__ == '__main__':

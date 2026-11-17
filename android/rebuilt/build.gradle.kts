@@ -200,7 +200,7 @@ tasks.withType<Test>().configureEach {
         // `WINDOWS_ENGINE=true` bypasses: the shared engine owns that behaviour
         // and `cargo test --manifest-path engine/rust/Cargo.toml` covers it.
         excludeTestsMatching("com.zeroconvert.ime.AiAssistTest.offlineCorrectionStillWorksWithoutPredictionModel")
-        excludeTestsMatching("com.zeroconvert.ime.AutomaticAssistTest.fastPredictionIsPublishedWhileCorrectorIsStillWorking")
+        excludeTestsMatching("com.zeroconvert.ime.AutomaticAssistTest.fastPredictionIsPublishedThenPromotedWhenLateCorrectionArrives")
         excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.truncatedReadingNeedsACompletedClauseAndRejectsTimeouts")
         excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.correctionAndPredictionUseIndependentModelsAndWeakCorrectionCannotHidePrediction")
         excludeTestsMatching("com.zeroconvert.ime.ModelAssistTest.completedCorrectorPreemptsFuzzyRulesAndUnchangedOutputVetoesThem")

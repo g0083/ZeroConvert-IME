@@ -23,9 +23,118 @@ LEARNING_MEMORY_PATH = (
 )
 CONVERTER_API_PATH = 'Sources/KanaKanjiConverterModule/ConverterAPI/KanaKanjiConverter.swift'
 LATTICE_PATH = 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Lattice.swift'
+DICDATA_STORE_PATH = 'Sources/KanaKanjiConverterModule/DictionaryManagement/DicdataStore.swift'
+ZENZ_INPUT_GENERATOR_PATH = (
+    'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Zenzai/Zenz/ZenzInputTextGenerator.swift'
+)
+ZENZ_PATH = 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Zenzai/Zenz/Zenz.swift'
 
 EXACT_KEYBOARD_LOOKUP_ANCHOR = '    public func requestCandidates(_ inputData: ComposingText, options: ConvertRequestOptions) -> ConversionResult {'
-EXACT_KEYBOARD_LOOKUP = '''    /// Bounded exact-word lookup for measured keyboard alternatives. Reuses the
+EXACT_KEYBOARD_LOOKUP = '''    /// Returns syntax connection score between `formerRcid` and `latterLcid`.
+    public func postCompositionConnectionScore(formerRcid: Int, latterLcid: Int) -> PValue {
+        self.converter.dicdataStore.getCCValue(formerRcid, latterLcid)
+    }
+
+    /// Generates bounded contextual next-word readings from the active Zenzai model using left-side context.
+    public func requestContextualNextWordReadings(
+        leftSideContext: String,
+        options: ConvertRequestOptions,
+        maxBranches: Int = 5,
+        maxTokensPerBranch: Int = 5,
+        maxDurationSeconds: Double = 0.085,
+        shouldCancel: (() -> Bool)? = nil
+    ) -> [ContextualNextWordReading] {
+        guard !leftSideContext.isEmpty,
+              options.zenzaiMode.enabled,
+              case .v3 = options.zenzaiMode.versionDependentMode,
+              shouldCancel?() != true,
+              let zenz = self.getModel(modelURL: options.zenzaiMode.weightURL) else {
+            return []
+        }
+        return zenz.contextualNextWordReadings(
+            leftSideContext: leftSideContext,
+            versionDependentConfig: options.zenzaiMode.versionDependentMode,
+            maxBranches: maxBranches,
+            maxTokensPerBranch: maxTokensPerBranch,
+            maxDurationSeconds: maxDurationSeconds,
+            shouldCancel: shouldCancel
+        )
+    }
+
+    /// Drops cached long-term learning LOUDS data without rewriting files on disk,
+    /// so sibling converter instances observe recent commits in the same session.
+    public func invalidateLearningMemoryCache() {
+        let previous = self.dicdataStoreState.learningMemoryManager.config
+        var invalidationConfig = previous
+        invalidationConfig.maxMemoryCount = -1
+        self.dicdataStoreState.updateLearningConfig(invalidationConfig)
+        var restoredConfig = previous
+        restoredConfig.maxMemoryCount = max(0, previous.maxMemoryCount)
+        self.dicdataStoreState.updateLearningConfig(restoredConfig)
+    }
+
+    /// Synchronizes learning memory configuration on the converter before committing or forgetting candidates.
+    public func syncLearningConfig(
+        learningType: LearningType,
+        memoryDirectoryURL: URL?,
+        maxMemoryCount: Int = 65536
+    ) {
+        self.dicdataStoreState.updateLearningConfig(
+            LearningConfig(
+                learningType: learningType,
+                maxMemoryCount: maxMemoryCount,
+                memoryURL: memoryDirectoryURL
+            )
+        )
+    }
+
+    private func withSession<T>(_ sessionID: SessionID?, _ body: () -> T) -> T {
+        guard let sessionID, sessionID != self.activeSessionID else {
+            return body()
+        }
+        let previousSessionID = self.activeSessionID
+        self.activeSessionID = sessionID
+        defer {
+            self.activeSessionID = previousSessionID
+        }
+        return body()
+    }
+
+    /// Expands an uncompleted roman suffix into compatible katakana reading prefixes
+    /// using the active input style table so overrides match mid-romaji keystrokes.
+    public func predictiveRubyPrefixes(for composingText: ComposingText) -> [String] {
+        let inputStyle = composingText.input.last?.inputStyle ?? .direct
+        let source = self.converter.resolvePredictiveInputSource(composingText: composingText, inputStyle: inputStyle)
+        guard source.droppedSuffixCount > 0, !source.possibleNexts.isEmpty else {
+            return []
+        }
+        let baseKatakana = source.baseConvertTarget.toKatakana()
+        guard !baseKatakana.isEmpty else {
+            return []
+        }
+        return source.possibleNexts.map { baseKatakana + $0 }
+    }
+
+    /// Requests conversion candidates on an isolated named session, optionally reusing cached
+    /// predictions only or constraining the lattice prefix to a committed surface.
+    public func requestCandidates(
+        _ inputData: ComposingText,
+        options: ConvertRequestOptions,
+        sessionID: String?,
+        cacheOnlyJapanesePrediction: Bool = false,
+        prefixConstraintSurface: String? = nil
+    ) -> ConversionResult {
+        self.withSession(sessionID) {
+            self.requestCandidatesImpl(
+                inputData,
+                options: options,
+                cacheOnlyJapanesePrediction: cacheOnlyJapanesePrediction,
+                prefixConstraintSurface: prefixConstraintSurface
+            )
+        }
+    }
+
+    /// Bounded exact-word lookup for measured keyboard alternatives. Reuses the
     /// active dictionary and user/learning state without another lattice conversion.
     public func requestExactKeyboardCorrectionCandidates(_ inputData: ComposingText, options: ConvertRequestOptions) -> [Candidate] {
         let reading = inputData.convertTarget
@@ -48,6 +157,250 @@ EXACT_KEYBOARD_LOOKUP = '''    /// Bounded exact-word lookup for measured keyboa
     }
 
 '''
+
+CONVERTER_API_REPLACEMENTS = (
+    (
+        '    private func processResult(inputData: ComposingText, result: (result: LatticeNode, lattice: Lattice), options: ConvertRequestOptions) -> ConversionResult {',
+        '    private func processResult(\n'
+        '        inputData: ComposingText,\n'
+        '        result: (result: LatticeNode, lattice: Lattice),\n'
+        '        options: ConvertRequestOptions,\n'
+        '        cacheOnlyJapanesePrediction: Bool = false,\n'
+        '        prefixConstraintSurface: String? = nil\n'
+        '    ) -> ConversionResult {',
+    ),
+    (
+        '        if options.requireJapanesePrediction.isEnabled {\n'
+        '            let clauseResultCandidates = clauseResult.map { self.converter.processClauseCandidate($0) }\n'
+        '            bestCandidateDataForPrediction = zip(clauseResult, clauseResultCandidates).max {$0.1.value < $1.1.value}!.0\n'
+        '            wholeSentenceUniqueCandidates = self.getUniqueCandidate(clauseResultCandidates)\n'
+        '        } else {\n'
+        '            wholeSentenceUniqueCandidates = self.getUniqueCandidate(clauseResult.lazy.map { self.converter.processClauseCandidate($0) })\n'
+        '        }',
+        '        if options.requireJapanesePrediction.isEnabled && !cacheOnlyJapanesePrediction {\n'
+        '            let clauseResultCandidates = clauseResult.map { self.converter.processClauseCandidate($0) }\n'
+        '            if let prefixConstraintSurface, !prefixConstraintSurface.isEmpty {\n'
+        '                bestCandidateDataForPrediction = zip(clauseResult, clauseResultCandidates)\n'
+        '                    .filter { $0.1.text.hasPrefix(prefixConstraintSurface) }\n'
+        '                    .max { $0.1.value < $1.1.value }?.0\n'
+        '            } else {\n'
+        '                bestCandidateDataForPrediction = zip(clauseResult, clauseResultCandidates).max {$0.1.value < $1.1.value}!.0\n'
+        '            }\n'
+        '            wholeSentenceUniqueCandidates = self.getUniqueCandidate(clauseResultCandidates)\n'
+        '        } else {\n'
+        '            wholeSentenceUniqueCandidates = self.getUniqueCandidate(clauseResult.lazy.map { self.converter.processClauseCandidate($0) })\n'
+        '        }',
+    ),
+    (
+        '            if options.requireJapanesePrediction.isEnabled, let bestCandidateDataForPrediction {\n'
+        '                let candidates = self.getUniqueCandidate(\n'
+        '                    self.getPredictionCandidate(bestCandidateDataForPrediction, composingText: inputData, options: options)\n'
+        '                ).min(count: 3, sortedBy: {$0.value > $1.value})\n'
+        '                stablePredictionCandidates = self.stablePredictionCandidates(\n'
+        '                    composingText: inputData,\n'
+        '                    inputStyle: inputStyle\n'
+        '                )\n'
+        '                predictionResults = self.mergeStableCandidates(\n'
+        '                    stableCandidates: stablePredictionCandidates,\n'
+        '                    otherCandidates: candidates,\n'
+        '                    limit: 3\n'
+        '                )\n'
+        '                if options.requireJapanesePrediction.shouldMix {\n'
+        '                    bestThreePredictionCandidates = predictionResults\n'
+        '                } else {\n'
+        '                    bestThreePredictionCandidates = []\n'
+        '                }\n'
+        '            } else {\n'
+        '                self.invalidateStablePredictionCandidateCache()\n'
+        '                bestThreePredictionCandidates = []\n'
+        '            }',
+        '            if options.requireJapanesePrediction.isEnabled {\n'
+        '                if cacheOnlyJapanesePrediction {\n'
+        '                    predictionResults = Array(\n'
+        '                        self.getUniqueCandidate(\n'
+        '                            self.stablePredictionCandidates(\n'
+        '                                composingText: inputData,\n'
+        '                                inputStyle: inputStyle\n'
+        '                            )\n'
+        '                        ).prefix(3)\n'
+        '                    )\n'
+        '                } else if let bestCandidateDataForPrediction {\n'
+        '                    let candidates = self.getUniqueCandidate(\n'
+        '                        self.getPredictionCandidate(bestCandidateDataForPrediction, composingText: inputData, options: options)\n'
+        '                    ).min(count: 3, sortedBy: {$0.value > $1.value})\n'
+        '                    stablePredictionCandidates = self.stablePredictionCandidates(\n'
+        '                        composingText: inputData,\n'
+        '                        inputStyle: inputStyle\n'
+        '                    )\n'
+        '                    predictionResults = self.mergeStableCandidates(\n'
+        '                        stableCandidates: stablePredictionCandidates,\n'
+        '                        otherCandidates: candidates,\n'
+        '                        limit: 3\n'
+        '                    )\n'
+        '                } else {\n'
+        '                    self.invalidateStablePredictionCandidateCache()\n'
+        '                    predictionResults = []\n'
+        '                }\n'
+        '                if options.requireJapanesePrediction.shouldMix {\n'
+        '                    bestThreePredictionCandidates = predictionResults\n'
+        '                } else {\n'
+        '                    bestThreePredictionCandidates = []\n'
+        '                }\n'
+        '            } else {\n'
+        '                self.invalidateStablePredictionCandidateCache()\n'
+        '                bestThreePredictionCandidates = []\n'
+        '            }',
+    ),
+    (
+        '    private func convertToLattice(_ inputData: ComposingText, N_best: Int, zenzaiMode: ConvertRequestOptions.ZenzaiMode, needTypoCorrection: Bool) -> (result: LatticeNode, lattice: Lattice)? {\n'
+        '        if inputData.convertTarget.isEmpty {\n'
+        '            return nil\n'
+        '        }',
+        '    private func convertToLattice(\n'
+        '        _ inputData: ComposingText,\n'
+        '        N_best: Int,\n'
+        '        zenzaiMode: ConvertRequestOptions.ZenzaiMode,\n'
+        '        needTypoCorrection: Bool,\n'
+        '        prefixConstraintSurface: String? = nil\n'
+        '    ) -> (result: LatticeNode, lattice: Lattice)? {\n'
+        '        if inputData.convertTarget.isEmpty {\n'
+        '            return nil\n'
+        '        }\n'
+        '        if !zenzaiMode.enabled, let prefixConstraintSurface, !prefixConstraintSurface.isEmpty {\n'
+        '            let constraint = Kana2Kanji.PrefixConstraint(Array(prefixConstraintSurface.utf8))\n'
+        '            let preprocessedLattice: Lattice?\n'
+        '            if let previousInputData = self.currentSessionState.previousInputData,\n'
+        '               !self.currentSessionState.lattice.isEmpty {\n'
+        '                if previousInputData == inputData {\n'
+        '                    let existing = self.currentSessionState.lattice\n'
+        '                    existing.resetNodeStates()\n'
+        '                    preprocessedLattice = existing\n'
+        '                } else {\n'
+        '                    preprocessedLattice = self.converter.buildLatticeWithIncrementalCache(\n'
+        '                        inputData: inputData,\n'
+        '                        inputCount: inputData.input.count,\n'
+        '                        surfaceCount: inputData.convertTarget.count,\n'
+        '                        incrementalCacheInfo: (inputData: previousInputData, lattice: self.currentSessionState.lattice),\n'
+        '                        dicdataStoreState: self.dicdataStoreState\n'
+        '                    )\n'
+        '                }\n'
+        '            } else {\n'
+        '                preprocessedLattice = nil\n'
+        '            }\n'
+        '            let result = self.converter.kana2lattice_all_with_prefix_constraint(\n'
+        '                inputData,\n'
+        '                N_best: N_best,\n'
+        '                constraint: constraint,\n'
+        '                preprocessedLattice: preprocessedLattice,\n'
+        '                dicdataStoreState: self.dicdataStoreState\n'
+        '            )\n'
+        '            self.updateCurrentSessionState {\n'
+        '                $0.previousInputData = inputData\n'
+        '                $0.lattice = result.lattice\n'
+        '            }\n'
+        '            return result\n'
+        '        }',
+    ),
+    (
+        '    public func requestCandidates(_ inputData: ComposingText, options: ConvertRequestOptions) -> ConversionResult {\n'
+        '        debug("requestCandidates 入力は", inputData)\n'
+        '        // 変換対象が無の場合\n'
+        '        if inputData.convertTarget.isEmpty {\n'
+        '            return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])\n'
+        '        }\n'
+        '        if options.shouldResetMemory {\n'
+        '            self.resetMemory()\n'
+        '        }\n'
+        '        if let previous = self.currentSessionState.experimentalKeyboardTypoCorrection,\n'
+        '           previous != options.experimentalKeyboardTypoCorrection\n'
+        '        {\n'
+        '            self.stopComposition()\n'
+        '        }\n'
+        '        self.updateCurrentSessionState {\n'
+        '            $0.experimentalKeyboardTypoCorrection = options.experimentalKeyboardTypoCorrection\n'
+        '        }\n'
+        '        self.dicdataStoreState.updateIfRequired(options: options)\n'
+        '        self.dicdataStoreState.prepareKeyboardTypoCorrection(\n'
+        '            composingText: inputData,\n'
+        '            enabled: options.experimentalKeyboardTypoCorrection,\n'
+        '            maxSpanLength: self.converter.dicdataStore.maxlength\n'
+        '        )\n'
+        '        let needTypoCorrection = self.isClassicTypoCorrectionEnabled(options)\n'
+        '\n'
+        '        guard let result = self.convertToLattice(inputData, N_best: options.N_best, zenzaiMode: options.zenzaiMode, needTypoCorrection: needTypoCorrection) else {\n'
+        '            return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])\n'
+        '        }\n'
+        '\n'
+        '        return self.processResult(inputData: inputData, result: result, options: options)\n'
+        '    }',
+        '    public func requestCandidates(_ inputData: ComposingText, options: ConvertRequestOptions) -> ConversionResult {\n'
+        '        self.requestCandidatesImpl(inputData, options: options)\n'
+        '    }\n'
+        '\n'
+        '    private func requestCandidatesImpl(\n'
+        '        _ inputData: ComposingText,\n'
+        '        options: ConvertRequestOptions,\n'
+        '        cacheOnlyJapanesePrediction: Bool = false,\n'
+        '        prefixConstraintSurface: String? = nil\n'
+        '    ) -> ConversionResult {\n'
+        '        debug("requestCandidates 入力は", inputData)\n'
+        '        // 変換対象が無の場合\n'
+        '        if inputData.convertTarget.isEmpty {\n'
+        '            return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])\n'
+        '        }\n'
+        '        if options.shouldResetMemory {\n'
+        '            self.resetMemory()\n'
+        '        }\n'
+        '        if let previous = self.currentSessionState.experimentalKeyboardTypoCorrection,\n'
+        '           previous != options.experimentalKeyboardTypoCorrection\n'
+        '        {\n'
+        '            self.stopComposition()\n'
+        '        }\n'
+        '        self.updateCurrentSessionState {\n'
+        '            $0.experimentalKeyboardTypoCorrection = options.experimentalKeyboardTypoCorrection\n'
+        '        }\n'
+        '        self.dicdataStoreState.updateIfRequired(options: options)\n'
+        '        if cacheOnlyJapanesePrediction, let prefixConstraintSurface, !prefixConstraintSurface.isEmpty {\n'
+        '            guard options.requireJapanesePrediction.isEnabled else {\n'
+        '                self.invalidateStablePredictionCandidateCache()\n'
+        '                return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])\n'
+        '            }\n'
+        '            let inputStyle = inputData.input.last?.inputStyle ?? .direct\n'
+        '            let cached = Array(\n'
+        '                self.getUniqueCandidate(\n'
+        '                    self.stablePredictionCandidates(composingText: inputData, inputStyle: inputStyle)\n'
+        '                ).prefix(3)\n'
+        '            )\n'
+        '            self.updateStablePredictionCandidateCache(inputData: inputData, inputStyle: inputStyle, candidates: cached)\n'
+        '            return ConversionResult(mainResults: [], predictionResults: cached, englishPredictionResults: [], firstClauseResults: [])\n'
+        '        }\n'
+        '        self.dicdataStoreState.prepareKeyboardTypoCorrection(\n'
+        '            composingText: inputData,\n'
+        '            enabled: options.experimentalKeyboardTypoCorrection,\n'
+        '            maxSpanLength: self.converter.dicdataStore.maxlength\n'
+        '        )\n'
+        '        let needTypoCorrection = self.isClassicTypoCorrectionEnabled(options)\n'
+        '\n'
+        '        guard let result = self.convertToLattice(\n'
+        '            inputData,\n'
+        '            N_best: options.N_best,\n'
+        '            zenzaiMode: options.zenzaiMode,\n'
+        '            needTypoCorrection: needTypoCorrection,\n'
+        '            prefixConstraintSurface: prefixConstraintSurface\n'
+        '        ) else {\n'
+        '            return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])\n'
+        '        }\n'
+        '\n'
+        '        return self.processResult(\n'
+        '            inputData: inputData,\n'
+        '            result: result,\n'
+        '            options: options,\n'
+        '            cacheOnlyJapanesePrediction: cacheOnlyJapanesePrediction,\n'
+        '            prefixConstraintSurface: prefixConstraintSurface\n'
+        '        )\n'
+        '    }',
+    ),
+)
 
 MODULEMAP_ANCHOR = 'link "llama"'
 MODULEMAP_REPLACEMENT = 'link "llama"\n    link "ggml"\n    link "ggml-base"'
@@ -151,6 +504,17 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '        var batch = llama_batch_init(Int32(tokens.count), 0, 1)\n'
         '        defer { llama_batch_free(batch) }',
     ),
+    (
+        '        if llama_decode(context, batch) != 0 {\n'
+        '            debug("llama_decode() failed")\n'
+        '            return nil\n'
+        '        }',
+        '        if llama_decode(context, batch) != 0 {\n'
+        '            self.prevInputBySeq[seqId] = Array(effectivePrevInput.prefix(prefixCacheCount))\n'
+        '            debug("llama_decode() failed")\n'
+        '            return nil\n'
+        '        }',
+    ),
 )
 
 
@@ -192,9 +556,24 @@ LEARNING_RESET_REPLACEMENT = '''        do {
         }
     }'''
 
+LEARNING_CACHE_INVALIDATION_ANCHOR = '''    /// - Returns: Whether cache should be reseted or not.
+    func updateConfig(_ newConfig: LearningConfig) -> Bool {
+        // 更新の必要がなければ何もしない
+        if !newConfig.learningType.needUsingMemory {'''
+
+LEARNING_CACHE_INVALIDATION_REPLACEMENT = '''    /// - Returns: Whether cache should be reseted or not.
+    func updateConfig(_ newConfig: LearningConfig) -> Bool {
+        // Negative maxMemoryCount signals DicdataStoreState to drop cached memory LOUDS without rewriting disk files.
+        if newConfig.maxMemoryCount < 0 {
+            return true
+        }
+        // 更新の必要がなければ何もしない
+        if !newConfig.learningType.needUsingMemory {'''
+
 LEARNING_MEMORY_REPLACEMENTS = (
     (LEARNING_FORGET_ANCHOR, LEARNING_FORGET_REPLACEMENT),
     (LEARNING_RESET_ANCHOR, LEARNING_RESET_REPLACEMENT),
+    (LEARNING_CACHE_INVALIDATION_ANCHOR, LEARNING_CACHE_INVALIDATION_REPLACEMENT),
 )
 
 # Zero-length elements such as `.compositionSeparator` inserted by cursor-mid
@@ -571,8 +950,13 @@ def patch_lattice(text):
 
 
 def patch_converter_api(text):
+    """Extend KanaKanjiConverter API with session-scoped prediction, cache sync, and exact lookup."""
     _require(text, EXACT_KEYBOARD_LOOKUP_ANCHOR)
-    return text.replace(EXACT_KEYBOARD_LOOKUP_ANCHOR, EXACT_KEYBOARD_LOOKUP + EXACT_KEYBOARD_LOOKUP_ANCHOR, 1)
+    text = text.replace(EXACT_KEYBOARD_LOOKUP_ANCHOR, EXACT_KEYBOARD_LOOKUP + EXACT_KEYBOARD_LOOKUP_ANCHOR, 1)
+    for anchor, replacement in CONVERTER_API_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    return text
 
 
 ZENZ_EVALUATOR_SETUP_ANCHOR = r'''        let candidateTokens = context.encode(candidate.text, addBOS: false, addEOS: false)
@@ -917,3 +1301,296 @@ def patch_zenz_evaluator(text):
     text = text.replace(ZENZ_EVALUATOR_SETUP_ANCHOR, ZENZ_EVALUATOR_SETUP_REPLACEMENT, 1)
     _require(text, ZENZ_EVALUATOR_LOOP_ANCHOR)
     return text.replace(ZENZ_EVALUATOR_LOOP_ANCHOR, ZENZ_EVALUATOR_LOOP_REPLACEMENT, 1)
+
+
+# Windows dictionary checkouts and Android staged assets carry CRLF (`\r\n`)
+# line endings; Swift treats `"\r\n"` as one Character so `.split(separator: "\n")`
+# returns the entire CSV file as one unsplit line and discards rows 2..30.
+DICDATA_ZERO_HINT_CRLF_ANCHOR = '            let csvLines = csvString.split(separator: "\\n")'
+DICDATA_ZERO_HINT_CRLF_REPLACEMENT = '            let csvLines = csvString.split(whereSeparator: \\.isNewline)'
+
+
+def patch_dicdata_store(text):
+    """Split zero-hint collocation CSV files on both LF and CRLF line endings."""
+    _require(text, DICDATA_ZERO_HINT_CRLF_ANCHOR)
+    return text.replace(DICDATA_ZERO_HINT_CRLF_ANCHOR, DICDATA_ZERO_HINT_CRLF_REPLACEMENT, 1)
+
+
+ZENZ_INPUT_GENERATOR_STRUCT_ANCHOR = 'struct ZenzInputTextGenerator {'
+ZENZ_INPUT_GENERATOR_STRUCT_REPLACEMENT = '''public struct ContextualNextWordReading: Sendable, Hashable {
+    public let reading: String
+    public let score: Float
+
+    public init(reading: String, score: Float) {
+        self.reading = reading
+        self.score = score
+    }
+}
+
+struct ZenzInputTextGenerator {'''
+
+ZENZ_INPUT_GENERATOR_TAIL_ANCHOR = '''            if appendedTokens.isEmpty {
+                break
+            }
+            promptTokens.append(contentsOf: appendedTokens)
+        }
+
+        return String(predictedCharacters)
+    }
+}'''
+
+ZENZ_INPUT_GENERATOR_TAIL_REPLACEMENT = '''            if appendedTokens.isEmpty {
+                break
+            }
+            promptTokens.append(contentsOf: appendedTokens)
+        }
+
+        return String(predictedCharacters)
+    }
+
+    private static func isContextualKatakanaScalar(_ scalar: UnicodeScalar) -> Bool {
+        (0x30A1 ... 0x30F6).contains(scalar.value) || scalar.value == 0x30FC
+    }
+
+    private static func isValidContextualPiece(_ piece: String) -> Bool {
+        guard !piece.isEmpty,
+              !piece.contains("\\u{FFFD}"),
+              !piece.contains("エモジ"),
+              !piece.contains("nam") else {
+            return false
+        }
+        return !piece.unicodeScalars.contains { scalar in
+            CharacterSet.controlCharacters.contains(scalar)
+                || (0xEE00 ... 0xEE0F).contains(scalar.value)
+        }
+    }
+
+    static func generateContextualCandidates(
+        context: ZenzContext,
+        leftSideContext: String,
+        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode,
+        maxBranches: Int = 5,
+        maxTokensPerBranch: Int = 5,
+        minStarterProb: Float = 0.012,
+        maxDurationSeconds: Double = 0.085,
+        shouldCancel: (() -> Bool)? = nil
+    ) -> [ContextualNextWordReading] {
+        guard maxBranches > 0,
+              maxTokensPerBranch >= 0,
+              shouldCancel?() != true else {
+            return []
+        }
+        let normalizedLine = leftSideContext
+            .replacingOccurrences(of: "\\r\\n", with: "\\n")
+            .replacingOccurrences(of: "\\r", with: "\\n")
+        let cleanContext = String(normalizedLine.split(separator: "\\n", omittingEmptySubsequences: false).last ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        guard !cleanContext.isEmpty,
+              let prompt = ZenzPromptBuilder.inputPredictionPrompt(
+                  leftSideContext: cleanContext,
+                  composingText: "",
+                  versionDependentConfig: versionDependentConfig
+              ) else {
+            return []
+        }
+
+        let startedAt = Date().timeIntervalSinceReferenceDate
+        let baseTokens = context.encode(prompt, addBOS: true, addEOS: false)
+        guard !baseTokens.isEmpty,
+              baseTokens.count <= 440,
+              shouldCancel?() != true,
+              let firstLogits = context.inputPredictionLogits(
+                  tokens: baseTokens,
+                  startOffset: baseTokens.count - 1
+              ) else {
+            return []
+        }
+
+        let vocabSize = Int(context.vocabSize)
+        guard vocabSize > 0 else {
+            return []
+        }
+
+        var maxLogit: Float = -.infinity
+        var topItems: [(token: llama_token, logit: Float)] = []
+        topItems.reserveCapacity(16)
+        for idx in 0 ..< vocabSize {
+            let logit = firstLogits[idx]
+            if logit > maxLogit {
+                maxLogit = logit
+            }
+            if topItems.count < 14 || logit > topItems[topItems.count - 1].logit {
+                let insertAt = topItems.firstIndex(where: { logit > $0.logit }) ?? topItems.count
+                topItems.insert((token: llama_token(idx), logit: logit), at: insertAt)
+                if topItems.count > 14 {
+                    topItems.removeLast()
+                }
+            }
+        }
+        guard maxLogit.isFinite else {
+            return []
+        }
+        var sumExp: Float = 0
+        for idx in 0 ..< vocabSize {
+            sumExp += expf(firstLogits[idx] - maxLogit)
+        }
+        let logSumExp = maxLogit + logf(max(sumExp, 1e-20))
+
+        let punctuationSet: Set<String> = ["、", "。", "！", "？"]
+        let disallowedStarters: Set<Character> = ["ー", "ァ", "ィ", "ゥ", "ェ", "ォ", "ッ", "ャ", "ュ", "ョ", "ヮ", "ン", "ヵ", "ヶ"]
+        var outputsByReading: [String: Float] = [:]
+        var starterBranches: [(token: llama_token, piece: String, logProb: Float)] = []
+        starterBranches.reserveCapacity(maxBranches)
+
+        for item in topItems {
+            guard item.token != context.eosToken else {
+                continue
+            }
+            let logProb = item.logit - logSumExp
+            let prob = expf(logProb)
+            let bytes = context.tokenToPiece(token: item.token).map { UInt8(truncatingIfNeeded: $0) }
+            guard let piece = String(data: Data(bytes), encoding: .utf8),
+                  Self.isValidContextualPiece(piece) else {
+                continue
+            }
+            if punctuationSet.contains(piece) {
+                if prob >= 0.03 {
+                    if let existing = outputsByReading[piece] {
+                        outputsByReading[piece] = max(existing, logProb)
+                    } else {
+                        outputsByReading[piece] = logProb
+                    }
+                }
+                continue
+            }
+            guard prob >= minStarterProb,
+                  starterBranches.count < maxBranches,
+                  let firstChar = piece.first,
+                  !disallowedStarters.contains(firstChar),
+                  piece.unicodeScalars.allSatisfy(Self.isContextualKatakanaScalar) else {
+                continue
+            }
+            starterBranches.append((token: item.token, piece: piece, logProb: logProb))
+        }
+
+        for starter in starterBranches {
+            if shouldCancel?() == true || (Date().timeIntervalSinceReferenceDate - startedAt) >= maxDurationSeconds {
+                break
+            }
+            var branchTokens: [llama_token] = [starter.token]
+            var reading = starter.piece
+            for _ in 0 ..< maxTokensPerBranch {
+                if reading.count >= 8
+                    || shouldCancel?() == true
+                    || (Date().timeIntervalSinceReferenceDate - startedAt) >= maxDurationSeconds {
+                    break
+                }
+                let stepTokens = baseTokens + branchTokens
+                guard stepTokens.count < 480,
+                      let stepLogits = context.inputPredictionLogits(
+                          tokens: stepTokens,
+                          startOffset: stepTokens.count - 1
+                      ) else {
+                    break
+                }
+                var bestIdx = 0
+                var bestLogit = stepLogits[0]
+                for idx in 1 ..< vocabSize {
+                    let v = stepLogits[idx]
+                    if v > bestLogit {
+                        bestLogit = v
+                        bestIdx = idx
+                    }
+                }
+                let nextToken = llama_token(bestIdx)
+                guard nextToken != context.eosToken else {
+                    break
+                }
+                let nextBytes = context.tokenToPiece(token: nextToken).map { UInt8(truncatingIfNeeded: $0) }
+                guard let nextPiece = String(data: Data(nextBytes), encoding: .utf8),
+                      Self.isValidContextualPiece(nextPiece),
+                      nextPiece.unicodeScalars.allSatisfy(Self.isContextualKatakanaScalar),
+                      reading.count + nextPiece.count <= 10 else {
+                    break
+                }
+                let candidateReading = reading + nextPiece
+                if candidateReading.contains("エモジ") {
+                    break
+                }
+                reading = candidateReading
+                branchTokens.append(nextToken)
+            }
+            guard !reading.isEmpty,
+                  reading != "エ",
+                  reading != "エモ",
+                  !reading.contains("エモジ") else {
+                continue
+            }
+            if let existing = outputsByReading[reading] {
+                outputsByReading[reading] = max(existing, starter.logProb)
+            } else {
+                outputsByReading[reading] = starter.logProb
+            }
+        }
+
+        return outputsByReading
+            .map { ContextualNextWordReading(reading: $0.key, score: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                return lhs.reading < rhs.reading
+            }
+    }
+}'''
+
+
+def patch_zenz_input_generator(text):
+    """Add bounded contextual next-word reading prediction sharing the prediction KV slot."""
+    _require(text, ZENZ_INPUT_GENERATOR_STRUCT_ANCHOR)
+    text = text.replace(ZENZ_INPUT_GENERATOR_STRUCT_ANCHOR, ZENZ_INPUT_GENERATOR_STRUCT_REPLACEMENT, 1)
+    _require(text, ZENZ_INPUT_GENERATOR_TAIL_ANCHOR)
+    return text.replace(ZENZ_INPUT_GENERATOR_TAIL_ANCHOR, ZENZ_INPUT_GENERATOR_TAIL_REPLACEMENT, 1)
+
+
+ZENZ_CONTEXTUAL_ANCHOR = '''    package func pureGreedyDecoding(pureInput: String, maxCount: Int = .max) -> String {
+        guard let zenzContext else {
+            return ""
+        }
+        return ZenzPureGreedyDecoder.decode(context: zenzContext, leftSideContext: pureInput, maxCount: maxCount)
+    }'''
+
+ZENZ_CONTEXTUAL_REPLACEMENT = '''    package func pureGreedyDecoding(pureInput: String, maxCount: Int = .max) -> String {
+        guard let zenzContext else {
+            return ""
+        }
+        return ZenzPureGreedyDecoder.decode(context: zenzContext, leftSideContext: pureInput, maxCount: maxCount)
+    }
+
+    func contextualNextWordReadings(
+        leftSideContext: String,
+        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode,
+        maxBranches: Int = 5,
+        maxTokensPerBranch: Int = 5,
+        maxDurationSeconds: Double = 0.085,
+        shouldCancel: (() -> Bool)? = nil
+    ) -> [ContextualNextWordReading] {
+        guard let zenzContext else {
+            return []
+        }
+        return ZenzInputTextGenerator.generateContextualCandidates(
+            context: zenzContext,
+            leftSideContext: leftSideContext,
+            versionDependentConfig: versionDependentConfig,
+            maxBranches: maxBranches,
+            maxTokensPerBranch: maxTokensPerBranch,
+            maxDurationSeconds: maxDurationSeconds,
+            shouldCancel: shouldCancel
+        )
+    }'''
+
+
+def patch_zenz(text):
+    """Forward contextual next-word reading generation through Zenz."""
+    _require(text, ZENZ_CONTEXTUAL_ANCHOR)
+    return text.replace(ZENZ_CONTEXTUAL_ANCHOR, ZENZ_CONTEXTUAL_REPLACEMENT, 1)

@@ -40,10 +40,8 @@ pub fn create_ruby_window(event_loop: &EventLoop<UserEvent>) -> Result<Window> {
 }
 
 pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebViewBuilder<'a>> {
-    let webview_builder = WebViewBuilder::with_web_context(web_context)
-        .with_transparent(true)
-        .with_html(
-            r##"
+    const CORRECTION_DIFF_SCRIPT: &str = include_str!("correction_diff.js");
+    let html = r##"
         <html>
             <head>
                 <style>
@@ -354,6 +352,9 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                     }
                 </style>
                 <script>
+__CORRECTION_DIFF_SCRIPT__
+                </script>
+                <script>
                     let currentRequestId = 0;
                     let measureFrame = null;
                     let resizeObserver = null;
@@ -442,17 +443,9 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                     }
 
                     function correctionDiff(source, replacement) {
-                        const a = Array.from(source), b = Array.from(replacement);
-                        let start = 0, end = 0;
-                        while (start < a.length && start < b.length && a[start] === b[start]) start++;
-                        while (end < a.length - start && end < b.length - start && a[a.length-1-end] === b[b.length-1-end]) end++;
-                        const left = Math.max(0, start - 8), right = Math.min(b.length, b.length - end + 8);
-                        const before = (left ? '…' : '') + b.slice(left, start).join('');
-                        const changed = b.slice(start, b.length-end).join('');
-                        const after = b.slice(b.length-end, right).join('') + (right < b.length ? '…' : '');
-                        const originalRight = Math.min(a.length, a.length-end+8);
-                        return { original: (left ? '…' : '') + a.slice(left, originalRight).join('') + (originalRight < a.length ? '…' : ''),
-                            replacement: escapeHtml(before) + '<mark>' + escapeHtml(changed) + '</mark>' + escapeHtml(after) };
+                        return window.CorrectionDiff.correctionDiff(source, replacement, {
+                            escapeHtml: escapeHtml,
+                        });
                     }
 
                     function updateReading(reading, requestId) {
@@ -610,8 +603,11 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                     <span id="measurement" aria-hidden="true"></span>
                 </main>
             </body>
-        </html>"##,
-        );
+        </html>"##
+        .replace("__CORRECTION_DIFF_SCRIPT__", CORRECTION_DIFF_SCRIPT);
+    let webview_builder = WebViewBuilder::with_web_context(web_context)
+        .with_transparent(true)
+        .with_html(html);
 
     Ok(webview_builder)
 }

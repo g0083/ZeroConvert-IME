@@ -16,7 +16,8 @@ data class Candidate(
     val learningAllowed: Boolean = true,
     val engineCandidateId: String = "",
     val engineConsumedReading: Int? = null,
-    val enginePredictionReading: String = ""
+    val enginePredictionReading: String = "",
+    val enginePostCompositionId: String = ""
 ) {
     fun previewForReading(reading: String): String = text + engineConsumedReading
         ?.takeIf { it in 1..reading.length }?.let { reading.substring(it) }.orEmpty()
@@ -32,7 +33,7 @@ data class Candidate(
     val isLearningTarget: Boolean get() = learningAllowed && segments.none { it.correctionKind != 0 }
     data class Key(val text: String, val reading: String, val assistType: com.zeroconvert.ime.assist.AiAssistType?)
     val key: Key get() = Key(text, reading, assist?.type)
-    val itemKey: String get() = "${text.length}:$text${reading.length}:$reading:${assist?.type?.name.orEmpty()}"
+    val itemKey: String get() = "${text.length}:$text${reading.length}:$reading:${assist?.type?.name.orEmpty()}:$enginePostCompositionId"
 }
 
 /**

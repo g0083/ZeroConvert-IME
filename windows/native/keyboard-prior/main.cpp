@@ -367,7 +367,6 @@ int main(int argc, char **argv) {
       }
     } else if (assist) {
       const ChannelDictionary dictionary(argv[3]);
-      std::cout << "ready " << nv << std::endl;
       auto tokenize = [&](const std::string &text) {
         std::vector<llama_token> tokens(512);
         const int n =
@@ -378,6 +377,35 @@ int main(int argc, char **argv) {
         tokens.resize(n);
         return tokens;
       };
+      if (gpu_layers > 0) {
+        // Vulkan lazily creates pipelines for different batch shapes. Exercise
+        // prefix prefill and small/large candidate batches on synthetic tokens.
+        const auto warm = [&](int count, int prefix_length, int branch_length) {
+          std::vector<std::vector<llama_token>> sequences;
+          for (int i = 0; i < count; ++i) {
+            std::vector<llama_token> sequence;
+            for (int j = 0; j < prefix_length; ++j)
+              sequence.push_back((20 + j) % nv);
+            for (int j = 0; j < branch_length; ++j)
+              sequence.push_back((80 + i * 23 + j) % nv);
+            sequences.push_back(std::move(sequence));
+          }
+          score_sequences(sequences, std::vector<int>(count, prefix_length));
+        };
+        warm(2, 1, 5);
+        // Small prefix prefills use separate kernels. Start each with an empty
+        // cache so the full prefix length is decoded, not just its last token.
+        for (int prefix_tokens = 1; prefix_tokens <= 8; ++prefix_tokens) {
+          cached_prefix_tokens.clear();
+          warm(2, prefix_tokens + 1, 5);
+        }
+        warm(3, 5, 10);
+        warm(8, 17, 12);
+        warm(24, 49, 16);
+        llama_memory_clear(llama_get_memory(ctx), true);
+        cached_prefix_tokens.clear();
+      }
+      std::cout << "ready " << nv << std::endl;
       std::string line;
       while (std::getline(std::cin, line)) {
         if (!line.empty() && line.back() == '\r')

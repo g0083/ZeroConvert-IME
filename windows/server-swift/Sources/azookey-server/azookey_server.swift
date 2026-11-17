@@ -747,13 +747,32 @@ private func rebuildConverter() {
     converterDicdataStore = dicdataStore
     converter = KanaKanjiConverter(dicdataStore: dicdataStore)
     normalNBestSupplementConverter = KanaKanjiConverter(dicdataStore: dicdataStore)
+    clearLastCommittedContinuation()
+    clearPostCompositionPredictionState()
 }
 
-private func converterRuntimeDirectoryURL() -> URL {
+func converterRuntimeDirectoryURL() -> URL {
     engineRuntimeDirectoryURL(
         appDataPath: ProcessInfo.processInfo.environment["APPDATA"],
         temporaryDirectoryURL: FileManager.default.temporaryDirectory
     )
+}
+
+#if os(Android)
+let defaultPredictiveConversionEnabled = true
+#else
+let defaultPredictiveConversionEnabled = false
+#endif
+
+func isPredictiveConversionEnabled() -> Bool {
+    (config["predictiveConversion"] as? Bool) ?? defaultPredictiveConversionEnabled
+}
+
+func isPostCompositionPredictionEnabled() -> Bool {
+    if let explicit = config["postCompositionPrediction"] as? Bool {
+        return explicit
+    }
+    return isPredictiveConversionEnabled()
 }
 
 private func ensureConverterRuntimeDirectory() {
@@ -783,7 +802,7 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
     return zenzaiEnabled && !normalizedBackend.isEmpty && normalizedBackend != "cpu"
 }
 
-private func converterModelURL() -> URL {
+func converterModelURL() -> URL {
     if let embeddedPath = config["embeddedModelPath"] as? String {
         return URL(filePath: embeddedPath)
     }
@@ -836,7 +855,7 @@ private func learningType(for mode: String?) -> LearningType {
     }
 }
 
-private func ensureLearningMemoryDirectoryIfNeeded() {
+func ensureLearningMemoryDirectoryIfNeeded() {
     guard currentLearningType != .nothing,
           let currentLearningMemoryDirectoryURL else {
         return
@@ -853,6 +872,18 @@ private func ensureLearningMemoryDirectoryIfNeeded() {
             "Failed to create learning memory directory \(currentLearningMemoryDirectoryURL.path): \(error)"
         )
     }
+}
+
+func ensureConverterLearningConfigSynced() {
+    ensureLearningMemoryDirectoryIfNeeded()
+    converter.syncLearningConfig(
+        learningType: currentLearningType,
+        memoryDirectoryURL: currentLearningMemoryDirectoryURL
+    )
+    normalNBestSupplementConverter.syncLearningConfig(
+        learningType: currentLearningType,
+        memoryDirectoryURL: currentLearningMemoryDirectoryURL
+    )
 }
 
 private func resetLearningMemoryDirectory() -> Bool {
@@ -1109,6 +1140,7 @@ private func clearLearningCandidateCache() {
 }
 
 func cacheLearningCandidates(_ candidates: [Candidate]) -> UInt64? {
+    recordRecentPublishedPostCompositionCandidates(candidates)
     guard currentLearningType == .inputAndOutput else {
         return nil
     }
@@ -1154,7 +1186,7 @@ func discardPinnedLearningCandidatesBeforeCompositionEdit() {
     learningCandidateCache.removeAllPins()
 }
 
-private func normalizedLearningRuby(_ ruby: String) -> String {
+func normalizedLearningRuby(_ ruby: String) -> String {
     ruby.unicodeScalars.reduce(into: "") { normalized, scalar in
         let value = scalar.value
         let normalizedValue = switch value {
@@ -1167,11 +1199,11 @@ private func normalizedLearningRuby(_ ruby: String) -> String {
     }
 }
 
-private func learningCandidateRuby(_ candidate: Candidate) -> String {
+func learningCandidateRuby(_ candidate: Candidate) -> String {
     normalizedLearningRuby(candidate.data.reduce(into: "") { $0 += $1.ruby })
 }
 
-private func learningCandidateOutput(_ candidate: Candidate) -> String {
+func learningCandidateOutput(_ candidate: Candidate) -> String {
     candidate.data.reduce(into: "") { $0 += $1.word }
 }
 
@@ -1184,6 +1216,8 @@ private func learningSelectionOverridesURL() -> URL? {
 
 struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral {
     private(set) var entries: [String: [String]] = [:]
+    // Maintain recency order in memory while preserving the flat `[String: [String]]` JSON schema.
+    private var recentRubies: [String] = []
 
     var count: Int { entries.count }
     var keys: Dictionary<String, [String]>.Keys { entries.keys }
@@ -1203,7 +1237,7 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
             if let newValue {
                 record(output: newValue, for: ruby)
             } else {
-                entries.removeValue(forKey: ruby)
+                removeValue(forKey: ruby)
             }
         }
     }
@@ -1216,6 +1250,8 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
             list = Array(list.prefix(maxOutputsPerRuby))
         }
         entries[ruby] = list
+        recentRubies.removeAll { $0 == ruby }
+        recentRubies.insert(ruby, at: 0)
     }
 
     func outputs(for ruby: String) -> [String] {
@@ -1224,11 +1260,13 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
 
     mutating func removeAll(keepingCapacity: Bool = false) {
         entries.removeAll(keepingCapacity: keepingCapacity)
+        recentRubies.removeAll(keepingCapacity: keepingCapacity)
     }
 
     @discardableResult
     mutating func removeValue(forKey key: String) -> [String]? {
-        entries.removeValue(forKey: key)
+        recentRubies.removeAll { $0 == key }
+        return entries.removeValue(forKey: key)
     }
 
     /// Drops one learned output while keeping the other outputs of the same reading,
@@ -1245,22 +1283,42 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
         }
         if list.isEmpty {
             entries.removeValue(forKey: ruby)
+            recentRubies.removeAll { $0 == ruby }
         } else {
             entries[ruby] = list
         }
         return true
     }
 
-    func prefixMatches(for prefixRuby: String, maxCount: Int = 3) -> [(ruby: String, output: String)] {
-        guard prefixRuby.count >= 2 else { return [] }
+    func prefixMatches(
+        for prefixRuby: String,
+        maxCount: Int = 3,
+        expandedPrefixRubies: [String] = []
+    ) -> [(ruby: String, output: String)] {
+        let normalizedExpansions = expandedPrefixRubies.compactMap { raw -> String? in
+            let normalized = normalizedLearningRuby(raw)
+            return normalized.count >= 2 ? normalized : nil
+        }
+        guard prefixRuby.count >= 2 || !normalizedExpansions.isEmpty else {
+            return []
+        }
+
         var results: [(ruby: String, output: String)] = []
-        for (ruby, outputs) in entries {
-            if ruby.hasPrefix(prefixRuby) && ruby != prefixRuby {
-                for output in outputs {
-                    results.append((ruby: ruby, output: output))
-                    if results.count >= maxCount {
-                        return results
-                    }
+        let orderedRubies = recentRubies.count == entries.count ? recentRubies : entries.keys.sorted()
+        for ruby in orderedRubies {
+            guard ruby != prefixRuby, let outputs = entries[ruby] else {
+                continue
+            }
+            let matches = normalizedExpansions.isEmpty
+                ? ruby.hasPrefix(prefixRuby)
+                : normalizedExpansions.contains(where: { ruby.hasPrefix($0) })
+            guard matches else {
+                continue
+            }
+            for output in outputs {
+                results.append((ruby: ruby, output: output))
+                if results.count >= maxCount {
+                    return results
                 }
             }
         }
@@ -1276,6 +1334,7 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
         } else {
             self.entries = [:]
         }
+        self.recentRubies = self.entries.keys.sorted()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1379,6 +1438,7 @@ func synthesizeLearnedCandidate(
 func prioritizeLearningSelectionOverrides<Element>(
     _ elements: [Element],
     ruby: String,
+    expandedPrefixRubies: [String] = [],
     candidate: (Element) -> Candidate,
     synthesizeElement: ((Candidate) -> Element)? = nil
 ) -> [Element] {
@@ -1387,12 +1447,53 @@ func prioritizeLearningSelectionOverrides<Element>(
     }
     let normalizedRuby = normalizedLearningRuby(ruby)
     let preferredOutputs = learningSelectionOverrides.outputs(for: normalizedRuby)
-    #if os(Android)
-    let defaultPredictive = true
-    #else
-    let defaultPredictive = false
-    #endif
-    let predictiveEnabled = (config["predictiveConversion"] as? Bool) ?? defaultPredictive
+    let predictiveEnabled = isPredictiveConversionEnabled()
+
+    func insertLearnedPrefixPredictions(into results: inout [Element]) {
+        guard predictiveEnabled,
+              let synthesizeElement,
+              normalizedRuby.count >= 2 || !expandedPrefixRubies.isEmpty else {
+            return
+        }
+        let prefixMatches = learningSelectionOverrides.prefixMatches(
+            for: normalizedRuby,
+            maxCount: 2,
+            expandedPrefixRubies: expandedPrefixRubies
+        )
+        guard !prefixMatches.isEmpty else {
+            return
+        }
+        // Keep at least Top 1 and all full-span exact conversions ahead of learned predictions,
+        // while promoting learned prefix matches above unlearned predictions and sub-clauses.
+        let splitIndex = results.indices.dropFirst().first { index in
+            candidate(results[index]).rubyCount != normalizedRuby.count
+        } ?? results.endIndex
+        let refComposingCount = (
+            elements.first(where: { candidate($0).rubyCount == normalizedRuby.count })
+                ?? elements.first
+        ).map { candidate($0).composingCount } ?? .inputCount(ruby.count)
+
+        var exactOutputs = Set(results[..<splitIndex].map { learningCandidateOutput(candidate($0)) })
+        var insertionIndex = splitIndex
+        for match in prefixMatches {
+            guard exactOutputs.insert(match.output).inserted else { continue }
+            if let existingIndex = results[insertionIndex...].firstIndex(where: {
+                learningCandidateOutput(candidate($0)) == match.output
+            }) {
+                let promoted = results.remove(at: existingIndex)
+                results.insert(promoted, at: insertionIndex)
+                insertionIndex += 1
+            } else {
+                let synth = synthesizeLearnedCandidate(
+                    word: match.output,
+                    ruby: match.ruby,
+                    composingCount: refComposingCount
+                )
+                results.insert(synthesizeElement(synth), at: insertionIndex)
+                insertionIndex += 1
+            }
+        }
+    }
 
     if !preferredOutputs.isEmpty {
         var prioritized: [Element] = []
@@ -1419,22 +1520,7 @@ func prioritizeLearningSelectionOverrides<Element>(
         }
 
         prioritized.append(contentsOf: remaining)
-
-        if predictiveEnabled, let synthesizeElement, normalizedRuby.count >= 2 {
-            let prefixMatches = learningSelectionOverrides.prefixMatches(for: normalizedRuby, maxCount: 2)
-            var existingTexts = Set(prioritized.map { learningCandidateOutput(candidate($0)) })
-            let refComposingCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
-            for match in prefixMatches {
-                guard existingTexts.insert(match.output).inserted else { continue }
-                let synth = synthesizeLearnedCandidate(
-                    word: match.output,
-                    ruby: match.ruby,
-                    composingCount: refComposingCount
-                )
-                prioritized.append(synthesizeElement(synth))
-            }
-        }
-
+        insertLearnedPrefixPredictions(into: &prioritized)
         return prioritized
     }
 
@@ -1462,21 +1548,7 @@ func prioritizeLearningSelectionOverrides<Element>(
         }
     }
 
-    if predictiveEnabled, let synthesizeElement, normalizedRuby.count >= 2 {
-        let prefixMatches = learningSelectionOverrides.prefixMatches(for: normalizedRuby, maxCount: 2)
-        var existingTexts = Set(results.map { learningCandidateOutput(candidate($0)) })
-        let refComposingCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
-        for match in prefixMatches {
-            guard existingTexts.insert(match.output).inserted else { continue }
-            let synth = synthesizeLearnedCandidate(
-                word: match.output,
-                ruby: match.ruby,
-                composingCount: refComposingCount
-            )
-            results.append(synthesizeElement(synth))
-        }
-    }
-
+    insertLearnedPrefixPredictions(into: &results)
     return results
 }
 
@@ -1500,7 +1572,7 @@ struct EmojiTextReplacerCache {
     mutating func reset() { resourceURL = nil; replacer = nil }
 }
 
-nonisolated(unsafe) private var emojiTextReplacerCache = EmojiTextReplacerCache()
+nonisolated(unsafe) var emojiTextReplacerCache = EmojiTextReplacerCache()
 
 func makeConvertRequestOptions(
     context: String,
@@ -2256,18 +2328,11 @@ func getOptions(
         learningMemoryDirectoryURL: currentLearningMemoryDirectoryURL,
         experimentalKeyboardTypoCorrection:
             (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection,
-        predictiveConversion:
-            (config["predictiveConversion"] as? Bool) ?? {
-                #if os(Android)
-                return true
-                #else
-                return false
-                #endif
-            }()
+        predictiveConversion: isPredictiveConversionEnabled()
     )
 }
 
-private func currentRuntimeZenzaiEnabled() -> Bool {
+func currentRuntimeZenzaiEnabled() -> Bool {
     effectiveZenzaiRuntimeEnabled(
         isConfigured: (config["enable"] as? Bool) ?? false,
         backend: config["backend"] as? String,
@@ -2728,9 +2793,39 @@ func cursorPrefixBoundaryFirstClauseResults(
     zenzaiFirstClauseResults.isEmpty ? mergedFirstClauseResults : zenzaiFirstClauseResults
 }
 
+func mergeDistinctPredictionCandidates(
+    primary: [Candidate],
+    fallback: [Candidate],
+    hiragana: String
+) -> [Candidate] {
+    guard !primary.isEmpty else {
+        return fallback
+    }
+    var seenTexts = Set<String>()
+    var combined: [Candidate] = []
+    combined.reserveCapacity(primary.count + fallback.count)
+    for candidate in primary {
+        let text = constructCandidateString(candidate: candidate, hiragana: hiragana)
+        if seenTexts.insert(text).inserted {
+            combined.append(candidate)
+        }
+    }
+    for candidate in fallback {
+        let text = constructCandidateString(candidate: candidate, hiragana: hiragana)
+        if seenTexts.insert(text).inserted {
+            combined.append(candidate)
+        }
+    }
+    return combined
+}
+
 private func requestNormalNBestSupplementCandidates(
+    converter targetConverter: KanaKanjiConverter = normalNBestSupplementConverter,
     inputData: ComposingText,
     options: ConvertRequestOptions,
+    sessionID: String? = nil,
+    cacheOnlyJapanesePrediction: Bool = false,
+    prefixConstraintSurface: String? = nil,
     operation: String,
     diagnosticDetails: String
 ) -> ConversionResult {
@@ -2738,7 +2833,13 @@ private func requestNormalNBestSupplementCandidates(
     normalOptions.zenzaiMode = .off
 
     let requestStart = performanceNow()
-    let converted = normalNBestSupplementConverter.requestCandidates(inputData, options: normalOptions)
+    let converted = targetConverter.requestCandidates(
+        inputData,
+        options: normalOptions,
+        sessionID: sessionID,
+        cacheOnlyJapanesePrediction: cacheOnlyJapanesePrediction,
+        prefixConstraintSurface: prefixConstraintSurface
+    )
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: operation,
@@ -2800,12 +2901,8 @@ public func load_config() {
     config["gpuLayers"] = 99
     config["model"] = "standard"
     config["experimentalTypoCorrection"] = defaultKeyboardTypoCorrection
-    #if os(Android)
-    let defaultPredictiveConversion = true
-    #else
-    let defaultPredictiveConversion = false
-    #endif
-    config["predictiveConversion"] = defaultPredictiveConversion
+    config["predictiveConversion"] = defaultPredictiveConversionEnabled
+    config["postCompositionPrediction"] = nil
     setRoman2KanaInputStyle()
     currentLearningType = .inputAndOutput
     currentLearningMemoryDirectoryURL = learningMemoryDirectoryURL(settingsPath: loadedSettingsPath)
@@ -2839,7 +2936,7 @@ public func load_config() {
         config["experimentalTypoCorrection"] =
             settings.general?.experimental_typo_correction ?? defaultKeyboardTypoCorrection
         config["predictiveConversion"] =
-            settings.general?.predictive_conversion ?? defaultPredictiveConversion
+            settings.general?.predictive_conversion ?? defaultPredictiveConversionEnabled
 
         let sourceEntries = settings.user_dictionary?.entries ?? []
         var seen: Set<String> = []
@@ -2918,9 +3015,11 @@ public func load_config() {
         || previousLearningMemoryDirectoryURL != currentLearningMemoryDirectoryURL
     {
         clearLearningCandidateCache()
+        clearPostCompositionPredictionState()
     }
     ensureLearningMemoryDirectoryIfNeeded()
     loadLearningSelectionOverrides()
+    loadPostCompositionBigrams()
 
     serverLog(
         "INFO",
@@ -2952,6 +3051,8 @@ public func initialize(
         serverLog("ERROR", "Initialize: failed to load reconversion dictionary: \(error)")
     }
     invalidateAutomaticConversionContinuationCache()
+    clearLastCommittedContinuation()
+    clearPostCompositionPredictionState()
     rebuildConverter()
     clearLearningCandidateCache()
 
@@ -3385,7 +3486,40 @@ public func clear_text() {
     composingTextSnapshots.removeAll()
     clearLearningCandidateCache()
     clearConversionContinuation()
+    clearPublishedPostCompositionPredictions()
     serverLog("DEBUG", "ClearText: completed")
+}
+
+private func recordCommittedLearningContinuation(
+    _ candidate: Candidate,
+    contextBeforeCommit: String
+) {
+    let surface = candidate.text
+    guard !surface.isEmpty,
+          !surface.contains(where: isAutomaticConversionContinuationStopCharacter) else {
+        clearLastCommittedContinuation()
+        return
+    }
+    let reading = katakanaToHiragana(learningCandidateRuby(candidate))
+    guard !reading.isEmpty,
+          isKanaLikeConversionContinuationReading(reading),
+          reading.count <= maxConversionContinuationReadingCount,
+          surface.count <= maxConversionContinuationSurfaceCount else {
+        clearLastCommittedContinuation()
+        return
+    }
+    if let previous = lastCommittedContinuation,
+       !contextBeforeCommit.isEmpty,
+       contextBeforeCommit.hasSuffix(previous.surface),
+       previous.reading.count + reading.count <= maxAutomaticConversionContinuationReadingCount,
+       previous.surface.count + surface.count <= maxAutomaticConversionContinuationSurfaceCount {
+        lastCommittedContinuation = ConversionContinuation(
+            reading: previous.reading + reading,
+            surface: previous.surface + surface
+        )
+    } else {
+        lastCommittedContinuation = ConversionContinuation(reading: reading, surface: surface)
+    }
 }
 
 @_silgen_name("CommitLearningCandidate")
@@ -3409,11 +3543,17 @@ public func commit_learning_candidate(
         return false
     }
 
-    ensureLearningMemoryDirectoryIfNeeded()
+    let contextBeforeCommit = (config["context"] as? String) ?? ""
+    ensureConverterLearningConfigSynced()
     converter.setCompletedData(candidate)
     converter.updateLearningData(candidate)
     converter.commitUpdateLearningData()
+    // Keep the N-best/prediction converter aligned without triggering a second disk merge.
+    normalNBestSupplementConverter.setCompletedData(candidate)
+    normalNBestSupplementConverter.invalidateLearningMemoryCache()
     recordLearningSelectionOverride(candidate)
+    recordCommittedLearningContinuation(candidate, contextBeforeCommit: contextBeforeCommit)
+    recordPostCompositionLearningCommit(candidate, contextBeforeCommit: contextBeforeCommit)
     serverLog(
         "DEBUG",
         "CommitLearningCandidate: completed candidateId=\(candidateId) commitKind=\(commitKind)"
@@ -3460,15 +3600,21 @@ public func commit_learning_candidates(
         return 0
     }
 
-    ensureLearningMemoryDirectoryIfNeeded()
+    var trackedContext = (config["context"] as? String) ?? ""
+    ensureConverterLearningConfigSynced()
     var selectionOverrideChanged = false
     for entry in candidates {
         converter.setCompletedData(entry.candidate)
         converter.updateLearningData(entry.candidate)
+        normalNBestSupplementConverter.setCompletedData(entry.candidate)
         selectionOverrideChanged =
             updateLearningSelectionOverride(entry.candidate) || selectionOverrideChanged
+        recordCommittedLearningContinuation(entry.candidate, contextBeforeCommit: trackedContext)
+        recordPostCompositionLearningCommit(entry.candidate, contextBeforeCommit: trackedContext)
+        trackedContext += entry.candidate.text
     }
     converter.commitUpdateLearningData()
+    normalNBestSupplementConverter.invalidateLearningMemoryCache()
     if selectionOverrideChanged {
         saveLearningSelectionOverrides()
     }
@@ -3485,7 +3631,9 @@ public func reset_learning_memory() -> Bool {
     converter.resetMemory()
     normalNBestSupplementConverter.resetMemory()
     clearLearningCandidateCache()
+    clearLastCommittedContinuation()
     learningSelectionOverrides.removeAll(keepingCapacity: false)
+    resetPostCompositionLearningMemory()
     serverLog("INFO", "ResetLearningMemory: completed resetDirectory=\(resetDirectory)")
     return resetDirectory
 }
@@ -3524,8 +3672,26 @@ public func forget_learning_candidate(candidateId: UInt64) -> Bool {
     let ruby = learningCandidateRuby(candidate)
     let output = learningCandidateOutput(candidate)
 
-    converter.forgetMemory(candidate)
-    normalNBestSupplementConverter.forgetMemory(candidate)
+    ensureConverterLearningConfigSynced()
+    let extraForgetElements = postCompositionJoinedForgetElements(for: candidate, output: output)
+    let forgetCandidate: Candidate
+    if extraForgetElements.isEmpty {
+        forgetCandidate = candidate
+    } else {
+        forgetCandidate = Candidate(
+            text: candidate.text,
+            value: candidate.value,
+            composingCount: candidate.composingCount,
+            lastMid: candidate.lastMid,
+            data: candidate.data + extraForgetElements,
+            isLearningTarget: candidate.isLearningTarget
+        )
+    }
+    converter.forgetMemory(forgetCandidate)
+    normalNBestSupplementConverter.forgetMemory(forgetCandidate)
+    normalNBestSupplementConverter.invalidateLearningMemoryCache()
+    clearLastCommittedContinuation()
+    forgetPostCompositionLearning(surface: output)
     let removedOverride = !ruby.isEmpty &&
         learningSelectionOverrides.remove(output: output, for: ruby)
     if removedOverride {
@@ -3584,6 +3750,7 @@ public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
             : (currentLearningType == .onlyOutput ? "read_only" : "enabled"),
         "candidateCacheSlots": learningCandidateCache.slotCount,
         "candidateCacheBatches": learningCandidateCache.batchCount,
+        "postCompositionBigramCount": postCompositionBigramStore.count,
     ]
     guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
           let json = String(data: data, encoding: .utf8) else {
@@ -3789,9 +3956,53 @@ private func get_composed_text_impl(
         "DEBUG",
         "GetComposedText: start \(diagnosticDetails)"
     )
-    var options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
-    if hasTrailingUncompletedRoman(in: previewComposingText) {
-        options.requireJapanesePrediction = .disabled
+    let hasTrailingRoman = hasTrailingUncompletedRoman(in: previewComposingText)
+    let options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
+    let japanesePredictionEnabled = options.requireJapanesePrediction != .disabled
+    let cacheOnlyPrediction = hasTrailingRoman
+    let predictiveContinuationRequest: ConversionContinuationRequest?
+    if suffixAfterCursor.isEmpty, japanesePredictionEnabled {
+        if let continuationRequest {
+            predictiveContinuationRequest = continuationRequest
+        } else {
+            let explicitPredictive = makePredictiveConversionContinuationRequest(
+                continuation: conversionContinuation,
+                allowPredictive: allowZenzai,
+                isCursorAtEnd: isCursorAtEnd,
+                previewComposingText: previewComposingText,
+                context: rawContextString
+            )
+            let committedPredictive = explicitPredictive ?? makePredictiveConversionContinuationRequest(
+                continuation: lastCommittedContinuation,
+                allowPredictive: allowZenzai,
+                isCursorAtEnd: isCursorAtEnd,
+                previewComposingText: previewComposingText,
+                context: rawContextString,
+                requireContextSuffixMatch: true
+            )
+            if let committedPredictive {
+                predictiveContinuationRequest = committedPredictive
+            } else {
+                let autoPredictive = (allowZenzai && isCursorAtEnd)
+                    ? makeAutomaticConversionContinuation(
+                        context: rawContextString,
+                        currentReading: previewHiragana,
+                        isCursorAtEnd: true,
+                        allowPureKana: true,
+                        allowUncompletedRoman: true
+                    )
+                    : nil
+                predictiveContinuationRequest = makePredictiveConversionContinuationRequest(
+                    continuation: autoPredictive,
+                    allowPredictive: allowZenzai,
+                    isCursorAtEnd: isCursorAtEnd,
+                    previewComposingText: previewComposingText,
+                    context: rawContextString
+                )
+            }
+        }
+    } else {
+        predictiveContinuationRequest = nil
     }
     candidateCrashTrace(
         useZenzai: useZenzai,
@@ -3816,6 +4027,7 @@ private func get_composed_text_impl(
         normalNBestConverted = requestNormalNBestSupplementCandidates(
             inputData: previewComposingText,
             options: supplementOptions,
+            cacheOnlyJapanesePrediction: cacheOnlyPrediction,
             operation: "get_composed_text",
             diagnosticDetails: diagnosticDetails
         )
@@ -3823,7 +4035,12 @@ private func get_composed_text_impl(
         normalNBestConverted = nil
     }
     let requestStart = performanceNow()
-    let converted = converter.requestCandidates(requestComposingText, options: zenzaiOptions)
+    let converted = converter.requestCandidates(
+        requestComposingText,
+        options: zenzaiOptions,
+        sessionID: nil,
+        cacheOnlyJapanesePrediction: cacheOnlyPrediction
+    )
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: "get_composed_text",
@@ -3860,16 +4077,15 @@ private func get_composed_text_impl(
                 disableAutomaticConversionContinuation(context: rawContextString)
             }
             var fallbackOptions = getOptions(context: rawContextString, zenzaiEnabled: useZenzai)
-            if hasTrailingUncompletedRoman(in: previewComposingText) {
-                fallbackOptions.requireJapanesePrediction = .disabled
-            }
             if useZenzai {
                 fallbackOptions = optionsForZenzaiConversion(from: fallbackOptions)
             }
             let fallbackStart = performanceNow()
             let fallbackConverted = converter.requestCandidates(
                 previewComposingText,
-                options: fallbackOptions
+                options: fallbackOptions,
+                sessionID: nil,
+                cacheOnlyJapanesePrediction: cacheOnlyPrediction
             )
             let fallbackMs = elapsedPerformanceMilliseconds(since: fallbackStart)
             let fallbackDetails = diagnosticsEnabled ? "\(diagnosticDetails);continuation_fallback_context=raw" : ""
@@ -3904,10 +4120,55 @@ private func get_composed_text_impl(
             hiragana: previewHiragana
         )
     } ?? zenzaiMainResults
-    let mergedMainResults = (suffixAfterCursor.isEmpty ? normalNBestConverted : nil).map {
+    let effectivePredictionResults: [Candidate]?
+    if suffixAfterCursor.isEmpty, japanesePredictionEnabled {
+        let basePredictions = normalNBestConverted?.predictionResults
+            ?? (continuationRequest.map { request in
+                converted.predictionResults.compactMap {
+                    slicePredictiveContinuationCandidate(
+                        $0,
+                        continuation: request.continuation,
+                        currentReading: previewHiragana
+                    )
+                }
+            } ?? converted.predictionResults)
+        if let predictiveContinuationRequest, useZenzai || continuationRequest == nil {
+            let predictionConverter = useZenzai ? normalNBestSupplementConverter : converter
+            let contPredOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
+            let contPredConverted = requestNormalNBestSupplementCandidates(
+                converter: predictionConverter,
+                inputData: predictiveContinuationRequest.combinedComposingText,
+                options: contPredOptions,
+                sessionID: "continuation-prediction",
+                cacheOnlyJapanesePrediction: cacheOnlyPrediction,
+                prefixConstraintSurface: predictiveContinuationRequest.continuation.surface,
+                operation: "get_composed_text_prediction_continuation",
+                diagnosticDetails: diagnosticDetails
+            )
+            let contextualPredictions = contPredConverted.predictionResults.compactMap {
+                slicePredictiveContinuationCandidate(
+                    $0,
+                    continuation: predictiveContinuationRequest.continuation,
+                    currentReading: previewHiragana
+                )
+            }
+            effectivePredictionResults = mergeDistinctPredictionCandidates(
+                primary: contextualPredictions,
+                fallback: basePredictions,
+                hiragana: previewHiragana
+            )
+        } else if useZenzai || continuationRequest != nil {
+            effectivePredictionResults = basePredictions
+        } else {
+            effectivePredictionResults = nil
+        }
+    } else {
+        effectivePredictionResults = nil
+    }
+    let mergedMainResults = effectivePredictionResults.map {
         mergePredictiveSupplementCandidates(
             exactMerged: mergedExactResults,
-            predictionResults: $0.predictionResults,
+            predictionResults: $0,
             hiragana: previewHiragana
         )
     } ?? mergedExactResults
@@ -3925,9 +4186,13 @@ private func get_composed_text_impl(
         normal: mergedMainResults, touch: touchCandidates,
         dictionary: normalNBestConverted?.mainResults ?? converted.mainResults
     )
+    let expandedPrefixRubies = (cacheOnlyPrediction && japanesePredictionEnabled)
+        ? (useZenzai ? normalNBestSupplementConverter : converter).predictiveRubyPrefixes(for: previewComposingText)
+        : []
     let rawMainResults = prioritizeLearningSelectionOverrides(
         weightedMainResults,
         ruby: previewHiragana,
+        expandedPrefixRubies: expandedPrefixRubies,
         candidate: { $0 },
         synthesizeElement: { $0 }
     )

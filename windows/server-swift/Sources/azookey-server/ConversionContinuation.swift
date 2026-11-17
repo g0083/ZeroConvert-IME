@@ -16,9 +16,14 @@ let maxConversionContinuationCurrentReadingCount = 16
 
 // Serialized by the single-threaded FFI executor in Rust and @MainActor in tests.
 nonisolated(unsafe) var conversionContinuation: ConversionContinuation?
+nonisolated(unsafe) var lastCommittedContinuation: ConversionContinuation?
 
 func clearConversionContinuation() {
     conversionContinuation = nil
+}
+
+func clearLastCommittedContinuation() {
+    lastCommittedContinuation = nil
 }
 
 /// Hiragana, the long vowel mark, and the hiragana iteration marks are the
@@ -111,6 +116,63 @@ func makeConversionContinuationRequest(
     )
 }
 
+func makePredictiveConversionContinuationRequest(
+    continuation: ConversionContinuation?,
+    allowPredictive: Bool,
+    isCursorAtEnd: Bool,
+    previewComposingText: ComposingText,
+    context: String,
+    requireContextSuffixMatch: Bool = false
+) -> ConversionContinuationRequest? {
+    guard allowPredictive,
+          let continuation,
+          isCursorAtEnd else {
+        return nil
+    }
+    if requireContextSuffixMatch {
+        guard !context.isEmpty, context.hasSuffix(continuation.surface) else {
+            return nil
+        }
+    }
+    guard !continuation.reading.isEmpty,
+          !continuation.surface.isEmpty,
+          continuation.reading.count <= maxConversionContinuationReadingCount,
+          continuation.surface.count <= maxConversionContinuationSurfaceCount,
+          isKanaLikeConversionContinuationReading(continuation.reading) else {
+        return nil
+    }
+    let previewHiragana = previewComposingText.convertTarget
+    let leadingHiragana = String(previewHiragana.prefix(while: { !($0.isASCII && $0.isLetter) }))
+    guard !leadingHiragana.isEmpty,
+          previewHiragana.count <= maxConversionContinuationCurrentReadingCount,
+          isKanaLikeConversionContinuationReading(leadingHiragana) else {
+        return nil
+    }
+    let combinedReadingCount = continuation.reading.count + previewHiragana.count
+    guard combinedReadingCount <= maxCombinedConversionContinuationReadingCount else {
+        return nil
+    }
+    let effectiveContext: String
+    switch resolveConversionContinuationContext(
+        context: context,
+        continuationSurface: continuation.surface
+    ) {
+    case .skip:
+        return nil
+    case .use(let resolvedContext):
+        effectiveContext = resolvedContext
+    }
+    var combinedComposingText = ComposingText()
+    combinedComposingText.insertAtCursorPosition(continuation.reading, inputStyle: .direct)
+    // Preserve input styles (for example roman2kana) so possibleNexts caches stay valid mid-romaji.
+    combinedComposingText.insertAtCursorPosition(previewComposingText.input)
+    return ConversionContinuationRequest(
+        continuation: continuation,
+        context: effectiveContext,
+        combinedComposingText: combinedComposingText
+    )
+}
+
 private func normalizedConversionContinuationRuby(_ text: String) -> String {
     var scalars = String.UnicodeScalarView()
     scalars.reserveCapacity(text.unicodeScalars.count)
@@ -136,6 +198,38 @@ func sliceConversionContinuationCandidate(
     _ candidate: Candidate,
     continuation: ConversionContinuation,
     currentReading: String
+) -> Candidate? {
+    sliceContinuationCandidateImpl(
+        candidate,
+        continuation: continuation,
+        currentReading: currentReading,
+        allowUncompletedRomanSuffix: false,
+        capComposingCountToCurrentReading: false
+    )
+}
+
+/// Slices a predictive candidate generated on a combined continuation reading
+/// while keeping the consuming count aligned with the active composition.
+func slicePredictiveContinuationCandidate(
+    _ candidate: Candidate,
+    continuation: ConversionContinuation,
+    currentReading: String
+) -> Candidate? {
+    sliceContinuationCandidateImpl(
+        candidate,
+        continuation: continuation,
+        currentReading: currentReading,
+        allowUncompletedRomanSuffix: true,
+        capComposingCountToCurrentReading: true
+    )
+}
+
+private func sliceContinuationCandidateImpl(
+    _ candidate: Candidate,
+    continuation: ConversionContinuation,
+    currentReading: String,
+    allowUncompletedRomanSuffix: Bool,
+    capComposingCountToCurrentReading: Bool
 ) -> Candidate? {
     guard !continuation.reading.isEmpty,
           !continuation.surface.isEmpty,
@@ -201,10 +295,14 @@ func sliceConversionContinuationCandidate(
 
     let suffixRuby = suffixData.reduce(into: "") { $0 += $1.ruby }
     let normalizedSuffixRuby = normalizedConversionContinuationRuby(suffixRuby)
-    let normalizedCurrentReading = normalizedConversionContinuationRuby(currentReading)
+    let comparableReading = allowUncompletedRomanSuffix
+        ? String(currentReading.prefix(while: { !($0.isASCII && $0.isLetter) }))
+        : currentReading
+    let normalizedCurrentReading = normalizedConversionContinuationRuby(comparableReading)
     guard !normalizedSuffixRuby.isEmpty,
+          !normalizedCurrentReading.isEmpty,
           normalizedSuffixRuby.hasPrefix(normalizedCurrentReading)
-            || normalizedCurrentReading.hasPrefix(normalizedSuffixRuby) else {
+            || (!allowUncompletedRomanSuffix && normalizedCurrentReading.hasPrefix(normalizedSuffixRuby)) else {
         return nil
     }
 
@@ -221,10 +319,14 @@ func sliceConversionContinuationCandidate(
         )
     }
 
+    let composingSurfaceCount = capComposingCountToCurrentReading
+        ? min(suffixRuby.count, currentReading.count)
+        : suffixRuby.count
+
     return Candidate(
         text: suffixData.reduce(into: "") { $0 += $1.word },
         value: candidate.value,
-        composingCount: .surfaceCount(suffixRuby.count),
+        composingCount: .surfaceCount(composingSurfaceCount),
         lastMid: suffixData.last?.mid ?? candidate.lastMid,
         data: suffixData,
         actions: candidate.actions,

@@ -56,4 +56,61 @@ class SharedEngineInputTest {
         assertEquals(3, com.zeroconvert.ime.engine.WindowsEngine.safeAutoCommitLength(reading, 2))
         assertEquals(4, com.zeroconvert.ime.engine.WindowsEngine.safeAutoCommitLength(reading, 99))
     }
+
+    @Test fun postCompositionParsingPreservesPredictionIdentityFiltersInvalidEntriesAndDistinctItemKeys() {
+        val json = org.json.JSONObject(
+            """
+            {
+              "leftSurface": "東京",
+              "accepted": true,
+              "terminal": false,
+              "predictions": [
+                {"id": "11", "text": "の", "reading": "とうきょうの", "isTerminal": false, "isEmoji": false},
+                {"id": "0", "text": "invalid", "reading": "むこう"},
+                {"id": "12", "text": "", "reading": "から"},
+                {"id": "13", "text": "🗼", "reading": "とうきょう🗼", "isTerminal": true, "isEmoji": true}
+              ]
+            }
+            """.trimIndent()
+        )
+        val parsed = com.zeroconvert.ime.engine.WindowsEngine.parsePostCompositionResult(json)
+        assertEquals("東京", parsed.leftSurface)
+        assertTrue(parsed.accepted)
+        assertFalse(parsed.terminal)
+        assertEquals(listOf("の", "🗼"), parsed.predictions.map { it.text })
+        assertEquals(listOf("11", "13"), parsed.predictions.map { it.enginePostCompositionId })
+        assertTrue(parsed.predictions.all { it.engineCandidateId.isEmpty() && !it.learningAllowed })
+        assertNotEquals(
+            parsed.predictions[0].itemKey,
+            parsed.predictions[0].copy(enginePostCompositionId = "99").itemKey
+        )
+    }
+
+    @Test fun postCompositionSettingShortCircuitsWhenDisabledAndUsesIndependentPreferenceKey() = kotlinx.coroutines.runBlocking {
+        assertNotEquals(
+            ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION,
+            ZeroConvertInputMethodService.KEY_POST_COMPOSITION_PREDICTION
+        )
+        assertTrue(ZeroConvertInputMethodService.DEFAULT_POST_COMPOSITION_PREDICTION)
+
+        val disabled = com.zeroconvert.ime.engine.WindowsEngine.postCompositionPredictions(
+            candidateId = "1",
+            committedText = "東京",
+            committedReading = "とうきょう",
+            context = "東京",
+            postCompositionPrediction = false
+        )
+        assertEquals("東京", disabled.leftSurface)
+        assertTrue(disabled.predictions.isEmpty())
+
+        val disabledSelect = com.zeroconvert.ime.engine.WindowsEngine.selectPostCompositionPrediction(
+            predictionId = "11",
+            context = "東京",
+            allowLearning = true,
+            postCompositionPrediction = false
+        )
+        assertFalse(disabledSelect.accepted)
+        assertTrue(disabledSelect.terminal)
+        assertTrue(disabledSelect.predictions.isEmpty())
+    }
 }

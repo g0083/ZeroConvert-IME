@@ -375,6 +375,108 @@ object WindowsEngine {
         }
     }
 
+    internal data class PostCompositionResult(
+        val leftSurface: String,
+        val predictions: List<Candidate>,
+        val accepted: Boolean = false,
+        val terminal: Boolean = false
+    )
+
+    internal fun parsePostCompositionResult(response: JSONObject): PostCompositionResult {
+        val leftSurface = response.optString("leftSurface", "")
+        val predictionsJson = response.optJSONArray("predictions")
+        val predictions = buildList {
+            if (predictionsJson != null) {
+                for (index in 0 until predictionsJson.length()) {
+                    val entry = predictionsJson.optJSONObject(index) ?: continue
+                    val id = entry.optString("id", "").takeIf { it.isNotEmpty() && it != "0" } ?: continue
+                    val text = entry.optString("text", "").takeIf { it.isNotEmpty() } ?: continue
+                    val reading = entry.optString("reading", "")
+                    add(
+                        Candidate(
+                            text = text,
+                            reading = KanaKanjiConverter.toKatakana(reading),
+                            isAI = false,
+                            learningAllowed = false,
+                            engineCandidateId = "",
+                            enginePostCompositionId = id
+                        )
+                    )
+                }
+            }
+        }
+        return PostCompositionResult(
+            leftSurface = leftSurface,
+            predictions = predictions,
+            accepted = response.optBoolean("accepted", false),
+            terminal = response.optBoolean("terminal", false)
+        )
+    }
+
+    internal suspend fun postCompositionPredictions(
+        candidateId: String,
+        committedText: String,
+        committedReading: String,
+        context: String,
+        postCompositionPrediction: Boolean
+    ): PostCompositionResult {
+        if (!postCompositionPrediction || committedText.isEmpty()) {
+            return PostCompositionResult(committedText, emptyList())
+        }
+        if (!ready) return PostCompositionResult(committedText, emptyList())
+        val epoch = nativeConversionEpoch()
+        return withContext(dispatcher) {
+            ensureActive()
+            if (!ready) return@withContext PostCompositionResult(committedText, emptyList())
+            if (epoch != nativeConversionEpoch()) throw CancellationException("Superseded post-composition prediction")
+            val response = checkedSwift(
+                JSONObject()
+                    .put("op", "postComposition")
+                    .put("candidateId", candidateId)
+                    .put("committedText", committedText)
+                    .put("committedReading", committedReading)
+                    .put("context", context)
+                    .put("postCompositionPrediction", postCompositionPrediction)
+                    .put("requestEpoch", epoch)
+            )
+            if (response.optBoolean("cancelled")) throw CancellationException("Post-composition prediction cancelled")
+            parsePostCompositionResult(response)
+        }
+    }
+
+    internal suspend fun selectPostCompositionPrediction(
+        predictionId: String,
+        context: String,
+        allowLearning: Boolean,
+        postCompositionPrediction: Boolean
+    ): PostCompositionResult {
+        if (!postCompositionPrediction || predictionId.isEmpty()) {
+            return PostCompositionResult("", emptyList(), accepted = false, terminal = true)
+        }
+        if (!ready) {
+            return PostCompositionResult("", emptyList(), accepted = false, terminal = true)
+        }
+        val epoch = nativeConversionEpoch()
+        return withContext(dispatcher) {
+            ensureActive()
+            if (!ready) {
+                return@withContext PostCompositionResult("", emptyList(), accepted = false, terminal = true)
+            }
+            if (epoch != nativeConversionEpoch()) throw CancellationException("Superseded post-composition selection")
+            val response = checkedSwift(
+                JSONObject()
+                    .put("op", "selectPostComposition")
+                    .put("predictionId", predictionId)
+                    .put("context", context)
+                    .put("allowLearning", allowLearning)
+                    .put("postCompositionPrediction", postCompositionPrediction)
+                    .put("requestEpoch", epoch)
+            )
+            if (response.optBoolean("cancelled")) throw CancellationException("Post-composition selection cancelled")
+            parsePostCompositionResult(response)
+        }
+    }
+
     fun assist(op: String, context: String, input: String, baseline: String, inference: AssistInference,
                baselineReading: String = ""): AiAssistResult? {
         if (!ready) return null
@@ -390,7 +492,8 @@ object WindowsEngine {
         if (text.isEmpty()) return null
         return AiAssistResult(if (correction) AiAssistType.TYPO_CORRECTION else AiAssistType.PREDICTION,
             text, "${if (correction) "💡" else "🔮"} $text", result.optInt("relevance"),
-            sourceReading = input, continuation = result.optString("continuation"), autoApply = result.optBoolean("autoApply"))
+            sourceReading = input, continuation = result.optString("continuation"),
+            autoApply = result.optBoolean("autoApply"), sourceSurface = baseline)
     }
 
     private fun assistRequest(request: JSONObject): String = nativeAssist(request.toString(), CompletionHost(object : AssistInference {
