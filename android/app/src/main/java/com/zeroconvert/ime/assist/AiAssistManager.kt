@@ -1,6 +1,7 @@
 package com.zeroconvert.ime.assist
 
 import com.zeroconvert.ime.ZenzNative
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -66,27 +67,48 @@ object AiAssistManager {
         baselineReading: String = "",
         policy: AssistPolicyTransport = SharedAssistPolicy.native,
         allowPrediction: Boolean = true,
+        rawInput: String = "",
+        touchHints: String = "",
+        inputMode: String = "",
         onUpdate: suspend (AssistUpdate) -> Unit
     ) = coroutineScope {
         val plan = SharedAssistPolicy.requestPlan(allowCorrection, allowPrediction, false,
             reading, baselineReading, policy)
         if (!plan.correction && !plan.prediction) return@coroutineScope
         val results = Channel<Pair<AiAssistType, AiAssistResult?>>(2)
-        fun worker(type: AiAssistType, generate: () -> AiAssistResult?) = launch(Dispatchers.IO) {
+        // On Android's shared engine both assist ops share one CPU inference lock; run prediction
+        // after correction finishes so correction never stalls on prediction tokens.
+        val correctionDone = if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE && plan.correction) {
+            CompletableDeferred<Unit>()
+        } else {
+            null
+        }
+        fun worker(type: AiAssistType, generate: suspend () -> AiAssistResult?) = launch(Dispatchers.IO) {
             val result = try { generate() } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) { null }
             results.send(type to result)
         }
         worker(AiAssistType.TYPO_CORRECTION) {
-            if (!plan.correction) {
-                null
-            } else {
-                ModelCorrector(inference).suggest(context, reading, baseline, baselineReading)
+            try {
+                if (!plan.correction) {
+                    null
+                } else {
+                    ModelCorrector(inference).suggest(
+                        context, reading, baseline, baselineReading, rawInput, touchHints, inputMode
+                    )
+                }
+            } finally {
+                correctionDone?.complete(Unit)
             }
         }
         worker(AiAssistType.PREDICTION) {
-            if (plan.prediction) ModelPredictor(inference).suggest(context, reading, baseline, baselineReading) else null
+            if (!plan.prediction) {
+                null
+            } else {
+                correctionDone?.await()
+                ModelPredictor(inference).suggest(context, reading, baseline, baselineReading)
+            }
         }
         val presentation = AssistPresentation(policy)
         val presentationWaitMs = SharedAssistPolicy.presentationWaitMs(policy)

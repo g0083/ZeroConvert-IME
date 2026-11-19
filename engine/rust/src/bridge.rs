@@ -14,6 +14,47 @@ struct Host {
     revision: u64,
     read_learning: bool,
 }
+impl Host {
+    fn keyboard_repair_request(
+        &self,
+        raw: &str,
+        input: &str,
+        context: &str,
+        touch_hints: &str,
+        input_mode: &str,
+        timeout_ms: u64,
+    ) -> Option<Option<Value>> {
+        // Values must survive as bare JSON text for the C++ side: drop controls,
+        // quotes and backslashes instead of escaping them.
+        let clean = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
+                .collect()
+        };
+        let dictionary = runtime::reverse_dictionary_path()
+            .map(|p| clean(&p.to_string_lossy()))
+            .unwrap_or_default();
+        let body = json!({
+            "keyboard_repair": "1",
+            "raw": clean(raw),
+            "input": clean(input),
+            "context": clean(context),
+            "touch": clean(touch_hints),
+            "mode": clean(input_mode),
+            "dictionary": dictionary,
+        });
+        Some(
+            runtime::CompletionBackend::complete(
+                self,
+                runtime::PREDICTION_SERVER_PORT,
+                "",
+                &body,
+                timeout_ms,
+            )
+            .filter(|value| !value.is_null()),
+        )
+    }
+}
 impl runtime::CompletionBackend for Host {
     fn revision(&self) -> u64 {
         self.revision
@@ -32,24 +73,18 @@ impl runtime::CompletionBackend for Host {
         context: &str,
         timeout_ms: u64,
     ) -> Option<Option<Value>> {
-        // Values must survive as bare JSON text for the C++ side: drop controls,
-        // quotes and backslashes instead of escaping them.
-        let clean = |text: &str| -> String {
-            text.chars()
-                .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
-                .collect()
-        };
-        let dictionary = runtime::reverse_dictionary_path()
-            .map(|p| clean(&p.to_string_lossy()))
-            .unwrap_or_default();
-        let body = json!({
-            "keyboard_repair": "1", "raw": clean(raw), "input": clean(input),
-            "context": clean(context), "dictionary": dictionary,
-        });
-        Some(
-            self.complete(runtime::PREDICTION_SERVER_PORT, "", &body, timeout_ms)
-                .filter(|value| !value.is_null()),
-        )
+        self.keyboard_repair_request(raw, input, context, "", "", timeout_ms)
+    }
+    fn keyboard_repair_with_hints(
+        &self,
+        raw: &str,
+        input: &str,
+        context: &str,
+        touch_hints: &str,
+        input_mode: &str,
+        timeout_ms: u64,
+    ) -> Option<Option<Value>> {
+        self.keyboard_repair_request(raw, input, context, touch_hints, input_mode, timeout_ms)
     }
     fn complete(&self, port: u16, _path: &str, body: &Value, timeout_ms: u64) -> Option<Value> {
         let payload = CString::new(body.to_string()).ok()?;
@@ -82,6 +117,12 @@ struct Request {
     context: String,
     #[serde(default, rename = "baselineReading")]
     baseline_reading: String,
+    #[serde(default)]
+    raw: String,
+    #[serde(default, rename = "touchHints")]
+    touch_hints: String,
+    #[serde(default, rename = "inputMode")]
+    input_mode: String,
 }
 
 pub fn dispatch(value: &str) -> Result<Value, String> {
@@ -226,8 +267,13 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         || request.baseline.chars().count() > 2048
         || request.context.chars().count() > 4096
         || request.baseline_reading.chars().count() > 512
+        || request.raw.chars().count() > 256
+        || request.touch_hints.chars().count() > 2048
     {
         return Err("request exceeds engine limits".into());
+    }
+    if !matches!(request.input_mode.as_str(), "" | "qwerty" | "flick") {
+        return Err("invalid inputMode".into());
     }
     let config = AiAssistConfig {
         enabled: true,
@@ -244,7 +290,15 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         return Ok(Value::Null);
     };
     match request.op.as_str() {
-        "correction" => Ok(ai_assist::corrector::suggest_composition(&request.context, assist_reading, &request.baseline, &config)
+        "correction" => Ok(ai_assist::corrector::suggest_composition_with_input_hints(
+            &request.context,
+            assist_reading,
+            &request.baseline,
+            &request.raw,
+            &request.touch_hints,
+            &request.input_mode,
+            &config,
+        )
             .filter(|s| s.surface != request.baseline && s.surface != request.input)
             .map(|suggestion| {
                 let automatic = ai_assist::corrector::can_auto_apply_composition(&request.input, &request.baseline, &suggestion.surface);
@@ -771,5 +825,169 @@ mod tests {
             true
         );
         dispatch(r#"{"op":"englishForgetAll"}"#).unwrap();
+    }
+
+    #[test]
+    fn correction_forwards_raw_and_touch_hints_to_keyboard_repair() {
+        #[derive(Default)]
+        struct Capture {
+            seen: Vec<Value>,
+        }
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let state = &mut *(ctx as *mut Capture);
+            let req = CStr::from_ptr(payload).to_str().unwrap();
+            let parsed: Value = serde_json::from_str(req).unwrap();
+            let is_repair = parsed.get("keyboard_repair").is_some();
+            state.seen.push(parsed);
+            if is_repair {
+                CString::new(r#"{"observed":"pもってる","reading":"おもってる","gain":65.0}"#)
+                    .unwrap()
+                    .into_raw()
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let mut capture = Capture::default();
+        let req = CString::new(
+            json!({
+                "op": "correction",
+                "context": "それ",
+                "input": "pもってる",
+                "baseline": "P持ってる",
+                "raw": "pmotteru",
+                "touchHints": "0:o=0.85,l=0.30"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reply_ptr = unsafe {
+            zerocon_assist_request(
+                req.as_ptr(),
+                mock_complete,
+                mock_release,
+                (&mut capture as *mut Capture).cast(),
+            )
+        };
+        let reply: Value = unsafe {
+            let text = CStr::from_ptr(reply_ptr).to_str().unwrap().to_owned();
+            zerocon_engine_free(reply_ptr);
+            serde_json::from_str(&text).unwrap()
+        };
+        let repair_req = capture
+            .seen
+            .iter()
+            .find(|v| v.get("keyboard_repair").is_some())
+            .expect("expected keyboard_repair payload");
+        assert_eq!(repair_req["raw"], "pmotteru");
+        assert_eq!(repair_req["touch"], "0:o=0.85,l=0.30");
+        assert_eq!(repair_req["input"], "pもってる");
+        assert_eq!(reply["text"], "おもってる");
+    }
+
+    #[test]
+    fn correction_rejects_oversized_raw_or_touch_hints() {
+        let too_long_raw = json!({
+            "op": "correction",
+            "input": "おもってる",
+            "baseline": "思ってる",
+            "raw": "a".repeat(257),
+        })
+        .to_string();
+        assert!(dispatch(&too_long_raw).is_err());
+
+        let too_long_touch = json!({
+            "op": "correction",
+            "input": "おもってる",
+            "baseline": "思ってる",
+            "touchHints": "x".repeat(2049),
+        })
+        .to_string();
+        assert!(dispatch(&too_long_touch).is_err());
+
+        let bad_mode = json!({
+            "op": "correction",
+            "input": "おもってる",
+            "baseline": "思ってる",
+            "inputMode": "12key_unknown",
+        })
+        .to_string();
+        assert!(dispatch(&bad_mode).is_err());
+    }
+
+    #[test]
+    fn correction_forwards_flick_mode_and_utf8_touch_hints() {
+        #[derive(Default)]
+        struct Capture {
+            seen: Vec<Value>,
+        }
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let state = &mut *(ctx as *mut Capture);
+            let req = CStr::from_ptr(payload).to_str().unwrap();
+            let parsed: Value = serde_json::from_str(req).unwrap();
+            let is_repair = parsed.get("keyboard_repair").is_some();
+            state.seen.push(parsed);
+            if is_repair {
+                CString::new(r#"{"observed":"あきがとう","reading":"ありがとう","gain":72.0}"#)
+                    .unwrap()
+                    .into_raw()
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let mut capture = Capture::default();
+        let req = CString::new(
+            json!({
+                "op": "correction",
+                "context": "いつも",
+                "input": "あきがとう",
+                "baseline": "飽きがとう",
+                "touchHints": "1:き=0.82",
+                "inputMode": "flick"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reply_ptr = unsafe {
+            zerocon_assist_request(
+                req.as_ptr(),
+                mock_complete,
+                mock_release,
+                (&mut capture as *mut Capture).cast(),
+            )
+        };
+        let reply: Value = unsafe {
+            let text = CStr::from_ptr(reply_ptr).to_str().unwrap().to_owned();
+            zerocon_engine_free(reply_ptr);
+            serde_json::from_str(&text).unwrap()
+        };
+        let repair_req = capture
+            .seen
+            .iter()
+            .find(|v| v.get("keyboard_repair").is_some())
+            .expect("expected keyboard_repair payload");
+        assert_eq!(repair_req["mode"], "flick");
+        assert_eq!(repair_req["touch"], "1:き=0.82");
+        assert_eq!(repair_req["input"], "あきがとう");
+        assert_eq!(reply["text"], "ありがとう");
     }
 }

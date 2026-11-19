@@ -174,7 +174,7 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
         pending
             .correction_result
             .as_ref()
-            .is_some_and(|r| r.auto_apply),
+            .is_some_and(|r| r.auto_apply || !r.suggestions.is_empty()),
         pending.started.elapsed(),
     ) {
         if let Some(result) = pending.prediction_result.take() {
@@ -292,6 +292,26 @@ fn matches_snapshot(
         && composition.candidates == *candidates
 }
 
+pub(super) fn is_reading_only_correction(surface: &str) -> bool {
+    !surface.is_empty()
+        && surface.chars().all(|c| {
+            ('\u{3041}'..='\u{3096}').contains(&c)
+                || matches!(
+                    c,
+                    '\u{309D}'
+                        | '\u{309E}'
+                        | '\u{30FC}'
+                        | '、'
+                        | '。'
+                        | '！'
+                        | '？'
+                        | '!'
+                        | '?'
+                        | '・'
+                )
+        })
+}
+
 fn append_suggestions(
     candidates: &mut Candidates,
     suggestions: Vec<shared::proto::Suggestion>,
@@ -313,6 +333,11 @@ fn append_suggestions(
         } else {
             candidates.texts.len()
         };
+        if !suggestion.prediction_reading.is_empty() {
+            candidates
+                .prediction_readings
+                .insert(suggestion.text.clone(), suggestion.prediction_reading);
+        }
         candidates.texts.insert(at, suggestion.text);
         // RPC subtext is a label/continuation, not an unconverted composition suffix.
         candidates.sub_texts.insert(at, String::new());
@@ -748,7 +773,15 @@ impl TextServiceFactory {
         ) {
             return Ok(());
         }
-        let mut candidates = match ipc.replace_with_direct_surface(surface) {
+        let repaired_reading = original
+            .candidates
+            .prediction_readings
+            .get(surface)
+            .filter(|r| is_reading_only_correction(r))
+            .cloned()
+            .or_else(|| is_reading_only_correction(surface).then(|| surface.to_owned()));
+        let converter_input = repaired_reading.as_deref().unwrap_or(surface).to_owned();
+        let mut candidates = match ipc.replace_with_direct_surface(&converter_input) {
             Ok(candidates) => candidates,
             Err(error) => {
                 // The old ledger and displayed composition remain authoritative.
@@ -757,7 +790,31 @@ impl TextServiceFactory {
                 return Ok(());
             }
         };
-        select_surface(&mut candidates, surface);
+        let (preview_text, suffix_text, selected_count) =
+            if repaired_reading.is_some() && !candidates.texts.is_empty() {
+                if let Some(selected) = Self::select_candidate(&candidates, 0) {
+                    (
+                        selected.text,
+                        selected.sub_text,
+                        selected.corresponding_count,
+                    )
+                } else {
+                    select_surface(&mut candidates, surface);
+                    (
+                        surface.into(),
+                        String::new(),
+                        candidates.corresponding_count[0],
+                    )
+                }
+            } else {
+                select_surface(&mut candidates, surface);
+                (
+                    surface.into(),
+                    String::new(),
+                    candidates.corresponding_count[0],
+                )
+            };
+        let applied_display = format!("{preview_text}{suffix_text}");
         // Persist canonical converter input before any reentrant TSF edit.
         original.typo = TypoState {
             correction: original.typo.correction.clone(),
@@ -767,17 +824,17 @@ impl TextServiceFactory {
             original,
             ledger,
             source,
-            surface: surface.into(),
+            surface: applied_display,
         });
         {
             let service = self.borrow()?;
             let mut state = service.borrow_mut_composition()?;
             state.state = CompositionState::Composing;
-            state.preview = surface.into();
-            state.suffix.clear();
-            state.raw_input = surface.into();
+            state.preview = preview_text.clone();
+            state.suffix = suffix_text.clone();
+            state.raw_input = converter_input;
             state.raw_hiragana = candidates.hiragana.clone();
-            state.corresponding_count = candidates.corresponding_count[0];
+            state.corresponding_count = selected_count;
             state.selection_index = 0;
             state.candidates = candidates.clone();
             state.live_conversion_history.clear();
@@ -789,7 +846,7 @@ impl TextServiceFactory {
             };
         }
         IMEState::set_ipc_service(ipc.clone())?;
-        if let Err(error) = self.set_text(surface, "") {
+        if let Err(error) = self.set_text(&preview_text, &suffix_text) {
             // Timer completions can race a TSF write lock. Restore the converter
             // and client snapshot even when the document already kept its old text.
             let _ = self.undo_typo_correction();
@@ -850,13 +907,24 @@ impl TextServiceFactory {
             .ok()
             .and_then(|service| {
                 service.borrow_composition().ok().map(|state| {
-                    let mut accepted: Vec<_> = state
+                    let mut accepted = Vec::new();
+                    for entry in state
                         .typo
                         .correction
                         .acceptances_for_commit(displayed)
                         .into_iter()
-                        .map(|entry| (entry.reading, entry.surface))
-                        .collect();
+                        .chain(
+                            state
+                                .typo
+                                .correction
+                                .acceptances_for_commit(&state.raw_hiragana),
+                        )
+                    {
+                        let pair = (entry.reading, entry.surface);
+                        if !accepted.contains(&pair) {
+                            accepted.push(pair);
+                        }
+                    }
                     // Space/arrow selection is also an explicit acceptance. Learn
                     // only after the selected whole-composition surface commits.
                     if state.fixed_prefix.is_empty()
@@ -1497,5 +1565,58 @@ mod tests {
             surface: "正しい変換".into(),
         };
         assert_eq!(empty_preview_applied.baseline_surface(), "通常変換です");
+    }
+
+    #[test]
+    fn reading_only_typo_correction_diffs_against_hiragana_and_enter_applies_in_preview() {
+        let candidates = Candidates {
+            prediction_readings: Default::default(),
+            texts: vec!["お世話になております".into(), "おせわになっております".into()],
+            sub_texts: vec![String::new(), String::new()],
+            hiragana: "おせわになております".into(),
+            corresponding_count: vec![20; 2],
+            candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+        };
+        let proposal_json = TextServiceFactory::build_assist_reading_json(
+            &candidates,
+            Some("おせわになております"),
+            None,
+            Some(shared::ai_candidate::TYPO_CORRECTION),
+            "",
+        )
+        .expect("reading-only proposal json");
+        let proposal: serde_json::Value = serde_json::from_str(&proposal_json).unwrap();
+        assert_eq!(proposal["assist"]["source"], "おせわになております");
+        assert_eq!(
+            proposal["assist"]["replacement"],
+            "おせわになっております"
+        );
+
+        let state = Composition {
+            raw_input: "osewaninateorimasu".into(),
+            state: CompositionState::Previewing,
+            selection_index: 1,
+            preview: "おせわになっております".into(),
+            candidates,
+            ..Default::default()
+        };
+        let plan = CompositionReducer::plan_actions_for_user_action(
+            &state,
+            &UserAction::Enter,
+            &InputMode::Kana,
+            false,
+            &AppConfig::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            (
+                CompositionState::Composing,
+                vec![ClientAction::ApplyTypoCorrection(
+                    "おせわになっております".into()
+                )]
+            )
+        );
     }
 }

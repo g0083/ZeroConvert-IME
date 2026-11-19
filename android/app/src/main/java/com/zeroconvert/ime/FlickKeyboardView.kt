@@ -517,6 +517,7 @@ private fun ColumnScope.FlickGridRow(
     getRootCoords: () -> LayoutCoordinates?,
     onFlickUpdateById: (Long, ActiveFlickPopupState?) -> Unit,
     onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
+    onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null,
     firstKeyBg: Color = keyBgColor,
     firstKeyTextColor: Color = textColor,
     firstIsActionKey: Boolean = false,
@@ -544,7 +545,8 @@ private fun ColumnScope.FlickGridRow(
             palette = palette,
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = onFlickComplete
+            onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias
         )
         FlickKeyCell(
             keyDef = keys.second,
@@ -556,7 +558,8 @@ private fun ColumnScope.FlickGridRow(
             palette = palette,
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = onFlickComplete
+            onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias
         )
         FlickKeyCell(
             keyDef = keys.third,
@@ -568,7 +571,8 @@ private fun ColumnScope.FlickGridRow(
             palette = palette,
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = onFlickComplete
+            onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias
         )
 
         rightKey(Modifier.weight(1.05f).fillMaxHeight(), rightPadding)
@@ -790,6 +794,7 @@ private fun Flick12KeyGrid(
     row3FirstKeyTextColor: Color = textColor,
     row3FirstIsActionKey: Boolean = false,
     onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
+    onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null,
     onUndo: () -> Unit,
     onDelete: () -> Unit,
     onCursorLeft: () -> Unit,
@@ -812,6 +817,7 @@ private fun Flick12KeyGrid(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
             leftKey = { mod, pad -> FlickSideUndoButton(mod, pad, actionKeyBg, textColor, palette, onUndo) },
             rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
         )
@@ -826,6 +832,7 @@ private fun Flick12KeyGrid(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
             leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
             rightKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) }
         )
@@ -840,6 +847,7 @@ private fun Flick12KeyGrid(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
             leftKey = { mod, pad ->
                 if (mode == KeyboardMode.NUMERIC) {
                     FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, palette, onOpenSymbols, onOpenEmoji)
@@ -860,6 +868,7 @@ private fun Flick12KeyGrid(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
             firstKeyBg = row3FirstKeyBg,
             firstKeyTextColor = row3FirstKeyTextColor,
             firstIsActionKey = row3FirstIsActionKey,
@@ -889,6 +898,7 @@ fun Japanese12KeyFlickLayout(
     rowHeight: Dp,
     isFlickOnly: Boolean = true,
     onKanaInput: (String) -> Unit,
+    onKanaInputWithBias: ((String, TouchKeyBias?) -> Unit)? = null,
     onReplaceLastKana: (String) -> Unit,
     onToggleDakuten: () -> Unit,
     onKanaModifier: (KanaModifierKind) -> Unit = {},
@@ -908,7 +918,7 @@ fun Japanese12KeyFlickLayout(
     var currentCycleIndex by remember { mutableStateOf(0) }
     var lastTapTimestamp by remember { mutableStateOf(0L) }
 
-    val handleFlickResult = { def: FlickKeyDef, dir: FlickDirection ->
+    val handleFlickResultWithBias = { def: FlickKeyDef, dir: FlickDirection, bias: TouchKeyBias? ->
         if (def == FlickKeyDefinitions.keyMod) {
             lastTappedKey = null
             when (dir) {
@@ -945,9 +955,17 @@ fun Japanese12KeyFlickLayout(
                 FlickDirection.DOWN -> { lastTappedKey = null; def.down }
             }
             if (output != null && output.isNotEmpty()) {
-                onKanaInput(output)
+                val scopedBias = if (isFlickOnly) bias else null
+                if (onKanaInputWithBias != null) {
+                    onKanaInputWithBias(output, scopedBias)
+                } else {
+                    onKanaInput(output)
+                }
             }
         }
+    }
+    val handleFlickResult: (FlickKeyDef, FlickDirection) -> Unit = { def, dir ->
+        handleFlickResultWithBias(def, dir, null)
     }
 
     val handleUndo = {
@@ -980,6 +998,7 @@ fun Japanese12KeyFlickLayout(
         row3FirstKeyBg = actionKeyBg,
         row3FirstIsActionKey = true,
         onFlickComplete = handleFlickResult,
+        onFlickCompleteWithBias = handleFlickResultWithBias,
         onUndo = handleUndo,
         onDelete = {
             lastTappedKey = null
@@ -1327,13 +1346,15 @@ fun FlickKeyCell(
     getRootCoords: () -> LayoutCoordinates?,
     onFlickUpdate: (ActiveFlickPopupState?) -> Unit = {},
     onFlickUpdateById: ((Long, ActiveFlickPopupState?) -> Unit)? = null,
-    onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit
+    onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
+    onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null
 ) {
     val currentKeyDef by rememberUpdatedState(keyDef)
     val currentGetRootCoords by rememberUpdatedState(getRootCoords)
     val currentOnFlickUpdate by rememberUpdatedState(onFlickUpdate)
     val currentOnFlickUpdateById by rememberUpdatedState(onFlickUpdateById)
     val currentOnFlickComplete by rememberUpdatedState(onFlickComplete)
+    val currentOnFlickCompleteWithBias by rememberUpdatedState(onFlickCompleteWithBias)
     val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
     val thresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
 
@@ -1349,7 +1370,12 @@ fun FlickKeyCell(
                 contentDescription = "${keyDef.label}を入力"
                 role = Role.Button
                 onClick {
-                    currentOnFlickComplete(currentKeyDef, FlickDirection.CENTER)
+                    val withBiasHandler = currentOnFlickCompleteWithBias
+                    if (withBiasHandler != null) {
+                        withBiasHandler(currentKeyDef, FlickDirection.CENTER, null)
+                    } else {
+                        currentOnFlickComplete(currentKeyDef, FlickDirection.CENTER)
+                    }
                     true
                 }
             }
@@ -1360,6 +1386,8 @@ fun FlickKeyCell(
                     val gestureKeyDef = currentKeyDef
                     val startOffset = down.position
                     var currentDir = FlickDirection.CENTER
+                    var lastDx = 0f
+                    var lastDy = 0f
                     val gestureId = nextFlickGestureId.incrementAndGet()
 
                     haptic()
@@ -1387,17 +1415,37 @@ fun FlickKeyCell(
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id }
                             if (change == null) break
+                            val thresholdPx = with(density) { thresholdDp.toPx() }
                             if (!change.pressed) {
                                 change.consume()
-                                currentOnFlickComplete(gestureKeyDef, currentDir)
+                                lastDx = change.position.x - startOffset.x
+                                lastDy = change.position.y - startOffset.y
+                                val bias = cellCoordinates?.size?.let { sz ->
+                                    computeFlickTouchBias(
+                                        keyDef = gestureKeyDef,
+                                        committedDir = currentDir,
+                                        dx = lastDx,
+                                        dy = lastDy,
+                                        thresholdPx = thresholdPx,
+                                        startX = startOffset.x,
+                                        startY = startOffset.y,
+                                        widthPx = sz.width.toFloat(),
+                                        heightPx = sz.height.toFloat()
+                                    )
+                                }
+                                val withBiasHandler = currentOnFlickCompleteWithBias
+                                if (withBiasHandler != null) {
+                                    withBiasHandler(gestureKeyDef, currentDir, bias)
+                                } else {
+                                    currentOnFlickComplete(gestureKeyDef, currentDir)
+                                }
                                 break
                             }
                             change.consume()
-                            val thresholdPx = with(density) { thresholdDp.toPx() }
                             val pos = change.position
-                            val dx = pos.x - startOffset.x
-                            val dy = pos.y - startOffset.y
-                            val newDir = calculateFlickDirectionWithHysteresis(dx, dy, thresholdPx, currentDir)
+                            lastDx = pos.x - startOffset.x
+                            lastDy = pos.y - startOffset.y
+                            val newDir = calculateFlickDirectionWithHysteresis(lastDx, lastDy, thresholdPx, currentDir)
                             if (newDir != currentDir) {
                                 currentDir = newDir
                                 val updatedPopup = ActiveFlickPopupState(gestureKeyDef, centerInRoot, currentDir, rootWidthPx, rootHeightPx)

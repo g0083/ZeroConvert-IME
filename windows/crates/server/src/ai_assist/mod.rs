@@ -972,27 +972,27 @@ const TYPO_TABLE: &[(&str, &str)] = &[
     ("こんちわ", "こんにちは"),
     ("ありがとうごづいます", "ありがとうございます"),
     ("よろしくょおねがい", "よろしくおねがい"),
-    ("おつくれさま", "お疲れ様"),
-    ("おつれさま", "お疲れ様"),
+    ("おつくれさま", "おつかれさま"),
+    ("おつれさま", "おつかれさま"),
     ("おひょ", "おはよう"),
     ("おはよぅ", "おはよう"),
-    ("てそと", "テスト"),
-    ("さびす", "サービス"),
-    ("くらおど", "クラウド"),
-    ("クラおど", "クラウド"),
-    ("かたん", "簡単"),
-    ("しぶみ", "新聞"),
-    ("かさおさす", "傘を差す"),
-    ("じかんわ", "時間は"),
-    ("だいじょぶ", "大丈夫"),
-    ("にゅうしよく", "入所"),
-    ("りようほう", "両方"),
-    ("ゆざ", "ユーザー"),
-    ("こぴ", "コピー"),
-    ("けか", "結果"),
+    ("てそと", "てすと"),
+    ("さびす", "さーびす"),
+    ("くらおど", "くらうど"),
+    ("クラおど", "くらうど"),
+    ("かたん", "かんたん"),
+    ("しぶみ", "しんぶん"),
+    ("かさおさす", "かさをさす"),
+    ("じかんわ", "じかんは"),
+    ("だいじょぶ", "だいじょうぶ"),
+    ("にゅうしよく", "にゅうしょく"),
+    ("りようほう", "りょうほう"),
+    ("ゆざ", "ゆーざー"),
+    ("こぴ", "こぴー"),
+    ("けか", "けっか"),
     ("いてらっしゃい", "いってらっしゃい"),
     ("しますた", "しました"),
-    ("ごかくに", "ご確認"),
+    ("ごかくに", "ごかくにん"),
     ("であある", "である"),
     ("でああった", "であった"),
     ("でああり", "であり"),
@@ -1017,21 +1017,21 @@ const TYPO_TABLE: &[(&str, &str)] = &[
     ("においいて", "において"),
     ("そののまま", "そのまま"),
     ("なかかった", "なかった"),
-    ("ファション", "ファッション"),
-    ("ショピング", "ショッピング"),
-    ("ヨーロパ", "ヨーロッパ"),
-    ("フィランド", "フィンランド"),
-    ("グリーランド", "グリーンランド"),
-    ("エンディグ", "エンディング"),
-    ("エンディンググ", "エンディング"),
-    ("オープニンググ", "オープニング"),
-    ("ラインセンス", "ライセンス"),
-    ("キャラクラー", "キャラクター"),
-    ("アミニズム", "アニミズム"),
-    ("グアマテラ", "グアテマラ"),
-    ("スッタフ", "スタッフ"),
+    ("ファション", "ふぁっしょん"),
+    ("ショピング", "しょっぴんぐ"),
+    ("ヨーロパ", "よーろっぱ"),
+    ("フィランド", "ふぃんらんど"),
+    ("グリーランド", "ぐりーんらんど"),
+    ("エンディグ", "えんでぃんぐ"),
+    ("エンディンググ", "えんでぃんぐ"),
+    ("オープニンググ", "おーぷにんぐ"),
+    ("ラインセンス", "らいせんす"),
+    ("キャラクラー", "きゃらくたー"),
+    ("アミニズム", "あにみずむ"),
+    ("グアマテラ", "ぐあてまら"),
+    ("スッタフ", "すたっふ"),
     ("そんあ", "そんな"),
-    ("ちゃんえる", "チャンネル"),
+    ("ちゃんえる", "ちゃんねる"),
     ("こんいちは", "こんにちは"),
     ("どんあ", "どんな"),
     ("とんえるず", "とんねるず"),
@@ -1039,50 +1039,50 @@ const TYPO_TABLE: &[(&str, &str)] = &[
     ("あんあ", "あんな"),
     ("みんあ", "みんな"),
     ("おんあ", "おんな"),
-    ("しmばし", "新橋"),
-    ("なmば", "難波"),
-    ("さmぽ", "散歩"),
-    ("しmぶん", "新聞"),
-    ("てmぷら", "天ぷら"),
-    ("かmぱい", "乾杯"),
-    ("せmぱい", "先輩"),
-    ("えmぴつ", "鉛筆"),
-    ("しmぱい", "心配"),
-    ("かmぺき", "完璧"),
-    ("きゅじょう", "球場"),
-    ("りゅせい", "流星"),
-    ("しゅねん", "周年"),
-    ("ちゅけい", "中継"),
-    ("ちゅこう", "中高"),
-    ("ちゅしん", "中心"),
+    ("しmばし", "しんばし"),
+    ("なmば", "なんば"),
+    ("さmぽ", "さんぽ"),
+    ("しmぶん", "しんぶん"),
+    ("てmぷら", "てんぷら"),
+    ("かmぱい", "かんぱい"),
+    ("せmぱい", "せんぱい"),
+    ("えmぴつ", "えんぴつ"),
+    ("しmぱい", "しんぱい"),
+    ("かmぺき", "かんぺき"),
+    ("きゅじょう", "きゅうじょう"),
+    ("りゅせい", "りゅうせい"),
+    ("しゅねん", "しゅうねん"),
+    ("ちゅけい", "ちゅうけい"),
+    ("ちゅこう", "ちゅうこう"),
+    ("ちゅしん", "ちゅうしん"),
     ("きゅり", "きゅうり"),
-    ("ちゅごく", "中国"),
-    ("ちゅしゃじょう", "駐車場"),
-    ("ちゅい", "注意"),
-    ("うちゅせん", "宇宙船"),
-    ("きゅけい", "休憩"),
-    ("きゅきゅう", "救急"),
-    ("きゅじつ", "休日"),
-    ("きゅりょう", "給料"),
-    ("きゅそく", "休息"),
-    ("きゅしゅう", "九州"),
-    ("きゅじょ", "救助"),
-    ("しゅまつ", "週末"),
-    ("しゅにゅう", "収入"),
-    ("りゅがく", "留学"),
-    ("りゅこう", "流行"),
-    ("りゅつう", "流通"),
-    ("にゅがく", "入学"),
-    ("にゅいん", "入院"),
-    ("にゅりょく", "入力"),
-    ("れにょうけい", "連用形"),
-    ("にほにゅうびん", "日本郵便"),
-    ("せにょう", "専用"),
-    ("きにょうび", "金曜日"),
-    ("ぜにょう", "全容"),
-    ("てにょう", "転用"),
-    ("せにょうしゃ", "専用車"),
-    ("せにょうせん", "専用線"),
+    ("ちゅごく", "ちゅうごく"),
+    ("ちゅしゃじょう", "ちゅうしゃじょう"),
+    ("ちゅい", "ちゅうい"),
+    ("うちゅせん", "うちゅうせん"),
+    ("きゅけい", "きゅうけい"),
+    ("きゅきゅう", "きゅうきゅう"),
+    ("きゅじつ", "きゅうじつ"),
+    ("きゅりょう", "きゅうりょう"),
+    ("きゅそく", "きゅうそく"),
+    ("きゅしゅう", "きゅうしゅう"),
+    ("きゅじょ", "きゅうじょ"),
+    ("しゅまつ", "しゅうまつ"),
+    ("しゅにゅう", "しゅうにゅう"),
+    ("りゅがく", "りゅうがく"),
+    ("りゅこう", "りゅうこう"),
+    ("りゅつう", "りゅうつう"),
+    ("にゅがく", "にゅうがく"),
+    ("にゅいん", "にゅういん"),
+    ("にゅりょく", "にゅうりょく"),
+    ("れにょうけい", "れんようけい"),
+    ("にほにゅうびん", "にほんゆうびん"),
+    ("せにょう", "せんよう"),
+    ("きにょうび", "きんようび"),
+    ("ぜにょう", "ぜんよう"),
+    ("てにょう", "てんよう"),
+    ("せにょうしゃ", "せんようしゃ"),
+    ("せにょうせん", "せんようせん"),
 ];
 
 /// 語と語の境界とみなす助詞・記号。語中の誤入力判定にのみ使う。
@@ -1175,11 +1175,8 @@ fn heuristic_typo_suggestion(
 
     // 0.5. ローマ字子音浮き・混入タイポ (例: 「おｋせり」->「おかえり」, 「おｔかれ」->「おつかれ」)
     if let Some(decoded_hira) = romaji_decoder::decode_floating_consonant_typo(hiragana) {
-        let surface = typo_variant::lookup_surface(&decoded_hira)
-            .filter(|s| is_valid_lookup_surface(s))
-            .unwrap_or_else(|| decoded_hira.clone());
         return Some(TypoSuggestion {
-            surface,
+            surface: decoded_hira.clone(),
             token_reading: raw_trimmed.to_string(),
             token_surface: decoded_hira,
             learned: false,
@@ -1270,7 +1267,7 @@ fn heuristic_typo_suggestion(
     let total_len = hiragana_chars.len();
     let mut v_chars = Vec::with_capacity(32);
     let mut best_vocab_match: Option<(bool, &str)> = None;
-    for &(v_reading, v_surface) in STANDARD_VOCAB {
+    for &(v_reading, _) in STANDARD_VOCAB {
         if hiragana == v_reading || !is_plausible_distance1_vocab_typo(hiragana, v_reading) {
             continue;
         }
@@ -1280,21 +1277,21 @@ fn heuristic_typo_suggestion(
             let qwerty_adj = has_qwerty_adjacent_difference(hiragana, v_reading);
             if qwerty_adj {
                 return Some(TypoSuggestion {
-                    surface: v_surface.to_string(),
+                    surface: v_reading.to_string(),
                     token_reading: hiragana.to_string(),
-                    token_surface: v_surface.to_string(),
+                    token_surface: v_reading.to_string(),
                     learned: false,
                 });
             } else if best_vocab_match.is_none() {
-                best_vocab_match = Some((false, v_surface));
+                best_vocab_match = Some((false, v_reading));
             }
         }
     }
-    if let Some((_, surface)) = best_vocab_match {
+    if let Some((_, reading)) = best_vocab_match {
         return Some(TypoSuggestion {
-            surface: surface.to_string(),
+            surface: reading.to_string(),
             token_reading: hiragana.to_string(),
-            token_surface: surface.to_string(),
+            token_surface: reading.to_string(),
             learned: false,
         });
     }
@@ -1319,7 +1316,7 @@ fn heuristic_typo_suggestion(
     // プレフィックス誤字は QWERTY 近接ミス優先、次いで最長一致を優先する
     let mut best_prefix_correction: Option<(bool, usize, String, String, String)> = None;
 
-    for &(v_reading, v_surface) in STANDARD_VOCAB {
+    for &(v_reading, _) in STANDARD_VOCAB {
         v_chars.clear();
         v_chars.extend(v_reading.chars());
         let v_len = v_chars.len();
@@ -1360,7 +1357,7 @@ fn heuristic_typo_suggestion(
             {
                 let qwerty_adj = has_qwerty_adjacent_difference(prefix, v_reading);
                 let tail: String = hiragana_chars[cand_len..].iter().collect();
-                let full = format!("{}{}", v_surface, tail);
+                let full = format!("{}{}", v_reading, tail);
                 // QWERTY隣接ミス (qwerty_adj: bool) を最優先し、次に語長 (v_len: usize) で比較
                 if best_prefix_correction
                     .as_ref()
@@ -1373,18 +1370,18 @@ fn heuristic_typo_suggestion(
                         v_len,
                         full,
                         prefix.clone(),
-                        v_surface.to_string(),
+                        v_reading.to_string(),
                     ));
                 }
             }
         }
     }
 
-    if let Some((_, _, full, prefix, v_surface)) = best_prefix_correction {
+    if let Some((_, _, full, prefix, v_reading)) = best_prefix_correction {
         return Some(TypoSuggestion {
             surface: full,
             token_reading: prefix,
-            token_surface: v_surface,
+            token_surface: v_reading,
             learned: false,
         });
     }
@@ -1392,22 +1389,14 @@ fn heuristic_typo_suggestion(
     // 7. QWERTY 隣接キー変種 + 軽量辞書インデックス (Phase 3)
     if let Some(correction) = find_qwerty_correction(hiragana) {
         return Some(TypoSuggestion {
-            surface: correction.surface,
+            surface: correction.repaired_reading,
             token_reading: correction.token_reading,
-            token_surface: correction.token_surface,
+            token_surface: correction.variant_reading,
             learned: false,
         });
     }
 
     None
-}
-
-/// 音韻規則による動的誤入力補正
-fn is_valid_lookup_surface(surface: &str) -> bool {
-    !surface.is_empty()
-        && !surface
-            .chars()
-            .any(|ch| ('\u{E000}'..='\u{F8FF}').contains(&ch))
 }
 
 fn is_known_clean_reading(hiragana: &str) -> bool {
@@ -1513,9 +1502,9 @@ fn rule_based_typo_correction(hiragana: &str) -> Option<String> {
     // ルールA: 促音 'っ' の抜け（2文字語: けか -> けっか）
     if len == 2 {
         let candidate: String = [chars[0], 'っ', chars[1]].iter().collect();
-        for &(v_reading, v_surface) in STANDARD_VOCAB {
+        for &(v_reading, _) in STANDARD_VOCAB {
             if candidate == v_reading {
-                return Some(v_surface.to_string());
+                return Some(candidate);
             }
         }
     }
@@ -1527,19 +1516,19 @@ fn rule_based_typo_correction(hiragana: &str) -> Option<String> {
             candidate.extend(&chars[..idx]);
             candidate.push('ん');
             candidate.extend(&chars[idx..]);
-            for &(v_reading, v_surface) in STANDARD_VOCAB {
+            for &(v_reading, _) in STANDARD_VOCAB {
                 if candidate == v_reading {
-                    return Some(v_surface.to_string());
+                    return Some(candidate);
                 }
             }
         }
     }
 
-    // ルールC: 長音 'ー' の脱落（さびす -> サービス）
+    // ルールC: 長音 'ー' の脱落（さびす -> さーびす）
     let with_chouon = format!("{}ー", hiragana);
-    for &(v_reading, v_surface) in STANDARD_VOCAB {
+    for &(v_reading, _) in STANDARD_VOCAB {
         if with_chouon == v_reading {
-            return Some(v_surface.to_string());
+            return Some(with_chouon);
         }
     }
 
@@ -1547,21 +1536,21 @@ fn rule_based_typo_correction(hiragana: &str) -> Option<String> {
     if hiragana.ends_with('わ') {
         let mut candidate = hiragana[..hiragana.len() - 'わ'.len_utf8()].to_string();
         candidate.push('は');
-        for &(v_reading, v_surface) in STANDARD_VOCAB {
+        for &(v_reading, _) in STANDARD_VOCAB {
             if candidate == v_reading {
-                return Some(v_surface.to_string());
+                return Some(candidate);
             }
         }
     }
 
     // ルールE: QWERTY母音隣接ミス 'u' <-> 'i' による形容詞誤字「〜すい」 -> 「〜しい」
-    // (例: うれすい -> 嬉しい、たのすい -> 楽しい、おいすい -> 美味しい)
+    // (例: うれすい -> うれしい、たのすい -> たのしい、おいすい -> おいしい)
     if hiragana.ends_with("すい") && hiragana.chars().count() >= 3 {
         let prefix = &hiragana[..hiragana.len() - "すい".len()];
         let candidate = format!("{}しい", prefix);
-        for &(v_reading, v_surface) in STANDARD_VOCAB {
+        for &(v_reading, _) in STANDARD_VOCAB {
             if candidate == v_reading {
-                return Some(v_surface.to_string());
+                return Some(candidate);
             }
         }
     }
@@ -1570,9 +1559,9 @@ fn rule_based_typo_correction(hiragana: &str) -> Option<String> {
     if hiragana.ends_with("すかった") && hiragana.chars().count() >= 4 {
         let prefix = &hiragana[..hiragana.len() - "すかった".len()];
         let candidate = format!("{}しかった", prefix);
-        for &(v_reading, v_surface) in STANDARD_VOCAB {
+        for &(v_reading, _) in STANDARD_VOCAB {
             if candidate == v_reading {
-                return Some(v_surface.to_string());
+                return Some(candidate);
             }
         }
     }
@@ -1581,9 +1570,9 @@ fn rule_based_typo_correction(hiragana: &str) -> Option<String> {
     if hiragana.ends_with("すく") && hiragana.chars().count() >= 3 {
         let prefix = &hiragana[..hiragana.len() - "すく".len()];
         let candidate = format!("{}しく", prefix);
-        for &(v_reading, v_surface) in STANDARD_VOCAB {
+        for &(v_reading, _) in STANDARD_VOCAB {
             if candidate == v_reading {
-                return Some(v_surface.to_string());
+                return Some(candidate);
             }
         }
     }
@@ -1756,7 +1745,7 @@ mod tests {
     fn corrects_missing_double_consonant() {
         assert_eq!(
             fetch_moshikashite_candidate("", "けか", &config()),
-            Some("結果".to_string())
+            Some("けっか".to_string())
         );
     }
 
@@ -1764,7 +1753,7 @@ mod tests {
     fn corrects_missing_nasal() {
         assert_eq!(
             fetch_moshikashite_candidate("", "かたん", &config()),
-            Some("簡単".to_string())
+            Some("かんたん".to_string())
         );
     }
 
@@ -1803,42 +1792,42 @@ mod tests {
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "てそとする", &config()),
-            Some("テストする".to_string())
+            Some("てすとする".to_string())
         );
     }
 
     #[test]
     fn test_qwerty_adjacent_typo_uresui() {
         let conf = config();
-        // 単体「うれすい」 -> 「嬉しい」
+        // 単体「うれすい」 -> 「うれしい」
         assert_eq!(
             fetch_moshikashite_candidate("", "うれすい", &conf),
-            Some("嬉しい".to_string())
+            Some("うれしい".to_string())
         );
-        // 接尾辞付き「うれすいです」 -> 「嬉しいです」
+        // 接尾辞付き「うれすいです」 -> 「うれしいです」
         assert_eq!(
             fetch_moshikashite_candidate("", "うれすいです", &conf),
-            Some("嬉しいです".to_string())
+            Some("うれしいです".to_string())
         );
-        // 「たのすい」 -> 「楽しい」
+        // 「たのすい」 -> 「たのしい」
         assert_eq!(
             fetch_moshikashite_candidate("", "たのすい", &conf),
-            Some("楽しい".to_string())
+            Some("たのしい".to_string())
         );
-        // 「おいすい」 -> 「美味しい」
+        // 「おいすい」 -> 「おいしい」
         assert_eq!(
             fetch_moshikashite_candidate("", "おいすい", &conf),
-            Some("美味しい".to_string())
+            Some("おいしい".to_string())
         );
-        // 「あすた」 -> 「明日」 (suta -> sita: u と i)
+        // 「あすた」 -> 「あした」 (suta -> sita: u と i)
         assert_eq!(
             fetch_moshikashite_candidate("", "あすた", &conf),
-            Some("明日".to_string())
+            Some("あした".to_string())
         );
-        // 「すごと」 -> 「仕事」 (sugoto -> sigoto: u と i)
+        // 「すごと」 -> 「しごと」 (sugoto -> sigoto: u と i)
         assert_eq!(
             fetch_moshikashite_candidate("", "すごと", &conf),
-            Some("仕事".to_string())
+            Some("しごと".to_string())
         );
     }
 
@@ -1851,7 +1840,7 @@ mod tests {
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "おｔかれ", &conf),
-            Some("お疲れ".to_string())
+            Some("おつかれ".to_string())
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "あｒがとう", &conf),
@@ -1869,15 +1858,15 @@ mod tests {
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "オツクレサマ", &conf),
-            Some("お疲れ様".to_string())
+            Some("おつかれさま".to_string())
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "ウレスイ", &conf),
-            Some("嬉しい".to_string())
+            Some("うれしい".to_string())
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "おｔかれ", &conf),
-            Some("お疲れ".to_string())
+            Some("おつかれ".to_string())
         );
 
         // 正常入力（clean Japanese）に対して誤って誤字補正を出さないこと
@@ -1937,11 +1926,11 @@ mod tests {
 
         assert_eq!(
             fetch_moshikashite_candidate("", "ごかくに", &conf).as_deref(),
-            Some("ご確認"),
+            Some("ごかくにん"),
         );
         assert_eq!(
             fetch_moshikashite_candidate("", "モウイッカイヤロイ", &conf).as_deref(),
-            Some("もう一回やろう"),
+            Some("もういっかいやろう"),
         );
     }
 

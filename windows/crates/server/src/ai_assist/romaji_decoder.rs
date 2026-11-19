@@ -420,6 +420,28 @@ pub fn romaji_to_hiragana_str(text: &str) -> String {
         ("pu", "ぷ"),
         ("pe", "ぺ"),
         ("po", "ぽ"),
+        ("xtsu", "っ"),
+        ("ltsu", "っ"),
+        ("xtu", "っ"),
+        ("ltu", "っ"),
+        ("xya", "ゃ"),
+        ("xyu", "ゅ"),
+        ("xyo", "ょ"),
+        ("lya", "ゃ"),
+        ("lyu", "ゅ"),
+        ("lyo", "ょ"),
+        ("xwa", "ゎ"),
+        ("lwa", "ゎ"),
+        ("xa", "ぁ"),
+        ("xi", "ぃ"),
+        ("xu", "ぅ"),
+        ("xe", "ぇ"),
+        ("xo", "ぉ"),
+        ("la", "ぁ"),
+        ("li", "ぃ"),
+        ("lu", "ぅ"),
+        ("le", "ぇ"),
+        ("lo", "ぉ"),
         ("a", "あ"),
         ("i", "い"),
         ("u", "う"),
@@ -500,5 +522,16 @@ mod tests {
             assert_eq!(decode_floating_consonant_typo(input), None, "{input}");
             assert_eq!(unique_adjacent_correction(input), None, "{input}");
         }
+    }
+
+    #[test]
+    fn small_kana_romaji_rules_decode_xtu_and_ltu() {
+        assert_eq!(romaji_to_hiragana_str("omoxtuteru"), "おもってる");
+        assert_eq!(romaji_to_hiragana_str("oxtukare"), "おっかれ");
+        assert_eq!(romaji_to_hiragana_str("kitto"), "きっと");
+        assert_eq!(romaji_to_hiragana_str("kixtsuto"), "きっと");
+        assert_eq!(romaji_to_hiragana_str("lixtu"), "ぃっ");
+        assert_eq!(romaji_to_hiragana_str("rixtu"), "りっ");
+        assert_eq!(romaji_to_hiragana_str("xya"), "ゃ");
     }
 }

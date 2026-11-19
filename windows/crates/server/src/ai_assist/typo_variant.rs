@@ -192,6 +192,8 @@ pub struct VariantCorrection {
 pub struct TypoVariantCorrection {
     /// 補正後の文字列 (読み全体)。
     pub surface: String,
+    /// 補正後のひらがな読み (読み全体)。
+    pub repaired_reading: String,
     /// 補正対象となった読みの断片。
     pub token_reading: String,
     /// 補正後の表記 (断片単位)。
@@ -322,6 +324,7 @@ pub fn find_qwerty_correction(reading: &str) -> Option<TypoVariantCorrection> {
     if let Some(correction) = find_qwerty_variant_correction(trimmed) {
         return Some(TypoVariantCorrection {
             surface: correction.surface.clone(),
+            repaired_reading: correction.variant.clone(),
             token_reading: trimmed.to_string(),
             token_surface: correction.surface,
             variant_reading: correction.variant,
@@ -349,6 +352,7 @@ pub fn find_qwerty_correction(reading: &str) -> Option<TypoVariantCorrection> {
         };
         return Some(TypoVariantCorrection {
             surface: format!("{prefix}{}", correction.surface),
+            repaired_reading: format!("{prefix}{}", correction.variant),
             token_reading: suffix,
             token_surface: correction.surface,
             variant_reading: correction.variant,

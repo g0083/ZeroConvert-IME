@@ -582,4 +582,99 @@ class KeyboardTouchLogicTest {
         assertFalse(shouldVibrateOnEditorCursorMove(textInDirection = "", hasSelection = false))
         assertFalse(shouldVibrateOnEditorCursorMove(textInDirection = null, hasSelection = false))
     }
+
+    @Test
+    fun computeFlickTouchBias_cleanTapAndFlickProduceEmptyHints() {
+        val cleanCenter = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertNotNull(cleanCenter)
+        assertEquals('か', cleanCenter?.typedChar)
+        assertTrue(cleanCenter?.nearbyChars?.isEmpty() == true)
+
+        val cleanCardinal = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.LEFT,
+            dx = -50f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('き', cleanCardinal?.typedChar)
+        assertTrue(cleanCardinal?.nearbyChars?.isEmpty() == true)
+    }
+
+    @Test
+    fun computeFlickTouchBias_detectsThresholdDiagonalAndCellEdgeHints() {
+        // Short flick staying in CENTER yields directional alternative ('き').
+        val shortTap = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.CENTER,
+            dx = -16f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('か', shortTap?.typedChar)
+        assertTrue(shortTap?.nearbyChars?.any { it.first == 'き' && it.second in 0.25f..1.0f } == true)
+
+        // Micro-flick barely past threshold yields CENTER ('か').
+        val microFlick = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.LEFT,
+            dx = -21f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('き', microFlick?.typedChar)
+        assertTrue(microFlick?.nearbyChars?.any { it.first == 'か' && it.second in 0.25f..0.90f } == true)
+
+        // 45-degree diagonal flick on た (LEFT committed vs UP secondary 'つ').
+        val diagonal = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyTa,
+            committedDir = FlickDirection.LEFT,
+            dx = -40f,
+            dy = -34f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('ち', diagonal?.typedChar)
+        assertTrue(diagonal?.nearbyChars?.any { it.first == 'つ' && it.second in 0.25f..1.0f } == true)
+
+        // Right edge of か (0,1) flicked UP hints adjacent key さ (0,2) UP -> 'す'.
+        val edge = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.UP,
+            dx = 0f,
+            dy = -45f,
+            thresholdPx = 20f,
+            startX = 95f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('く', edge?.typedChar)
+        assertTrue(edge?.nearbyChars?.any { it.first == 'す' && it.second in 0.25f..0.85f } == true)
+    }
 }

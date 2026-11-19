@@ -71,6 +71,7 @@ object WindowsEngine {
     private external fun nativeConversionEpoch(): Long
     private external fun nativeAbortConversion()
     private external fun nativeLoadBackends(directory: String)
+    private external fun nativePreloadAssistDictionary(path: String)
 
     fun abort() { nativeAbortConversion() }
 
@@ -116,9 +117,11 @@ object WindowsEngine {
         migrateSelections(File(dataRoot, "Azookey/LearningMemory"))
         migrateCorrections(File(dataRoot, "Azookey/ai-assist-learning.json"))
         migrateEnglishLearning(File(dataRoot, "Azookey/english-learning.json"))
+        val reverseDictionaryPath = File(root, "Dictionary/Reverse/reverse-v2.bin").absolutePath
         assistRequest(JSONObject().put("op", "configurePaths")
             .put("settings", File(dataRoot, "Azookey/settings.json").absolutePath)
-            .put("reverse", File(root, "Dictionary/Reverse/reverse-v2.bin").absolutePath))
+            .put("reverse", reverseDictionaryPath))
+        nativePreloadAssistDictionary(reverseDictionaryPath)
         loadInputPolicy()
         lastSettings = ""
         configure(true, "", true, false)
@@ -545,13 +548,18 @@ object WindowsEngine {
     }
 
     fun assist(op: String, context: String, input: String, baseline: String, inference: AssistInference,
-               baselineReading: String = ""): AiAssistResult? {
+               baselineReading: String = "", rawInput: String = "", touchHints: String = "",
+               inputMode: String = ""): AiAssistResult? {
         if (!ready) return null
-        val raw = assistReply(nativeAssist(JSONObject().put("op", op)
+        val requestJson = JSONObject().put("op", op)
             .put("revision", (inference.revision shl 32) xor AssistVocabulary.revision)
             .put("readLearning", LearningPolicy.canRead)
             .put("context", context).put("input", input).put("baseline", baseline)
-            .put("baselineReading", baselineReading).toString(),
+            .put("baselineReading", baselineReading)
+        if (rawInput.isNotEmpty()) requestJson.put("raw", rawInput)
+        if (touchHints.isNotEmpty()) requestJson.put("touchHints", touchHints)
+        if (inputMode.isNotEmpty()) requestJson.put("inputMode", inputMode)
+        val raw = assistReply(nativeAssist(requestJson.toString(),
             CompletionHost(inference))) ?: return null
         val result = JSONObject(raw)
         val correction = op == "correction"

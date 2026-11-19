@@ -8,6 +8,7 @@ struct llama_model;
 // The model is borrowed: detach before the owner frees it.
 void keyboard_assist_attach(llama_model *model);
 void keyboard_assist_detach();
+void keyboard_assist_preload_dictionary(const char *path);
 
 // `payload` is the flat JSON built by the Rust bridge (no escapes inside values).
 // Returns the worker's reply JSON object, or "null" when no answer is available

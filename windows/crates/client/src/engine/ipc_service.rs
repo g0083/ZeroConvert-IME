@@ -772,9 +772,16 @@ impl IPCService {
         let mut client = self.azookey_client.clone();
         self.runtime.spawn(async move {
             // A pause in typing starts work; subsequent keys cancel this task.
-            // 連続タイピング中のGPU/CPU推論競合・入力遅延を防ぐため、打鍵休止（180ms）を待つ
+            // 連続タイピング中のGPU/CPU推論競合・入力遅延を防ぐため、打鍵休止（補正90ms / 先読み180ms）を待つ
             let translation = request.kind == 3;
-            tokio::time::sleep(Duration::from_millis(if translation { 400 } else { 180 })).await;
+            let delay_ms = if translation {
+                400
+            } else if request.kind == 1 {
+                90
+            } else {
+                180
+            };
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             if translation {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
                 loop {

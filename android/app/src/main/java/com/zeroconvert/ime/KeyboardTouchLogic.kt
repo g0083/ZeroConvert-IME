@@ -781,3 +781,133 @@ internal fun computeQwertyPreviewBubbleBounds(
         heightPx = bubbleHeightPx
     )
 }
+
+private val flickKanaGridCoords: Map<Pair<Int, Int>, FlickKeyDef> = mapOf(
+    (0 to 0) to FlickKeyDefinitions.keyA,
+    (0 to 1) to FlickKeyDefinitions.keyKa,
+    (0 to 2) to FlickKeyDefinitions.keySa,
+    (1 to 0) to FlickKeyDefinitions.keyTa,
+    (1 to 1) to FlickKeyDefinitions.keyNa,
+    (1 to 2) to FlickKeyDefinitions.keyHa,
+    (2 to 0) to FlickKeyDefinitions.keyMa,
+    (2 to 1) to FlickKeyDefinitions.keyYa,
+    (2 to 2) to FlickKeyDefinitions.keyRa,
+    (3 to 1) to FlickKeyDefinitions.keyWa
+)
+
+private val flickKanaCellByCenter: Map<String, Pair<Int, Int>> =
+    flickKanaGridCoords.entries.associate { (coord, def) -> def.center to coord }
+
+private fun flickKeyOutput(def: FlickKeyDef, dir: FlickDirection): Char? = when (dir) {
+    FlickDirection.CENTER -> def.center
+    FlickDirection.LEFT -> def.left
+    FlickDirection.UP -> def.up
+    FlickDirection.RIGHT -> def.right
+    FlickDirection.DOWN -> def.down
+}.singleOrNull()
+
+/**
+ * Extracts boundary-only flick gesture ambiguity hints (`nearbyChars`) for Japanese 12-key kana.
+ * Clean center taps and confident cardinal flicks yield an empty hint list (never penalized).
+ */
+internal fun computeFlickTouchBias(
+    keyDef: FlickKeyDef,
+    committedDir: FlickDirection,
+    dx: Float,
+    dy: Float,
+    thresholdPx: Float,
+    startX: Float,
+    startY: Float,
+    widthPx: Float,
+    heightPx: Float
+): TouchKeyBias? {
+    if (keyDef.isActionKey) return null
+    val cell = flickKanaCellByCenter[keyDef.center] ?: return null
+    val committedChar = flickKeyOutput(keyDef, committedDir) ?: return null
+
+    val alts = HashMap<Char, Float>()
+    fun addAlt(ch: Char?, weight: Float) {
+        if (ch == null || ch == committedChar || !weight.isFinite()) return
+        val clamped = weight.coerceIn(0.25f, 1.0f)
+        val prev = alts[ch]
+        if (prev == null || clamped > prev) alts[ch] = clamped
+    }
+
+    val safeThreshold = thresholdPx.coerceAtLeast(1f)
+    val absX = abs(dx)
+    val absY = abs(dy)
+    val dist = maxOf(absX, absY)
+
+    // Signal A: Flick-length threshold boundary (tentative center tap vs short flick)
+    if (committedDir == FlickDirection.CENTER) {
+        if (dist >= safeThreshold * 0.45f) {
+            val dominantDir = if (absX > absY) {
+                if (dx < 0f) FlickDirection.LEFT else FlickDirection.RIGHT
+            } else {
+                if (dy < 0f) FlickDirection.UP else FlickDirection.DOWN
+            }
+            val w = ((dist / safeThreshold - 0.45f) / 0.55f).coerceIn(0.25f, 1.0f)
+            addAlt(flickKeyOutput(keyDef, dominantDir), w)
+        }
+    } else if (dist <= safeThreshold * 1.45f) {
+        val w = ((1.45f - dist / safeThreshold) / 0.75f).coerceIn(0.25f, 0.90f)
+        addAlt(flickKeyOutput(keyDef, FlickDirection.CENTER), w)
+    }
+
+    // Signal B: 45-degree diagonal flick boundary
+    if (committedDir != FlickDirection.CENTER) {
+        val major = maxOf(absX, absY)
+        val minor = minOf(absX, absY)
+        if (major > 0f) {
+            val ratio = minor / major
+            if (ratio >= 0.45f) {
+                val secondaryDir = when (committedDir) {
+                    FlickDirection.LEFT, FlickDirection.RIGHT ->
+                        if (dy < 0f) FlickDirection.UP else FlickDirection.DOWN
+                    FlickDirection.UP, FlickDirection.DOWN ->
+                        if (dx < 0f) FlickDirection.LEFT else FlickDirection.RIGHT
+                    FlickDirection.CENTER -> FlickDirection.CENTER
+                }
+                val w = ((ratio - 0.45f) / 0.55f).coerceIn(0.25f, 1.0f)
+                addAlt(flickKeyOutput(keyDef, secondaryDir), w)
+            }
+        }
+    }
+
+    // Signal C: 3x4 grid key-cell edge touch
+    val (row, col) = cell
+    if (widthPx > 0f) {
+        val nx = (startX / widthPx).coerceIn(0f, 1f)
+        if (nx < 0.22f) {
+            val w = (((0.22f - nx) / 0.22f) * 0.85f).coerceIn(0.25f, 0.85f)
+            flickKanaGridCoords[row to (col - 1)]?.let {
+                addAlt(flickKeyOutput(it, committedDir), w)
+            }
+        } else if (nx > 0.78f) {
+            val w = (((nx - 0.78f) / 0.22f) * 0.85f).coerceIn(0.25f, 0.85f)
+            flickKanaGridCoords[row to (col + 1)]?.let {
+                addAlt(flickKeyOutput(it, committedDir), w)
+            }
+        }
+    }
+    if (heightPx > 0f) {
+        val ny = (startY / heightPx).coerceIn(0f, 1f)
+        if (ny < 0.22f) {
+            val w = (((0.22f - ny) / 0.22f) * 0.85f).coerceIn(0.25f, 0.85f)
+            flickKanaGridCoords[(row - 1) to col]?.let {
+                addAlt(flickKeyOutput(it, committedDir), w)
+            }
+        } else if (ny > 0.78f) {
+            val w = (((ny - 0.78f) / 0.22f) * 0.85f).coerceIn(0.25f, 0.85f)
+            flickKanaGridCoords[(row + 1) to col]?.let {
+                addAlt(flickKeyOutput(it, committedDir), w)
+            }
+        }
+    }
+
+    val nearby = alts.entries
+        .sortedByDescending { it.value }
+        .take(4)
+        .map { it.key to it.value }
+    return TouchKeyBias(typedChar = committedChar, nearbyChars = nearby)
+}

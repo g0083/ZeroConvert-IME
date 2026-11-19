@@ -155,32 +155,13 @@ score_sequences(const llama_vocab *vocab,
                 const std::vector<std::vector<llama_token>> &sequences,
                 const std::vector<int> &prefix_lengths) {
   const int nv = llama_vocab_n_tokens(vocab);
-  const int count = int(sequences.size());
-  if (count == 0 || count > 32 ||
+  int active_count = int(sequences.size());
+  if (active_count == 0 ||
       std::any_of(sequences.begin(), sequences.end(),
                   [](const auto &sequence) { return sequence.empty(); }))
     return {};
-
-  int max_shared = int(sequences[0].size()) - 1;
-  for (int i = 0; i < count; ++i) {
-    max_shared =
-        std::min(max_shared, std::min(int(sequences[i].size()) - 1,
-                                      std::max(0, prefix_lengths[i] - 1)));
-  }
-  int shared_unscored_len = 0;
-  while (shared_unscored_len < max_shared) {
-    const llama_token tok = sequences[0][shared_unscored_len];
-    bool all_match = true;
-    for (int i = 1; i < count; ++i) {
-      if (sequences[i][shared_unscored_len] != tok) {
-        all_match = false;
-        break;
-      }
-    }
-    if (!all_match)
-      break;
-    ++shared_unscored_len;
-  }
+  if (active_count > 32)
+    active_count = 32;
 
   struct Node {
     llama_token token;
@@ -193,33 +174,65 @@ score_sequences(const llama_vocab *vocab,
     int owner;
     llama_token next;
   };
-  std::map<std::vector<llama_token>, int> prefixes;
+  const int max_ctx = int(llama_n_ctx(context));
+  int shared_unscored_len = 0;
   std::vector<Node> nodes;
   std::vector<Edge> edges;
-  for (int i = 0; i < count; ++i) {
-    const auto &tokens = sequences[i];
-    std::vector<llama_token> prefix;
-    for (int j = shared_unscored_len; j < int(tokens.size()) - 1; ++j) {
-      prefix.push_back(tokens[j]);
-      auto found = prefixes.find(prefix);
-      int node;
-      if (found == prefixes.end()) {
-        node = int(nodes.size());
-        prefixes.emplace(prefix, node);
-        nodes.push_back({tokens[j], j, false, {}});
-      } else
-        node = found->second;
-      nodes[node].owners.push_back(i);
-      if (j + 1 >= prefix_lengths[i]) {
-        nodes[node].need_logits = true;
-        edges.push_back({node, i, tokens[j + 1]});
+  while (true) {
+    int max_shared = int(sequences[0].size()) - 1;
+    for (int i = 0; i < active_count; ++i) {
+      max_shared =
+          std::min(max_shared, std::min(int(sequences[i].size()) - 1,
+                                        std::max(0, prefix_lengths[i] - 1)));
+    }
+    shared_unscored_len = 0;
+    while (shared_unscored_len < max_shared) {
+      const llama_token tok = sequences[0][shared_unscored_len];
+      bool all_match = true;
+      for (int i = 1; i < active_count; ++i) {
+        if (sequences[i][shared_unscored_len] != tok) {
+          all_match = false;
+          break;
+        }
+      }
+      if (!all_match)
+        break;
+      ++shared_unscored_len;
+    }
+
+    std::map<std::vector<llama_token>, int> prefixes;
+    nodes.clear();
+    edges.clear();
+    for (int i = 0; i < active_count; ++i) {
+      const auto &tokens = sequences[i];
+      std::vector<llama_token> prefix;
+      for (int j = shared_unscored_len; j < int(tokens.size()) - 1; ++j) {
+        prefix.push_back(tokens[j]);
+        auto found = prefixes.find(prefix);
+        int node;
+        if (found == prefixes.end()) {
+          node = int(nodes.size());
+          prefixes.emplace(prefix, node);
+          nodes.push_back({tokens[j], j, false, {}});
+        } else {
+          node = found->second;
+        }
+        nodes[node].owners.push_back(i);
+        if (j + 1 >= prefix_lengths[i]) {
+          nodes[node].need_logits = true;
+          edges.push_back({node, i, tokens[j + 1]});
+        }
       }
     }
+    if (shared_unscored_len + int(nodes.size()) <= max_ctx ||
+        active_count <= 2)
+      break;
+    --active_count;
   }
+  if (shared_unscored_len + int(nodes.size()) > max_ctx)
+    return std::vector<double>(sequences.size(), -1e9);
   if (nodes.empty())
-    return std::vector<double>(count, 0.0);
-  if (shared_unscored_len + int(nodes.size()) > 512)
-    return {};
+    return std::vector<double>(sequences.size(), 0.0);
 
   auto *mem = llama_get_memory(context);
   int lcp = 0;
@@ -263,7 +276,7 @@ score_sequences(const llama_vocab *vocab,
         return {};
       }
     }
-    for (int s = 1; s < count; ++s) {
+    for (int s = 1; s < active_count; ++s) {
       llama_memory_seq_cp(mem, 0, s, 0,
                           static_cast<llama_pos>(shared_unscored_len));
     }
@@ -273,7 +286,7 @@ score_sequences(const llama_vocab *vocab,
     cached_prefix_tokens.clear();
   }
 
-  auto batch = llama_batch_init(int(nodes.size()), 0, count);
+  auto batch = llama_batch_init(int(nodes.size()), 0, active_count);
   for (const auto &node : nodes) {
     const int at = batch.n_tokens++;
     batch.token[at] = node.token;
@@ -291,7 +304,10 @@ score_sequences(const llama_vocab *vocab,
     cached_prefix_tokens.clear();
     return {};
   }
-  std::vector<double> scores(count, 0.0), normalizers(nodes.size(), 0.0);
+  std::vector<double> scores(sequences.size(), -1e9),
+      normalizers(nodes.size(), 0.0);
+  for (int i = 0; i < active_count; ++i)
+    scores[i] = 0.0;
   for (int i = 0; i < int(nodes.size()); ++i) {
     if (!nodes[i].need_logits)
       continue;
@@ -328,12 +344,17 @@ score_sequences(const llama_vocab *vocab,
 
 std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
                 const std::string &input_utf8,
-                const std::string &context_utf8) {
+                const std::string &context_utf8,
+                const std::string &touch_hints,
+                const std::string &mode_str) {
   const auto *vocab = llama_model_get_vocab(model);
+  const auto input_mode = (mode_str == "flick") ? InputKeyboardMode::Flick
+                                                : InputKeyboardMode::Qwerty;
   const auto input_hira = !input_utf8.empty()
                               ? hiragana(decode_utf8(input_utf8))
                               : roman_decode(raw_keys);
-  const auto candidates = assist_candidates(raw_keys, input_hira, dict, 24);
+  const auto candidates = assist_candidates(
+      raw_keys, input_hira, dict, 24, touch_hints, input_mode);
   std::ostringstream out;
   if (candidates.size() <= 1) {
     out << "{\"observed\":" << json_string(encode_utf8(input_hira)) << "}";
@@ -351,39 +372,69 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
     if (ctx_u32.size() > 64)
       ctx_u32 = ctx_u32.substr(ctx_u32.size() - 64);
   }
-  const std::u32string prompt_prefix =
-      ctx_u32.empty() ? U"\uee00" : (U"\uee02" + ctx_u32 + U"\uee00");
-  const auto pfx_tokens = tokenize(vocab, encode_utf8(prompt_prefix));
-  if (pfx_tokens.empty())
-    return "null";
-  std::vector<std::vector<llama_token>> sequences;
-  std::vector<int> lengths(candidates.size(), int(pfx_tokens.size()));
-  for (const auto &c : candidates)
-    sequences.push_back(tokenize(
-        vocab, encode_utf8(prompt_prefix + katakana(c.reading) + U"\uee01")));
-  const auto scores = score_sequences(vocab, sequences, lengths);
-  if (scores.empty())
-    return "null";
   const auto &orig = candidates[0];
-  const double baseline = orig.path.score + 8.0 * scores[0];
-  const int orig_tokens = int(sequences[0].size());
+  const auto windows =
+      build_scoring_windows(orig.reading, ctx_u32, candidates, dict);
+  if (windows.empty()) {
+    out << "{\"observed\":" << json_string(encode_utf8(orig.reading)) << "}";
+    return out.str();
+  }
   struct Ranked {
     double stage1_delta;
     double final_score;
     size_t index;
+    size_t win_idx;
+    size_t member_idx;
+    std::u32string prompt_prefix;
+    std::vector<llama_token> cand_tokens;
   };
   std::vector<Ranked> ranked;
-  for (size_t i = 1; i < candidates.size(); ++i) {
-    const int token_diff = int(sequences[i].size()) - orig_tokens;
-    const double len_comp =
-        (token_diff > 0 && candidates[i].path.score > orig.path.score + 3.5)
-            ? 6.0 * std::min(token_diff, 2)
-            : 0.0;
-    const double total = candidates[i].path.score + 8.0 * scores[i] + len_comp -
-                         candidates[i].penalty * 3.0;
-    const double delta = total - baseline;
-    if (delta >= 34.0)
-      ranked.push_back({delta, delta, i});
+  for (size_t w = 0; w < windows.size(); ++w) {
+    const auto &win = windows[w];
+    const std::u32string prompt_prefix =
+        win.left_context.empty() ? U"\uee00"
+                                 : (U"\uee02" + win.left_context + U"\uee00");
+    const auto pfx_tokens = tokenize(vocab, encode_utf8(prompt_prefix));
+    if (pfx_tokens.empty())
+      return "null";
+    std::vector<std::vector<llama_token>> sequences;
+    sequences.reserve(1 + win.members.size());
+    auto orig_seq = tokenize(
+        vocab, encode_utf8(prompt_prefix + katakana(win.orig_slice) + U"\uee01"));
+    if (orig_seq.empty())
+      return "null";
+    sequences.push_back(std::move(orig_seq));
+    for (const auto &m : win.members) {
+      auto c_seq = tokenize(
+          vocab, encode_utf8(prompt_prefix + katakana(m.cand_slice) + U"\uee01"));
+      if (c_seq.empty())
+        return "null";
+      sequences.push_back(std::move(c_seq));
+    }
+    std::vector<int> lengths(sequences.size(), int(pfx_tokens.size()));
+    const auto scores = score_sequences(vocab, sequences, lengths);
+    if (scores.empty())
+      return "null";
+    if (scores[0] <= -1e8)
+      continue;
+    const double baseline = win.orig_path.score + 8.0 * scores[0];
+    const int orig_tokens = int(sequences[0].size());
+    for (size_t j = 0; j < win.members.size(); ++j) {
+      const auto &m = win.members[j];
+      const auto &cand = candidates[m.candidate_index];
+      const int token_diff = int(sequences[j + 1].size()) - orig_tokens;
+      const double len_comp =
+          (m.cand_slice.size() >= win.orig_slice.size() && token_diff > 0 &&
+           m.cand_path.score > win.orig_path.score + 3.5)
+              ? 6.0 * std::min(token_diff, 2)
+              : 0.0;
+      const double total = m.cand_path.score + 8.0 * scores[j + 1] + len_comp -
+                           cand.penalty * 3.0;
+      const double delta = total - baseline;
+      if (delta >= 34.0)
+        ranked.push_back({delta, delta, m.candidate_index, w, j, prompt_prefix,
+                          std::move(sequences[j + 1])});
+    }
   }
   std::sort(ranked.begin(), ranked.end(), [](const Ranked &a, const Ranked &b) {
     return a.stage1_delta > b.stage1_delta;
@@ -392,24 +443,32 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
     out << "{\"observed\":" << json_string(encode_utf8(orig.reading)) << "}";
     return out.str();
   }
-  const size_t top_k = std::min<size_t>(ranked.size(), 3);
-  if (top_k >= 2) {
+  const size_t top_win = ranked[0].win_idx;
+  std::vector<size_t> win_ranked;
+  for (size_t k = 0; k < ranked.size() && win_ranked.size() < 3; ++k) {
+    if (ranked[k].win_idx == top_win)
+      win_ranked.push_back(k);
+  }
+  if (win_ranked.size() >= 2 &&
+      (ranked[win_ranked[0]].stage1_delta - ranked[win_ranked[1]].stage1_delta <
+       12.0)) {
     std::vector<std::vector<llama_token>> surf_sequences;
     std::vector<int> surf_prefixes;
-    std::vector<size_t> valid_k;
-    for (size_t k = 0; k < top_k; ++k) {
-      const size_t idx = ranked[k].index;
-      const auto &c = candidates[idx];
-      if (c.path.surface.empty())
+    std::vector<size_t> valid_pos;
+    const auto &win = windows[top_win];
+    for (size_t pos : win_ranked) {
+      const auto &rc = ranked[pos];
+      const auto &m = win.members[rc.member_idx];
+      if (m.cand_path.surface.empty())
         continue;
-      auto full =
-          tokenize(vocab, encode_utf8(prompt_prefix + katakana(c.reading) +
-                                      U"\uee01" + decode_utf8(c.path.surface)));
-      const int pfx_len = int(sequences[idx].size());
+      auto full = tokenize(vocab,
+                           encode_utf8(rc.prompt_prefix + katakana(m.cand_slice) +
+                                       U"\uee01" + decode_utf8(m.cand_path.surface)));
+      const int pfx_len = int(rc.cand_tokens.size());
       if (int(full.size()) > pfx_len) {
         surf_sequences.push_back(std::move(full));
         surf_prefixes.push_back(pfx_len);
-        valid_k.push_back(k);
+        valid_pos.push_back(pos);
       }
     }
     if (surf_sequences.size() >= 2) {
@@ -417,23 +476,30 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
           score_sequences(vocab, surf_sequences, surf_prefixes);
       if (surf_scores.empty())
         return "null";
-      for (size_t j = 0; j < valid_k.size(); ++j) {
+      for (size_t j = 0; j < valid_pos.size(); ++j) {
+        const size_t pos = valid_pos[j];
         const int n_surf = int(surf_sequences[j].size()) - surf_prefixes[j];
-        ranked[valid_k[j]].final_score =
-            ranked[valid_k[j]].stage1_delta +
+        ranked[pos].final_score =
+            ranked[pos].stage1_delta +
             5.0 * (surf_scores[j] / std::max(1, n_surf));
       }
-      std::sort(ranked.begin(), ranked.begin() + top_k,
+      std::vector<Ranked> reordered;
+      reordered.reserve(valid_pos.size());
+      for (size_t pos : valid_pos)
+        reordered.push_back(ranked[pos]);
+      std::sort(reordered.begin(), reordered.end(),
                 [](const Ranked &a, const Ranked &b) {
                   return a.final_score > b.final_score;
                 });
+      for (size_t j = 0; j < valid_pos.size(); ++j)
+        ranked[valid_pos[j]] = std::move(reordered[j]);
     }
   }
   const size_t best = ranked[0].index;
   const double best_delta = std::max(37.0, ranked[0].stage1_delta);
   out << "{\"observed\":" << json_string(encode_utf8(orig.reading))
       << ",\"reading\":" << json_string(encode_utf8(candidates[best].reading));
-  if (top_k >= 2 && ranked[1].stage1_delta >= 35.0) {
+  if (ranked.size() >= 2 && ranked[1].stage1_delta >= 35.0) {
     out << ",\"alt_reading\":"
         << json_string(encode_utf8(candidates[ranked[1].index].reading));
   }
@@ -441,6 +507,16 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
   return out.str();
 }
 } // namespace
+
+void keyboard_assist_preload_dictionary(const char *path) {
+  if (!path || !*path)
+    return;
+#ifdef __wasi__
+  (void)ready_dictionary(path);
+#else
+  ensure_dictionary_loading(path);
+#endif
+}
 
 void keyboard_assist_attach(llama_model *value) {
 #ifndef __wasi__
@@ -475,6 +551,8 @@ std::string keyboard_assist_request(const char *payload_text,
   const auto input = field(payload, "input");
   const auto ctx = field(payload, "context");
   const auto path = field(payload, "dictionary");
+  const auto touch = field(payload, "touch");
+  const auto mode_str = field(payload, "mode");
   // Android can defer dictionary loading. The single-threaded WASI host calls
   // this on its separate assistance Worker.
   const auto dict = ready_dictionary(path);
@@ -492,7 +570,7 @@ std::string keyboard_assist_request(const char *payload_text,
                            std::min<unsigned long long>(timeout_ms, 30000));
     if (!ensure_context())
       return "null";
-    return run(*dict, raw, input, ctx);
+    return run(*dict, raw, input, ctx, touch, mode_str);
 #ifndef __wasi__
   } catch (...) {
     return "null";

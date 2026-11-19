@@ -324,6 +324,9 @@ fun KeyboardRootView(
                                         onKanaInput = { kana ->
                                             imeService.handleKana(kana)
                                         },
+                                        onKanaInputWithBias = { kana, bias ->
+                                            imeService.handleKana(kana, bias)
+                                        },
                                         onReplaceLastKana = { nextKana ->
                                             imeService.replaceLastKana(nextKana)
                                         },

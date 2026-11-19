@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zeroconvert.ime.assist.AiAssistResult
 import com.zeroconvert.ime.assist.AiAssistType
+import com.zeroconvert.ime.assist.CorrectionSession
 
 /**
  * Height of the reading and candidate bars: 80% of the key height setting, so the bars stay
@@ -262,8 +263,12 @@ fun KeyboardAssistBar(
                     ) {
                         Text(text = title, color = color, fontSize = 12.sp, maxLines = 1, softWrap = false)
                         if (isTypo) {
-                            val sourceText = assist.sourceSurface.ifEmpty {
+                            val sourceText = if (CorrectionSession.isReadingOnlyCorrection(assist.text)) {
                                 assist.sourceReading.ifEmpty { reading }
+                            } else {
+                                assist.sourceSurface.ifEmpty {
+                                    assist.sourceReading.ifEmpty { reading }
+                                }
                             }
                             val textFontSize = 14.sp
                             val baseStyle = LocalTextStyle.current.copy(fontSize = textFontSize)

@@ -89,7 +89,31 @@ pub fn suggest_composition(
     baseline: &str,
     config: &AiAssistConfig,
 ) -> Option<TypoSuggestion> {
-    suggest_composition_with_channel(context, input, baseline, config, true)
+    suggest_composition_with_input_hints(context, input, baseline, "", "", "", config)
+}
+
+/// Like [`suggest_composition`], forwarding raw ASCII romaji, per-position touch hints,
+/// and keyboard input mode (`""` / `"qwerty"` / `"flick"`). Raw/touch hints apply only
+/// when the whole composition is repaired without splitting a protected prefix.
+pub fn suggest_composition_with_input_hints(
+    context: &str,
+    input: &str,
+    baseline: &str,
+    raw: &str,
+    touch_hints: &str,
+    input_mode: &str,
+    config: &AiAssistConfig,
+) -> Option<TypoSuggestion> {
+    suggest_composition_with_channel(
+        context,
+        input,
+        baseline,
+        raw,
+        touch_hints,
+        input_mode,
+        config,
+        true,
+    )
 }
 
 /// Fallback used after `keyboard_hybrid::suggest` already ran channel repair and
@@ -101,20 +125,31 @@ pub fn suggest_composition_heuristic(
     baseline: &str,
     config: &AiAssistConfig,
 ) -> Option<TypoSuggestion> {
-    suggest_composition_with_channel(context, input, baseline, config, false)
+    suggest_composition_with_channel(context, input, baseline, "", "", "", config, false)
 }
 
 fn suggest_composition_with_channel(
     context: &str,
     input: &str,
     baseline: &str,
+    raw: &str,
+    touch_hints: &str,
+    input_mode: &str,
     config: &AiAssistConfig,
     allow_channel_repair: bool,
 ) -> Option<TypoSuggestion> {
     let (prefix, target) = trailing_phrase(input, baseline)?;
-    let mut result = suggest_with_channel(
+    let (scoped_raw, scoped_touch) = if prefix.is_empty() {
+        (raw, touch_hints)
+    } else {
+        ("", "")
+    };
+    let mut result = suggest_with_channel_and_hints(
         &format!("{context}{prefix}"),
         target,
+        scoped_raw,
+        scoped_touch,
+        input_mode,
         config,
         allow_channel_repair,
     )?;
@@ -280,6 +315,7 @@ pub fn completed_surface(response: &Value, input: &str, budget: u64) -> Option<S
     .then_some(surface)
 }
 
+#[allow(dead_code)]
 fn infer(context: &str, input: &str, config: &AiAssistConfig) -> Option<String> {
     if !config.enabled || config.corrector_port < 1024 {
         return None;
@@ -314,12 +350,15 @@ fn infer(context: &str, input: &str, config: &AiAssistConfig) -> Option<String> 
 /// model (or lookup fallback) produces the final surface. Raw unrepaired input is
 /// never sent to a separate seq2seq corrector model.
 pub fn suggest(context: &str, input: &str, config: &AiAssistConfig) -> Option<TypoSuggestion> {
-    suggest_with_channel(context, input, config, true)
+    suggest_with_channel_and_hints(context, input, "", "", "", config, true)
 }
 
-fn suggest_with_channel(
+fn suggest_with_channel_and_hints(
     context: &str,
     input: &str,
+    raw: &str,
+    touch_hints: &str,
+    input_mode: &str,
     config: &AiAssistConfig,
     allow_channel_repair: bool,
 ) -> Option<TypoSuggestion> {
@@ -354,19 +393,13 @@ fn suggest_with_channel(
             learned: false,
         });
     }
-    // Mixed kana/Latin input is repaired by deterministic one-key reconstruction,
-    // then converted to its context-dependent surface by the main model.
+    // Mixed kana/Latin input is repaired by deterministic one-key reconstruction
+    // to its hiragana reading; the main converter converts it when applied.
     if let Some(reading) = romaji_decoder::decode_floating_consonant_typo(input) {
-        let expected = typo_variant::lookup_surface(&reading).unwrap_or_else(|| reading.clone());
-        let surface = infer(&context, &reading, config)
-            .filter(|s| {
-                *s == expected || *s == reading || reading_check::has_same_reading(s, &reading)
-            })
-            .unwrap_or(expected);
         return Some(TypoSuggestion {
-            surface: surface.clone(),
+            surface: reading.clone(),
             token_reading: input.into(),
-            token_surface: surface,
+            token_surface: reading,
             learned: false,
         });
     }
@@ -383,40 +416,20 @@ fn suggest_with_channel(
         } else {
             input.to_owned()
         };
-        if let Some(readings) =
-            super::keyboard_hybrid::repair_readings(&context, &repair_input, "", wait_for_worker)
-        {
-            if readings.is_empty() {
-                return None;
-            }
-            let mut saw_invalid_surface = false;
-            for reading in &readings {
-                match infer(&context, reading, config) {
-                    Some(s) if reading_check::has_same_reading(&s, reading) => {
-                        return (katakana_to_hiragana(&s) != katakana_to_hiragana(input))
-                            .then_some(TypoSuggestion {
-                                surface: s.clone(),
-                                token_reading: input.into(),
-                                token_surface: s,
-                                learned: false,
-                            });
-                    }
-                    Some(_) => {
-                        saw_invalid_surface = true;
-                    }
-                    None => {}
-                }
-            }
-            if saw_invalid_surface {
-                return None;
-            }
-            let reading = &readings[0];
-            let surface = typo_variant::lookup_surface(reading).unwrap_or_else(|| reading.clone());
-            return (katakana_to_hiragana(&surface) != katakana_to_hiragana(input)).then_some(
+        if let Some(readings) = super::keyboard_hybrid::repair_readings_with_hints(
+            &context,
+            &repair_input,
+            raw,
+            touch_hints,
+            input_mode,
+            wait_for_worker,
+        ) {
+            let reading = readings.into_iter().next()?;
+            return (katakana_to_hiragana(&reading) != katakana_to_hiragana(input)).then_some(
                 TypoSuggestion {
-                    surface: surface.clone(),
+                    surface: reading.clone(),
                     token_reading: input.into(),
-                    token_surface: surface,
+                    token_surface: reading,
                     learned: false,
                 },
             );
@@ -477,9 +490,9 @@ mod tests {
         };
         for (input, expected) in [
             ("きんにちは", "こんにちは"),
-            ("くらおど", "クラウド"),
+            ("くらおど", "くらうど"),
             ("おひょ", "おはよう"),
-            ("てそと", "テスト"),
+            ("てそと", "てすと"),
         ] {
             let proposal = suggest_composition("", input, input, &config).unwrap();
             assert_eq!(proposal.surface, expected);
@@ -561,7 +574,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 1. Repaired reading from keyboard channel is converted using main conversion model.
+        // 1. Repaired reading from keyboard channel is returned directly without /completion.
         clear_cache();
         let sent_calls = Arc::new(Mutex::new(Vec::new()));
         let backend = MockUnifiedBackend {
@@ -576,33 +589,30 @@ mod tests {
         runtime::with_backend(Box::new(backend), || {
             let suggestion =
                 suggest("確認をお願いします。", "おせわになております", &config).unwrap();
-            assert_eq!(suggestion.surface, "お世話になっております");
+            assert_eq!(suggestion.surface, "おせわになっております");
             assert_eq!(suggestion.token_reading, "おせわになております");
         });
         {
             let recorded = sent_calls.lock().unwrap();
-            assert_eq!(recorded.len(), 1);
-            assert_eq!(recorded[0].0, runtime::PREDICTION_SERVER_PORT);
-            assert!(recorded[0].1.contains("オセワニナッテオリマス"));
-            assert!(!recorded[0].1.contains("オセワニナテオリマス"));
+            assert!(recorded.is_empty());
         }
 
-        // 2. When main model returns a surface with a mismatched reading, channel repair rejects it.
+        // 2. Same reading as input returns None without calling /completion.
         clear_cache();
-        let bad_surface_calls = Arc::new(Mutex::new(Vec::new()));
-        let bad_surface_backend = MockUnifiedBackend {
+        let unchanged_calls = Arc::new(Mutex::new(Vec::new()));
+        let unchanged_backend = MockUnifiedBackend {
             repair: Some(json!({
                 "observed": "おせわになております",
-                "reading": "おせわになっております",
+                "reading": "おせわになております",
                 "gain": 45.0
             })),
-            reply: json!({"content": "全く違う変換結果", "stopped_eos": true}),
-            calls: bad_surface_calls.clone(),
+            reply: json!({"content": "お世話になっております", "stopped_eos": true}),
+            calls: unchanged_calls.clone(),
         };
-        runtime::with_backend(Box::new(bad_surface_backend), || {
+        runtime::with_backend(Box::new(unchanged_backend), || {
             assert!(suggest("確認をお願いします。", "おせわになております", &config).is_none());
         });
-        assert_eq!(bad_surface_calls.lock().unwrap().len(), 1);
+        assert!(unchanged_calls.lock().unwrap().is_empty());
 
         // 3. Unrepaired input is never sent to /completion when no repair candidate exists.
         clear_cache();
@@ -756,6 +766,89 @@ mod tests {
         assert_eq!(
             restore_nam_digits("nambonまとめて持つ", &[String::from("3")]),
             "3bonまとめて持つ"
+        );
+    }
+
+    #[test]
+    fn input_hints_are_forwarded_only_for_unsplit_compositions() {
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct CaptureBackend(Arc<Mutex<Vec<(String, String, String, String)>>>);
+        impl runtime::CompletionBackend for CaptureBackend {
+            fn allow_native_worker(&self) -> bool {
+                true
+            }
+            fn wait_for_native_worker(&self) -> bool {
+                true
+            }
+            fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+                None
+            }
+            fn keyboard_repair_with_hints(
+                &self,
+                raw: &str,
+                input: &str,
+                _context: &str,
+                touch_hints: &str,
+                input_mode: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                self.0.lock().unwrap().push((
+                    raw.to_owned(),
+                    input.to_owned(),
+                    touch_hints.to_owned(),
+                    input_mode.to_owned(),
+                ));
+                Some(None)
+            }
+        }
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let config = AiAssistConfig {
+            enabled: true,
+            corrector_port: 12000,
+            ..AiAssistConfig::default()
+        };
+        runtime::with_backend(Box::new(CaptureBackend(calls.clone())), || {
+            let _ = suggest_composition_with_input_hints(
+                "",
+                "pもってる",
+                "P持ってる",
+                "pmotteru",
+                "0:o=0.85",
+                "qwerty",
+                &config,
+            );
+            let long_prefix_input = format!("{}。おねがいすます", "あ".repeat(126));
+            let long_prefix_base = format!("{}。お願いすます", "あ".repeat(126));
+            let _ = suggest_composition_with_input_hints(
+                "",
+                &long_prefix_input,
+                &long_prefix_base,
+                "",
+                "1:し=0.80",
+                "flick",
+                &config,
+            );
+        });
+        let recorded = calls.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(
+            recorded[0],
+            (
+                "pmotteru".to_owned(),
+                "pもってる".to_owned(),
+                "0:o=0.85".to_owned(),
+                "qwerty".to_owned()
+            )
+        );
+        assert_eq!(
+            recorded[1],
+            (
+                String::new(),
+                "おねがいすます".to_owned(),
+                String::new(),
+                "flick".to_owned()
+            )
         );
     }
 }

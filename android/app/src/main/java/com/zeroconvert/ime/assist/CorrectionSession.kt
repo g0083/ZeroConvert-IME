@@ -77,4 +77,39 @@ class CorrectionSession(private val policy: AssistPolicyTransport = SharedAssist
         state = null
         undo = null
     }
+
+    companion object {
+        /**
+         * True when a typo correction repaired only the hiragana reading so normal
+         * conversion should convert it instead of locking the surface literal.
+         */
+        fun isReadingOnlyCorrection(surface: String): Boolean =
+            surface.isNotEmpty() && surface.all { ch ->
+                ch in '\u3041'..'\u3096' ||
+                    ch == '\u309D' ||
+                    ch == '\u309E' ||
+                    ch == '\u30FC' ||
+                    ch == '、' ||
+                    ch == '。' ||
+                    ch == '！' ||
+                    ch == '？' ||
+                    ch == '!' ||
+                    ch == '?' ||
+                    ch == '・'
+            }
+
+        /**
+         * Drops fixed-surface locking when [protectedPrefix] is only a repaired reading,
+         * allowing Swift/Zenzai to convert the whole reading normally.
+         */
+        fun fixedSurfacePrefixForConversion(protectedPrefix: String): String =
+            if (isReadingOnlyCorrection(protectedPrefix)) "" else protectedPrefix
+
+        /**
+         * Matches pending typo-learning acceptances against either the committed surface
+         * or its underlying repaired reading.
+         */
+        fun committedMatchTarget(displayedText: String, reading: String = ""): String =
+            if (reading.isNotEmpty() && reading != displayedText) "$displayedText\n$reading" else displayedText
+    }
 }

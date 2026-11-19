@@ -67,18 +67,39 @@ pub trait CompletionBackend {
     ) -> Option<Option<Value>> {
         None
     }
+    /// In-process keyboard repair with optional per-position touch hints and input mode (Android).
+    fn keyboard_repair_with_hints(
+        &self,
+        raw: &str,
+        input: &str,
+        context: &str,
+        _touch_hints: &str,
+        _input_mode: &str,
+        timeout_ms: u64,
+    ) -> Option<Option<Value>> {
+        self.keyboard_repair(raw, input, context, timeout_ms)
+    }
 }
 
-pub(super) fn keyboard_repair_override(
+pub(super) fn keyboard_repair_override_with_hints(
     raw: &str,
     input: &str,
     context: &str,
+    touch_hints: &str,
+    input_mode: &str,
     timeout_ms: u64,
 ) -> Option<Option<Value>> {
     BACKEND.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .and_then(|backend| backend.keyboard_repair(raw, input, context, timeout_ms))
+        slot.borrow().as_ref().and_then(|backend| {
+            backend.keyboard_repair_with_hints(
+                raw,
+                input,
+                context,
+                touch_hints,
+                input_mode,
+                timeout_ms,
+            )
+        })
     })
 }
 

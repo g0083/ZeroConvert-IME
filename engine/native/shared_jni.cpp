@@ -76,6 +76,12 @@ Java_com_zeroconvert_ime_engine_WindowsEngine_nativeLoadBackends(JNIEnv *env, jo
     ggml_backend_load_all_from_path(directory.c_str());
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_zeroconvert_ime_engine_WindowsEngine_nativePreloadAssistDictionary(JNIEnv *env, jobject, jstring path) {
+    const auto dictionary_path = assist_from_java(env, path);
+    keyboard_assist_preload_dictionary(dictionary_path.c_str());
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_zeroconvert_ime_engine_WindowsEngine_nativeAssist(JNIEnv *env, jobject, jstring input, jobject inference) {
     auto cls = env->GetObjectClass(inference);

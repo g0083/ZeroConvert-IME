@@ -147,4 +147,38 @@ class CorrectionSessionTest {
         assertTrue(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 5_001L, lastPrivateInputEndMillis = 5_000L))
         assertTrue(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 0L, lastPrivateInputEndMillis = 5_000L))
     }
+
+    @Test fun readingOnlyCorrectionDoesNotLockFixedPrefixAndCommitsConvertedSurface() = runBlocking {
+        assertTrue(CorrectionSession.isReadingOnlyCorrection("おせわになっております"))
+        assertTrue(CorrectionSession.isReadingOnlyCorrection("おかえり！"))
+        assertFalse(CorrectionSession.isReadingOnlyCorrection(""))
+        assertFalse(CorrectionSession.isReadingOnlyCorrection("お疲れ様"))
+        assertFalse(CorrectionSession.isReadingOnlyCorrection("カタカナ"))
+        assertFalse(CorrectionSession.isReadingOnlyCorrection("hello"))
+
+        val input = ComposingText().apply { insertAtCursorPosition("おせわになております", InputStyle.DIRECT) }
+        val correction = CorrectionSession(RustAssistPolicy)
+        assertTrue(correction.apply(input, "おせわになっております", "お世話になております", explicit = true))
+        val protectedPrefix = correction.fixedPrefix(input.convertTarget)
+        assertEquals("おせわになっております", protectedPrefix)
+        assertEquals("", CorrectionSession.fixedSurfacePrefixForConversion(protectedPrefix))
+
+        // Appending more text still avoids locking the repaired reading so full-sentence conversion can run.
+        correction.edited()
+        input.insertAtCursorPosition("desu", InputStyle.ROMAN2KANA)
+        val extendedProtected = correction.fixedPrefix(input.convertTarget)
+        assertEquals("おせわになっております", extendedProtected)
+        assertEquals("", CorrectionSession.fixedSurfacePrefixForConversion(extendedProtected))
+
+        // Non-reading surface corrections still preserve their fixed surface prefix.
+        assertEquals("学校", CorrectionSession.fixedSurfacePrefixForConversion("学校"))
+
+        // Committing the converted kanji surface still records the accepted reading repair.
+        val matchTarget = CorrectionSession.committedMatchTarget("お世話になっておりますです", "おせわになっておりますです")
+        assertEquals(
+            listOf(CorrectionSession.Acceptance("おせわになております", "おせわになっております")),
+            correction.committed(matchTarget)
+        )
+        assertEquals("", correction.fixedPrefix("お世話になっておりますです"))
+    }
 }

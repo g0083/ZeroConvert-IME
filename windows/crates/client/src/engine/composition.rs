@@ -2198,8 +2198,12 @@ impl TextServiceFactory {
             "prediction"
         };
         let source = if kind == shared::ai_candidate::TYPO_CORRECTION {
-            typo::baseline_surface_from_candidates(candidates)
-                .unwrap_or_else(|| candidates.hiragana.clone())
+            if typo::is_reading_only_correction(text) {
+                candidates.hiragana.clone()
+            } else {
+                typo::baseline_surface_from_candidates(candidates)
+                    .unwrap_or_else(|| candidates.hiragana.clone())
+            }
         } else {
             candidates.hiragana.clone()
         };
@@ -5572,6 +5576,27 @@ impl TextServiceFactory {
                     ClientAction::StartJevConversion,
                 ],
             ));
+        }
+        if matches!(action, UserAction::Enter)
+            && !app_config.general.experimental_translation
+            && !composition.typo.correction.is_applied()
+        {
+            if let Ok(sel_idx) = usize::try_from(composition.selection_index) {
+                if composition.candidates.candidate_ids.get(sel_idx).copied()
+                    == Some(shared::ai_candidate::TYPO_CORRECTION)
+                {
+                    if let Some(text) = composition.candidates.texts.get(sel_idx) {
+                        if typo::is_reading_only_correction(text)
+                            || composition.candidates.prediction_readings.contains_key(text)
+                        {
+                            return Some((
+                                CompositionState::Composing,
+                                vec![ClientAction::ApplyTypoCorrection(text.clone())],
+                            ));
+                        }
+                    }
+                }
+            }
         }
         let result = match composition.state {
             CompositionState::None => match action {

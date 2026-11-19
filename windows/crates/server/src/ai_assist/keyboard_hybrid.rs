@@ -1,6 +1,6 @@
 //! Keyboard-channel correction on the assistance worker. Never mutates Swift.
 //! The native child owns the active conversion model/dictionary; each request has a deadline.
-use super::{corrector, reading_check, runtime, simple_http_post, AiAssistConfig, TypoSuggestion};
+use super::{corrector, runtime, AiAssistConfig, TypoSuggestion};
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader, Write},
@@ -442,6 +442,19 @@ pub fn repair_readings(
     raw: &str,
     wait_for_worker: bool,
 ) -> Option<Vec<String>> {
+    repair_readings_with_hints(context, input, raw, "", "", wait_for_worker)
+}
+
+/// Like [`repair_readings`], forwarding optional per-position touch hints (`"0:o=0.85;..."`)
+/// and keyboard input mode (`""` / `"qwerty"` / `"flick"`).
+pub fn repair_readings_with_hints(
+    context: &str,
+    input: &str,
+    raw: &str,
+    touch_hints: &str,
+    input_mode: &str,
+    wait_for_worker: bool,
+) -> Option<Vec<String>> {
     let norm = normalize_reading(input);
     let char_count = norm.chars().count();
     if !(2..=128).contains(&char_count)
@@ -453,17 +466,19 @@ pub fn repair_readings(
     {
         return None;
     }
-    let valid_raw = if (4..=64).contains(&raw.len()) && raw.bytes().all(|c| c.is_ascii_lowercase())
+    let valid_raw = if (4..=192).contains(&raw.len()) && raw.bytes().all(|c| c.is_ascii_lowercase())
     {
         raw
     } else {
         ""
     };
     let (masked_context, _) = super::corrector::mask_digits_with_nam(context);
-    let response = if let Some(hosted) = runtime::keyboard_repair_override(
+    let response = if let Some(hosted) = runtime::keyboard_repair_override_with_hints(
         valid_raw,
         &norm,
         &masked_context,
+        touch_hints,
+        input_mode,
         if wait_for_worker { 30000 } else { 350 },
     ) {
         // The host scores on its own loaded model; no child process exists here.
@@ -496,7 +511,7 @@ pub fn repair_readings(
         }
         let result = slot
             .as_mut()?
-            .request(valid_raw, &norm, &masked_context, 350);
+            .request(valid_raw, &norm, &masked_context, 220);
         if result.is_err() {
             *slot = None;
             drop(slot);
@@ -539,39 +554,10 @@ pub fn suggest(
     {
         return None;
     }
-    let started = Instant::now();
     let readings = repair_readings(context, input, raw, false)?;
-    if readings.is_empty() {
+    let Some(reading) = readings.into_iter().next() else {
         return Some(None);
-    }
-    for reading in &readings {
-        let remaining = 450u64
-            .saturating_sub(started.elapsed().as_millis() as u64)
-            .min(200);
-        if remaining < 20 {
-            break;
-        }
-        // Reuse ordinary conversion for final spelling, independently of the main
-        // Swift composition. Its reading must match the channel's proposed reading.
-        let Some(payload) = corrector::payload(context, reading) else {
-            continue;
-        };
-        if let Some(surface) =
-            simple_http_post(config.prediction_port, "/completion", &payload, remaining)
-                .and_then(|r| {
-                    corrector::completed_surface(&r, reading, payload["n_predict"].as_u64()?)
-                })
-                .filter(|s| reading_check::has_same_reading(s, reading))
-        {
-            return Some(Some(TypoSuggestion {
-                surface: surface.clone(),
-                token_reading: input.into(),
-                token_surface: surface,
-                learned: false,
-            }));
-        }
-    }
-    let reading = readings.into_iter().next()?;
+    };
     Some(Some(TypoSuggestion {
         surface: reading.clone(),
         token_reading: input.into(),
