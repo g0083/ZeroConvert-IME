@@ -21,6 +21,7 @@ export const SHARED_INPUTS = [
   'windows/scripts/converter_patch.py',
   'windows/crates/shared/src/conversion_policy.rs',
   'windows/crates/shared/src/assist_policy.rs',
+  'windows/crates/shared/src/english_learning.rs',
   'windows/crates/shared/src/session_policy.rs',
   'windows/crates/shared/src/learning_policy.rs',
   // Compiled into libzenz_jni.so by engine/native/keyboard_assist.cpp.

@@ -145,16 +145,16 @@ impl TextServiceFactory {
         let trace_request_id = current_input_trace_request_id();
         let total_start = trace_request_id.map(|_| Instant::now());
         let result: Result<Option<String>> = (|| unsafe {
-            let (tid, parent_context) = {
+            let (tid, parent_context, private_on_focus) = {
                 let text_service = self.borrow()?;
                 let context = text_service.context::<ITfContext>()?;
                 let parent_context = self.to_parent_context_if_exists(Some(context))?;
-                (text_service.tid, parent_context)
+                (text_service.tid, parent_context, text_service.private_input)
             };
 
             let edit_session_start = trace_request_id.map(|_| Instant::now());
             let preview_end_shift = preview_end_shift(preview)?;
-            let preceding_text = read_edit_session::<String>(
+            let (preceding_text, private_input) = read_edit_session::<(String, bool)>(
                 tid,
                 parent_context.clone(),
                 Rc::new({
@@ -170,13 +170,24 @@ impl TextServiceFactory {
                         )?;
 
                         if pfetched == 0 {
-                            return Ok(String::new());
+                            return Ok((String::new(), private_on_focus));
                         }
 
                         let range = match pselection[0].range.as_ref() {
                             Some(range) => range.Clone()?,
-                            None => return Ok(String::new()),
+                            None => return Ok((String::new(), private_on_focus)),
                         };
+
+                        if private_on_focus
+                            || Self::range_has_sensitive_input_scope(
+                                cookie,
+                                &parent_context,
+                                &range,
+                            )
+                            .unwrap_or(false)
+                        {
+                            return Ok((String::new(), true));
+                        }
 
                         let mut preceding_range_shifted = 0;
 
@@ -211,7 +222,7 @@ impl TextServiceFactory {
                             .unwrap_or(false)
                         {
                             // Do not read sensitive/unchecked text, or reuse cached context.
-                            return Ok(String::new());
+                            return Ok((String::new(), false));
                         }
 
                         let mut pchtext = [0u16; 64];
@@ -223,7 +234,7 @@ impl TextServiceFactory {
                             &mut pcch,
                         )?;
 
-                        Ok(String::from_utf16_lossy(&pchtext[..pcch as usize]))
+                        Ok((String::from_utf16_lossy(&pchtext[..pcch as usize]), false))
                     }
                 }),
             )?;
@@ -244,9 +255,10 @@ impl TextServiceFactory {
             // Jev passes this fresh value explicitly; it must not touch KKC's cache
             // or issue the normal synchronous set_context RPC.
             if for_jev {
-                return Ok(Some(preceding_text));
+                return Ok((!private_input).then_some(preceding_text));
             }
 
+            self.set_private_input_for_field(private_input)?;
             let Some(mut ipc_service) = IMEState::ipc_service()? else {
                 return Ok(Some(preceding_text));
             };
@@ -254,9 +266,11 @@ impl TextServiceFactory {
             let connection_id = ipc_service.connection_id();
             let should_set_context = {
                 let text_service = self.borrow_mut()?;
-                text_service
-                    .surrounding_text_context_state
-                    .should_send(ipc_service.context_cache_key(), &preceding_text)
+                text_service.surrounding_text_context_state.should_send(
+                    ipc_service.context_cache_key(),
+                    &preceding_text,
+                    private_input,
+                )
             };
             if !should_set_context {
                 if let Some(request_id) = trace_request_id {
@@ -274,12 +288,14 @@ impl TextServiceFactory {
                 return Ok(Some(preceding_text));
             }
 
-            ipc_service.set_context(preceding_text.clone())?;
+            ipc_service.set_context(preceding_text.clone(), private_input)?;
             {
                 let mut text_service = self.borrow_mut()?;
-                text_service
-                    .surrounding_text_context_state
-                    .remember(ipc_service.context_cache_key(), &preceding_text);
+                text_service.surrounding_text_context_state.remember(
+                    ipc_service.context_cache_key(),
+                    &preceding_text,
+                    private_input,
+                );
             }
             IMEState::set_ipc_service(ipc_service)?;
 

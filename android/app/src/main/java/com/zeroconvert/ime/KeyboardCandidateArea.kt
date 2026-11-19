@@ -5,12 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Undo
@@ -21,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -382,8 +382,96 @@ fun KeyboardContentArea(
                     expandedContent()
                 }
             } else {
-                keyboardContent()
+                ModeSwitchGuideOverlay(keyboardContent)
             }
+        }
+    }
+}
+
+internal data class PackedCandidate(
+    val index: Int,
+    val candidate: Candidate
+)
+
+internal object ExpandedCandidateLayout {
+    fun packRows(
+        candidates: List<Candidate>,
+        itemWidthsPx: List<Int>,
+        maxRowWidthPx: Int,
+        horizontalGapPx: Int
+    ): List<List<PackedCandidate>> {
+        if (candidates.isEmpty()) return emptyList()
+        val safeMaxWidth = maxRowWidthPx.coerceAtLeast(1)
+        val safeGap = horizontalGapPx.coerceAtLeast(0)
+        val rows = ArrayList<List<PackedCandidate>>()
+        var currentRow = ArrayList<PackedCandidate>()
+        var currentWidth = 0
+        for (index in candidates.indices) {
+            val rawWidth = itemWidthsPx.getOrElse(index) { safeMaxWidth }
+            val itemWidth = rawWidth.coerceIn(1, safeMaxWidth)
+            val neededWidth = if (currentRow.isEmpty()) itemWidth else currentWidth + safeGap + itemWidth
+            if (currentRow.isNotEmpty() && neededWidth > safeMaxWidth) {
+                rows.add(currentRow)
+                currentRow = ArrayList()
+                currentRow.add(PackedCandidate(index, candidates[index]))
+                currentWidth = itemWidth
+            } else {
+                currentRow.add(PackedCandidate(index, candidates[index]))
+                currentWidth = neededWidth
+            }
+        }
+        if (currentRow.isNotEmpty()) {
+            rows.add(currentRow)
+        }
+        return rows
+    }
+}
+
+internal fun candidateDisplayLabel(candidate: Candidate): String =
+    (if (candidate.assist != null) "補正: " else "") + candidate.text
+
+internal enum class CandidateBarContentMode {
+    TRANSLATION,
+    SELECTION_TRANSLATION,
+    SELECTION_ACTIONS,
+    CANDIDATE_STRIP,
+    IDLE_TOOLBAR
+}
+
+internal data class CandidateBarDisplayPolicy(
+    val mode: CandidateBarContentMode,
+    val showClipboardSuggestion: Boolean,
+    val showKeyboardPlacementMenu: Boolean,
+    val showCandidateToggle: Boolean,
+    val isCandidateToggleExpanded: Boolean
+) {
+    companion object {
+        fun resolve(
+            hasCandidates: Boolean,
+            isCandidatesExpanded: Boolean,
+            hasSelectionCount: Boolean,
+            translationActive: Boolean,
+            selectionTranslationActive: Boolean,
+            clipboardSuggestionDismissed: Boolean = false
+        ): CandidateBarDisplayPolicy {
+            val mode = when {
+                translationActive -> CandidateBarContentMode.TRANSLATION
+                selectionTranslationActive -> CandidateBarContentMode.SELECTION_TRANSLATION
+                hasSelectionCount -> CandidateBarContentMode.SELECTION_ACTIONS
+                hasCandidates && !isCandidatesExpanded -> CandidateBarContentMode.CANDIDATE_STRIP
+                else -> CandidateBarContentMode.IDLE_TOOLBAR
+            }
+            val showClipboardSuggestion = mode == CandidateBarContentMode.IDLE_TOOLBAR &&
+                !clipboardSuggestionDismissed
+            val showCandidateToggle = hasCandidates &&
+                (mode == CandidateBarContentMode.CANDIDATE_STRIP || mode == CandidateBarContentMode.IDLE_TOOLBAR)
+            return CandidateBarDisplayPolicy(
+                mode = mode,
+                showClipboardSuggestion = showClipboardSuggestion,
+                showKeyboardPlacementMenu = mode == CandidateBarContentMode.IDLE_TOOLBAR,
+                showCandidateToggle = showCandidateToggle,
+                isCandidateToggleExpanded = showCandidateToggle && isCandidatesExpanded
+            )
         }
     }
 }
@@ -391,50 +479,99 @@ fun KeyboardContentArea(
 @Composable
 fun ExpandedCandidatePanel(
     candidates: List<Candidate>,
-    isRealtimeInline: Boolean,
     palette: ZeroConPalette,
-    onToggleRealtimeInline: () -> Unit,
     onSelect: (Candidate) -> Unit
 ) {
-    Column(Modifier.fillMaxSize().background(palette.surface).padding(4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("候補一覧 (${candidates.size}件)", color = palette.textSecondary, fontSize = 12.sp,
-                maxLines = 1, modifier = Modifier.weight(1f))
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = if (isRealtimeInline) palette.readyEmerald.copy(alpha = 0.2f) else palette.keyModifier,
-                modifier = Modifier.fillMaxHeight().pointerDownHaptic().clickable(onClick = onToggleRealtimeInline)
-            ) {
-                Box(Modifier.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (isRealtimeInline) "リアルタイム反映: ON" else "リアルタイム反映: OFF",
-                        color = if (isRealtimeInline) palette.readyEmerald else palette.textSecondary,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-            }
+    val listState = rememberLazyListState()
+    val topCandidateKey = candidates.firstOrNull()?.itemKey
+    LaunchedEffect(topCandidateKey) {
+        listState.scrollToItem(0)
+    }
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(palette.surface)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+        val density = LocalDensity.current
+        val measurer = rememberTextMeasurer()
+        val textStyle = LocalTextStyle.current.copy(fontSize = 15.sp)
+        val firstTextStyle = textStyle.copy(fontWeight = FontWeight.Medium)
+        val maxRowWidthDp = maxWidth
+        val maxRowWidthPx = if (constraints.hasBoundedWidth) {
+            constraints.maxWidth.coerceAtLeast(1)
+        } else {
+            with(density) { 320.dp.roundToPx() }
         }
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 100.dp),
-            modifier = Modifier.fillMaxWidth().weight(1f)
+        val horizontalGapPx = with(density) { 4.dp.roundToPx() }
+        val chipHorizontalPaddingPx = with(density) { 16.dp.roundToPx() }
+        val minChipWidthPx = with(density) { 44.dp.roundToPx() }
+        val rows = remember(
+            candidates,
+            maxRowWidthPx,
+            textStyle,
+            firstTextStyle,
+            density.density,
+            density.fontScale
         ) {
-            items(candidates.size, key = { "${it}_${candidates[it].itemKey}" }) { index ->
-                val item = candidates[index]
-                Box(
-                    modifier = Modifier.padding(2.dp).height(48.dp)
-                        .clip(RoundedCornerShape(6.dp)).background(palette.keyNormal)
-                        .semantics { contentDescription = "変換候補 ${item.text}" }
-                        .clickable { onSelect(item) }.padding(horizontal = 8.dp),
-                    contentAlignment = Alignment.Center
+            val widths = candidates.mapIndexed { index, item ->
+                val textWidth = measurer.measure(
+                    text = candidateDisplayLabel(item),
+                    style = if (index == 0) firstTextStyle else textStyle,
+                    softWrap = false,
+                    maxLines = 1
+                ).size.width
+                // 2px buffer avoids 1px rounding wraps inside the Row.
+                (textWidth + chipHorizontalPaddingPx + 2).coerceAtLeast(minChipWidthPx)
+            }
+            ExpandedCandidateLayout.packRows(
+                candidates = candidates,
+                itemWidthsPx = widths,
+                maxRowWidthPx = maxRowWidthPx,
+                horizontalGapPx = horizontalGapPx
+            )
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(
+                items = rows,
+                key = { rowIndex, row -> "${rowIndex}_${row.first().candidate.itemKey}" }
+            ) { _, row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(item.text, color = palette.textPrimary, fontSize = 15.sp, maxLines = 1,
-                        softWrap = false, overflow = TextOverflow.Ellipsis)
+                    for (entry in row) {
+                        val item = entry.candidate
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = 44.dp, max = maxRowWidthDp)
+                                .height(36.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(palette.keyNormal)
+                                .semantics { contentDescription = "変換候補 ${item.text}" }
+                                .clickable { onSelect(item) }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = candidateDisplayLabel(item),
+                                color = if (entry.index == 0 && item.isAI) {
+                                    palette.primaryAccentSoft
+                                } else {
+                                    palette.textPrimary
+                                },
+                                fontSize = 15.sp,
+                                fontWeight = if (entry.index == 0) FontWeight.Medium else FontWeight.Normal,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             }
         }

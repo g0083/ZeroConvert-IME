@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 pub mod corrector;
 pub mod dynamic_macro;
+pub mod english_learning;
 pub mod keyboard_hybrid;
 pub mod learning;
 pub mod prediction;

@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -261,28 +262,58 @@ suspend fun AwaitPointerEventScope.awaitPointerReleaseInBounds(
     widthPx: Float,
     heightPx: Float,
     slopForgivenessPx: Float
-): Boolean {
+): Boolean = awaitKeyRelease(pointerId, widthPx, heightPx, slopForgivenessPx) == FlickDirection.CENTER
+
+private suspend fun AwaitPointerEventScope.awaitKeyRelease(
+    pointerId: PointerId,
+    widthPx: Float,
+    heightPx: Float,
+    slopForgivenessPx: Float,
+    flickStart: Offset? = null,
+    flickThresholdPx: Float = 0f,
+    onFlickPreview: ((FlickDirection?) -> Unit)? = null
+): FlickDirection? {
+    var direction = FlickDirection.CENTER
     while (true) {
         val event = awaitPointerEvent()
-        val change = event.changes.firstOrNull { it.id == pointerId } ?: return false
-        if (!change.pressed) {
-            if (change.isConsumed) return false
-            val pos = change.position
-            val inside = pos.x >= -slopForgivenessPx &&
-                pos.x <= widthPx + slopForgivenessPx &&
-                pos.y >= -slopForgivenessPx &&
-                pos.y <= heightPx + slopForgivenessPx
-            if (inside) {
-                change.consume()
+        val change = event.changes.firstOrNull { it.id == pointerId } ?: return null
+        if (change.isConsumed && (!change.pressed || flickStart != null)) return null
+        val pos = change.position
+        if (flickStart != null) {
+            val nextDirection = calculateFlickDirectionWithHysteresis(
+                pos.x - flickStart.x,
+                pos.y - flickStart.y,
+                flickThresholdPx,
+                direction
+            )
+            if (nextDirection != direction) {
+                direction = nextDirection
+                onFlickPreview?.invoke(direction)
             }
-            return inside
+        }
+        if (!change.pressed) {
+            when (direction) {
+                FlickDirection.RIGHT, FlickDirection.UP -> Unit
+                FlickDirection.LEFT, FlickDirection.DOWN -> return null
+                FlickDirection.CENTER -> {
+                    if (pos.x < -slopForgivenessPx || pos.x > widthPx + slopForgivenessPx ||
+                        pos.y < -slopForgivenessPx || pos.y > heightPx + slopForgivenessPx
+                    ) return null
+                }
+            }
+            change.consume()
+            return direction
+        }
+        if (direction != FlickDirection.CENTER) {
+            change.consume()
         }
     }
 }
 
 /**
  * Shared full-slot action button providing immediate pressed visual highlight, strict
- * pointer-down-only haptic feedback, optional long-press, and a forgiving release hitbox.
+ * pointer-down-only haptic feedback, optional long-press or right and up flicks,
+ * and a forgiving tap hitbox.
  */
 @Composable
 fun KeyboardActionKey(
@@ -295,17 +326,21 @@ fun KeyboardActionKey(
     contentDescription: String? = null,
     onBeforePress: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
+    onFlick: ((FlickDirection) -> Unit)? = null,
+    onFlickPreview: ((FlickDirection?) -> Unit)? = null,
     onClick: () -> Unit,
     content: @Composable BoxScope.(isPressed: Boolean) -> Unit
 ) {
     val currentOnClick by rememberUpdatedState(onClick)
     val currentOnLongClick by rememberUpdatedState(onLongClick)
+    val currentOnFlick by rememberUpdatedState(onFlick)
+    val currentOnFlickPreview by rememberUpdatedState(onFlickPreview)
     val currentOnBeforePress by rememberUpdatedState(onBeforePress)
     val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
     val bordersEnabled = LocalKeyBordersEnabled.current
     val longPressTimeoutMs = LocalViewConfiguration.current.longPressTimeoutMillis
     val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
+    val flickThresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
     var isPressed by remember { mutableStateOf(false) }
 
     val semanticsModifier = Modifier.semantics(mergeDescendants = true) {
@@ -331,7 +366,7 @@ fun KeyboardActionKey(
         modifier = modifier
             .then(semanticsModifier)
             .pointerInput(Unit) {
-                val forgivenessPx = with(density) { 12.dp.toPx() }
+                val forgivenessPx = 12.dp.toPx()
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
@@ -350,20 +385,30 @@ fun KeyboardActionKey(
                         }
                     }
 
-                    val releasedInside = try {
-                        awaitPointerReleaseInBounds(
+                    val flickPreview = currentOnFlickPreview
+                    val direction = try {
+                        flickPreview?.invoke(FlickDirection.CENTER)
+                        awaitKeyRelease(
                             pointerId = down.id,
                             widthPx = size.width.toFloat(),
                             heightPx = size.height.toFloat(),
-                            slopForgivenessPx = forgivenessPx
+                            slopForgivenessPx = forgivenessPx,
+                            flickStart = down.position.takeIf { currentOnFlick != null },
+                            flickThresholdPx = flickThresholdDp.toPx(),
+                            onFlickPreview = flickPreview
                         )
                     } finally {
                         longPressJob?.cancel()
                         isPressed = false
+                        flickPreview?.invoke(null)
                     }
 
-                    if (releasedInside && !longPressTriggered) {
-                        currentOnClick()
+                    if (direction != null && !longPressTriggered) {
+                        if (direction == FlickDirection.CENTER) {
+                            currentOnClick()
+                        } else {
+                            currentOnFlick?.invoke(direction)
+                        }
                     }
                 }
             },

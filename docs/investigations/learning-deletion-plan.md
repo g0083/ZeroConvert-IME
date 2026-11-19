@@ -170,7 +170,7 @@ Androidは同じSwiftエンジンを直接呼ぶため、`engine/swift/AndroidBr
 
 ## 未対応
 
-- 英語学習（`zerocon_english_data`）と絵文字履歴は削除スコープに含めていない。
+- 絵文字履歴は削除スコープに含めていない。（英語学習は旧 `zerocon_english_data` から共通 `english-learning.json` へ移行し、`"english"` スコープによる一括削除および候補ごとの削除に対応済み。）
 - 上流 `forgetMemory` の表記単位照合により、同じ表記を別読みで学習していた場合も消える。仕様として許容。
 
 ## 修正（2026-11-12・Windows右クリック削除の再変換）

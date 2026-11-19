@@ -4,6 +4,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyboardState, ToUnicode, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_SHIFT,
 };
 
+pub(crate) const VK_PACKET_KEY_CODE: usize = 0xE7;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum UserAction {
     Input(char),
@@ -193,6 +195,10 @@ impl TryFrom<usize> for UserAction {
 
             0xF3 | 0xF4 => UserAction::ToggleInputMode, // Zenkaku/Hankaku
 
+            // VK_PACKET (KEYEVENTF_UNICODE) carries a pre-composed UTF-16 code unit from
+            // SendInput. Never consume its kernel packet state via ToUnicode in the IME.
+            VK_PACKET_KEY_CODE => UserAction::Unknown,
+
             _ => {
                 let key_state = {
                     let mut key_state = [0u8; 256];
@@ -225,7 +231,7 @@ impl TryFrom<usize> for UserAction {
 
 #[cfg(test)]
 mod tests {
-    use super::{Function, UserAction};
+    use super::{Function, UserAction, VK_PACKET_KEY_CODE};
 
     #[test]
     fn ctrl_shortcut_keys_map_to_conversion_functions() {
@@ -264,5 +270,12 @@ mod tests {
         let action = UserAction::try_from(0x1C).expect("VK_CONVERT should map");
 
         assert!(matches!(action, UserAction::Reconvert));
+    }
+
+    #[test]
+    fn vk_packet_maps_to_unknown_without_to_unicode() {
+        let action = UserAction::try_from(VK_PACKET_KEY_CODE).expect("VK_PACKET should map");
+
+        assert!(matches!(action, UserAction::Unknown));
     }
 }

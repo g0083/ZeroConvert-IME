@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.zeroconvert.ime.assist.AiAssistResult
 import com.zeroconvert.ime.assist.AiAssistType
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 
 /** UI-only device regressions: no model, input history, selected IME or preferences are touched. */
 class KeyboardUiRegression(private val instrumentation: Instrumentation) {
@@ -34,6 +35,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
         val applied: Boolean = false,
         val expanded: Boolean = false,
         val flick: Boolean = false,
+        val flickMode: KeyboardMode = KeyboardMode.JAPANESE,
         val keyHeight: Int = 46,
         val fontScale: Float = 1f,
         val candidates: List<Candidate> = listOf(Candidate("通常候補", "")),
@@ -54,6 +56,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
     private var typed = ""
     private var emojiTyped = ""
     private var symbolTyped = ""
+    private val modeSwitches = mutableListOf<FlickDirection>()
     private val emojiCategories: List<EmojiCategory> by lazy {
         instrumentation.targetContext.assets.open("emoji_catalog.tsv")
             .bufferedReader(Charsets.UTF_8).useLines { EmojiCatalog.parse(it) }
@@ -236,8 +239,8 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                         rowCount = if (sample.numberRow) 5 else 4,
                         extraHeight = if (sample.emoji || sample.symbols) KeyboardBarHeight * 2 else 0.dp,
                         expandedContent = {
-                            ExpandedCandidatePanel(listOf(Candidate(longText, sample.reading)), true,
-                                ZeroConDarkPalette, {}, {})
+                            ExpandedCandidatePanel(listOf(Candidate(longText, sample.reading)),
+                                ZeroConDarkPalette, {})
                         },
                         keyboardContent = {
                             if (sample.emoji) {
@@ -252,7 +255,8 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                     onBackToQwerty = {},
                                     onDelete = {},
                                     onSpace = {},
-                                    onEnter = {}
+                                    onEnter = {},
+                                    onOpenSymbols = { state.value = state.value.copy(emoji = false, symbols = true) }
                                 )
                             } else if (sample.symbols) {
                                 SymbolsPanel(
@@ -266,25 +270,53 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                     onSpace = {},
                                     onEnter = {},
                                     onCursorLeft = {},
-                                    onCursorRight = {}
+                                    onCursorRight = {},
+                                    onOpenEmoji = { state.value = state.value.copy(emoji = true, symbols = false) }
                                 )
                             } else if (sample.flick) {
-                                Japanese12KeyFlickLayout(
-                                    keyBgColor = ZeroConDarkPalette.keyNormal,
-                                    actionKeyBg = ZeroConDarkPalette.keyModifier,
-                                    textColor = ZeroConDarkPalette.textPrimary,
-                                    palette = ZeroConDarkPalette,
-                                    rowHeight = sample.keyHeight.dp * (52f / 46f),
-                                    onKanaInput = { typed += it }, onReplaceLastKana = {}, onToggleDakuten = {},
-                                    onDelete = {}, onSpace = {}, onEnter = {}, onCycleMode = {},
-                                    onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
-                                )
+                                when (sample.flickMode) {
+                                    KeyboardMode.JAPANESE -> Japanese12KeyFlickLayout(
+                                        keyBgColor = ZeroConDarkPalette.keyNormal,
+                                        actionKeyBg = ZeroConDarkPalette.keyModifier,
+                                        textColor = ZeroConDarkPalette.textPrimary,
+                                        palette = ZeroConDarkPalette,
+                                        rowHeight = sample.keyHeight.dp * (52f / 46f),
+                                        onKanaInput = { typed += it }, onReplaceLastKana = {}, onToggleDakuten = {},
+                                        onDelete = {}, onUndo = { undone++ }, onSpace = {}, onEnter = {},
+                                        onSwitchMode = { modeSwitches += it },
+                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
+                                    )
+                                    KeyboardMode.ENGLISH -> English12KeyFlickLayout(
+                                        keyBgColor = ZeroConDarkPalette.keyNormal,
+                                        actionKeyBg = ZeroConDarkPalette.keyModifier,
+                                        textColor = ZeroConDarkPalette.textPrimary,
+                                        palette = ZeroConDarkPalette,
+                                        rowHeight = sample.keyHeight.dp * (52f / 46f),
+                                        onCommitText = { typed += it },
+                                        onToggleLastCharCase = {},
+                                        isLastCharLetter = { false },
+                                        onDelete = {}, onUndo = { undone++ }, onSpace = {}, onEnter = {},
+                                        onSwitchMode = { modeSwitches += it },
+                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
+                                    )
+                                    KeyboardMode.NUMERIC -> FlickNumericPadLayout(
+                                        keyBgColor = ZeroConDarkPalette.keyNormal,
+                                        actionKeyBg = ZeroConDarkPalette.keyModifier,
+                                        textColor = ZeroConDarkPalette.textPrimary,
+                                        palette = ZeroConDarkPalette,
+                                        rowHeight = sample.keyHeight.dp * (52f / 46f),
+                                        onCommitText = { typed += it },
+                                        onDelete = {}, onUndo = { undone++ }, onEnter = {},
+                                        onSwitchMode = { modeSwitches += it },
+                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
+                                    )
+                                }
                             } else {
                                 JapaneseQwertyLayout(sample.shifted, ZeroConDarkPalette.keyNormal,
                                     ZeroConDarkPalette.keyModifier, ZeroConDarkPalette.textPrimary,
                                     ZeroConDarkPalette,
                                     onKeyPress = { typed += it }, onShiftToggle = {}, onDelete = {},
-                                    onSpace = {}, onEnter = {}, onCycleMode = {}, onOpenEmoji = {},
+                                    onSpace = {}, onEnter = {}, onSwitchMode = { modeSwitches += it }, onOpenEmoji = {},
                                     isComposing = sample.reading.isNotEmpty(), onCursorLeft = {}, onCursorRight = {},
                                     showNumberRow = sample.numberRow)
                             }
@@ -362,6 +394,36 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                     update(state.value.copy(assist = prediction))
                     touch(key, MotionEvent.ACTION_UP, downTime)
                     check(typed == if (flick) "あ" else "a") { "Touch lost or entered a different character: $typed" }
+                }
+                test("mode_switch_guide_${if (flick) "flick" else "qwerty"}") {
+                    update(Case(flick = flick))
+                    val key = bounds("入力モード:日本語")
+                    val distance = (35f * density).roundToInt()
+                    val gestures = listOf(
+                        Triple(FlickDirection.UP, 0, -distance),
+                        Triple(FlickDirection.RIGHT, distance, 0),
+                        Triple(FlickDirection.CENTER, 0, 0)
+                    )
+                    for ((direction, dx, dy) in gestures) {
+                        modeSwitches.clear()
+                        val downTime = SystemClock.uptimeMillis()
+                        touch(key, MotionEvent.ACTION_DOWN, downTime)
+                        waitFor("Mode guide did not show the up and right destinations") {
+                            node("↑ 数字") != null && node("→ 英字") != null
+                        }
+                        val end = Rect(key).apply { offset(dx, dy) }
+                        if (direction != FlickDirection.CENTER) {
+                            moveTo(end.exactCenterX(), end.exactCenterY(), downTime)
+                        }
+                        check(modeSwitches.isEmpty()) { "Mode switched before release" }
+                        touch(end, MotionEvent.ACTION_UP, downTime)
+                        check(modeSwitches == listOf(direction)) {
+                            "Expected one switch to $direction, got $modeSwitches"
+                        }
+                        waitFor("Mode guide stayed on screen after release") {
+                            node("↑ 数字") == null && node("→ 英字") == null
+                        }
+                    }
                 }
             }
             // The hidden number row moves the digits onto the up-flick of q..p, so the
@@ -618,6 +680,37 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                 check(reclaimed >= barsHeight - 2) {
                     "$tab panel did not reclaim the hidden bars: $body vs $qwertyBody"
                 }
+            }
+            test("flick_12key_common_keys_keep_same_positions_across_modes") {
+                fun captureSidePositions(mode: KeyboardMode): List<Rect> {
+                    update(Case(flick = true, flickMode = mode))
+                    val emojiOrSymbols = if (mode == KeyboardMode.NUMERIC) "記号" else "絵文字・記号"
+                    return listOf(
+                        bounds("元に戻す"),
+                        bounds("◀"),
+                        bounds(emojiOrSymbols),
+                        bounds("入力モード:${mode.label}"),
+                        bounds("Backspace"),
+                        bounds("▶"),
+                        bounds("空白"),
+                        bounds("確定")
+                    )
+                }
+                val jpPositions = captureSidePositions(KeyboardMode.JAPANESE)
+                val enPositions = captureSidePositions(KeyboardMode.ENGLISH)
+                val numPositions = captureSidePositions(KeyboardMode.NUMERIC)
+                check(jpPositions == enPositions) { "JP and EN 12-key side positions differ: $jpPositions vs $enPositions" }
+                check(jpPositions == numPositions) { "JP and Numeric 12-key side positions differ: $jpPositions vs $numPositions" }
+                undone = 0
+                tap("元に戻す")
+                check(undone == 1) { "12-key Undo button did not fire onUndo: $undone" }
+            }
+            test("emoji_and_symbols_panels_switch_between_each_other") {
+                update(Case(emoji = true))
+                click("記号パネルに切り替え")
+                waitFor("Did not switch from Emoji to Symbols panel") { node("絵文字パネルに切り替え") != null }
+                click("絵文字パネルに切り替え")
+                waitFor("Did not switch from Symbols to Emoji panel") { node("記号パネルに切り替え") != null }
             }
             test("emoji_panel_hides_the_reading_and_candidate_bars") {
                 checkPanelReclaimsTheBars("Emoji", Case(emoji = true))

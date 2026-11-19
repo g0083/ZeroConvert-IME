@@ -29,7 +29,7 @@ fn ensure_ipc_service_for_tsf_event(event: &str) {
 }
 
 /// Input mode implied by the InputScope of the current selection, if any.
-fn input_scope_mode_for_cookie(context: &ITfContext, cookie: u32) -> Option<InputMode> {
+fn input_scope_for_cookie(context: &ITfContext, cookie: u32) -> Option<(bool, Option<InputMode>)> {
     let mut selection = [TF_SELECTION::default()];
     let mut fetched = 0;
     unsafe {
@@ -43,10 +43,24 @@ fn input_scope_mode_for_cookie(context: &ITfContext, cookie: u32) -> Option<Inpu
     let range = selection[0].range.as_ref()?;
     let range = unsafe { range.Clone().ok()? };
     let scopes = TextServiceFactory::range_input_scopes(cookie, context, &range).ok()?;
-    mode_for_scopes(&scopes)
+    Some((
+        scopes
+            .iter()
+            .copied()
+            .any(TextServiceFactory::is_sensitive_input_scope),
+        mode_for_scopes(&scopes),
+    ))
 }
 
 impl TextServiceFactory {
+    pub(crate) fn set_private_input_for_field(&self, private_input: bool) -> Result<()> {
+        let previous = std::mem::replace(&mut self.borrow_mut()?.private_input, private_input);
+        if previous != private_input {
+            let _ = self.update_lang_bar();
+        }
+        Ok(())
+    }
+
     fn refresh_selection_context(&self) -> Result<()> {
         let thread_mgr = self.borrow()?.thread_mgr()?;
         let Ok(document) = (unsafe { thread_mgr.GetFocus() }) else {
@@ -65,6 +79,7 @@ impl TextServiceFactory {
 
     pub fn set_keyboard_disabled_state(&self, disabled: bool) -> Result<()> {
         if disabled {
+            self.set_private_input_for_field(false)?;
             self.stop_translation_mode();
             self.hide_selection_count();
             self.cancel_typo_assist();
@@ -118,9 +133,10 @@ impl TextServiceFactory {
         let Some(focus) = focus else {
             return Ok(());
         };
-        if !self.follow_input_scope_mode_enabled()? || IMEState::keyboard_disabled()? {
+        if IMEState::keyboard_disabled()? {
             return Ok(());
         }
+        let follow_mode = self.follow_input_scope_mode_enabled()?;
         let (tid, this, context) = {
             let text_service = self.borrow()?;
             let composing = text_service
@@ -145,7 +161,7 @@ impl TextServiceFactory {
             let context = context.clone();
             let requested = requested.clone();
             move |cookie| {
-                requested.set(input_scope_mode_for_cookie(&context, cookie));
+                requested.set(input_scope_for_cookie(&context, cookie));
                 Ok(())
             }
         });
@@ -153,9 +169,7 @@ impl TextServiceFactory {
             let this = this.clone();
             let context = context.clone();
             move || {
-                let Some(mode) = requested.take() else {
-                    return;
-                };
+                let (private_input, mode) = requested.take().unwrap_or_default();
                 let factory = unsafe { this.as_impl() };
                 let Ok(mut text_service) = factory.borrow_mut() else {
                     return;
@@ -177,6 +191,10 @@ impl TextServiceFactory {
                 if !still_focused || composing || IMEState::keyboard_disabled().unwrap_or(true) {
                     return;
                 }
+                let _ = factory.set_private_input_for_field(private_input);
+                let Some(mode) = mode.filter(|_| follow_mode) else {
+                    return;
+                };
                 if IMEState::input_mode().is_ok_and(|current| current == mode) {
                     return;
                 }
@@ -216,6 +234,7 @@ impl ITfThreadMgrEventSink_Impl for TextServiceFactory_Impl {
         }
         self.stop_translation_mode();
         self.end_composition_for_tsf_event();
+        self.set_private_input_for_field(false)?;
         self.set_keyboard_disabled_for_document_mgr(focus)?;
         ensure_ipc_service_for_tsf_event("OnSetFocus");
         if let Err(error) = self.request_input_scope_mode_switch(focus) {

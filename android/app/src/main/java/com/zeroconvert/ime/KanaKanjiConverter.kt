@@ -168,7 +168,12 @@ class KanaKanjiConverter {
          * Order matters only for reporting: the engine reset also clears the
          * candidate cache, so a later commit cannot resurrect a deleted entry.
          */
-        fun clearAllLearning(context: Context, conversion: Boolean, typo: Boolean): Boolean {
+        fun clearAllLearning(
+            context: Context,
+            conversion: Boolean,
+            typo: Boolean,
+            english: Boolean = false
+        ): Boolean {
             ensureInitialized(context)
             var ok = true
             if (typo) {
@@ -178,6 +183,10 @@ class KanaKanjiConverter {
                 bumpLearningHistory()
                 ok = com.zeroconvert.ime.engine.WindowsEngine.resetLearningBlocking()
             }
+            if (english) {
+                bumpLearningHistory()
+                ok = EnglishWordDictionary.clearLearning() && ok
+            }
             return ok
         }
 
@@ -185,6 +194,12 @@ class KanaKanjiConverter {
         fun getTypoLearningCount(context: Context): Int {
             com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(context)
             return com.zeroconvert.ime.engine.WindowsEngine.learningTypoCount()
+        }
+
+        /** Learned English words currently promoted, for the settings summary. */
+        fun getEnglishLearningCount(context: Context): Int {
+            ensureInitialized(context)
+            return com.zeroconvert.ime.engine.WindowsEngine.learningEnglishCount()
         }
 
         @Synchronized

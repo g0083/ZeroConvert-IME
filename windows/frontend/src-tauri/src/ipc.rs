@@ -260,6 +260,7 @@ impl IPCService {
 
             if !context.is_empty() {
                 let mut ctx_req = tonic::Request::new(shared::proto::SetContextRequest {
+                    private_input: false,
                     context: context.to_string(),
                     request_id: 11,
                 });

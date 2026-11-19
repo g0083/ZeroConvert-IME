@@ -35,6 +35,11 @@ pub enum ClientAction {
         kind: LearningCommitKind,
         was_temporary_latin: bool,
     },
+    CommitEnglishLearning {
+        prefix: String,
+        word: String,
+        explicit_selection: bool,
+    },
     SetTemporaryLatin(bool),
     SetTemporaryLatinShiftPending(bool),
 

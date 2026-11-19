@@ -9,6 +9,22 @@ import org.junit.Test
 class KeyboardTouchLogicTest {
 
     @Test
+    fun modeSwitchCyclesThroughAllThreeModes() {
+        val transitions = listOf(
+            Triple(KeyboardMode.JAPANESE, KeyboardMode.NUMERIC, KeyboardMode.ENGLISH),
+            Triple(KeyboardMode.ENGLISH, KeyboardMode.JAPANESE, KeyboardMode.NUMERIC),
+            Triple(KeyboardMode.NUMERIC, KeyboardMode.ENGLISH, KeyboardMode.JAPANESE)
+        )
+        for ((current, previous, next) in transitions) {
+            assertEquals(previous, current.afterSwitch(FlickDirection.UP))
+            assertEquals(next, current.afterSwitch(FlickDirection.RIGHT))
+            assertEquals(next, current.afterSwitch(FlickDirection.CENTER))
+            assertEquals(current, current.afterSwitch(FlickDirection.LEFT))
+            assertEquals(current, current.afterSwitch(FlickDirection.DOWN))
+        }
+    }
+
+    @Test
     fun calculateFlickDirectionWithHysteresis_respectsSensitivityThreshold() {
         assertEquals(
             FlickDirection.CENTER,

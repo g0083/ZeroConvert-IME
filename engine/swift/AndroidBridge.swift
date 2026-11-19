@@ -228,11 +228,15 @@ private let embeddedPerformance = EmbeddedPerformance()
     guard !zerocon_conversion_cancelled() else { return ["cancelled": true] }
     let started = DispatchTime.now().uptimeNanoseconds
     var length: CInt = 0
+    var readingCompletions = Set<Int>()
     // No caller-supplied raw-input boundary: use the snapshot's cursor prefix.
     // Zero is an exact empty boundary in the shared API, not an unspecified one.
-    let candidates = request["allowAI"] as? Bool == false
-        ? get_composed_text_for_reconversion(lengthPtr: &length)
-        : (snapshot.isAtEndIndex ? get_composed_text(lengthPtr: &length) : get_composed_text_for_cursor_range(lengthPtr: &length))
+    let allowAI = request["allowAI"] as? Bool != false
+    let candidates = allowAI && !snapshot.isAtEndIndex
+        ? get_composed_text_for_cursor_range(lengthPtr: &length)
+        : get_composed_text_impl(lengthPtr: &length, allowZenzai: allowAI, onReadingCompletion: {
+            readingCompletions.insert($0)
+        })
     defer { free_candidate_list(candidates, length) }
     if zerocon_conversion_cancelled() {
         // An aborted decode may leave a partially updated KV cache. Reset both
@@ -258,6 +262,7 @@ private let embeddedPerformance = EmbeddedPerformance()
         result.append(["text": text, "suffix": suffix, "candidateId": String(candidate.candidateId),
                        "correspondingCount": candidate.correspondingCount,
                        "consumedReadingUtf16": consumedUtf16,
+                       "readingCompletion": readingCompletions.contains(index),
                        "learningAllowed": learningCandidateCache.isLearningTarget(candidate.candidateId),
                        "predictionReading": candidate.predictionReading.map { String(cString: $0) } ?? ""])
     }

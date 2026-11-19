@@ -115,6 +115,7 @@ object WindowsEngine {
         modelPath = selectedModel.absolutePath
         migrateSelections(File(dataRoot, "Azookey/LearningMemory"))
         migrateCorrections(File(dataRoot, "Azookey/ai-assist-learning.json"))
+        migrateEnglishLearning(File(dataRoot, "Azookey/english-learning.json"))
         assistRequest(JSONObject().put("op", "configurePaths")
             .put("settings", File(dataRoot, "Azookey/settings.json").absolutePath)
             .put("reverse", File(root, "Dictionary/Reverse/reverse-v2.bin").absolutePath))
@@ -208,6 +209,71 @@ object WindowsEngine {
                 .put("count", entry.optInt("confirmed", 0)).put("updated_at_ms", entry.optLong("updated_at_ms", 0)))
         }
         atomicWrite(destination, JSONObject().put("version", 1).put("entries", entries).toString())
+    }
+
+    private fun migrateEnglishLearning(destination: File) {
+        if (destination.exists()) return
+        destination.parentFile?.mkdirs()
+        val legacyJson = application
+            .getSharedPreferences("zerocon_english_data", Context.MODE_PRIVATE)
+            .getString("english_learning_memory_json", null)
+        atomicWrite(destination, buildMigratedEnglishLearningJson(legacyJson))
+    }
+
+    internal fun buildMigratedEnglishLearningJson(
+        legacyJson: String?,
+        nowMs: Long = System.currentTimeMillis()
+    ): String {
+        val wordsByKey = LinkedHashMap<String, JSONObject>()
+        val prefixOverrides = JSONArray()
+        if (!legacyJson.isNullOrBlank()) {
+            runCatching { JSONObject(legacyJson) }.getOrNull()?.let { source ->
+                var offset = 1L
+                val keys = source.keys()
+                while (keys.hasNext()) {
+                    val rawPrefix = keys.next().trim()
+                    val rawWord = source.optString(rawPrefix, "").trim()
+                    if (rawWord.length !in 2..64 || !rawWord.all { it in 'A'..'Z' || it in 'a'..'z' }) {
+                        continue
+                    }
+                    val ts = (nowMs.coerceAtLeast(0) + offset++)
+                    val wordKey = rawWord.lowercase(java.util.Locale.ROOT)
+                    val existing = wordsByKey[wordKey]
+                    if (existing == null) {
+                        wordsByKey[wordKey] = JSONObject()
+                            .put("word", rawWord)
+                            .put("count", 1)
+                            .put("explicit_count", 1)
+                            .put("in_dictionary", false)
+                            .put("updated_at_ms", ts)
+                    } else {
+                        existing.put("word", rawWord)
+                        existing.put("count", existing.optInt("count", 1) + 1)
+                        existing.put("explicit_count", existing.optInt("explicit_count", 1) + 1)
+                        existing.put("updated_at_ms", ts)
+                    }
+                    if (rawPrefix.length in 1..64 &&
+                        rawPrefix.all { it in 'A'..'Z' || it in 'a'..'z' } &&
+                        (rawPrefix.lowercase(java.util.Locale.ROOT) != wordKey || rawWord != rawPrefix)
+                    ) {
+                        prefixOverrides.put(
+                            JSONObject()
+                                .put("prefix", rawPrefix.lowercase(java.util.Locale.ROOT))
+                                .put("word", rawWord)
+                                .put("count", 1)
+                                .put("updated_at_ms", ts)
+                        )
+                    }
+                }
+            }
+        }
+        val words = JSONArray()
+        for (entry in wordsByKey.values) words.put(entry)
+        return JSONObject()
+            .put("version", 1)
+            .put("words", words)
+            .put("prefix_overrides", prefixOverrides)
+            .toString()
     }
 
     private fun atomicWrite(destination: File, text: String) {
@@ -363,7 +429,8 @@ object WindowsEngine {
                     isAI = neuralAllowed, learningAllowed = candidate.getBoolean("learningAllowed"),
                     engineCandidateId = candidate.getString("candidateId").takeUnless { it == "0" }.orEmpty(),
                     engineConsumedReading = consumed,
-                    enginePredictionReading = candidate.optString("predictionReading"))
+                    enginePredictionReading = candidate.optString("predictionReading"),
+                    isReadingCompletion = candidate.optBoolean("readingCompletion"))
             }.distinctBy { it.text to it.engineConsumedReading }
             val macrosRaw = assistReply(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor))
             val macroTexts = macrosRaw?.let { raw ->
@@ -519,6 +586,118 @@ object WindowsEngine {
         backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
             assistRequest(JSONObject().put("op", "forgetAll"))
         })
+    }
+
+    data class EnglishLearnedSuggestion(
+        val text: String,
+        val learned: Boolean,
+        val key: String
+    )
+
+    data class EnglishSuggestResponse(
+        val suggestions: List<EnglishLearnedSuggestion> = emptyList(),
+        val promotedPrefix: Boolean = false
+    )
+
+    fun isReady(): Boolean = ready
+
+    fun englishSuggest(
+        prefix: String,
+        limit: Int = 8,
+        readLearning: Boolean = LearningPolicy.canRead
+    ): EnglishSuggestResponse {
+        if (!ready || !readLearning || prefix.isEmpty()) return EnglishSuggestResponse()
+        val reply = runCatching {
+            assistReply(
+                assistRequest(
+                    JSONObject()
+                        .put("op", "englishSuggest")
+                        .put("input", prefix)
+                        .put("limit", limit)
+                        .put("readLearning", true)
+                )
+            )
+        }.getOrNull() ?: return EnglishSuggestResponse()
+        val obj = runCatching { JSONObject(reply) }.getOrNull() ?: return EnglishSuggestResponse()
+        val arr = obj.optJSONArray("suggestions") ?: JSONArray()
+        val suggestions = ArrayList<EnglishLearnedSuggestion>(arr.length())
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            val text = item.optString("text")
+            if (text.isNotEmpty()) {
+                suggestions.add(
+                    EnglishLearnedSuggestion(
+                        text = text,
+                        learned = item.optBoolean("learned", true),
+                        key = item.optString("key")
+                    )
+                )
+            }
+        }
+        return EnglishSuggestResponse(suggestions, obj.optBoolean("promotedPrefix", false))
+    }
+
+    fun recordEnglishWord(
+        prefix: String,
+        word: String,
+        explicitSelection: Boolean,
+        inDictionary: Boolean,
+        expectedRevision: Long = KanaKanjiConverter.learningHistoryRevision
+    ) {
+        if (word.isEmpty()) return
+        backgroundTasks.trySend(BackgroundTask(expectedRevision) {
+            assistRequest(
+                JSONObject()
+                    .put("op", "englishRecord")
+                    .put("prefix", prefix)
+                    .put("word", word)
+                    .put("explicitSelection", explicitSelection)
+                    .put("inDictionary", inDictionary)
+            )
+        })
+    }
+
+    fun forgetEnglishWordBlocking(word: String, prefix: String = ""): Boolean = runBlocking(dispatcher) {
+        if (!ready || !LearningPolicy.canRead || word.isEmpty()) return@runBlocking false
+        runCatching {
+            val reply = assistReply(
+                assistRequest(
+                    JSONObject()
+                        .put("op", "englishForget")
+                        .put("word", word)
+                        .put("prefix", prefix)
+                )
+            )
+            reply?.let { JSONObject(it).optBoolean("forgot", false) } ?: false
+        }.getOrDefault(false)
+    }
+
+    fun clearEnglishLearningBlocking(): Boolean = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking false
+        runCatching {
+            assistReply(assistRequest(JSONObject().put("op", "englishForgetAll"))) != null
+        }.getOrDefault(false)
+    }
+
+    fun learningEnglishCount(): Int = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking 0
+        runCatching { assistReply(assistRequest(JSONObject().put("op", "learningStats"))) }
+            .getOrNull()?.let { JSONObject(it).optInt("englishCount", 0) } ?: 0
+    }
+
+    fun englishPromotedWords(readLearning: Boolean = LearningPolicy.canRead): List<String> {
+        if (!ready || !readLearning) return emptyList()
+        val reply = runCatching {
+            assistReply(
+                assistRequest(
+                    JSONObject()
+                        .put("op", "englishPromotedWords")
+                        .put("readLearning", true)
+                )
+            )
+        }.getOrNull() ?: return emptyList()
+        val arr = runCatching { JSONObject(reply).optJSONArray("words") }.getOrNull() ?: return emptyList()
+        return List(arr.length()) { arr.optString(it) }.filter { it.isNotEmpty() }
     }
 
     /** Number of learned typo corrections the shared store holds. */

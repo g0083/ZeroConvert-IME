@@ -188,6 +188,7 @@ val buildAssistPolicyTestHost by tasks.registering(Exec::class) {
     inputs.dir(rootProject.file("../windows/crates/server/src/ai_assist"))
     inputs.files(rootProject.file("../windows/crates/shared/src/assist_policy.rs"),
         rootProject.file("../windows/crates/shared/src/conversion_policy.rs"),
+        rootProject.file("../windows/crates/shared/src/english_learning.rs"),
         rootProject.file("../engine/rust/Cargo.toml"), rootProject.file("../engine/rust/Cargo.lock"))
     outputs.file(assistPolicyExecutable)
 }

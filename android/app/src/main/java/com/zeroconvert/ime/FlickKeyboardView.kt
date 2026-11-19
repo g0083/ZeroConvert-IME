@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material3.Icon
@@ -575,30 +576,40 @@ private fun ColumnScope.FlickGridRow(
 }
 
 @Composable
-private fun FlickSideSymbolsButton(
+private fun FlickSideUndoButton(
     modifier: Modifier,
     visualPadding: PaddingValues,
     actionKeyBg: Color,
     textColor: Color,
-    onOpenSymbols: () -> Unit
+    palette: ZeroConPalette,
+    onUndo: () -> Unit
 ) {
     KeyboardActionKey(
         modifier = modifier,
         visualPadding = visualPadding,
         cornerRadius = 8.dp,
         baseColor = actionKeyBg,
-        onClick = onOpenSymbols
+        palette = palette,
+        contentDescription = "元に戻す",
+        onClick = onUndo
     ) {
-        Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.Undo,
+            contentDescription = null,
+            tint = textColor,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
 @Composable
-private fun FlickSideEmojiButton(
+private fun FlickSideSymbolsButton(
     modifier: Modifier,
     visualPadding: PaddingValues,
     actionKeyBg: Color,
     textColor: Color,
+    palette: ZeroConPalette,
+    onOpenSymbols: () -> Unit,
     onOpenEmoji: () -> Unit
 ) {
     KeyboardActionKey(
@@ -606,9 +617,65 @@ private fun FlickSideEmojiButton(
         visualPadding = visualPadding,
         cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        palette = palette,
+        contentDescription = "記号",
+        onFlick = { direction ->
+            when (direction) {
+                FlickDirection.UP, FlickDirection.RIGHT -> onOpenEmoji()
+                FlickDirection.CENTER -> onOpenSymbols()
+                FlickDirection.LEFT, FlickDirection.DOWN -> Unit
+            }
+        },
+        onClick = onOpenSymbols
+    ) {
+        Text(text = "!?#", color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun FlickSideEmojiSymbolsButton(
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    onOpenEmoji: () -> Unit,
+    onOpenSymbols: () -> Unit
+) {
+    KeyboardActionKey(
+        modifier = modifier,
+        visualPadding = visualPadding,
+        cornerRadius = 8.dp,
+        baseColor = actionKeyBg,
+        palette = palette,
+        contentDescription = "絵文字・記号",
+        onFlick = { direction ->
+            when (direction) {
+                FlickDirection.UP, FlickDirection.RIGHT -> onOpenSymbols()
+                FlickDirection.CENTER -> onOpenEmoji()
+                FlickDirection.LEFT, FlickDirection.DOWN -> Unit
+            }
+        },
         onClick = onOpenEmoji
     ) {
-        Icon(imageVector = Icons.Default.Mood, contentDescription = "Emoji", tint = textColor, modifier = Modifier.size(22.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mood,
+                contentDescription = null,
+                tint = textColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(1.dp))
+            Text(
+                text = "記",
+                color = textColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }
 
@@ -705,6 +772,113 @@ private fun FlickSideCursorButton(
     }
 }
 
+/**
+ * Shared 5x4 12-key grid keeping common utility keys in identical positions across
+ * Japanese, English, and Numeric modes (following Gboard's 12-key layout):
+ * Left column:  [Undo (↶)] [◀] [☺記 / !?#] [あa1]
+ * Right column: [Backspace] [▶] [␣] [確定]
+ */
+@Composable
+private fun Flick12KeyGrid(
+    mode: KeyboardMode,
+    rows: List<Triple<FlickKeyDef, FlickKeyDef, FlickKeyDef>>,
+    keyBgColor: Color,
+    actionKeyBg: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    row3FirstKeyBg: Color = keyBgColor,
+    row3FirstKeyTextColor: Color = textColor,
+    row3FirstIsActionKey: Boolean = false,
+    onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
+    onUndo: () -> Unit,
+    onDelete: () -> Unit,
+    onCursorLeft: () -> Unit,
+    onCursorRight: () -> Unit,
+    onOpenEmoji: () -> Unit,
+    onOpenSymbols: () -> Unit,
+    onSpace: () -> Unit,
+    onLongPressSpace: () -> Unit,
+    onSwitchMode: (FlickDirection) -> Unit,
+    onEnter: () -> Unit
+) {
+    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
+        FlickGridRow(
+            rowIndex = 0,
+            keys = rows[0],
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete,
+            leftKey = { mod, pad -> FlickSideUndoButton(mod, pad, actionKeyBg, textColor, palette, onUndo) },
+            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
+        )
+
+        FlickGridRow(
+            rowIndex = 1,
+            keys = rows[1],
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete,
+            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
+            rightKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) }
+        )
+
+        FlickGridRow(
+            rowIndex = 2,
+            keys = rows[2],
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete,
+            leftKey = { mod, pad ->
+                if (mode == KeyboardMode.NUMERIC) {
+                    FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, palette, onOpenSymbols, onOpenEmoji)
+                } else {
+                    FlickSideEmojiSymbolsButton(mod, pad, actionKeyBg, textColor, palette, onOpenEmoji, onOpenSymbols)
+                }
+            },
+            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace) }
+        )
+
+        FlickGridRow(
+            rowIndex = 3,
+            keys = rows[3],
+            keyBgColor = keyBgColor,
+            actionKeyBg = actionKeyBg,
+            textColor = textColor,
+            palette = palette,
+            getRootCoords = getRootCoords,
+            onFlickUpdateById = onFlickUpdateById,
+            onFlickComplete = onFlickComplete,
+            firstKeyBg = row3FirstKeyBg,
+            firstKeyTextColor = row3FirstKeyTextColor,
+            firstIsActionKey = row3FirstIsActionKey,
+            leftKey = { mod, pad ->
+                Aa1Button(
+                    mode = mode,
+                    modifier = mod,
+                    actionKeyBg = actionKeyBg,
+                    fillAvailableHeight = true,
+                    visualPadding = pad,
+                    palette = palette,
+                    onSwitchMode = onSwitchMode
+                )
+            },
+            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
+        )
+    }
+}
+
 @Suppress("UNUSED_PARAMETER")
 @Composable
 fun Japanese12KeyFlickLayout(
@@ -719,10 +893,11 @@ fun Japanese12KeyFlickLayout(
     onToggleDakuten: () -> Unit,
     onKanaModifier: (KanaModifierKind) -> Unit = {},
     onDelete: () -> Unit,
+    onUndo: () -> Unit = {},
     onSpace: () -> Unit,
     onLongPressSpace: () -> Unit = {},
     onEnter: () -> Unit,
-    onCycleMode: () -> Unit,
+    onSwitchMode: (FlickDirection) -> Unit,
     onOpenSymbols: () -> Unit,
     onOpenEmoji: () -> Unit,
     onCursorLeft: () -> Unit,
@@ -735,6 +910,7 @@ fun Japanese12KeyFlickLayout(
 
     val handleFlickResult = { def: FlickKeyDef, dir: FlickDirection ->
         if (def == FlickKeyDefinitions.keyMod) {
+            lastTappedKey = null
             when (dir) {
                 FlickDirection.CENTER -> onToggleDakuten()
                 FlickDirection.LEFT -> onKanaModifier(KanaModifierKind.DAKUTEN)
@@ -774,75 +950,71 @@ fun Japanese12KeyFlickLayout(
         }
     }
 
-    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
-        FlickGridRow(
-            rowIndex = 0,
-            keys = Triple(FlickKeyDefinitions.keyA, FlickKeyDefinitions.keyKa, FlickKeyDefinitions.keySa),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, onOpenSymbols) },
-            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
-        )
-
-        FlickGridRow(
-            rowIndex = 1,
-            keys = Triple(FlickKeyDefinitions.keyTa, FlickKeyDefinitions.keyNa, FlickKeyDefinitions.keyHa),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
-            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace) }
-        )
-
-        FlickGridRow(
-            rowIndex = 2,
-            keys = Triple(FlickKeyDefinitions.keyMa, FlickKeyDefinitions.keyYa, FlickKeyDefinitions.keyRa),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) },
-            rightKey = { mod, pad -> FlickSideEmojiButton(mod, pad, actionKeyBg, textColor, onOpenEmoji) }
-        )
-
-        FlickGridRow(
-            rowIndex = 3,
-            keys = Triple(FlickKeyDefinitions.keyMod, FlickKeyDefinitions.keyWa, FlickKeyDefinitions.keyPunc),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            firstKeyBg = actionKeyBg,
-            firstIsActionKey = true,
-            leftKey = { mod, pad ->
-                Aa1Button(
-                    mode = KeyboardMode.JAPANESE,
-                    modifier = mod,
-                    actionKeyBg = actionKeyBg,
-                    fillAvailableHeight = true,
-                    visualPadding = pad,
-                    palette = palette,
-                    onClick = onCycleMode
-                )
-            },
-            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
-        )
+    val handleUndo = {
+        val now = System.currentTimeMillis()
+        val key = lastTappedKey
+        val cycle = if (!isFlickOnly && key != null) FlickKeyDefinitions.toggleCycles[key] else null
+        if (cycle != null && currentCycleIndex > 0 && (now - lastTapTimestamp) < 850L) {
+            currentCycleIndex--
+            lastTapTimestamp = now
+            onReplaceLastKana(cycle[currentCycleIndex])
+        } else {
+            lastTappedKey = null
+            currentCycleIndex = 0
+            onUndo()
+        }
     }
+
+    Flick12KeyGrid(
+        mode = KeyboardMode.JAPANESE,
+        rows = listOf(
+            Triple(FlickKeyDefinitions.keyA, FlickKeyDefinitions.keyKa, FlickKeyDefinitions.keySa),
+            Triple(FlickKeyDefinitions.keyTa, FlickKeyDefinitions.keyNa, FlickKeyDefinitions.keyHa),
+            Triple(FlickKeyDefinitions.keyMa, FlickKeyDefinitions.keyYa, FlickKeyDefinitions.keyRa),
+            Triple(FlickKeyDefinitions.keyMod, FlickKeyDefinitions.keyWa, FlickKeyDefinitions.keyPunc)
+        ),
+        keyBgColor = keyBgColor,
+        actionKeyBg = actionKeyBg,
+        textColor = textColor,
+        palette = palette,
+        row3FirstKeyBg = actionKeyBg,
+        row3FirstIsActionKey = true,
+        onFlickComplete = handleFlickResult,
+        onUndo = handleUndo,
+        onDelete = {
+            lastTappedKey = null
+            onDelete()
+        },
+        onCursorLeft = {
+            lastTappedKey = null
+            onCursorLeft()
+        },
+        onCursorRight = {
+            lastTappedKey = null
+            onCursorRight()
+        },
+        onOpenEmoji = {
+            lastTappedKey = null
+            onOpenEmoji()
+        },
+        onOpenSymbols = {
+            lastTappedKey = null
+            onOpenSymbols()
+        },
+        onSpace = {
+            lastTappedKey = null
+            onSpace()
+        },
+        onLongPressSpace = onLongPressSpace,
+        onSwitchMode = { direction ->
+            lastTappedKey = null
+            onSwitchMode(direction)
+        },
+        onEnter = {
+            lastTappedKey = null
+            onEnter()
+        }
+    )
 }
 
 @Suppress("UNUSED_PARAMETER")
@@ -859,10 +1031,11 @@ fun English12KeyFlickLayout(
     onToggleLastCharCase: () -> Unit,
     isLastCharLetter: () -> Boolean,
     onDelete: () -> Unit,
+    onUndo: () -> Unit = {},
     onSpace: () -> Unit,
     onLongPressSpace: () -> Unit = {},
     onEnter: () -> Unit,
-    onCycleMode: () -> Unit,
+    onSwitchMode: (FlickDirection) -> Unit,
     onOpenSymbols: () -> Unit,
     onOpenEmoji: () -> Unit,
     onCursorLeft: () -> Unit,
@@ -876,6 +1049,7 @@ fun English12KeyFlickLayout(
 
     val handleFlickResult = { def: FlickKeyDef, dir: FlickDirection ->
         if (def == FlickEnglishKeyDefinitions.keyCase) {
+            lastTappedKey = null
             when (dir) {
                 FlickDirection.CENTER -> {
                     if (isLastCharLetter()) {
@@ -925,96 +1099,97 @@ fun English12KeyFlickLayout(
         }
     }
 
-    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
-        FlickGridRow(
-            rowIndex = 0,
-            keys = Triple(
+    val handleUndo = {
+        val now = System.currentTimeMillis()
+        val key = lastTappedKey
+        val cycle = if (!isFlickOnly && key != null) {
+            FlickEnglishKeyDefinitions.getToggleCycles(isShifted)[key]
+                ?: FlickEnglishKeyDefinitions.getToggleCycles(!isShifted)[key]
+        } else {
+            null
+        }
+        if (cycle != null && currentCycleIndex > 0 && (now - lastTapTimestamp) < 850L) {
+            currentCycleIndex--
+            lastTapTimestamp = now
+            onReplaceLastCommittedText(cycle[currentCycleIndex], 1)
+        } else {
+            lastTappedKey = null
+            currentCycleIndex = 0
+            onUndo()
+        }
+    }
+
+    Flick12KeyGrid(
+        mode = KeyboardMode.ENGLISH,
+        rows = listOf(
+            Triple(
                 FlickEnglishKeyDefinitions.getKey1(),
                 FlickEnglishKeyDefinitions.getKey2(isShifted),
                 FlickEnglishKeyDefinitions.getKey3(isShifted)
             ),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, onOpenSymbols) },
-            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
-        )
-
-        FlickGridRow(
-            rowIndex = 1,
-            keys = Triple(
+            Triple(
                 FlickEnglishKeyDefinitions.getKey4(isShifted),
                 FlickEnglishKeyDefinitions.getKey5(isShifted),
                 FlickEnglishKeyDefinitions.getKey6(isShifted)
             ),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
-            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace) }
-        )
-
-        FlickGridRow(
-            rowIndex = 2,
-            keys = Triple(
+            Triple(
                 FlickEnglishKeyDefinitions.getKey7(isShifted),
                 FlickEnglishKeyDefinitions.getKey8(isShifted),
                 FlickEnglishKeyDefinitions.getKey9(isShifted)
             ),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) },
-            rightKey = { mod, pad -> FlickSideEmojiButton(mod, pad, actionKeyBg, textColor, onOpenEmoji) }
-        )
-
-        FlickGridRow(
-            rowIndex = 3,
-            keys = Triple(
+            Triple(
                 FlickEnglishKeyDefinitions.keyCase,
                 FlickEnglishKeyDefinitions.key0,
                 FlickEnglishKeyDefinitions.keyPunc
-            ),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            firstKeyBg = if (isShifted) palette.primaryAccent.copy(alpha = 0.28f) else actionKeyBg,
-            firstKeyTextColor = if (isShifted) {
-                if (palette.isDark) palette.primaryAccentSoft else palette.primaryAccent
-            } else {
-                textColor
-            },
-            firstIsActionKey = true,
-            leftKey = { mod, pad ->
-                Aa1Button(
-                    mode = KeyboardMode.ENGLISH,
-                    modifier = mod,
-                    actionKeyBg = actionKeyBg,
-                    fillAvailableHeight = true,
-                    visualPadding = pad,
-                    palette = palette,
-                    onClick = onCycleMode
-                )
-            },
-            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
-        )
-    }
+            )
+        ),
+        keyBgColor = keyBgColor,
+        actionKeyBg = actionKeyBg,
+        textColor = textColor,
+        palette = palette,
+        row3FirstKeyBg = if (isShifted) palette.primaryAccent.copy(alpha = 0.28f) else actionKeyBg,
+        row3FirstKeyTextColor = if (isShifted) {
+            if (palette.isDark) palette.primaryAccentSoft else palette.primaryAccent
+        } else {
+            textColor
+        },
+        row3FirstIsActionKey = true,
+        onFlickComplete = handleFlickResult,
+        onUndo = handleUndo,
+        onDelete = {
+            lastTappedKey = null
+            onDelete()
+        },
+        onCursorLeft = {
+            lastTappedKey = null
+            onCursorLeft()
+        },
+        onCursorRight = {
+            lastTappedKey = null
+            onCursorRight()
+        },
+        onOpenEmoji = {
+            lastTappedKey = null
+            onOpenEmoji()
+        },
+        onOpenSymbols = {
+            lastTappedKey = null
+            onOpenSymbols()
+        },
+        onSpace = {
+            lastTappedKey = null
+            onSpace()
+        },
+        onLongPressSpace = onLongPressSpace,
+        onSwitchMode = { direction ->
+            lastTappedKey = null
+            onSwitchMode(direction)
+        },
+        onEnter = {
+            lastTappedKey = null
+            onEnter()
+        }
+    )
 }
 
 @Suppress("UNUSED_PARAMETER")
@@ -1029,10 +1204,12 @@ fun FlickNumericPadLayout(
     onCommitText: (String) -> Unit,
     onReplaceLastCommittedText: (String, Int) -> Unit = { _, _ -> },
     onDelete: () -> Unit,
+    onUndo: () -> Unit = {},
     onLongPressSpace: () -> Unit = {},
     onEnter: () -> Unit,
-    onCycleMode: () -> Unit,
+    onSwitchMode: (FlickDirection) -> Unit,
     onOpenSymbols: () -> Unit,
+    onOpenEmoji: () -> Unit = {},
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit
 ) {
@@ -1071,87 +1248,69 @@ fun FlickNumericPadLayout(
         }
     }
 
-    FlickKeyboardContainer(palette = palette) { getRootCoords, onFlickUpdateById ->
-        FlickGridRow(
-            rowIndex = 0,
-            keys = Triple(FlickNumericKeyDefinitions.key1, FlickNumericKeyDefinitions.key2, FlickNumericKeyDefinitions.key3),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad ->
-                RepeatingIconButton(
-                    onClick = onDelete,
-                    modifier = mod,
-                    visualPadding = pad,
-                    cornerRadius = 8.dp,
-                    baseColor = actionKeyBg,
-                    palette = palette,
-                    hapticOnPress = false
-                ) {
-                    Text(text = "↶", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                }
-            },
-            rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
-        )
-
-        FlickGridRow(
-            rowIndex = 1,
-            keys = Triple(FlickNumericKeyDefinitions.key4, FlickNumericKeyDefinitions.key5, FlickNumericKeyDefinitions.key6),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
-            rightKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) }
-        )
-
-        FlickGridRow(
-            rowIndex = 2,
-            keys = Triple(FlickNumericKeyDefinitions.key7, FlickNumericKeyDefinitions.key8, FlickNumericKeyDefinitions.key9),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad -> FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, onOpenSymbols) },
-            rightKey = { mod, pad ->
-                FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, { onCommitText(" ") }, onLongPressSpace)
-            }
-        )
-
-        FlickGridRow(
-            rowIndex = 3,
-            keys = Triple(FlickNumericKeyDefinitions.keyBrackets, FlickNumericKeyDefinitions.key0, FlickNumericKeyDefinitions.keyPunc),
-            keyBgColor = keyBgColor,
-            actionKeyBg = actionKeyBg,
-            textColor = textColor,
-            palette = palette,
-            getRootCoords = getRootCoords,
-            onFlickUpdateById = onFlickUpdateById,
-            onFlickComplete = handleFlickResult,
-            leftKey = { mod, pad ->
-                Aa1Button(
-                    mode = KeyboardMode.NUMERIC,
-                    modifier = mod,
-                    actionKeyBg = actionKeyBg,
-                    fillAvailableHeight = true,
-                    visualPadding = pad,
-                    palette = palette,
-                    onClick = onCycleMode
-                )
-            },
-            rightKey = { mod, pad -> FlickSideEnterButton(mod, pad, palette, onEnter) }
-        )
+    val handleUndo = {
+        val now = System.currentTimeMillis()
+        val key = lastTappedKey
+        val cycle = if (!isFlickOnly && key != null) FlickNumericKeyDefinitions.toggleCycles[key] else null
+        if (cycle != null && currentCycleIndex > 0 && (now - lastTapTimestamp) < 850L) {
+            currentCycleIndex--
+            lastTapTimestamp = now
+            onReplaceLastCommittedText(cycle[currentCycleIndex], 1)
+        } else {
+            lastTappedKey = null
+            currentCycleIndex = 0
+            onUndo()
+        }
     }
+
+    Flick12KeyGrid(
+        mode = KeyboardMode.NUMERIC,
+        rows = listOf(
+            Triple(FlickNumericKeyDefinitions.key1, FlickNumericKeyDefinitions.key2, FlickNumericKeyDefinitions.key3),
+            Triple(FlickNumericKeyDefinitions.key4, FlickNumericKeyDefinitions.key5, FlickNumericKeyDefinitions.key6),
+            Triple(FlickNumericKeyDefinitions.key7, FlickNumericKeyDefinitions.key8, FlickNumericKeyDefinitions.key9),
+            Triple(FlickNumericKeyDefinitions.keyBrackets, FlickNumericKeyDefinitions.key0, FlickNumericKeyDefinitions.keyPunc)
+        ),
+        keyBgColor = keyBgColor,
+        actionKeyBg = actionKeyBg,
+        textColor = textColor,
+        palette = palette,
+        onFlickComplete = handleFlickResult,
+        onUndo = handleUndo,
+        onDelete = {
+            lastTappedKey = null
+            onDelete()
+        },
+        onCursorLeft = {
+            lastTappedKey = null
+            onCursorLeft()
+        },
+        onCursorRight = {
+            lastTappedKey = null
+            onCursorRight()
+        },
+        onOpenEmoji = {
+            lastTappedKey = null
+            onOpenEmoji()
+        },
+        onOpenSymbols = {
+            lastTappedKey = null
+            onOpenSymbols()
+        },
+        onSpace = {
+            lastTappedKey = null
+            onCommitText(" ")
+        },
+        onLongPressSpace = onLongPressSpace,
+        onSwitchMode = { direction ->
+            lastTappedKey = null
+            onSwitchMode(direction)
+        },
+        onEnter = {
+            lastTappedKey = null
+            onEnter()
+        }
+    )
 }
 
 @Suppress("UNUSED_PARAMETER")

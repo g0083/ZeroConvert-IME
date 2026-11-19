@@ -235,10 +235,12 @@ message ClearTextResponse {
 message SetContextRequest {
   string context = 1;
   uint64 request_id = 2;
+  bool private_input = 3;
 }
 
 message SetContextResponse {
   uint64 server_session_id = 1; // Identifies the current server process session.
+  bool private_input = 2;
 }
 
 message UpdateConfigRequest {
@@ -320,6 +322,34 @@ message LearningStatsResponse {
   bool history_paused = 4;
   string learning_mode = 5;
   uint32 typo_count = 6;
+  uint32 english_count = 7;
+}
+
+message GetEnglishLearningRequest {
+  uint64 known_server_session_id = 1;
+  uint64 known_revision = 2;
+  uint64 request_id = 3;
+}
+
+message GetEnglishLearningResponse {
+  uint64 server_session_id = 1;
+  uint64 revision = 2;
+  bool unchanged = 3;
+  string snapshot_json = 4;
+}
+
+message RecordEnglishLearningRequest {
+  string prefix = 1;
+  string word = 2;
+  bool explicit_selection = 3;
+  bool in_dictionary = 4;
+  uint64 request_id = 5;
+}
+
+message RecordEnglishLearningResponse {
+  uint64 server_session_id = 1;
+  uint64 revision = 2;
+  bool saved = 3;
 }
 
 message ResetLearningMemoryRequest {
@@ -340,6 +370,7 @@ enum LearningMemoryScope {
   LEARNING_MEMORY_SCOPE_UNSPECIFIED = 0;
   LEARNING_MEMORY_SCOPE_CONVERSION = 1;
   LEARNING_MEMORY_SCOPE_TYPO = 2;
+  LEARNING_MEMORY_SCOPE_ENGLISH = 3;
 }
 
 message PerformanceLogRequest {
@@ -411,5 +442,7 @@ service AzookeyService {
   rpc ForgetLearningCandidate (ForgetLearningCandidateRequest) returns (ForgetLearningCandidateResponse);
   rpc GetLearningStats (LearningStatsRequest) returns (LearningStatsResponse);
   rpc ResetLearningMemory (ResetLearningMemoryRequest) returns (ResetLearningMemoryResponse);
+  rpc GetEnglishLearning (GetEnglishLearningRequest) returns (GetEnglishLearningResponse);
+  rpc RecordEnglishLearning (RecordEnglishLearningRequest) returns (RecordEnglishLearningResponse);
   rpc LogPerformance (PerformanceLogRequest) returns (PerformanceLogResponse);
 }

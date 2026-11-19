@@ -16,11 +16,13 @@ import android.os.VibratorManager
 import android.inputmethodservice.InputMethodService
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.Toast
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.*
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
@@ -30,6 +32,7 @@ import com.zeroconvert.ime.azookey.input.ComposingText
 import com.zeroconvert.ime.azookey.input.InputStyle
 import com.zeroconvert.ime.assist.AssistRequestGate
 import com.zeroconvert.ime.assist.CorrectionSession
+import com.zeroconvert.ime.assist.InputPrivacy
 import com.zeroconvert.ime.assist.SharedAssistPolicy
 import com.zeroconvert.ime.assist.hasPendingRomaji
 import com.zeroconvert.ime.translation.TranslationEngine
@@ -106,6 +109,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_FLICK_SENSITIVITY_DP = "flick_sensitivity_dp" // int dp (12..28), default 18
         const val KEY_KEY_BORDERS_ENABLED = "key_borders_enabled" // boolean, default true
         const val KEY_ONE_HANDED_MODE = "one_handed_mode" // String: OFF, LEFT, RIGHT
+        const val KEY_SPLIT_KEYBOARD = "split_keyboard"
+        const val KEY_SPLIT_GAP_PERCENT = "split_keyboard_gap_percent"
+        const val KEY_SPLIT_DUPLICATE_KEYS = "split_keyboard_duplicate_keys"
         const val KEY_KEYBOARD_BOTTOM_PADDING_DP = "keyboard_bottom_padding_dp" // int dp (0..32), default 0
         const val KEY_DYNAMIC_TOUCH_ASSIST = TouchAssistSettings.KEY_HIT_AREA // predictive hit area, default true
         const val KEY_TOUCH_TYPO_CORRECTION = TouchAssistSettings.KEY_CORRECTION // independent; inherits old setting once
@@ -134,10 +140,6 @@ class ZeroConvertInputMethodService : InputMethodService(),
         // Autorepeat moves every 50 ms and editor callbacks can trail the write,
         // so a self-issued caret is trusted for a little longer than one tick.
         private const val SELF_CURSOR_MOVE_WINDOW_MS = 400L
-
-        private val EMAIL_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
-        private val URL_REGEX = Regex("https?://[^\\s]+")
-        private val PHONE_REGEX = Regex("(?:(?:\\+?81[- ]?)?0\\d{1,4}[- ]?\\d{1,4}[- ]?\\d{3,4})")
 
         fun hasTrailingIncompleteRomaji(readingHiragana: String): Boolean {
             return readingHiragana.hasPendingRomaji()
@@ -197,7 +199,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val flickSensitivityDpState = mutableStateOf(18)
     val isKeyBordersEnabledState = mutableStateOf(true)
     val oneHandedModeState = mutableStateOf(OneHandedMode.OFF)
+    val isSplitKeyboardEnabledState = mutableStateOf(false)
+    val splitGapPercentState = mutableIntStateOf(QwertySplitLayout.DEFAULT_GAP_PERCENT)
+    val splitDuplicateKeysState = mutableStateOf(QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS)
     val keyboardBottomPaddingDpState = mutableStateOf(0)
+    private val floatingKeyboard by lazy {
+        FloatingKeyboardState(getSharedPreferences("keyboard_placement", Context.MODE_PRIVATE))
+    }
+    private var floatingKeyboardHost: FloatingKeyboardHost? = null
+    val clipboardEditSessionState = mutableStateOf<ClipboardEditSession?>(null)
+    private var clipboardEditOverlayHeightPx = 0
+    private var handlingClipboardEditSelection = false
     val isDynamicTouchAssistEnabledState = mutableStateOf(true)
     val isTouchTypoCorrectionEnabledState = mutableStateOf(true)
     val isAiAssistEnabledState = mutableStateOf(true)
@@ -301,6 +313,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         aiAssistAdoptedState.value = false
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
+        undoHistory.clear()
         ensureTranslationLoaded(file) { loaded ->
             if (!loaded) {
                 if (isTranslationMode()) {
@@ -843,6 +856,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun selectCandidate(candidate: Candidate) {
         if (candidate !in candidatesList) return
+        if (candidate.isReadingCompletion &&
+            displayedConversionTicket?.let(requestGate::isGenerationCurrent) != true) return
         if (candidate.enginePostCompositionId.isNotEmpty()) {
             selectPostCompositionCandidate(candidate)
             return
@@ -933,9 +948,28 @@ class ZeroConvertInputMethodService : InputMethodService(),
      * the ranking changed, and leaving the old list would offer the stale order.
      */
     fun forgetCandidateLearning(candidate: Candidate) {
+        if (isSensitiveInput()) return
         val id = candidate.engineCandidateId.takeIf { it.isNotEmpty() } ?: return
-        val reading = composingText.convertTargetBeforeCursor
         val context = applicationContext
+        if (EnglishWordDictionary.parseEnglishCandidateId(id) != null) {
+            val activePrefix = englishComposing
+            serviceScope.launch(Dispatchers.IO) {
+                val forgot = EnglishWordDictionary.forgetWord(candidate.text, candidate.reading)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        if (forgot) "学習を削除しました" else "この候補の学習は削除できませんでした",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    if (forgot && englishComposing == activePrefix && activePrefix.isNotEmpty()) {
+                        candidatesList.removeAll { it.itemKey == candidate.itemKey }
+                        triggerEnglishSuggestions(activePrefix)
+                    }
+                }
+            }
+            return
+        }
+        val reading = composingText.convertTargetBeforeCursor
         serviceScope.launch(Dispatchers.IO) {
             val forgot = com.zeroconvert.ime.engine.WindowsEngine.forgetCandidate(id)
             if (candidate.assist?.type == com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION) {
@@ -973,6 +1007,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         lastInferredResult = savedOriginalResult
         candidatesList.clear()
         candidatesList.addAll(savedOriginalCandidates)
+        displayedConversionTicket = requestGate.capture(requestKey())
         inferenceHistory.clear()
         aiAssistAdoptedState.value = false
         aiAssistResultState.value = null
@@ -980,53 +1015,28 @@ class ZeroConvertInputMethodService : InputMethodService(),
         return true
     }
 
-    private fun extractEntities(text: String): List<ClipboardEntry> {
-        val found = linkedSetOf<String>()
-        EMAIL_REGEX.findAll(text).forEach { found.add(it.value) }
-        URL_REGEX.findAll(text).forEach { found.add(it.value) }
-        PHONE_REGEX.findAll(text).forEach { found.add(it.value) }
-        if (found.isEmpty()) return emptyList()
-        val now = System.currentTimeMillis()
-        return found.map { entity ->
-            val type = when {
-                EMAIL_REGEX.matches(entity) -> "email"
-                URL_REGEX.matches(entity) -> "url"
-                PHONE_REGEX.matches(entity) -> "phone"
-                else -> "text"
-            }
-            ClipboardEntry(text = entity, entityType = type, timestamp = now)
-        }
-    }
-
     fun addClipboardEntry(entry: ClipboardEntry) {
-        val exists = clipboardHistory.any { it.text == entry.text && it.imageUri == entry.imageUri }
-        if (exists) return
-        clipboardHistory.add(0, entry)
-        trimClipboardHistory(cleanupImages = entry.isImage)
-        // A new clipboard item makes the suggestion visible again
-        isClipboardSuggestionDismissed.value = false
+        appendClipboardEntries(listOf(entry), triggerImageCleanup = entry.isImage)
     }
 
     private fun appendClipboardEntries(entries: List<ClipboardEntry>, triggerImageCleanup: Boolean = false) {
-        var added = false
-        var touchedImage = triggerImageCleanup
-        for (entry in entries) {
-            val exists = clipboardHistory.any { it.text == entry.text && it.imageUri == entry.imageUri }
-            if (exists) continue
-            clipboardHistory.add(0, entry)
-            added = true
-            if (entry.isImage) touchedImage = true
-        }
-        if (!added) return
+        if (isPrivateMode) return
+        if (!ClipboardHistoryPolicy.upsertEntries(clipboardHistory, entries)) return
+        val touchedImage = triggerImageCleanup || entries.any { it.isImage }
         trimClipboardHistory(cleanupImages = touchedImage)
-        // A new clipboard item makes the suggestion visible again
-        isClipboardSuggestionDismissed.value = false
+        // Only the newly copied or promoted items become visible again; other dismissed items stay hidden.
+        dismissedClipboardSuggestionIds.value = ClipboardHistoryPolicy.clearDismissedForEntries(
+            history = clipboardHistory,
+            upsertedEntries = entries,
+            dismissedIds = dismissedClipboardSuggestionIds.value
+        )
     }
 
     fun removeClipboardEntry(entry: ClipboardEntry) {
         val idx = clipboardHistory.indexOfFirst { it.id == entry.id }
         if (idx < 0) return
         val removed = clipboardHistory.removeAt(idx)
+        dismissedClipboardSuggestionIds.value = dismissedClipboardSuggestionIds.value - removed.id
         if (removed.pinned) persistPinnedClipboard()
     }
 
@@ -1039,23 +1049,48 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     /**
-     * The IME cannot host an InputConnection of its own, so text editing happens in a small
-     * editor activity: our keyboard then types into that activity's field through the normal
-     * pipeline instead of committing to the app behind the keyboard.
+     * Routes IME typing into [ClipboardEditSession] directly inside the IME window so editing a
+     * clipboard entry keeps the keyboard continuously visible without switching Activity focus.
      */
     fun beginClipboardEdit(entry: ClipboardEntry) {
         val text = entry.text ?: return
-        ClipboardEditBridge.onSave = { newText -> updateClipboardEntry(entry, newText) }
-        val intent = Intent(this, ClipboardEditActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra(ClipboardEditActivity.EXTRA_TEXT, text)
-        }
-        try {
-            startActivity(intent)
-        } catch (e: Exception) {
-            ClipboardEditBridge.onSave = null
-            Log.e(TAG, "beginClipboardEdit failed", e)
-        }
+        if (isTranslationMode()) exitTranslationMode(revert = false)
+        clearInput()
+        super.getCurrentInputConnection()?.finishComposingText()
+        undoHistory.clear()
+        clipboardEditSessionState.value = ClipboardEditSession(
+            entry = entry,
+            initialText = text,
+            onSelectionChanged = ::notifyClipboardEditSelection
+        )
+    }
+
+    fun saveClipboardEdit() {
+        val session = clipboardEditSessionState.value ?: return
+        val newText = session.currentText
+        closeClipboardEditSession()
+        updateClipboardEntry(session.entry, newText)
+    }
+
+    fun cancelClipboardEdit() {
+        if (clipboardEditSessionState.value == null) return
+        closeClipboardEditSession()
+    }
+
+    private fun closeClipboardEditSession() {
+        if (isTranslationMode()) exitTranslationMode(revert = false)
+        clearInput()
+        undoHistory.clear()
+        clipboardEditOverlayHeightPx = 0
+        clipboardEditSessionState.value = null
+        floatingKeyboardHost?.requestLayout()
+    }
+
+    fun setClipboardEditOverlayHeightPx(heightPx: Int) {
+        val normalized = heightPx.coerceAtLeast(0)
+        if (clipboardEditOverlayHeightPx == normalized) return
+        clipboardEditOverlayHeightPx = normalized
+        floatingKeyboardHost?.requestLayout()
     }
 
     fun clearClipboardHistory(keepPinned: Boolean = true) {
@@ -1063,6 +1098,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val remaining = if (keepPinned) clipboardHistory.filter { it.pinned } else emptyList()
             clipboardHistory.clear()
             clipboardHistory.addAll(remaining)
+            val remainingIds = remaining.mapTo(HashSet(remaining.size)) { it.id }
+            dismissedClipboardSuggestionIds.value = dismissedClipboardSuggestionIds.value.intersect(remainingIds)
             persistPinnedClipboard()
         } catch (e: Exception) {
             Log.e(TAG, "clearClipboardHistory failed", e)
@@ -1125,6 +1162,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private fun scheduleScreenshotCapture(immediate: Boolean = false, force: Boolean = false) {
+        if (isPrivateMode) return
         if (!force && !isInputViewShown) {
             pendingScreenshotScan = true
             return
@@ -1134,19 +1172,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
         screenshotCaptureJob = serviceScope.launch {
             // Screenshot providers often emit several MediaStore changes for one capture.
             if (!immediate) delay(400)
-            val entries = withContext(Dispatchers.IO) { collectRecentScreenshots() }
+            val cutoffSeconds = maxOf(lastScreenshotCheck / 1000 - 5, lastPrivateInputEndMillis / 1000 + 1)
+            lastScreenshotCheck = System.currentTimeMillis()
+            val entries = withContext(Dispatchers.IO) { collectRecentScreenshots(cutoffSeconds) }
             if (entries.isNotEmpty()) {
                 appendClipboardEntries(entries, triggerImageCleanup = true)
             }
         }
     }
 
-    private fun collectRecentScreenshots(): List<ClipboardEntry> {
+    private suspend fun collectRecentScreenshots(cutoffSeconds: Long): List<ClipboardEntry> {
         if (!getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).getBoolean(KEY_SCREENSHOT_CAPTURE, true)) {
             return emptyList()
         }
-        val cutoff = lastScreenshotCheck
-        lastScreenshotCheck = System.currentTimeMillis()
         val entries = mutableListOf<ClipboardEntry>()
         try {
             val projection = arrayOf(
@@ -1156,7 +1194,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 MediaStore.Images.Media.DATE_ADDED
             )
             val selection = "${MediaStore.Images.Media.DATE_ADDED} >= ?"
-            val selectionArgs = arrayOf((cutoff / 1000 - 5).toString())
+            val selectionArgs = arrayOf(cutoffSeconds.toString())
             contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection,
@@ -1168,6 +1206,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
                 val pathCol = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
                 while (cursor.moveToNext()) {
+                    currentCoroutineContext().ensureActive()
                     val name = cursor.getString(nameCol) ?: continue
                     val relPath = if (pathCol >= 0) cursor.getString(pathCol) else null
                     val isScreenshot = name.contains("Screenshot", ignoreCase = true) ||
@@ -1177,10 +1216,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     val id = cursor.getLong(idCol)
                     if (!seenScreenshotIds.add(id)) continue
                     val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    currentCoroutineContext().ensureActive()
                     val cached = cacheClipboardImage(uri)
                     entries += ClipboardEntry(imageUri = cached ?: uri)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             Log.w(TAG, "Screenshot capture failed: ${e.message}")
         }
@@ -1284,6 +1326,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     /** Records a committed emoji so the palette can offer it under "最近". */
     fun recordRecentEmoji(emoji: String) {
+        if (isSensitiveInput()) return
         val updated = EmojiCatalog.pushRecent(recentEmojiState.value, emoji)
         if (updated == recentEmojiState.value) return
         recentEmojiState.value = updated
@@ -1292,6 +1335,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     fun pasteClipboard(entry: ClipboardEntry, fromSuggestion: Boolean = false) {
+        if (isPrivateMode) return
         if (!composingText.isEmpty) {
             confirmCurrent()
         }
@@ -1302,8 +1346,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             commitClipboardImage(ic, entry.imageUri)
         }
         if (fromSuggestion) {
-            // The suggestion is shown only once; further pastes require opening the clipboard panel
-            isClipboardSuggestionDismissed.value = true
+            // Dismiss only the pasted suggestion so remaining clipboard suggestions stay visible.
+            dismissedClipboardSuggestionIds.value = dismissedClipboardSuggestionIds.value + entry.id
         }
     }
 
@@ -1391,6 +1435,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
         prefs.edit().putString(KEY_ONE_HANDED_MODE, mode.name).apply()
     }
 
+    internal fun setKeyboardPlacementMode(mode: KeyboardPlacementMode) {
+        val oneHanded = if (mode == KeyboardPlacementMode.ONE_HANDED) OneHandedMode.RIGHT else OneHandedMode.OFF
+        val split = mode == KeyboardPlacementMode.SPLIT
+        oneHandedModeState.value = oneHanded
+        isSplitKeyboardEnabledState.value = split
+        getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_ONE_HANDED_MODE, oneHanded.name)
+            .putBoolean(KEY_SPLIT_KEYBOARD, split)
+            .apply()
+        val floating = mode == KeyboardPlacementMode.FLOATING
+        if (floatingKeyboard.isFloating != floating) setFloatingKeyboard(floating)
+    }
+
     fun nextKeyWeightsForCurrentInput(mode: KeyboardMode): Map<Char, Float> {
         if (!isDynamicTouchAssistEnabledState.value || isSensitiveInput() || isTranslationMode()) {
             return emptyMap()
@@ -1445,7 +1502,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun openSettings() {
         try {
             val intent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             startActivity(intent)
         } catch (e: Exception) {
@@ -1454,14 +1511,32 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private var sharedPreferences: android.content.SharedPreferences? = null
-    private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            reloadPreferences()
-        } else {
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                reloadPreferences()
+    private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+        val reload = {
+            when (key) {
+                KEY_ONE_HANDED_MODE, KEY_SPLIT_KEYBOARD, KEY_SPLIT_GAP_PERCENT, KEY_SPLIT_DUPLICATE_KEYS ->
+                    loadKeyboardPlacementPreferences(prefs)
+                else -> reloadPreferences()
             }
         }
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            reload()
+        } else {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                reload()
+            }
+        }
+    }
+
+    private fun loadKeyboardPlacementPreferences(prefs: android.content.SharedPreferences) {
+        oneHandedModeState.value = OneHandedMode.fromName(prefs.getString(KEY_ONE_HANDED_MODE, OneHandedMode.OFF.name))
+        isSplitKeyboardEnabledState.value = prefs.getBoolean(KEY_SPLIT_KEYBOARD, false)
+        splitGapPercentState.intValue = QwertySplitLayout.clampGapPercent(
+            prefs.getInt(KEY_SPLIT_GAP_PERCENT, QwertySplitLayout.DEFAULT_GAP_PERCENT)
+        )
+        splitDuplicateKeysState.value = prefs.getBoolean(
+            KEY_SPLIT_DUPLICATE_KEYS, QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS
+        )
     }
 
     private fun reloadPreferences() {
@@ -1487,7 +1562,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isKeyPreviewEnabledState.value = prefs.getBoolean(KEY_KEY_PREVIEW_ENABLED, true)
         flickSensitivityDpState.value = prefs.getInt(KEY_FLICK_SENSITIVITY_DP, 18).coerceIn(12, 28)
         isKeyBordersEnabledState.value = prefs.getBoolean(KEY_KEY_BORDERS_ENABLED, true)
-        oneHandedModeState.value = OneHandedMode.fromName(prefs.getString(KEY_ONE_HANDED_MODE, OneHandedMode.OFF.name))
+        loadKeyboardPlacementPreferences(prefs)
         keyboardBottomPaddingDpState.value = prefs.getInt(KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32)
         val touchAssist = TouchAssistSettings.load(prefs)
         val touchCorrectionChanged = isTouchTypoCorrectionEnabledState.value != touchAssist.correctionEnabled
@@ -1550,14 +1625,23 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private data class PendingLearning(val reading: String, val surface: String, val english: Boolean,
                                       val selection: ConversionCommitLearning? = null,
-                                      val historyRevision: Long = KanaKanjiConverter.learningHistoryRevision)
+                                      val historyRevision: Long = KanaKanjiConverter.learningHistoryRevision,
+                                      val englishExplicit: Boolean = false)
     private val learningQueue = Channel<PendingLearning>(128)
     private val learningWorker = serviceScope.launch(Dispatchers.IO) {
         for (selection in learningQueue) {
             if (!LearningPolicy.canWrite) continue
             try {
                 if (selection.english) {
-                    EnglishWordDictionary.recordSelection(applicationContext, selection.reading, selection.surface)
+                    if (selection.historyRevision == KanaKanjiConverter.learningHistoryRevision) {
+                        EnglishWordDictionary.recordCommit(
+                            applicationContext,
+                            selection.reading,
+                            selection.surface,
+                            selection.englishExplicit,
+                            selection.historyRevision
+                        )
+                    }
                 } else {
                     // Conversion learning belongs to the shared engine: a queued commit
                     // is applied only when it has a live candidate identity and no
@@ -1595,7 +1679,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private val selectionCountMutex = kotlinx.coroutines.sync.Mutex()
     private var reconverting = false
     val clipboardHistory = mutableStateListOf<ClipboardEntry>()
-    val isClipboardSuggestionDismissed = mutableStateOf(false)
+    val dismissedClipboardSuggestionIds = mutableStateOf<Set<Long>>(emptySet())
     val clipboardRetentionHoursState = mutableStateOf(1)
     val clipboardSuggestionMinutesState = mutableStateOf(ClipboardSuggestionPolicy.DEFAULT_MINUTES)
     val emojiCategoriesState = mutableStateOf<List<EmojiCategory>>(emptyList())
@@ -1619,6 +1703,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     // reading instead of converting only the remaining tail.
     private var pendingConversionContinuation: ConversionContinuation? = null
     private val composingEditor = ComposingEditorState()
+    private val undoHistory = ImeUndoHistory()
     private val editorComposingPreview: String get() = composingEditor.preview
     // Hardware arrow keys held down: a repeat must not be treated as an external
     // move. On-screen arrows take the same path, so they register too.
@@ -1628,6 +1713,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     // is more reliable than a per-write queue that overflows.
     private var selfIssuedCursorMoveAt = 0L
     private val requestGate = AssistRequestGate()
+    private var displayedConversionTicket: AssistRequestGate.Ticket? = null
     private var displayedAssistTicket: AssistRequestGate.Ticket? = null
     private var assistInputConnection: android.view.inputmethod.InputConnection? = null
     private var postCompositionJob: Job? = null
@@ -1786,6 +1872,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private fun cancelPendingInference(edited: Boolean = true) {
         clearPostCompositionDisplay()
         requestGate.invalidate()
+        displayedConversionTicket = null
         ZenzNative.abort()
         inferenceJob?.cancel()
         aiAssistJob?.cancel()
@@ -1802,9 +1889,28 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    private fun isSensitiveInput(): Boolean {
-        val info = currentInputEditorInfo ?: return true
-        return com.zeroconvert.ime.assist.InputPrivacy.isSensitive(info.inputType, info.imeOptions)
+    private val privateModeState = mutableStateOf(false)
+    internal val isPrivateMode: Boolean get() = privateModeState.value
+    private var clipboardPrivacyGeneration = 0L
+    private var lastPrivateInputEndMillis = 0L
+
+    private fun isSensitiveInput(): Boolean =
+        isPrivateMode ||
+            currentInputEditorInfo?.let { InputPrivacy.isSensitive(it.inputType, it.imeOptions) } ?: true
+
+    private fun updateInputPrivacy(info: android.view.inputmethod.EditorInfo?) {
+        val privateMode = info != null && InputPrivacy.isPrivateInput(info.inputType, info.imeOptions)
+        if (privateMode == isPrivateMode) return
+        privateModeState.value = privateMode
+        clipboardPrivacyGeneration++
+        if (privateMode) {
+            screenshotCaptureJob?.cancel()
+            screenshotCaptureJob = null
+            pendingScreenshotScan = false
+        } else {
+            // MediaStore notifications and clipboard events can arrive after a focus change.
+            lastPrivateInputEndMillis = System.currentTimeMillis()
+        }
     }
 
     private fun recordCommittedCorrections(text: String) {
@@ -1948,6 +2054,32 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
+    override fun getCurrentInputConnection(): android.view.inputmethod.InputConnection? {
+        clipboardEditSessionState.value?.let { return it }
+        return super.getCurrentInputConnection()
+    }
+
+    override fun getCurrentInputEditorInfo(): android.view.inputmethod.EditorInfo? {
+        clipboardEditSessionState.value?.let { return it.editorInfo }
+        return super.getCurrentInputEditorInfo()
+    }
+
+    private fun notifyClipboardEditSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int
+    ) {
+        handlingClipboardEditSelection = true
+        try {
+            onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        } finally {
+            handlingClipboardEditSelection = false
+        }
+    }
+
     override fun onUpdateSelection(
         oldSelStart: Int,
         oldSelEnd: Int,
@@ -1956,6 +2088,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         candidatesStart: Int,
         candidatesEnd: Int
     ) {
+        if (clipboardEditSessionState.value != null && !handlingClipboardEditSelection) return
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         val selected = newSelStart != newSelEnd
         val pendingSelectionTranslation = selectionTranslationState.value
@@ -2034,11 +2167,18 @@ class ZeroConvertInputMethodService : InputMethodService(),
             .getInt(KEY_CLIPBOARD_RETENTION_HOURS, 1)
         cleanupExpiredClipboard()
         clipListener = ClipboardManager.OnPrimaryClipChangedListener {
+            if (isPrivateMode) return@OnPrimaryClipChangedListener
+            val generation = clipboardPrivacyGeneration
             val clip = try { clipboardManager?.primaryClip } catch (_: RuntimeException) { null }
                 ?: return@OnPrimaryClipChangedListener
+            val clipTime = clip.description?.timestamp ?: 0L
+            if (!InputPrivacy.shouldAcceptClipboardEvent(isPrivateMode, clipTime, lastPrivateInputEndMillis)) {
+                return@OnPrimaryClipChangedListener
+            }
             val itemCount = clip.itemCount
             if (itemCount <= 0) return@OnPrimaryClipChangedListener
             serviceScope.launch(Dispatchers.IO) {
+                val clipTimestamp = System.currentTimeMillis()
                 val newEntries = mutableListOf<ClipboardEntry>()
                 for (i in 0 until itemCount) {
                     val item = clip.getItemAt(i) ?: continue
@@ -2050,7 +2190,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     val isImage = resolvedMime?.startsWith("image/") == true
                     if (isImage && uri != null) {
                         val cached = cacheClipboardImage(uri)
-                        newEntries += ClipboardEntry(imageUri = cached ?: uri)
+                        newEntries += ClipboardEntry(imageUri = cached ?: uri, timestamp = clipTimestamp)
                     } else {
                         val text = try {
                             item.coerceToText(this@ZeroConvertInputMethodService).toString()
@@ -2058,14 +2198,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
                             ""
                         }
                         if (text.isNotBlank()) {
-                            newEntries += ClipboardEntry(text = text)
-                            newEntries += extractEntities(text)
+                            newEntries += ClipboardHistoryPolicy.buildTextEntries(text, now = clipTimestamp)
                         }
                     }
                 }
                 if (newEntries.isEmpty()) return@launch
                 withContext(Dispatchers.Main) {
-                    appendClipboardEntries(newEntries)
+                    if (generation == clipboardPrivacyGeneration) appendClipboardEntries(newEntries)
                 }
             }
         }
@@ -2086,12 +2225,37 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     override fun onConfigureWindow(win: android.view.Window, isFullscreen: Boolean, isCandidatesOnly: Boolean) {
-        super.onConfigureWindow(win, isFullscreen, isCandidatesOnly)
+        if (floatingKeyboard.isFloating && !isCandidatesOnly) {
+            win.setLayout(MATCH_PARENT, MATCH_PARENT)
+        } else {
+            super.onConfigureWindow(win, isFullscreen, isCandidatesOnly)
+        }
         win.decorView.let { decorView ->
             decorView.setViewTreeLifecycleOwner(this)
             decorView.setViewTreeViewModelStoreOwner(this)
             decorView.setViewTreeSavedStateRegistryOwner(this)
         }
+    }
+
+    override fun onEvaluateFullscreenMode(): Boolean =
+        !floatingKeyboard.isFloating && super.onEvaluateFullscreenMode()
+
+    override fun onComputeInsets(outInsets: Insets) {
+        val host = floatingKeyboardHost
+        if (floatingKeyboard.isFloating && host?.isShown == true) {
+            host.computeFloatingInsets(outInsets)
+        } else if (clipboardEditOverlayHeightPx > 0 && host?.isShown == true) {
+            host.computeDockedOverlayInsets(outInsets, clipboardEditOverlayHeightPx)
+        } else {
+            super.onComputeInsets(outInsets)
+        }
+    }
+
+    private fun setFloatingKeyboard(enabled: Boolean) {
+        floatingKeyboardHost?.cancelDrag()
+        floatingKeyboard.setEnabled(enabled)
+        updateFullscreenMode()
+        window?.window?.let { onConfigureWindow(it, isFullscreenMode, !isShowInputRequested) }
     }
 
     override fun onCreateInputView(): View {
@@ -2105,12 +2269,36 @@ class ZeroConvertInputMethodService : InputMethodService(),
             setViewTreeLifecycleOwner(this@ZeroConvertInputMethodService)
             setViewTreeViewModelStoreOwner(this@ZeroConvertInputMethodService)
             setViewTreeSavedStateRegistryOwner(this@ZeroConvertInputMethodService)
+        }
+        fun maxFloatingRows(): Int = if (
+            isQwertyNumberRowState.value && japaneseLayoutState.value == JapaneseInputLayout.QWERTY
+        ) 5 else 4
+        val host = FloatingKeyboardHost(
+            composeView,
+            floatingKeyboard,
+            naturalKeyboardHeightDp = {
+                floatingKeyboardNaturalHeight(keyboardKeyHeightState.value.dp, maxFloatingRows()).value
+            }
+        ) { setFloatingKeyboard(false) }
+        floatingKeyboardHost = host
 
-            setContent {
+        composeView.setContent {
+            val floating = floatingKeyboard.isFloating
+            val themeMode = themeModeState.value
+            FloatingKeyboardPanel(
+                host = host,
+                floating = floating,
+                inputViewEpoch = inputViewEpochState.value,
+                themeMode = themeMode,
+                keyHeightDp = keyboardKeyHeightState.value,
+                maxKeyRows = maxFloatingRows(),
+                clipboardEditing = clipboardEditSessionState.value != null,
+                onDock = { setFloatingKeyboard(false) }
+            ) {
                 KeyboardRootView(
                     imeService = this@ZeroConvertInputMethodService,
                     onAdoptAiAssist = { adoptAiAssist() },
-                    themeMode = themeModeState.value,
+                    themeMode = themeMode,
                     onToggleRealtimeInline = {
                         setRealtimeInlineEnabled(!isRealtimeInlineState.value)
                     },
@@ -2118,11 +2306,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     onDeleteChar = { handleDelete() },
                     onEnter = { handleEnter() },
                     onClearInput = { clearInput() },
-                    onClipboardPaste = { entry, fromSuggestion -> pasteClipboard(entry, fromSuggestion) }
+                    onClipboardPaste = { entry, fromSuggestion -> pasteClipboard(entry, fromSuggestion) },
+                    isFloating = floating
                 )
             }
         }
-        return composeView
+        return host
     }
 
     private var lastInferredSurface: String = ""
@@ -2203,6 +2392,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
         // Insert into azooKey ComposingText state machine. ASCII punctuation is
         // normalized to the Japanese mark so the reading matches the key label.
+        recordJapaneseComposingUndo()
         val prevInputCount = composingText.input.size
         val appendAtEnd = composingText.isAtEndIndex
         val effectiveChar = PanelTextCommit.punctuationForReading(ch) ?: ch
@@ -2280,6 +2470,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         cancelPendingInference()
 
         // Insert direct kana into composingText
+        recordJapaneseComposingUndo()
         japaneseTouchBiases.clear()
         composingText.insertAtCursorPosition(kana, InputStyle.DIRECT)
         val surface = composingText.convertTargetBeforeCursor
@@ -2319,6 +2510,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
         canRewindOnNextBackspace = false
         cancelPendingInference()
+        recordJapaneseComposingUndo()
 
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(modified.toString(), InputStyle.DIRECT)
@@ -2390,7 +2582,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
             if (ch.isLetter()) {
                 val flipped = if (ch.isUpperCase()) ch.lowercaseChar() else ch.uppercaseChar()
                 ic.deleteSurroundingText(1, 0)
-                ic.commitText(flipped.toString(), 1)
+                if (ic.commitText(flipped.toString(), 1) && !isSensitiveInput()) {
+                    undoHistory.push(
+                        ImeUndoEntry.ReplacedCommittedText(
+                            previousText = last,
+                            currentText = flipped.toString()
+                        )
+                    )
+                }
             }
         }
     }
@@ -2398,8 +2597,24 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun replaceLastCommittedText(newText: String, oldLength: Int = 1) {
         if (isConfirming) return
         val ic = currentInputConnection ?: return
+        if (englishComposing.isNotEmpty() && oldLength > 0 && englishComposing.length >= oldLength) {
+            val remaining = englishComposing.dropLast(oldLength)
+            englishComposing = remaining
+            currentComposingSurface.value = remaining
+            if (remaining.isEmpty()) {
+                setManagedComposingText(ic, "", 1)
+                clearEnglishInput()
+            } else {
+                setManagedComposingText(ic, remaining, 1)
+                triggerEnglishSuggestions(remaining)
+            }
+            handleEnglishText(newText)
+            return
+        }
         ic.deleteSurroundingText(oldLength, 0)
-        ic.commitText(newText, 1)
+        if (ic.commitText(newText, 1) && !isSensitiveInput()) {
+            undoHistory.updateLatestCommittedSuffix(oldLength, newText)
+        }
     }
 
     fun showInputMethodPicker() {
@@ -2446,7 +2661,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
                     experimentalKeyboardCorrection = dictionaryCorrection,
-                    predictiveConversion = isPredictiveConversionEnabled(),
+                    predictiveConversion = !sensitive && !reconversion && !rangeConversion && isPredictiveConversionEnabled(),
                     continuation = continuation, touchBiases = touchBiasesSnapshot).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
@@ -2456,13 +2671,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     if (connection !== currentInputConnection || !requestGate.isCurrent(ticket, requestKey())) {
                         return@withContext
                     }
-                    // Learning-history prefix predictions are candidate-bar only: never inline.
+                    // Reading completions require an explicit candidate tap.
                     // A candidate that consumes only part of the reading is padded with the
                     // leftover kana (安間 + り), so inline text prefers one that explains the
                     // whole reading and only falls back to a partial candidate when none does.
-                    val inlineBase = { InlinePreviewPolicy.select(results, surface) }
-                    val aiCand = (results.firstOrNull { it.isAI && it.coversReading(surface) } ?: inlineBase())
-                        ?.previewForReading(surface).orEmpty()
+                    val inlineBase = InlinePreviewPolicy.select(results, surface)
+                    val aiCandidate = results.firstOrNull {
+                        it.isAI && !it.isReadingCompletion && it.coversReading(surface)
+                    } ?: inlineBase
+                    val aiCand = aiCandidate?.previewForReading(surface).orEmpty()
                     if (composingText.isAtEndIndex && surface.isNotEmpty() && aiCand.isNotEmpty() &&
                         !hasTrailingIncompleteRomaji(surface) && !corrections.holdsAutoCommit
                     ) {
@@ -2483,7 +2700,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     }
                     val previousResult = lastInferredResult
                     val previousSurface = lastInferredSurface
-                    val best = inlineBase()?.previewForReading(surface).orEmpty()
+                    val best = inlineBase?.previewForReading(surface).orEmpty()
                     val suppressDowngrade = (isRealtimeInlineEnabled() || rangeConversion) && best.isNotEmpty() &&
                         InlinePreviewPolicy.shouldSuppressPreviewDowngrade(
                             previousReading = previousSurface,
@@ -2493,6 +2710,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         )
                     candidatesList.clear()
                     candidatesList.addAll(results)
+                    displayedConversionTicket = ticket
                     if (!suppressDowngrade) {
                         predictedCandidate.value = best
                         lastInferredSurface = surface
@@ -2502,7 +2720,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         (isDictionaryTypoCorrectionState.value || isAiAssistEnabled()) && !hasTrailingIncompleteRomaji(surface)) {
                         val allowCorrection = isDictionaryTypoCorrectionState.value && !corrections.isApplied && fixedPrefix.isEmpty()
                         val allowPrediction = isAiAssistEnabled()
-                        val baselineReading = inlineBase()?.enginePredictionReading.orEmpty()
+                        val baselineReading = inlineBase?.enginePredictionReading.orEmpty()
                         aiAssistJob = serviceScope.launch(Dispatchers.IO) {
                             com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(applicationContext)
                             com.zeroconvert.ime.assist.AiAssistManager.streamAiAssist(
@@ -2631,6 +2849,222 @@ class ZeroConvertInputMethodService : InputMethodService(),
         } finally { connection.endBatchEdit() }
     }
 
+    private fun recordJapaneseComposingUndo() {
+        if (isSensitiveInput()) return
+        undoHistory.push(
+            ImeUndoEntry.JapaneseComposing(
+                previousComposing = composingText.clone(),
+                touchBiases = japaneseTouchBiases.toList(),
+                previousLeftContext = cachedLeftContext
+            )
+        )
+    }
+
+    fun handleUndo() {
+        if (performUndo()) {
+            vibrateOnKeyPress()
+        }
+    }
+
+    private fun performUndo(): Boolean {
+        if (isConfirming || isTranslationMode()) return false
+        if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
+            return performRevertAiAssist()
+        }
+        if (isAutoCommitRewindEnabled() && canRewindOnNextBackspace && lastAutoCommitRewind != null) {
+            return performAutoCommitRewind()
+        }
+        if (conversionRange.active) {
+            cancelConversionRange()
+            return true
+        }
+        val entry = undoHistory.pop() ?: return false
+        return applyUndoEntry(entry)
+    }
+
+    private fun applyUndoEntry(entry: ImeUndoEntry): Boolean {
+        if (isSensitiveInput()) {
+            undoHistory.clear()
+            return false
+        }
+        return when (entry) {
+            is ImeUndoEntry.JapaneseComposing -> {
+                if (englishComposing.isNotEmpty() || hasSelectionInEditor) return false
+                cancelPendingInference()
+                canRewindOnNextBackspace = false
+                lastAutoCommitRewind = null
+                corrections.clear()
+                aiAssistAdoptedState.value = false
+                composingText.restoreFrom(entry.previousComposing)
+                japaneseTouchBiases.clear()
+                japaneseTouchBiases.addAll(entry.touchBiases)
+                cachedLeftContext = entry.previousLeftContext
+                val surface = composingText.convertTargetBeforeCursor
+                currentComposingSurface.value = surface
+                if (composingText.isEmpty) {
+                    inferenceHistory.clear()
+                    setManagedComposingText(currentInputConnection, "", 0)
+                    currentInputConnection?.finishComposingText()
+                    clearInput()
+                } else {
+                    val inline = isRealtimeInlineEnabled()
+                    val prefix = tentativeInlineDisplay(surface, inline)
+                    inferenceHistory.removeAll { it.readingHiragana.length >= surface.length }
+                    val preview = ConversionRangeSession.preview(composingText, prefix, inline)
+                    if (setComposingPreview(currentInputConnection, preview) && surface.isNotEmpty()) {
+                        triggerDebouncedConversion(surface)
+                    } else {
+                        clearCandidateList()
+                    }
+                }
+                true
+            }
+            is ImeUndoEntry.EnglishComposing -> {
+                if (!composingText.isEmpty || hasSelectionInEditor) return false
+                englishComposing = entry.previousText
+                englishTouchBiases.clear()
+                englishTouchBiases.addAll(entry.touchBiases)
+                currentComposingSurface.value = englishComposing
+                if (englishComposing.isNotEmpty()) {
+                    setManagedComposingText(currentInputConnection, englishComposing, 1)
+                    triggerEnglishSuggestions(englishComposing)
+                } else {
+                    setManagedComposingText(currentInputConnection, "", 0)
+                    currentInputConnection?.finishComposingText()
+                    candidatesList.clear()
+                    predictedCandidate.value = ""
+                }
+                true
+            }
+            is ImeUndoEntry.CommittedText -> {
+                if (hasSelectionInEditor || englishComposing.isNotEmpty()) return false
+                val ic = currentInputConnection ?: return false
+                if (composingText.isEmpty) {
+                    val before = try {
+                        ic.getTextBeforeCursor(entry.committedText.length, 0)?.toString()
+                    } catch (_: RuntimeException) {
+                        null
+                    }
+                    if (before != entry.committedText) return false
+                    ic.beginBatchEdit()
+                    try {
+                        if (!ic.deleteSurroundingText(entry.committedText.length, 0)) return false
+                        if (entry.previousComposing != null && !entry.previousComposing.isEmpty) {
+                            composingText.restoreFrom(entry.previousComposing)
+                            cachedLeftContext = entry.previousLeftContext
+                            leftContextConnection = ic
+                            japaneseTouchBiases.clear()
+                            japaneseTouchBiases.addAll(entry.japaneseTouchBiases)
+                            val surface = composingText.convertTargetBeforeCursor
+                            currentComposingSurface.value = surface
+                            setManagedComposingText(ic, composingText.convertTarget, 1)
+                            if (surface.isNotEmpty()) {
+                                triggerDebouncedConversion(surface)
+                            }
+                        } else if (entry.previousEnglish.isNotEmpty()) {
+                            englishComposing = entry.previousEnglish
+                            cachedLeftContext = entry.previousLeftContext
+                            leftContextConnection = ic
+                            englishTouchBiases.clear()
+                            englishTouchBiases.addAll(entry.englishTouchBiases)
+                            currentComposingSurface.value = englishComposing
+                            setManagedComposingText(ic, englishComposing, 1)
+                            triggerEnglishSuggestions(englishComposing)
+                        }
+                    } finally {
+                        ic.endBatchEdit()
+                    }
+                    true
+                } else {
+                    val previousComposing = entry.previousComposing?.takeIf { !it.isEmpty } ?: return false
+                    val confirmedBefore = readEditorLeftContext(ic) ?: return false
+                    if (!confirmedBefore.endsWith(entry.committedText)) return false
+                    cancelPendingInference()
+                    ic.beginBatchEdit()
+                    try {
+                        if (!setManagedComposingText(ic, "", 0)) return false
+                        if (!ic.deleteSurroundingText(entry.committedText.length, 0)) {
+                            setManagedComposingText(ic, composingText.convertTarget, 1)
+                            return false
+                        }
+                        composingText.restoreFrom(previousComposing)
+                        cachedLeftContext = entry.previousLeftContext
+                        leftContextConnection = ic
+                        japaneseTouchBiases.clear()
+                        japaneseTouchBiases.addAll(entry.japaneseTouchBiases)
+                        val surface = composingText.convertTargetBeforeCursor
+                        currentComposingSurface.value = surface
+                        setManagedComposingText(ic, composingText.convertTarget, 1)
+                        if (surface.isNotEmpty()) {
+                            triggerDebouncedConversion(surface)
+                        }
+                    } finally {
+                        ic.endBatchEdit()
+                    }
+                    true
+                }
+            }
+            is ImeUndoEntry.DeletedText -> {
+                if (!composingText.isEmpty || englishComposing.isNotEmpty() || hasSelectionInEditor) return false
+                val ic = currentInputConnection ?: return false
+                ic.commitText(entry.deletedText, 1)
+            }
+            is ImeUndoEntry.ReplacedCommittedText -> {
+                if (!composingText.isEmpty || englishComposing.isNotEmpty() || hasSelectionInEditor) return false
+                val ic = currentInputConnection ?: return false
+                val before = try {
+                    ic.getTextBeforeCursor(entry.currentText.length, 0)?.toString()
+                } catch (_: RuntimeException) {
+                    null
+                }
+                if (before != entry.currentText) return false
+                ic.beginBatchEdit()
+                try {
+                    ic.deleteSurroundingText(entry.currentText.length, 0) &&
+                        ic.commitText(entry.previousText, 1)
+                } finally {
+                    ic.endBatchEdit()
+                }
+            }
+        }
+    }
+
+    private fun performAutoCommitRewind(): Boolean {
+        val rewindRecord = lastAutoCommitRewind ?: return false
+        canRewindOnNextBackspace = false
+        lastAutoCommitRewind = null
+
+        val connection = currentInputConnection ?: return false
+        val tailPreview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
+        connection.beginBatchEdit()
+        val rewindResult = try {
+            AutoCommitRewind.restore(rewindRecord, composingText.convertTarget, tailPreview, object : AutoCommitRewind.Editor {
+                override fun beforeCursor(length: Int) = connection.getTextBeforeCursor(length, 0)?.toString()
+                override fun composing(text: String) = setManagedComposingText(connection, text, 1)
+                override fun deleteBefore(length: Int) = connection.deleteSurroundingText(length, 0)
+                override fun commit(text: String) = connection.commitText(text, 1)
+            })
+        } finally { connection.endBatchEdit() }
+        if (rewindResult == AutoCommitRewind.Result.COMMITTED_FALLBACK) { clearInput(); return false }
+        if (rewindResult != AutoCommitRewind.Result.RESTORED && rewindResult != AutoCommitRewind.Result.RESTORE_PENDING) return false
+        cachedLeftContext = rewindRecord.previousLeftContext
+        composingText.restoreFrom(rewindRecord.originalInput ?: return false)
+        japaneseTouchBiases.clear()
+        pendingConversionContinuation = null
+
+        val restoredSurface = composingText.convertTargetBeforeCursor
+        currentComposingSurface.value = restoredSurface
+        lastInferredSurface = ""
+        lastInferredResult = ""
+        inferenceHistory.clear()
+
+        setManagedComposingText(currentInputConnection, composingText.convertTarget, 1)
+        if (restoredSurface.isNotEmpty()) {
+            triggerDebouncedConversion(restoredSurface)
+        }
+        return true
+    }
+
     fun handleDelete() {
         if (performDelete()) {
             vibrateOnKeyPress()
@@ -2653,52 +3087,23 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (!selected.isNullOrEmpty() || hasSelectionInEditor) {
             canRewindOnNextBackspace = false
             lastAutoCommitRewind = null
+            val selectedText = selected?.toString().orEmpty()
             clearInput()
             hasSelectionInEditor = false
             if (ic == null) return false
-            ic.commitText("", 1)
+            val committed = ic.commitText("", 1)
             val stillSelected = ic.getSelectedText(0)
             if (!stillSelected.isNullOrEmpty()) {
                 sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DEL)
+            } else if (committed && selectedText.isNotEmpty() && selectedText.length <= 200 && !isSensitiveInput()) {
+                undoHistory.push(ImeUndoEntry.DeletedText(selectedText))
             }
             return true
         }
 
         // Check optional Backspace rewind right after an auto-commit
-        val rewindRecord = lastAutoCommitRewind
-        if (isAutoCommitRewindEnabled() && canRewindOnNextBackspace && rewindRecord != null) {
-            canRewindOnNextBackspace = false
-            lastAutoCommitRewind = null
-
-            val connection = currentInputConnection ?: return false
-            val tailPreview = if (isRealtimeInlineEnabled()) predictedCandidate.value.ifEmpty { composingText.convertTarget } else composingText.convertTarget
-            connection.beginBatchEdit()
-            val rewindResult = try {
-                AutoCommitRewind.restore(rewindRecord, composingText.convertTarget, tailPreview, object : AutoCommitRewind.Editor {
-                    override fun beforeCursor(length: Int) = connection.getTextBeforeCursor(length, 0)?.toString()
-                    override fun composing(text: String) = setManagedComposingText(connection, text, 1)
-                    override fun deleteBefore(length: Int) = connection.deleteSurroundingText(length, 0)
-                    override fun commit(text: String) = connection.commitText(text, 1)
-                })
-            } finally { connection.endBatchEdit() }
-            if (rewindResult == AutoCommitRewind.Result.COMMITTED_FALLBACK) { clearInput(); return false }
-            if (rewindResult != AutoCommitRewind.Result.RESTORED && rewindResult != AutoCommitRewind.Result.RESTORE_PENDING) return false
-            cachedLeftContext = rewindRecord.previousLeftContext
-            composingText.restoreFrom(rewindRecord.originalInput ?: return false)
-            japaneseTouchBiases.clear()
-            pendingConversionContinuation = null
-
-            val restoredSurface = composingText.convertTargetBeforeCursor
-            currentComposingSurface.value = restoredSurface
-            lastInferredSurface = ""
-            lastInferredResult = ""
-            inferenceHistory.clear()
-
-            setManagedComposingText(currentInputConnection, composingText.convertTarget, 1)
-            if (restoredSurface.isNotEmpty()) {
-                triggerDebouncedConversion(restoredSurface)
-            }
-            return true
+        if (isAutoCommitRewindEnabled() && canRewindOnNextBackspace && lastAutoCommitRewind != null) {
+            return performAutoCommitRewind()
         }
 
         canRewindOnNextBackspace = false
@@ -2708,6 +3113,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val previous = ComposingEditorState.moveByCodePoint(composingText.convertTarget, composingText.convertTargetCursorPosition, -1)
             val deleteCount = composingText.convertTargetCursorPosition - previous
             if (deleteCount <= 0) { clearCandidateList(); return false }
+            recordJapaneseComposingUndo()
             composingText.deleteBackwardFromCursorPosition(deleteCount)
             if (composingText.isAtEndIndex) {
                 while (japaneseTouchBiases.size > composingText.input.size) {
@@ -2982,7 +3388,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val results = converter.requestCandidates(snapshot, context, enableAI = !sensitive && !reconversion && !rangeConversion,
                     profile = profile, personalize = !sensitive, fixedSurfacePrefix = fixedPrefix,
                     experimentalKeyboardCorrection = dictionaryCorrection,
-                    predictiveConversion = isPredictiveConversionEnabled(),
+                    predictiveConversion = !sensitive && !reconversion && !rangeConversion && isPredictiveConversionEnabled(),
                     continuation = continuation).let {
                     if (rangeConversion) ConversionRangeSession.candidatesForRange(snapshot, it) else it
                 }
@@ -2992,7 +3398,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     if (connection === currentInputConnection && requestGate.isCurrent(ticket, requestKey())) {
                         isConfirming = false
                         if (contextCurrent) {
-                            val candidate = results.firstOrNull()
+                            val candidate = results.firstOrNull { !it.isReadingCompletion }
                             // Without a candidate the reading is only the fallback surface:
                             // commit it as the chosen text, never as a silent kana pass-through
                             // of a composition the engine may have failed to convert.
@@ -3029,8 +3435,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
             appendTranslationLiteral(text)
             return
         }
-        currentInputConnection?.commitText(text, 1)
+        val committed = currentInputConnection?.commitText(text, 1) == true
         clearInput()
+        if (committed && text.isNotEmpty() && !isSensitiveInput()) {
+            undoHistory.push(ImeUndoEntry.CommittedText(committedText = text))
+        }
     }
 
     /**
@@ -3046,10 +3455,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         // Known issue: this confirmation is asynchronous, so the emoji can be committed
         // ahead of the converted reading. Panel text uses the ordered commitPanelText path.
-        if (!composingText.isEmpty) confirmCurrent()
-        currentInputConnection?.commitText(emoji, 1)
+        val hadComposing = !composingText.isEmpty
+        if (hadComposing) confirmCurrent()
+        val committed = currentInputConnection?.commitText(emoji, 1) == true
         clearInput()
-        recordRecentEmoji(emoji)
+        if (committed && !hadComposing && !isSensitiveInput()) {
+            undoHistory.push(ImeUndoEntry.CommittedText(committedText = emoji))
+        }
+        if (committed) recordRecentEmoji(emoji)
     }
 
     fun handleEnglishChar(ch: Char, touchBias: TouchKeyBias? = null) {
@@ -3064,7 +3477,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
             return
         }
         if (ch == ' ') { handleEnglishSpace(); return }
-        if (!ch.isLetter()) {
+        val isAtTrigger = ch == '@'
+        val isDomainContinuation = englishComposing.startsWith("@") &&
+            EnglishWordDictionary.isEmailDomainContinuationChar(ch) &&
+            englishComposing.length < 64
+        if (isAtTrigger) {
+            if (englishComposing.isNotEmpty()) commitEnglishBuffer(useTopCandidate = false)
+        } else if (!ch.isLetter() && !isDomainContinuation) {
             if (englishComposing.isNotEmpty()) commitEnglishBuffer(useTopCandidate = false)
             commitDirect(ch.toString())
             return
@@ -3074,6 +3493,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val ic = currentInputConnection
             cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
             englishTouchBiases.clear()
+        }
+        if (!isSensitiveInput()) {
+            undoHistory.push(
+                ImeUndoEntry.EnglishComposing(
+                    previousText = englishComposing,
+                    touchBiases = englishTouchBiases.toList()
+                )
+            )
         }
         englishComposing += ch
         if (!isSensitiveInput()) {
@@ -3132,6 +3559,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
         }
         if (englishComposing.isNotEmpty()) {
+            if (!isSensitiveInput()) {
+                undoHistory.push(
+                    ImeUndoEntry.EnglishComposing(
+                        previousText = englishComposing,
+                        touchBiases = englishTouchBiases.toList()
+                    )
+                )
+            }
             englishComposing = englishComposing.dropLast(1)
             if (englishTouchBiases.isNotEmpty()) {
                 englishTouchBiases.removeAt(englishTouchBiases.lastIndex)
@@ -3160,6 +3595,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
             null
         }
         val ok = ic.deleteSurroundingText(1, 0)
+        if (ok && !textBefore.isNullOrEmpty() && !isSensitiveInput()) {
+            undoHistory.push(ImeUndoEntry.DeletedText(textBefore.toString()))
+        }
         if (!ok && sendKeyEventFallback) {
             sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DEL)
         }
@@ -3174,7 +3612,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (englishComposing.isNotEmpty()) {
             commitEnglishBuffer(useTopCandidate = isEnglishSpaceAdoptsCandidateState.value)
         }
-        currentInputConnection?.commitText(" ", 1)
+        if (currentInputConnection?.commitText(" ", 1) == true && !isSensitiveInput()) {
+            undoHistory.push(ImeUndoEntry.CommittedText(committedText = " "))
+        }
     }
 
     fun commitEnglishBuffer(useTopCandidate: Boolean = true) {
@@ -3184,8 +3624,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         if (englishComposing.isEmpty()) return
         val candidate = if (useTopCandidate) candidatesList.firstOrNull() else null
+        val isRealSuggestion = candidate != null && (candidate.cost >= 0f || candidate.text != englishComposing)
         commitText(candidate?.text ?: englishComposing,
-            isExplicitSelection = candidate != null, committedCandidate = candidate)
+            isExplicitSelection = isRealSuggestion, committedCandidate = candidate)
     }
 
     private fun clearEnglishInput() {
@@ -3235,6 +3676,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
      */
     fun commitPanelText(text: String) {
         if (text.isEmpty()) return
+        if (keyboardModeState.value == KeyboardMode.ENGLISH &&
+            !isTranslationMode() &&
+            (text == "@" ||
+                (englishComposing.startsWith("@") &&
+                    text.all { EnglishWordDictionary.isEmailDomainContinuationChar(it) }))
+        ) {
+            handleEnglishText(text)
+            return
+        }
         val decision = PanelTextCommit.decide(
             translationMode = isTranslationMode(),
             committingTranslation = committingTranslation,
@@ -3273,7 +3723,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             readingBefore, text, committedCandidate, trailingText,
             sensitive = isSensitiveInput(), correctionApplied = corrections.isApplied
         ) else null
-        val learnEnglish = wasEnglish && isExplicitSelection && !isSensitiveInput() && LearningPolicy.canWrite
+        val learnEnglish = wasEnglish && !isSensitiveInput() && LearningPolicy.canWrite
         val learningRevisionBefore = KanaKanjiConverter.learningHistoryRevision
         val shouldPredictPostComposition = !wasEnglish &&
             surfaceAfter.isEmpty() &&
@@ -3291,20 +3741,51 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
             if (baseContext.isNotEmpty()) EditorContext.bounded(baseContext + text) else text
         } else ""
+        val undoComposingSnapshot = if (!wasEnglish && !composingText.isEmpty && !isSensitiveInput()) composingText.clone() else null
+        val undoEnglish = if (wasEnglish && !isSensitiveInput()) englishReading else ""
+        val undoLeftContext = cachedLeftContext
+        val undoJpBiases = if (!wasEnglish && !isSensitiveInput()) japaneseTouchBiases.toList() else emptyList()
+        val undoEnBiases = if (wasEnglish && !isSensitiveInput()) englishTouchBiases.toList() else emptyList()
         var committedTerminalComposition = false
         cancelPendingInference(edited = false)
         connection.beginBatchEdit()
         try {
             if (!connection.commitText(text, 1)) return
+            if (text.isNotEmpty() && !isSensitiveInput()) {
+                undoHistory.push(
+                    ImeUndoEntry.CommittedText(
+                        committedText = text,
+                        previousComposing = undoComposingSnapshot,
+                        previousEnglish = undoEnglish,
+                        previousLeftContext = undoLeftContext,
+                        japaneseTouchBiases = undoJpBiases,
+                        englishTouchBiases = undoEnBiases
+                    )
+                )
+            }
             composingEditor.finishComposition()
             conversionRange.clear()
             conversionRangeState.value = ""
             // A tap is not a training event. Only a successful editor commit is.
             recordCommittedCorrections(text)
             if (selection != null || learnEnglish) {
-                val event = if (learnEnglish) PendingLearning(englishReading, text, true)
-                    else PendingLearning(checkNotNull(selection).reading, selection.surface, false, selection,
+                val event = if (learnEnglish) {
+                    val englishWord = if (trailingText.isNotEmpty() && text.endsWith(trailingText)) {
+                        text.removeSuffix(trailingText)
+                    } else {
+                        text
+                    }
+                    PendingLearning(
+                        reading = englishReading,
+                        surface = englishWord,
+                        english = true,
+                        historyRevision = learningRevisionBefore,
+                        englishExplicit = isExplicitSelection
+                    )
+                } else {
+                    PendingLearning(checkNotNull(selection).reading, selection.surface, false, selection,
                         learningRevisionBefore)
+                }
                 if (learningQueue.trySend(event).isFailure) {
                     Log.w(TAG, "Selection learning queue is full or closed")
                 }
@@ -3422,11 +3903,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        cancelClipboardEdit()
         exitTranslationMode(revert = false)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         reloadPreferences()
         clearInput()
+        undoHistory.clear()
         applyInputTypeMode(info)
         inputViewEpochState.value++
         hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
@@ -3440,8 +3923,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     override fun onStartInput(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
+        cancelClipboardEdit()
+        updateInputPrivacy(info)
         exitTranslationMode(revert = false)
         clearInput()
+        undoHistory.clear()
         hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
         selectionAvailableState.value = hasSelectionInEditor
         updateSelectionCharacterCount(info?.initialSelStart ?: -1, info?.initialSelEnd ?: -1)
@@ -3452,17 +3938,23 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     override fun onFinishInput() {
+        cancelClipboardEdit()
+        updateInputPrivacy(null)
         exitTranslationMode(revert = false)
         clearInput()
+        undoHistory.clear()
         super.onFinishInput()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        cancelClipboardEdit()
+        floatingKeyboardHost?.cancelDrag()
         exitTranslationMode(revert = false)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         clearInput()
+        undoHistory.clear()
     }
 
     override fun onDestroy() {

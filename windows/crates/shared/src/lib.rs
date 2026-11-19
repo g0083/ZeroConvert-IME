@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod assist_policy;
 pub mod conversion_policy;
+pub mod english_learning;
 pub mod learning_policy;
 pub mod session_policy;
 use std::{
@@ -33,6 +34,8 @@ pub mod ai_candidate {
     pub const DYNAMIC_MACRO: u64 = 999_903;
     /// Experimental Japanese-to-English translation (never a learning candidate).
     pub const TRANSLATION: u64 = crate::assist_policy::TRANSLATION;
+    /// Learned English-mode word / completion candidate.
+    pub const ENGLISH_LEARNING: u64 = 999_905;
 
     /// Lowest id of the reserved AI assist range.
     const AI_ASSIST_RANGE_START: u64 = TYPO_CORRECTION;
@@ -535,6 +538,20 @@ pub enum LearningMode {
     Enabled,
     ReadOnly,
     Disabled,
+}
+
+impl LearningMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::ReadOnly => "read_only",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn capability(self) -> learning_policy::LearningCapability {
+        learning_policy::capability(self.as_str())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]

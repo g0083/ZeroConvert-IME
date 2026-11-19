@@ -17,7 +17,8 @@ data class Candidate(
     val engineCandidateId: String = "",
     val engineConsumedReading: Int? = null,
     val enginePredictionReading: String = "",
-    val enginePostCompositionId: String = ""
+    val enginePostCompositionId: String = "",
+    val isReadingCompletion: Boolean = false
 ) {
     fun previewForReading(reading: String): String = text + engineConsumedReading
         ?.takeIf { it in 1..reading.length }?.let { reading.substring(it) }.orEmpty()

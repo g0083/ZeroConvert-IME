@@ -22,6 +22,11 @@ impl PipeClient {
         })
     }
 
+    #[cfg(debug_assertions)]
+    pub fn new_for_test(management_allowed: bool) -> Arc<Self> {
+        Self::new(management_allowed)
+    }
+
     pub(crate) fn disconnect(&self) {
         self.connected.store(false, Ordering::Release);
     }

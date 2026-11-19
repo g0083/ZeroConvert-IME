@@ -875,7 +875,7 @@ impl TextServiceFactory {
         self.close_composition(true)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn set_text(&self, text: &str, subtext: &str) -> Result<()> {
         let text_service = self.borrow()?;
 
@@ -947,7 +947,7 @@ impl TextServiceFactory {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn shift_start(&self, text: &str, subtext: &str) -> Result<()> {
         let text_service = self.borrow()?;
 

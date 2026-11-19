@@ -98,6 +98,7 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             reverse_dictionary: reverse.into(),
         });
         ai_assist::learning::load_learning_store();
+        ai_assist::english_learning::load_english_learning_store();
         return Ok(Value::Null);
     }
     if envelope["op"] == "setVocabulary" {
@@ -164,6 +165,62 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         .map(|s| json!({"readingLength":s.hiragana_len,"surface":s.preview}))
         .unwrap_or(Value::Null));
     }
+    if envelope["op"] == "englishSuggest" {
+        let prefix = envelope["input"].as_str().unwrap_or_default();
+        if prefix.chars().count() > 64 {
+            return Err("english prefix exceeds limits".into());
+        }
+        let limit = envelope["limit"].as_u64().unwrap_or(8).clamp(1, 32) as usize;
+        let read_learning = envelope["readLearning"].as_bool().unwrap_or(false);
+        let suggestions =
+            ai_assist::english_learning::suggest_english(prefix, limit, read_learning);
+        let promoted_prefix =
+            read_learning && ai_assist::english_learning::is_promoted_english_word(prefix);
+        return Ok(json!({
+            "suggestions": suggestions,
+            "promotedPrefix": promoted_prefix,
+        }));
+    }
+    if envelope["op"] == "englishRecord" {
+        let prefix = envelope["prefix"].as_str().unwrap_or_default();
+        let word = envelope["word"].as_str().unwrap_or_default();
+        if prefix.chars().count() > 64 || word.chars().count() > 64 {
+            return Err("english learning record exceeds limits".into());
+        }
+        let explicit_selection = envelope["explicitSelection"].as_bool().unwrap_or(false);
+        let in_dictionary = envelope["inDictionary"].as_bool().unwrap_or(false);
+        let (_, saved) = ai_assist::english_learning::record_english_word(
+            prefix,
+            word,
+            explicit_selection,
+            in_dictionary,
+        );
+        return Ok(json!({ "saved": saved }));
+    }
+    if envelope["op"] == "englishForget" {
+        let word = envelope["word"].as_str().unwrap_or_default();
+        let prefix = envelope["prefix"].as_str().filter(|s| !s.is_empty());
+        if word.chars().count() > 64 || prefix.is_some_and(|p| p.chars().count() > 64) {
+            return Err("english forget request exceeds limits".into());
+        }
+        return Ok(json!({
+            "forgot": ai_assist::english_learning::forget_english_word(word, prefix),
+        }));
+    }
+    if envelope["op"] == "englishForgetAll" {
+        return Ok(json!({
+            "forgot": ai_assist::english_learning::clear_english_learning(),
+        }));
+    }
+    if envelope["op"] == "englishPromotedWords" {
+        let read_learning = envelope["readLearning"].as_bool().unwrap_or(false);
+        let words = if read_learning {
+            ai_assist::english_learning::promoted_english_words()
+        } else {
+            Vec::new()
+        };
+        return Ok(json!({ "words": words }));
+    }
     let request: Request = serde_json::from_str(value).map_err(|e| e.to_string())?;
     if request.input.chars().count() > 512
         || request.baseline.chars().count() > 2048
@@ -207,7 +264,10 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         "learn" => Ok(json!({"saved": ai_assist::record_learned_typo(&request.input, &request.baseline)})),
         "forget" => Ok(json!({"forgot": ai_assist::learning::forget_learned_typo(&request.input, &request.baseline)})),
         "forgetAll" => Ok(json!({"forgot": ai_assist::learning::clear_learned_typos()})),
-        "learningStats" => Ok(json!({"typoCount": ai_assist::learning::learned_typo_count()})),
+        "learningStats" => Ok(json!({
+            "typoCount": ai_assist::learning::learned_typo_count(),
+            "englishCount": ai_assist::english_learning::learned_english_count(),
+        })),
         _ => Err("unknown engine operation".into()),
     }
 }
@@ -515,5 +575,201 @@ mod tests {
         );
         // Nothing left to clear.
         assert_eq!(dispatch(r#"{"op":"forgetAll"}"#).unwrap()["forgot"], false);
+    }
+
+    #[test]
+    fn native_bridge_english_learning_follows_gboard_rules_and_forgets() {
+        let _guard = learning_test_lock();
+        dispatch(r#"{"op":"englishForgetAll"}"#).unwrap();
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            0
+        );
+
+        // OOV direct commit once -> pending only, not promoted.
+        let first = dispatch(
+            &json!({
+                "op": "englishRecord",
+                "prefix": "ZeroConvert",
+                "word": "ZeroConvert",
+                "explicitSelection": false,
+                "inDictionary": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(first["saved"], true);
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            0
+        );
+
+        // Second direct commit promotes OOV.
+        dispatch(
+            &json!({
+                "op": "englishRecord",
+                "prefix": "ZeroConvert",
+                "word": "ZeroConvert",
+                "explicitSelection": false,
+                "inDictionary": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            1
+        );
+
+        // Explicit selection and dictionary direct commit promote immediately.
+        dispatch(
+            &json!({
+                "op": "englishRecord",
+                "prefix": "hel",
+                "word": "hello",
+                "explicitSelection": true,
+                "inDictionary": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            2
+        );
+
+        let suggest_on = dispatch(
+            &json!({
+                "op": "englishSuggest",
+                "input": "Zero",
+                "limit": 8,
+                "readLearning": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(suggest_on["suggestions"][0]["text"], "ZeroConvert");
+        assert_eq!(suggest_on["suggestions"][0]["learned"], true);
+        assert_eq!(suggest_on["promotedPrefix"], false);
+
+        let suggest_exact = dispatch(
+            &json!({
+                "op": "englishSuggest",
+                "input": "ZeroConvert",
+                "limit": 8,
+                "readLearning": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(suggest_exact["promotedPrefix"], true);
+
+        let suggest_off = dispatch(
+            &json!({
+                "op": "englishSuggest",
+                "input": "Zero",
+                "limit": 8,
+                "readLearning": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(suggest_off["suggestions"].as_array().unwrap().is_empty());
+        assert_eq!(suggest_off["promotedPrefix"], false);
+
+        let promoted = dispatch(r#"{"op":"englishPromotedWords","readLearning":true}"#).unwrap();
+        assert!(promoted["words"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "ZeroConvert"));
+
+        // Forget removes the requested word only.
+        assert_eq!(
+            dispatch(
+                &json!({"op":"englishForget","word":"ZeroConvert","prefix":"Zero"}).to_string()
+            )
+            .unwrap()["forgot"],
+            true
+        );
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            1
+        );
+
+        // Forget all clears remaining entries.
+        assert_eq!(
+            dispatch(r#"{"op":"englishForgetAll"}"#).unwrap()["forgot"],
+            true
+        );
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            0
+        );
+        assert_eq!(
+            dispatch(r#"{"op":"englishForgetAll"}"#).unwrap()["forgot"],
+            false
+        );
+    }
+
+    #[test]
+    fn native_bridge_records_and_suggests_email_domains() {
+        let _guard = learning_test_lock();
+        dispatch(r#"{"op":"englishForgetAll"}"#).unwrap();
+
+        // OOV custom domain requires 2 direct commits before promotion.
+        dispatch(
+            &json!({
+                "op": "englishRecord",
+                "prefix": "@example.co.jp",
+                "word": "@example.co.jp",
+                "explicitSelection": false,
+                "inDictionary": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            0
+        );
+
+        dispatch(
+            &json!({
+                "op": "englishRecord",
+                "prefix": "@example.co.jp",
+                "word": "@example.co.jp",
+                "explicitSelection": false,
+                "inDictionary": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            dispatch(r#"{"op":"learningStats"}"#).unwrap()["englishCount"],
+            1
+        );
+
+        let suggested = dispatch(
+            &json!({
+                "op": "englishSuggest",
+                "input": "@ex",
+                "limit": 8,
+                "readLearning": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(suggested["suggestions"][0]["text"], "@example.co.jp");
+        assert_eq!(suggested["suggestions"][0]["learned"], true);
+
+        assert_eq!(
+            dispatch(
+                &json!({"op":"englishForget","word":"@example.co.jp","prefix":"@ex"}).to_string()
+            )
+            .unwrap()["forgot"],
+            true
+        );
+        dispatch(r#"{"op":"englishForgetAll"}"#).unwrap();
     }
 }

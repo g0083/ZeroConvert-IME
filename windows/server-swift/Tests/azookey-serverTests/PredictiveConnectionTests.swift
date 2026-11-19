@@ -159,6 +159,67 @@ private func withPredictiveServerState<T>(
     }
 }
 
+@MainActor
+@Test func pendingRomajiCanFindCompletionsWithoutAnEarlierCandidateRequest() {
+    let dictionaryURL = testPackageRootURL().appending(path: "azooKey_dictionary_storage/Dictionary")
+    withPredictiveServerState(dictionaryURL: dictionaryURL) {
+        let previousModelPath = config["embeddedModelPath"]
+        let testModelPath = ProcessInfo.processInfo.environment["ZEROCON_PENDING_PREDICTION_TEST_MODEL"]
+        config["embeddedModelPath"] = testModelPath
+        config["enable"] = testModelPath != nil
+        defer { config["embeddedModelPath"] = previousModelPath }
+        func append(_ keys: String) {
+            for key in keys {
+                composingText.insertAtCursorPosition(String(key), inputStyle: .roman2kana)
+            }
+        }
+        @MainActor func expectCandidate(_ text: String) {
+            let candidates = collectComposedCandidates()
+            let candidate = candidates.prefix(6).first { $0.text == text }
+            #expect(candidate?.count == Int32(composingText.input.count),
+                    "\(composingText.convertTarget) -> \(candidates.prefix(10))")
+        }
+
+        append("shin")
+        #expect(composingText.convertTarget == "しn")
+        _ = collectComposedCandidates()
+        append("g")
+        #expect(composingText.convertTarget == "しんg")
+        expectCandidate("シンギュラリティ")
+
+        // A rapid burst of keys can skip all preceding candidate requests.
+        clear_text()
+        append("sing")
+        expectCandidate("シンギュラリティ")
+        composingText.deleteBackwardFromCursorPosition(count: 1)
+        append("k")
+        #expect(composingText.convertTarget == "しんk")
+        #expect(!collectComposedCandidates().contains { $0.text == "シンギュラリティ" })
+        composingText.deleteBackwardFromCursorPosition(count: 1)
+        append("gy")
+        expectCandidate("シンギュラリティ")
+        append("u")
+        #expect(composingText.convertTarget == "しんぎゅ")
+        #expect(collectComposedCandidates().contains { $0.text == "シンギュラリティ" })
+
+        _ = composingText.moveCursorFromCursorPosition(count: -2)
+        var length: CInt = 0
+        let cursorCandidates = get_composed_text_for_cursor_range(lengthPtr: &length)
+        defer { free_candidate_list(cursorCandidates, length) }
+        #expect(!(0..<Int(length)).contains { index in
+            cursorCandidates[index]?.pointee.text.map { String(cString: $0) } == "シンギュラリティ"
+        })
+
+        clear_text()
+        append("yorosh")
+        expectCandidate("よろしく")
+        clear_text()
+        config["predictiveConversion"] = false
+        append("shing")
+        #expect(!collectComposedCandidates().contains { $0.text == "シンギュラリティ" })
+    }
+}
+
 @Test func learningSelectionOverridesPrioritizeRecentAndPromoteAboveSubClauses() async throws {
     let full1 = makeStubCandidate(word: "明日", ruby: "アシタ", composingCount: .inputCount(3))
     let full2 = makeStubCandidate(word: "朝", ruby: "アシタ", composingCount: .inputCount(3))
@@ -184,14 +245,38 @@ private func withPredictiveServerState<T>(
         learningSelectionOverrides.record(output: "明日の天気", for: "アシタノテンキ")
         learningSelectionOverrides.record(output: "明日お願いします", for: "アシタオネガイシマス")
 
-        let prioritized = prioritizeLearningSelectionOverrides(
+        var prioritized = prioritizeLearningSelectionOverrides(
             [full1, full2, dictPred, partial],
             ruby: "あした",
             candidate: { $0 },
             synthesizeElement: { $0 }
-        ).map(\.text)
+        )
 
-        #expect(prioritized == ["明日", "朝", "明日お願いします", "明日の天気", "あ"])
+        #expect(prioritized.map(\.text) == ["明日", "朝", "明日お願いします", "明日の天気", "あ"])
+        promoteKanaReadingCompletion(in: &prioritized, normalizedReading: "アシタ")
+        #expect(prioritized.map(\.text) == ["明日", "明日お願いします", "朝", "明日の天気", "あ"])
+    }
+}
+
+@Test func kanaPredictionPromotionPreservesNormalCandidatesAndRequiresAPrefixMatch() {
+    let top = makeStubCandidate(word: "今日", ruby: "キョウ", composingCount: .surfaceCount(3))
+    let alternative = makeStubCandidate(word: "京", ruby: "キョウ", composingCount: .surfaceCount(3))
+    let differentReading = makeStubCandidate(word: "教室", ruby: "キョウシツ", composingCount: .surfaceCount(3))
+    let completion = makeStubCandidate(word: "今日中", ruby: "キョウジュウ", composingCount: .surfaceCount(3))
+    let nextCompletion = makeStubCandidate(word: "今日は", ruby: "キョウハ", composingCount: .surfaceCount(3))
+    var corrected = differentReading
+    corrected.data[0].metadata.insert(.isKeyboardTypoCorrection)
+    let original = [top, alternative, corrected, completion, nextCompletion]
+    var ranked = original
+
+    promoteKanaReadingCompletion(in: &ranked, normalizedReading: "キョウ")
+    #expect(ranked.map(\.text) == ["今日", "今日中", "京", "教室", "今日は"])
+    #expect(!extendsKanaReading(completion, normalizedReading: "キョウシ"))
+
+    for reading in ["キ", "キョウノ"] {
+        ranked = original
+        promoteKanaReadingCompletion(in: &ranked, normalizedReading: reading)
+        #expect(ranked.map(\.text) == original.map(\.text))
     }
 }
 

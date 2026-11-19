@@ -115,6 +115,81 @@ EXACT_KEYBOARD_LOOKUP = '''    /// Returns syntax connection score between `form
         return source.possibleNexts.map { baseKatakana + $0 }
     }
 
+    /// Looks up whole-reading completions while the last syllable is still being typed.
+    /// Use the active romanization table and a small dictionary budget instead of
+    /// running the regular clause prediction search for each possible syllable.
+    public func requestPendingRomanCompletions(
+        _ inputData: ComposingText,
+        options: ConvertRequestOptions
+    ) -> [Candidate] {
+        guard options.requireJapanesePrediction.isEnabled,
+              inputData.input.last?.inputStyle == .roman2kana else { return [] }
+        let source = self.converter.resolvePredictiveInputSource(composingText: inputData, inputStyle: .roman2kana)
+        guard source.droppedSuffixCount > 0, (1...24).contains(source.baseConvertTarget.count) else { return [] }
+
+        // When both ギ and ギュ are possible, the first search already covers the second.
+        var suffixes: [String] = []
+        for suffix in Set(source.possibleNexts).sorted() where !suffix.isEmpty {
+            if !suffixes.contains(where: { suffix.hasPrefix($0) }) {
+                suffixes.append(suffix)
+            }
+        }
+        guard !suffixes.isEmpty else { return [] }
+        self.dicdataStoreState.updateIfRequired(options: options)
+        let store = self.converter.dicdataStore
+        let base = source.baseConvertTarget.toKatakana()
+        let inputLength = inputData.convertTarget.count
+        let cc = store.getCCLatter(CIDData.BOS.cid)
+        let dynamicEntries = store.getPrefixMatchDynamicUserDict(base, state: self.dicdataStoreState)
+        var candidates: [Candidate] = []
+        let compoundKana = "ャュョ"
+        let contractedSuffixes = Set(source.possibleNexts.filter { $0.last.map(compoundKana.contains) == true })
+        // Limited searches of ギ alone may never reach ギュ. Give contracted
+        // syllables their own budget even when the plain kana is also possible.
+        let searchedSuffixes = Array(suffixes.prefix(8)) + contractedSuffixes.sorted()
+            .filter { !suffixes.contains($0) }.prefix(4)
+        for suffix in searchedSuffixes {
+            let ruby = base + suffix
+            let entries = store.getPredictionLOUDSDicdata(
+                key: ruby, state: self.dicdataStoreState, includeExactMatch: true, pendingRomanLimit: 48
+            )
+            let userEntries = dynamicEntries.lazy.filter { $0.ruby.hasPrefix(ruby) }.prefix(48)
+            for entry in (entries + userEntries) where entry.ruby.hasPrefix(ruby) {
+                let usesMeaning = DicdataStore.includeMMValueCalculation(entry)
+                let meaningScore = usesMeaning ? store.getMMValue(MIDData.EOS.mid, entry.mid) : .zero
+                candidates.append(Candidate(
+                    text: entry.word,
+                    value: entry.value() + cc.get(entry.lcid) + meaningScore - PValue(max(0, entry.ruby.count - inputLength)),
+                    composingCount: .surfaceCount(inputLength),
+                    lastMid: usesMeaning ? entry.mid : MIDData.EOS.mid,
+                    data: [entry]
+                ))
+            }
+        }
+        // Deduplicate after ranking so different entries for a surface keep the best reading.
+        let ranked = candidates.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            if $0.text != $1.text { return $0.text < $1.text }
+            return $0.data[0].ruby < $1.data[0].ruby
+        }
+        let unique = self.getUniqueCandidate(ranked)
+        // Keep the leading matches, then give distinct contracted syllables one
+        // slot each so common words from a single branch cannot fill the strip.
+        var diversified = Array(unique.prefix(2))
+        var representedSuffixes = Set<String>()
+        func contractedSuffix(for candidate: Candidate) -> String? {
+            let remainder = candidate.data[0].ruby.dropFirst(base.count)
+            return contractedSuffixes.first(where: { remainder.hasPrefix($0) })
+        }
+        representedSuffixes.formUnion(diversified.compactMap(contractedSuffix))
+        for candidate in unique.dropFirst(2) where diversified.count < 5 {
+            if let suffix = contractedSuffix(for: candidate), representedSuffixes.insert(suffix).inserted {
+                diversified.append(candidate)
+            }
+        }
+        return Array(self.getUniqueCandidate(diversified + unique).prefix(8))
+    }
+
     /// Requests conversion candidates on an isolated named session, optionally reusing cached
     /// predictions only or constraining the lattice prefix to a committed surface.
     public func requestCandidates(
@@ -1309,11 +1384,56 @@ def patch_zenz_evaluator(text):
 DICDATA_ZERO_HINT_CRLF_ANCHOR = '            let csvLines = csvString.split(separator: "\\n")'
 DICDATA_ZERO_HINT_CRLF_REPLACEMENT = '            let csvLines = csvString.split(whereSeparator: \\.isNewline)'
 
+DICDATA_PREDICTION_LOOKUP_ANCHOR = '''    func getPredictionLOUDSDicdata(key: some StringProtocol, state: DicdataStoreState, includeExactMatch: Bool = false) -> [DicdataElement] {'''
+DICDATA_PREDICTION_LOOKUP_REPLACEMENT = '''    func getPredictionLOUDSDicdata(
+        key: some StringProtocol,
+        state: DicdataStoreState,
+        includeExactMatch: Bool = false,
+        pendingRomanLimit: Int? = nil
+    ) -> [DicdataElement] {'''
+
+DICDATA_PREDICTION_LIMIT_REPLACEMENTS = (
+    (DICDATA_PREDICTION_LOOKUP_ANCHOR, DICDATA_PREDICTION_LOOKUP_REPLACEMENT),
+    ('        let maxCount = 700', '        let maxCount = pendingRomanLimit ?? 700'),
+    ('        let depth = if count == 1 {', '        let depth = if pendingRomanLimit != nil {\n            7\n        } else if count == 1 {'),
+    (
+        '        if includeExactMatch, prefixIndices.count < maxCount {',
+        '''        if pendingRomanLimit != nil {
+            prefixIndices = Array(prefixIndices.prefix(maxCount))
+        }
+        if includeExactMatch, pendingRomanLimit != nil || prefixIndices.count < maxCount {''',
+    ),
+    (
+        '        var userDictIndices = self.startingFromPrefixSearch(query: "user", charIDs: charIDs, maxCount: maxCount, state: state)\n'
+        '        if includeExactMatch, userDictIndices.count < maxCount {',
+        '''        var userDictIndices = self.startingFromPrefixSearch(query: "user", charIDs: charIDs,
+            depth: pendingRomanLimit == nil ? .max : depth, maxCount: maxCount, state: state)
+        if pendingRomanLimit != nil {
+            userDictIndices = Array(userDictIndices.prefix(maxCount))
+        }
+        if includeExactMatch, pendingRomanLimit != nil || userDictIndices.count < maxCount {''',
+    ),
+    (
+        '            var memoryDictIndices = self.startingFromPrefixSearch(query: "memory", charIDs: charIDs, maxCount: maxCount, state: state)\n'
+        '            if includeExactMatch, memoryDictIndices.count < maxCount {',
+        '''            var memoryDictIndices = self.startingFromPrefixSearch(query: "memory", charIDs: charIDs,
+                depth: pendingRomanLimit == nil ? .max : depth, maxCount: maxCount, state: state)
+            if pendingRomanLimit != nil {
+                memoryDictIndices = Array(memoryDictIndices.prefix(maxCount))
+            }
+            if includeExactMatch, pendingRomanLimit != nil || memoryDictIndices.count < maxCount {''',
+    ),
+)
+
 
 def patch_dicdata_store(text):
-    """Split zero-hint collocation CSV files on both LF and CRLF line endings."""
+    """Handle zero-hint CSV newlines and expose smaller prediction lookup budgets."""
     _require(text, DICDATA_ZERO_HINT_CRLF_ANCHOR)
-    return text.replace(DICDATA_ZERO_HINT_CRLF_ANCHOR, DICDATA_ZERO_HINT_CRLF_REPLACEMENT, 1)
+    text = text.replace(DICDATA_ZERO_HINT_CRLF_ANCHOR, DICDATA_ZERO_HINT_CRLF_REPLACEMENT, 1)
+    for anchor, replacement in DICDATA_PREDICTION_LIMIT_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    return text
 
 
 ZENZ_INPUT_GENERATOR_STRUCT_ANCHOR = 'struct ZenzInputTextGenerator {'

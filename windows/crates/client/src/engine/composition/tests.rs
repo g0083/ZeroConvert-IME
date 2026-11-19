@@ -4517,3 +4517,103 @@ fn append_result_with_non_empty_suffix_does_not_indicate_server_reset() {
         &after_mid_insert,
     ));
 }
+
+#[test]
+fn passthrough_packet_is_ignored_when_idle() {
+    let composition = Composition::default();
+
+    for mode in [InputMode::Kana, InputMode::Latin] {
+        assert_eq!(
+            TextServiceFactory::plan_passthrough_packet_commit_actions(&composition, &mode),
+            None
+        );
+    }
+}
+
+#[test]
+fn passthrough_packet_commits_whole_composition_including_suffix_in_kana_mode() {
+    for state in [CompositionState::Composing, CompositionState::Previewing] {
+        let with_preview_and_suffix = Composition {
+            state: state.clone(),
+            preview: "漢字".to_string(),
+            suffix: "あいう".to_string(),
+            temporary_latin: true,
+            temporary_latin_shift_pending: true,
+            ..Composition::default()
+        };
+
+        assert_eq!(
+            TextServiceFactory::plan_passthrough_packet_commit_actions(
+                &with_preview_and_suffix,
+                &InputMode::Kana
+            ),
+            Some((
+                CompositionState::None,
+                vec![
+                    ClientAction::SetTemporaryLatin(false),
+                    ClientAction::SetTemporaryLatinShiftPending(false),
+                    ClientAction::CommitLearning {
+                        scope: LearningCommitScope::Composition,
+                        kind: LearningCommitKind::Normal,
+                        was_temporary_latin: true,
+                    },
+                    ClientAction::EndComposition,
+                ],
+            ))
+        );
+
+        let suffix_only = Composition {
+            state,
+            suffix: "あいう".to_string(),
+            ..Composition::default()
+        };
+
+        assert_eq!(
+            TextServiceFactory::plan_passthrough_packet_commit_actions(
+                &suffix_only,
+                &InputMode::Kana
+            ),
+            Some((
+                CompositionState::None,
+                vec![
+                    ClientAction::CommitWithText("あいう".to_string()),
+                    ClientAction::EndComposition,
+                ],
+            ))
+        );
+    }
+}
+
+#[test]
+fn passthrough_packet_commits_active_composition_in_latin_mode() {
+    let composition = Composition {
+        state: CompositionState::Composing,
+        raw_input: "hello".to_string(),
+        preview: "hello".to_string(),
+        candidates: Candidates {
+            texts: vec!["hello".to_string(), "Hello".to_string()],
+            sub_texts: vec![String::new(), String::new()],
+            hiragana: "hello".to_string(),
+            corresponding_count: vec![5, 5],
+            candidate_ids: vec![0, 0],
+            prediction_readings: Default::default(),
+        },
+        selection_index: 1,
+        ..Composition::default()
+    };
+
+    assert_eq!(
+        TextServiceFactory::plan_passthrough_packet_commit_actions(&composition, &InputMode::Latin),
+        Some((
+            CompositionState::None,
+            vec![
+                ClientAction::CommitEnglishLearning {
+                    prefix: "hello".to_string(),
+                    word: "Hello".to_string(),
+                    explicit_selection: true,
+                },
+                ClientAction::EndComposition,
+            ],
+        ))
+    );
+}

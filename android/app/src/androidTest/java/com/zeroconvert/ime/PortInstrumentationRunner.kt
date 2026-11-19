@@ -33,6 +33,7 @@ class PortInstrumentationRunner : Instrumentation() {
     private var clipboardUiOnly = false
     private var pendingRomajiOnly = false
     private var learningDeletionOnly = false
+    private var privateModeOnly = false
     private var performanceArguments: Bundle? = null
     private fun findNode(matches: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (android.os.Build.VERSION.SDK_INT >= 33) uiAutomation.clearCache()
@@ -124,8 +125,8 @@ class PortInstrumentationRunner : Instrumentation() {
         return false
     }
 
-    private fun waitUntil(message: String, condition: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + 4000
+    private fun waitUntil(message: String, timeoutMs: Long = 4000, condition: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
         while (!condition()) {
             check(SystemClock.uptimeMillis() < deadline) { message }
             SystemClock.sleep(50)
@@ -166,6 +167,7 @@ class PortInstrumentationRunner : Instrumentation() {
         clipboardUiOnly = arguments?.getString("clipboardUiOnly") == "true"
         pendingRomajiOnly = arguments?.getString("pendingRomajiOnly") == "true"
         learningDeletionOnly = arguments?.getString("learningDeletionOnly") == "true"
+        privateModeOnly = arguments?.getString("privateModeOnly") == "true"
         performanceArguments = arguments?.takeIf { it.getString("enginePerformance") == "true" }
         start()
     }
@@ -199,6 +201,7 @@ class PortInstrumentationRunner : Instrumentation() {
         var failures = 0
         var tests = 0
         fun test(name: String, action: () -> Unit) {
+            if (privateModeOnly && name != "editor_setup" && name != "real_ime_private_mode_candidate_bar") return
             // A focused run skips everything else so an unrelated native test
             // cannot take the whole process down before this one executes.
             if (learningDeletionOnly && name != "editor_setup" &&
@@ -619,6 +622,69 @@ class PortInstrumentationRunner : Instrumentation() {
             test("quality_prediction_dataset") {
                 check(BenchmarkRunner.loadPredictiveDataset(targetContext).isNotEmpty()) { "Prediction dataset missing" }
                 runBlocking { BenchmarkRunner.runPredictiveBenchmark(targetContext) { progress("prediction", it) } }
+            }
+        }
+        test("real_ime_private_mode_candidate_bar") {
+            val info = uiAutomation.serviceInfo
+            info.flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            uiAutomation.serviceInfo = info
+            val field = checkNotNull(activity).field
+            val inputManager = targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            val normalImeOptions = onUi { field.imeOptions }
+            val privateModeLabel = targetContext.getString(R.string.private_mode_active)
+            waitUntil("Test editor has no window focus") { onUi { field.hasWindowFocus() } }
+            onUi {
+                field.showSoftInputOnFocus = true
+                field.requestFocus()
+                inputManager.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+            }
+            waitUntil("Normal editor did not display the settings button", timeoutMs = 15_000) {
+                findText("ZeroCon AI") != null
+            }
+            try {
+                onUi {
+                    field.setText("")
+                    field.imeOptions = normalImeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                    inputManager.restartInput(field)
+                }
+                waitUntil("Private mode did not activate on editor restart") { findText(privateModeLabel) != null }
+                check(findText("ZeroCon AI") == null) { "Private mode did not replace the settings button" }
+                check(findText("Clipboard") == null) { "Private mode displayed clipboard history controls" }
+                repeat(2) {
+                    if (findText("入力モード:日本語") == null) {
+                        check(clickText("入力モード:英語", 200) || clickText("入力モード:数字", 200))
+                    }
+                }
+                waitUntil("Japanese keyboard mode did not switch") { findText("入力モード:日本語") != null }
+                val key = if (findText("あを入力") != null) "あを入力" else "aを入力"
+                check(touchKey(key) && touchKey(key)) { "Japanese keys could not be tapped in private mode" }
+                waitUntil("Japanese text did not reach the private editor") { onUi { field.text.isNotEmpty() } }
+                waitUntil("Candidates did not replace the private mode button", timeoutMs = 25_000) {
+                    findText("変換候補一覧") != null && findText(privateModeLabel) == null
+                }
+                check(touchKey("◀") && touchKey("▶") && touchKey("Backspace"))
+                check(onUi { field.text.toString() } == "あ")
+                check(clickText("確定", 500) || clickText("Enter", 500))
+                waitUntil("Private conversion did not commit") {
+                    onUi { field.text.isNotEmpty() && BaseInputConnection.getComposingSpanStart(field.text) == -1 }
+                }
+                waitUntil("Private mode button did not return after commit") { findText(privateModeLabel) != null }
+                check(touchKey(privateModeLabel)) { "Private mode button could not be tapped" }
+                waitUntil("Private mode button did not open settings", timeoutMs = 10_000) {
+                    findText("ZeroCon Keyboard") != null && !onUi { field.hasWindowFocus() }
+                }
+                check(uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK))
+                waitUntil("Test editor did not regain focus", timeoutMs = 15_000) { onUi { field.hasWindowFocus() } }
+            } finally {
+                onUi {
+                    field.setText("")
+                    field.imeOptions = normalImeOptions
+                    inputManager.restartInput(field)
+                    inputManager.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
+            waitUntil("Normal editor did not restore the settings button", timeoutMs = 15_000) {
+                findText(privateModeLabel) == null && findText("ZeroCon AI") != null && findText("Clipboard") != null
             }
         }
         test("real_ime_keys_and_commit") {
@@ -1076,6 +1142,93 @@ class PortInstrumentationRunner : Instrumentation() {
                         if (hadLayout) prefs.edit().putString(key, savedLayout).apply()
                         else prefs.edit().remove(key).apply()
                     }
+                }
+            }
+        }
+        test("numeric_mode_exposes_layout_and_one_handed_buttons") {
+            val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
+            val layoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
+            val oneHandedKey = ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE
+            val splitKey = ZeroConvertInputMethodService.KEY_SPLIT_KEYBOARD
+            val saved = listOf(layoutKey, oneHandedKey).associateWith { prefs.getString(it, null) }
+            val savedSplit = if (prefs.contains(splitKey)) prefs.getBoolean(splitKey, false) else null
+            val wasFloating = targetContext.getSharedPreferences("keyboard_placement", Context.MODE_PRIVATE)
+                .getBoolean("enabled", false)
+            val placementMenu = targetContext.getString(R.string.keyboard_placement_menu)
+            val returnToStandard = targetContext.getString(R.string.keyboard_placement_return_to_standard)
+            val oneHanded = targetContext.getString(R.string.keyboard_placement_one_handed)
+            val floating = targetContext.getString(R.string.keyboard_placement_floating)
+            val split = targetContext.getString(R.string.keyboard_placement_split)
+            var switchedPlacement = false
+            val field = checkNotNull(activity).field
+            val imm = targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            try {
+                onUi {
+                    prefs.edit()
+                        .putString(layoutKey, JapaneseInputLayout.FLICK_12KEY.name)
+                        .putString(oneHandedKey, OneHandedMode.OFF.name)
+                        .apply()
+                    field.setText("")
+                    imm.restartInput(field)
+                }
+                val numeric = "入力モード:数字"
+                val modes = listOf(numeric, "入力モード:英語", "入力モード:日本語")
+                repeat(2) {
+                    var current: String? = null
+                    waitUntil("Input mode key did not appear") {
+                        current = modes.firstOrNull { findText(it) != null }
+                        current != null
+                    }
+                    val mode = checkNotNull(current)
+                    if (mode != numeric) {
+                        check(clickText(mode)) { "Could not switch from $mode" }
+                        waitUntil("Input mode did not change") { findText(mode) == null }
+                    }
+                }
+                waitUntil("Numeric pad did not appear") { findText(numeric) != null && findText("1を入力") != null }
+                check(clickText("Switch layout")) { "Layout switch was unavailable in numeric mode" }
+                waitUntil("Layout selection did not take effect on the numeric pad") {
+                    prefs.getString(layoutKey, null) == JapaneseInputLayout.QWERTY.name && findText(numeric) != null
+                }
+                check(clickText(placementMenu)) { "Keyboard placement menu was unavailable" }
+                waitUntil("Keyboard placement menu did not list all three modes") {
+                    findText(floating) != null && findText(oneHanded) != null && findText(split) != null
+                }
+                check(clickText(oneHanded)) { "One-handed mode was unavailable" }
+                switchedPlacement = true
+                waitUntil("Numeric pad did not become right-aligned") {
+                    findText("左寄せに切り替え") != null && findText(numeric) != null
+                }
+                check(clickText("1を入力")) { "Digit key was unavailable in one-handed mode" }
+                waitUntil("One-handed numeric pad did not enter a digit") {
+                    onUi { field.text.toString() == "1" }
+                }
+                check(clickText("左寄せに切り替え"))
+                waitUntil("Numeric pad did not become left-aligned") { findText("右寄せに切り替え") != null }
+                check(clickText(placementMenu))
+                waitUntil("The active mode did not expose the return-to-standard action") {
+                    val item = findNode { node ->
+                        node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK && it.label == returnToStandard }
+                    }
+                    item?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                }
+                waitUntil("Numeric pad did not return to full width") { findText("全幅に戻す") == null }
+                check(clickText(numeric))
+                waitUntil("Japanese mode did not use the selected QWERTY layout") { findText("aを入力") != null }
+            } finally {
+                if (wasFloating && switchedPlacement) {
+                    clickText(placementMenu)
+                    clickText(floating)
+                }
+                onUi {
+                    val editor = prefs.edit()
+                    saved.forEach { (key, value) ->
+                        if (value == null) editor.remove(key) else editor.putString(key, value)
+                    }
+                    if (savedSplit == null) editor.remove(splitKey) else editor.putBoolean(splitKey, savedSplit)
+                    editor.apply()
+                    field.setText("")
+                    imm.restartInput(field)
                 }
             }
         }

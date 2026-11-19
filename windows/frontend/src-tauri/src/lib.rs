@@ -92,6 +92,7 @@ struct ResetLearningHistoryResponse {
 struct LearningStatsView {
     selection_count: u32,
     typo_count: u32,
+    english_count: u32,
     history_present: bool,
     history_paused: bool,
     learning_mode: String,
@@ -102,6 +103,7 @@ impl From<shared::proto::LearningStatsResponse> for LearningStatsView {
         Self {
             selection_count: stats.selection_count,
             typo_count: stats.typo_count,
+            english_count: stats.english_count,
             history_present: stats.history_present,
             history_paused: stats.history_paused,
             learning_mode: stats.learning_mode,
@@ -390,6 +392,7 @@ fn learning_scopes_from_names(names: Option<&[String]>) -> Vec<shared::proto::Le
         let scope = match name.as_str() {
             "conversion" => shared::proto::LearningMemoryScope::Conversion,
             "typo" => shared::proto::LearningMemoryScope::Typo,
+            "english" => shared::proto::LearningMemoryScope::English,
             // An unknown name must not silently widen the reset to every store.
             other => {
                 eprintln!("Ignoring unknown learning scope: {other}");
@@ -407,6 +410,7 @@ fn scope_name(scope: i32) -> &'static str {
     match shared::proto::LearningMemoryScope::try_from(scope) {
         Ok(shared::proto::LearningMemoryScope::Conversion) => "conversion",
         Ok(shared::proto::LearningMemoryScope::Typo) => "typo",
+        Ok(shared::proto::LearningMemoryScope::English) => "english",
         _ => "unknown",
     }
 }
@@ -1608,14 +1612,23 @@ mod tests {
 
     #[test]
     fn learning_scope_names_map_to_known_scopes_only() {
-        let names = vec!["conversion".to_string(), "typo".to_string()];
+        let names = vec![
+            "conversion".to_string(),
+            "typo".to_string(),
+            "english".to_string(),
+        ];
         let scopes = learning_scopes_from_names(Some(&names));
         assert_eq!(
             scopes,
             vec![
                 shared::proto::LearningMemoryScope::Conversion,
-                shared::proto::LearningMemoryScope::Typo
+                shared::proto::LearningMemoryScope::Typo,
+                shared::proto::LearningMemoryScope::English,
             ]
+        );
+        assert_eq!(
+            scope_name(shared::proto::LearningMemoryScope::English as i32),
+            "english"
         );
     }
 

@@ -3,23 +3,140 @@ package com.zeroconvert.ime
 import android.content.Context
 import android.util.Log
 import com.zeroconvert.ime.assist.TouchBiasTypoResolver
-import com.zeroconvert.ime.azookey.input.ComposingText
-import org.json.JSONObject
+import com.zeroconvert.ime.engine.WindowsEngine
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.Locale
+
+internal interface EnglishLearningBackend {
+    fun isReady(): Boolean
+    fun suggest(prefix: String, limit: Int, readLearning: Boolean): WindowsEngine.EnglishSuggestResponse
+    fun record(prefix: String, word: String, explicitSelection: Boolean, inDictionary: Boolean, expectedRevision: Long)
+    fun forget(word: String, prefix: String): Boolean
+    fun clear(): Boolean
+    fun promotedWords(readLearning: Boolean): List<String>
+}
 
 object EnglishWordDictionary {
     private const val TAG = "EnglishWordDictionary"
-    private const val PREFS = "zerocon_english_data"
-    private const val KEY_LEARNING = "english_learning_memory_json"
     private const val ASSET = "english_words.txt"
+    const val ENGLISH_CANDIDATE_ID_PREFIX = "en:"
+
+    private object WindowsEngineBackend : EnglishLearningBackend {
+        override fun isReady(): Boolean = WindowsEngine.isReady()
+        override fun suggest(prefix: String, limit: Int, readLearning: Boolean) =
+            WindowsEngine.englishSuggest(prefix, limit, readLearning)
+        override fun record(
+            prefix: String,
+            word: String,
+            explicitSelection: Boolean,
+            inDictionary: Boolean,
+            expectedRevision: Long
+        ) = WindowsEngine.recordEnglishWord(prefix, word, explicitSelection, inDictionary, expectedRevision)
+        override fun forget(word: String, prefix: String) =
+            WindowsEngine.forgetEnglishWordBlocking(word, prefix)
+        override fun clear() = WindowsEngine.clearEnglishLearningBlocking()
+        override fun promotedWords(readLearning: Boolean) = WindowsEngine.englishPromotedWords(readLearning)
+    }
+
+    @Volatile
+    private var backend: EnglishLearningBackend = WindowsEngineBackend
 
     @Volatile
     private var loaded = false
     @Volatile
     private var cachedNextWeights: Pair<String, Map<Char, Float>>? = null
+    @Volatile
+    private var cachedPromotedWords: List<String> = emptyList()
+    @Volatile
+    private var promotedRevision: Long = 0L
+
     private val words = mutableListOf<String>()
-    private val learning = LinkedHashMap<String, String>()
+    private val wordSet = HashSet<String>()
+
+    /**
+     * Common email domains suggested in English mode when typing `@`.
+     * Must stay aligned with `windows/crates/shared/src/english_learning.rs`.
+     */
+    val DEFAULT_EMAIL_DOMAINS: List<String> = listOf(
+        "@gmail.com",
+        "@icloud.com",
+        "@yahoo.co.jp",
+        "@outlook.jp",
+        "@outlook.com",
+        "@docomo.ne.jp",
+        "@ezweb.ne.jp",
+        "@softbank.ne.jp",
+        "@au.com",
+        "@hotmail.com",
+        "@i.softbank.jp",
+        "@ymobile.ne.jp",
+        "@uqmobile.jp",
+        "@rakuten.jp",
+        "@live.jp",
+        "@me.com",
+        "@mac.com",
+        "@proton.me",
+        "@protonmail.com",
+        "@yahoo.com",
+        "@nifty.com",
+        "@biglobe.ne.jp",
+        "@so-net.ne.jp",
+        "@ocn.ne.jp"
+    )
+    private val defaultEmailDomainSet: Set<String> = DEFAULT_EMAIL_DOMAINS.toHashSet()
+
+    fun isEmailDomainContinuationChar(ch: Char): Boolean =
+        ch in 'a'..'z' || ch in 'A'..'Z' || ch in '0'..'9' || ch == '.' || ch == '-' || ch == '_'
+
+    fun isEmailDomainPrefix(prefix: String): Boolean =
+        prefix.startsWith("@") &&
+            prefix.length <= 64 &&
+            prefix.drop(1).all { isEmailDomainContinuationChar(it) }
+
+    fun isDefaultEmailDomain(word: String): Boolean {
+        val lower = word.trim().lowercase(Locale.ROOT)
+        return lower.startsWith("@") && defaultEmailDomainSet.contains(lower)
+    }
+
+    fun englishCandidateId(wordLower: String): String {
+        val clean = wordLower.trim().lowercase(Locale.ROOT)
+        return if (clean.isEmpty()) "" else "$ENGLISH_CANDIDATE_ID_PREFIX$clean"
+    }
+
+    fun parseEnglishCandidateId(id: String): String? {
+        if (!id.startsWith(ENGLISH_CANDIDATE_ID_PREFIX)) return null
+        return id.removePrefix(ENGLISH_CANDIDATE_ID_PREFIX).takeIf { it.isNotEmpty() }
+    }
+
+    private fun updateCachedPromotedWords(wordsList: List<String>) {
+        cachedPromotedWords = wordsList
+        promotedRevision += 1L
+        cachedNextWeights = null
+    }
+
+    @Synchronized
+    internal fun setBackendForTest(testBackend: EnglishLearningBackend?) {
+        backend = testBackend ?: WindowsEngineBackend
+        cachedPromotedWords = emptyList()
+        promotedRevision += 1L
+        cachedNextWeights = null
+    }
+
+    @Synchronized
+    internal fun seedWordsForTest(testWords: List<String>) {
+        words.clear()
+        wordSet.clear()
+        for (raw in testWords) {
+            val w = raw.trim()
+            if (w.isNotEmpty() && w.all { it.isLetter() }) {
+                words.add(w)
+                wordSet.add(w.lowercase(Locale.ROOT))
+            }
+        }
+        loaded = true
+        cachedNextWeights = null
+    }
 
     @Synchronized
     fun ensureLoaded(context: Context) {
@@ -32,6 +149,7 @@ object EnglishWordDictionary {
                         val w = line.trim()
                         if (w.isNotEmpty() && w.all { it.isLetter() }) {
                             words.add(w)
+                            wordSet.add(w.lowercase(Locale.ROOT))
                         }
                         line = r.readLine()
                     }
@@ -40,75 +158,146 @@ object EnglishWordDictionary {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load $ASSET", e)
         }
-        // load learning
-        try {
-            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val json = prefs.getString(KEY_LEARNING, null)
-            if (!json.isNullOrEmpty()) {
-                val obj = JSONObject(json)
-                val keys = obj.keys()
-                while (keys.hasNext()) {
-                    val k = keys.next()
-                    val v = obj.optString(k, "")
-                    if (k.isNotEmpty() && v.isNotEmpty()) learning[k] = v
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load english learning memory", e)
-        }
         loaded = true
         cachedNextWeights = null
-        Log.i(TAG, "Loaded ${words.size} english words, ${learning.size} learned")
+        if (backend.isReady() && LearningPolicy.canRead) {
+            updateCachedPromotedWords(backend.promotedWords(true))
+        }
+        Log.i(TAG, "Loaded ${words.size} english words")
     }
 
-    @Synchronized
-    fun recordSelection(context: Context, prefix: String, word: String) {
+    fun isDictionaryWord(word: String): Boolean {
+        val lower = word.trim().lowercase(Locale.ROOT)
+        if (lower.startsWith("@")) return defaultEmailDomainSet.contains(lower)
+        if (lower.length < 2 || !lower.all { it in 'a'..'z' }) return false
+        return synchronized(this) { wordSet.contains(lower) }
+    }
+
+    fun recordCommit(
+        context: Context,
+        prefix: String,
+        word: String,
+        explicitSelection: Boolean,
+        expectedRevision: Long = KanaKanjiConverter.learningHistoryRevision
+    ) {
         ensureLoaded(context)
-        val key = prefix.lowercase()
-        if (key.isEmpty() || word.isEmpty()) return
-        learning.remove(key)
-        learning[key] = word
-        while (learning.size > 500) {
-            val eldest = learning.keys.firstOrNull() ?: break
-            learning.remove(eldest)
+        if (!LearningPolicy.canWrite) return
+        val inDictionary = isDictionaryWord(word)
+        backend.record(prefix, word, explicitSelection, inDictionary, expectedRevision)
+    }
+
+    @Deprecated("Use recordCommit", ReplaceWith("recordCommit(context, prefix, word, true)"))
+    fun recordSelection(context: Context, prefix: String, word: String) {
+        recordCommit(context, prefix, word, explicitSelection = true)
+    }
+
+    fun forgetWord(word: String, prefix: String = ""): Boolean {
+        val forgot = backend.forget(word, prefix)
+        if (forgot) {
+            updateCachedPromotedWords(backend.promotedWords(LearningPolicy.canRead))
         }
-        try {
-            val obj = JSONObject()
-            for ((k, v) in learning) obj.put(k, v)
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_LEARNING, obj.toString()).apply()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save english learning memory", e)
-        }
+        return forgot
+    }
+
+    fun clearLearning(): Boolean {
+        val cleared = backend.clear()
+        updateCachedPromotedWords(emptyList())
+        return cleared
     }
 
     fun suggest(context: Context, prefix: String, limit: Int = 8): List<Candidate> {
-        ensureLoaded(context)
-        if (prefix.isEmpty()) return emptyList()
-        val p = prefix.lowercase()
-        val capitalize = prefix.isNotEmpty() && prefix[0].isUpperCase()
-        val result = mutableListOf<Candidate>()
-        // learned override first
-        val learned = synchronized(this) { learning[p] }
-        if (!learned.isNullOrEmpty() && learned.lowercase() != p) {
-            result.add(Candidate(text = adjustCase(learned, capitalize), reading = prefix, cost = 2000f, isAI = false))
+        val isEmailDomain = prefix.startsWith("@")
+        if (!isEmailDomain) {
+            ensureLoaded(context)
         }
-        // frequency-ranked prefix matches
-        synchronized(this) {
-            for (w in words) {
+        if (prefix.isEmpty() || limit <= 0) return emptyList()
+        if (isEmailDomain && !isEmailDomainPrefix(prefix)) return emptyList()
+        val p = prefix.lowercase(Locale.ROOT)
+        val capitalize = !isEmailDomain && prefix.isNotEmpty() && prefix[0].isUpperCase()
+        val allCaps = !isEmailDomain && prefix.length >= 2 && prefix.all { !it.isLetter() || it.isUpperCase() }
+        val result = mutableListOf<Candidate>()
+
+        val readLearning = LearningPolicy.canRead
+        val learned = if (readLearning) {
+            backend.suggest(prefix, limit, true)
+        } else {
+            WindowsEngine.EnglishSuggestResponse()
+        }
+        for ((index, entry) in learned.suggestions.withIndex()) {
+            if (result.size >= limit) break
+            val candidateText = if (isEmailDomain) entry.text.lowercase(Locale.ROOT) else entry.text
+            if (candidateText == prefix) continue
+            if (result.none { it.text == candidateText }) {
+                result.add(
+                    Candidate(
+                        text = candidateText,
+                        reading = prefix,
+                        cost = 2000f - index,
+                        isAI = false,
+                        engineCandidateId = if (entry.learned) {
+                            englishCandidateId(entry.key.ifEmpty { candidateText })
+                        } else {
+                            ""
+                        }
+                    )
+                )
+            }
+        }
+
+        if (isEmailDomain) {
+            for (domain in DEFAULT_EMAIL_DOMAINS) {
                 if (result.size >= limit) break
-                val wl = w.lowercase()
-                if (wl.startsWith(p) && wl != p) {
-                    val cand = adjustCase(w, capitalize)
-                    if (result.none { it.text == cand }) {
-                        result.add(Candidate(text = cand, reading = prefix, cost = 1000f - result.size.toFloat(), isAI = false))
+                if (domain.startsWith(p) && domain != prefix && result.none { it.text == domain }) {
+                    result.add(
+                        Candidate(
+                            text = domain,
+                            reading = prefix,
+                            cost = 1000f - result.size.toFloat(),
+                            isAI = false,
+                            engineCandidateId = ""
+                        )
+                    )
+                }
+            }
+        } else {
+            // frequency-ranked prefix matches
+            synchronized(this) {
+                for (w in words) {
+                    if (result.size >= limit) break
+                    val wl = w.lowercase(Locale.ROOT)
+                    if (wl.startsWith(p) && wl != p) {
+                        val cand = adjustCase(w, prefix, capitalize, allCaps)
+                        if (cand != prefix && result.none { it.text == cand }) {
+                            result.add(
+                                Candidate(
+                                    text = cand,
+                                    reading = prefix,
+                                    cost = 1000f - result.size.toFloat(),
+                                    isAI = false,
+                                    engineCandidateId = ""
+                                )
+                            )
+                        }
                     }
                 }
             }
         }
+
         // fallback: the typed text itself
         if (result.isEmpty()) {
-            result.add(Candidate(text = prefix, reading = prefix, cost = -100f, isAI = false))
+            result.add(
+                Candidate(
+                    text = prefix,
+                    reading = prefix,
+                    cost = -100f,
+                    isAI = false,
+                    engineCandidateId = if (readLearning && learned.promotedPrefix) {
+                        englishCandidateId(p)
+                    } else {
+                        ""
+                    }
+                )
+            )
         }
         return result
     }
@@ -118,14 +307,25 @@ object EnglishWordDictionary {
      * Returns `emptyMap()` until the dictionary has been loaded on a background thread.
      */
     fun nextCharWeights(prefix: String): Map<Char, Float> {
-        if (!loaded || prefix.isBlank()) return emptyMap()
-        val key = prefix.lowercase()
+        val isEmailDomain = prefix.startsWith("@")
+        if ((!loaded && !isEmailDomain) || prefix.isBlank()) return emptyMap()
+        val key = prefix.lowercase(Locale.ROOT)
+        val includeLearned = LearningPolicy.canRead
+        val promoted = if (includeLearned) cachedPromotedWords else emptyList()
+        val cacheKey = "$includeLearned:$promotedRevision:$key"
         cachedNextWeights?.let { (cachedPrefix, cachedMap) ->
-            if (cachedPrefix == key) return cachedMap
+            if (cachedPrefix == cacheKey) return cachedMap
         }
-        val snapshot = synchronized(this) { words.toList() }
+        val snapshot = if (isEmailDomain) {
+            val learnedDomains = promoted.filter { it.startsWith("@") }
+            if (learnedDomains.isEmpty()) DEFAULT_EMAIL_DOMAINS else learnedDomains + DEFAULT_EMAIL_DOMAINS
+        } else {
+            synchronized(this) {
+                if (promoted.isEmpty()) words.toList() else promoted + words
+            }
+        }
         val weights = NextKeyPredictor.computeEnglishNextCharWeights(key, snapshot)
-        cachedNextWeights = key to weights
+        cachedNextWeights = cacheKey to weights
         return weights
     }
 
@@ -140,11 +340,18 @@ object EnglishWordDictionary {
         limit: Int = 8
     ): List<Candidate> {
         val base = suggest(context, prefix, limit)
-        if (touchBiases.isEmpty() || prefix.length < 2) return base
+        if (prefix.startsWith("@") || touchBiases.isEmpty() || prefix.length < 2) return base
         val hasDictionaryHit = base.any { it.cost > 0f }
         if (hasDictionaryHit) return base
 
-        val snapshot = synchronized(this) { words.toList() }
+        val promoted = if (LearningPolicy.canRead) {
+            backend.promotedWords(true).also { updateCachedPromotedWords(it) }
+        } else {
+            emptyList()
+        }
+        val snapshot = synchronized(this) {
+            if (promoted.isEmpty()) words.toList() else promoted + words
+        }
         val recovered = TouchBiasTypoResolver.rankEnglishCorrections(
             prefix = prefix,
             touchBiases = touchBiases,
@@ -166,8 +373,13 @@ object EnglishWordDictionary {
         return merged.take(limit)
     }
 
-    private fun adjustCase(word: String, capitalize: Boolean): String {
-        if (!capitalize || word.isEmpty()) return word
+    private fun adjustCase(word: String, prefix: String, capitalize: Boolean, allCaps: Boolean): String {
+        if (word.isEmpty()) return word
+        if (allCaps) return word.uppercase(Locale.ROOT)
+        if (!capitalize) return word
+        if (prefix.length <= word.length && word.lowercase(Locale.ROOT).startsWith(prefix.lowercase(Locale.ROOT))) {
+            return prefix + word.substring(prefix.length)
+        }
         return word[0].uppercaseChar() + word.substring(1)
     }
 }

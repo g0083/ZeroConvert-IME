@@ -7,27 +7,51 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import java.util.concurrent.atomic.AtomicReference
 
 /** Exercise the actual timer and settings controls using synthetic, isolated clipboard history. */
 class ClipboardSuggestionRegression(private val instrumentation: Instrumentation) {
     private val history = mutableStateListOf<ClipboardEntry>()
     private val minutes = mutableStateOf(ClipboardSuggestionPolicy.DEFAULT_MINUTES)
+    private val dismissedIds = mutableStateOf<Set<Long>>(emptySet())
     @Volatile private var displayed: ClipboardEntry? = null
+    @Volatile private var displayedAll: List<ClipboardEntry> = emptyList()
     private val revision = mutableStateOf(0)
     @Volatile private var renderedRevision = -1
 
     @Composable private fun Fixture() {
         val currentRevision = revision.value
-        val suggestion = rememberClipboardSuggestion(history, minutes.value)
+        val suggestions = rememberClipboardSuggestions(history, minutes.value, dismissedIds.value)
+        val suggestion = suggestions.firstOrNull()
         Column {
             Text(suggestion?.preview ?: "候補なし")
+            if (suggestions.isNotEmpty()) {
+                ClipboardSuggestionStrip(
+                    suggestions = suggestions,
+                    chipColor = ZeroConDarkPalette.keyModifier,
+                    textColor = ZeroConDarkPalette.textPrimary,
+                    palette = ZeroConDarkPalette,
+                    onSelect = { dismissedIds.value = dismissedIds.value + it.id },
+                    modifier = Modifier.fillMaxWidth().height(36.dp)
+                )
+            }
             ClipboardSuggestionDurationSetting(minutes.value, ZeroConDarkPalette) { minutes.value = it }
         }
-        SideEffect { displayed = suggestion; renderedRevision = currentRevision }
+        SideEffect {
+            displayed = suggestion
+            displayedAll = suggestions
+            renderedRevision = currentRevision
+        }
     }
 
     private fun waitFor(message: String, condition: () -> Boolean) {
@@ -42,6 +66,7 @@ class ClipboardSuggestionRegression(private val instrumentation: Instrumentation
         var expectedRevision = -1
         instrumentation.runOnMainSync {
             history.clear(); history.addAll(entries); minutes.value = duration
+            dismissedIds.value = emptySet()
             revision.value += 1
             expectedRevision = revision.value
         }
@@ -129,6 +154,133 @@ class ClipboardSuggestionRegression(private val instrumentation: Instrumentation
                 check(displayed?.isImage == true)
                 update(listOf(image.copy(pinned = true)))
                 check(displayed == null)
+            }
+            test("multiple_suggestions_display_and_expire_individually") {
+                val now = System.currentTimeMillis()
+                update(
+                    listOf(
+                        ClipboardEntry(text = "新しい項目", timestamp = now - 10_000),
+                        ClipboardEntry(text = "まもなく期限切れ", timestamp = now - 178_500)
+                    )
+                )
+                check(displayedAll.map { it.text } == listOf("新しい項目", "まもなく期限切れ"))
+                waitFor("Older suggestion did not expire independently") {
+                    displayedAll.map { it.text } == listOf("新しい項目")
+                }
+            }
+            test("pasting_one_suggestion_keeps_remaining_suggestions_visible") {
+                val now = System.currentTimeMillis()
+                update(
+                    listOf(
+                        ClipboardEntry(text = "1件目", timestamp = now - 1_000),
+                        ClipboardEntry(text = "2件目", timestamp = now - 2_000)
+                    )
+                )
+                check(displayedAll.map { it.text } == listOf("1件目", "2件目"))
+                click("クリップボード候補 1件目")
+                waitFor("Pasting one suggestion dismissed remaining suggestions") {
+                    displayedAll.map { it.text } == listOf("2件目")
+                }
+            }
+            test("editing_clipboard_entry_does_not_bring_main_activity_to_front") {
+                fun lifecycleState(target: ComponentActivity): Lifecycle.State {
+                    var state = Lifecycle.State.DESTROYED
+                    instrumentation.runOnMainSync { state = target.lifecycle.currentState }
+                    return state
+                }
+                fun findNodeText(targetText: String): Boolean {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+                    fun visit(node: AccessibilityNodeInfo): Boolean {
+                        if (node.text?.toString() == targetText) return true
+                        for (index in 0 until node.childCount) {
+                            if (node.getChild(index)?.let(::visit) == true) return true
+                        }
+                        return false
+                    }
+                    return instrumentation.uiAutomation.windows.asSequence()
+                        .mapNotNull { it.root }
+                        .any { visit(it) }
+                }
+                var mainActivity: MainActivity? = null
+                var foregroundEditor: PortTestActivity? = null
+                try {
+                    mainActivity = instrumentation.startActivitySync(
+                        Intent(instrumentation.targetContext, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ) as MainActivity
+                    foregroundEditor = instrumentation.startActivitySync(
+                        Intent(instrumentation.targetContext, PortTestActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                    ) as PortTestActivity
+                    val main = mainActivity
+                    val editorTask = foregroundEditor
+                    check(main.taskId != editorTask.taskId) {
+                        "MainActivity and foreground editor shared task ${main.taskId}"
+                    }
+                    waitFor("MainActivity did not move to background") {
+                        lifecycleState(main) == Lifecycle.State.CREATED &&
+                            lifecycleState(editorTask) == Lifecycle.State.RESUMED
+                    }
+                    val savedText = AtomicReference<String?>(null)
+                    val activeSession = mutableStateOf<ClipboardEditSession?>(
+                        ClipboardEditSession(ClipboardEntry(id = 42L, text = "編集テスト"), "編集テスト")
+                    )
+                    instrumentation.runOnMainSync {
+                        editorTask.setContent {
+                            activeSession.value?.let { current ->
+                                ClipboardEditCard(
+                                    session = current,
+                                    palette = ZeroConDarkPalette,
+                                    onSave = {
+                                        savedText.set(current.currentText)
+                                        activeSession.value = null
+                                    },
+                                    onCancel = {
+                                        activeSession.value = null
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    waitFor("ClipboardEditCard did not appear") {
+                        findNodeText("クリップボードを編集")
+                    }
+                    check(lifecycleState(main) == Lifecycle.State.CREATED) {
+                        "ClipboardEditCard brought MainActivity forward: ${lifecycleState(main)}"
+                    }
+                    check(lifecycleState(editorTask) == Lifecycle.State.RESUMED) {
+                        "Foreground editor lost resumed focus while editing clipboard: ${lifecycleState(editorTask)}"
+                    }
+                    instrumentation.runOnMainSync {
+                        val session = checkNotNull(activeSession.value)
+                        session.setComposingText("追記", 1)
+                        session.finishComposingText()
+                    }
+                    waitFor("ClipboardEditCard did not display edited text") {
+                        findNodeText("編集テスト追記")
+                    }
+                    check(lifecycleState(main) == Lifecycle.State.CREATED) {
+                        "MainActivity was brought forward during clipboard edit: ${lifecycleState(main)}"
+                    }
+                    check(lifecycleState(editorTask) == Lifecycle.State.RESUMED) {
+                        "Foreground editor left RESUMED state during clipboard edit: ${lifecycleState(editorTask)}"
+                    }
+                    click("保存")
+                    waitFor("ClipboardEditCard did not save updated text") {
+                        savedText.get() == "編集テスト追記" && activeSession.value == null
+                    }
+                    check(lifecycleState(main) == Lifecycle.State.CREATED) {
+                        "MainActivity was brought forward after saving clipboard edit: ${lifecycleState(main)}"
+                    }
+                    check(lifecycleState(editorTask) == Lifecycle.State.RESUMED) {
+                        "Foreground editor did not stay RESUMED after saving clipboard edit: ${lifecycleState(editorTask)}"
+                    }
+                } finally {
+                    instrumentation.runOnMainSync {
+                        foregroundEditor?.let { if (!it.isFinishing) it.finish() }
+                        mainActivity?.let { if (!it.isFinishing) it.finish() }
+                    }
+                }
             }
         } finally {
             activity?.let { editor -> instrumentation.runOnMainSync { editor.finish() } }

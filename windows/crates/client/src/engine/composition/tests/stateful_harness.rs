@@ -2045,7 +2045,7 @@ fn apply_user_action(
                 harness.state = CompositionState::Composing;
             }
             ClientAction::ShowCandidateWindow | ClientAction::StartJevConversion => {}
-            ClientAction::CommitLearning { .. } => {}
+            ClientAction::CommitLearning { .. } | ClientAction::CommitEnglishLearning { .. } => {}
             ClientAction::CommitTextDirect(text) => {
                 harness.committed_clauses.push(SimCommittedClause {
                     display: text.clone(),

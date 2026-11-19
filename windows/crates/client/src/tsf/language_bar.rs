@@ -168,6 +168,9 @@ impl ITfLangBarItem_Impl for TextServiceFactory_Impl {
     // this will be shown as a tooltip when you hover the language bar item
     #[macros::anyhow]
     fn GetTooltipString(&self) -> Result<BSTR> {
+        if self.borrow()?.private_input {
+            return Ok(BSTR::from("ZeroCon IME · プライベートモード"));
+        }
         Ok(BSTR::from(
             "ZeroCon IME (左クリック: かな/英数切替, 右クリック: メニュー)",
         ))

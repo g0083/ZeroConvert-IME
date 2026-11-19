@@ -87,6 +87,12 @@ Androidの「補正候補を自動で反映」は `auto_typo_correction` に対�
 - 先読み関数の引数名は `partial_surface` だが、serverからは `hiragana_text` が渡る。定型句表には漢字表記もあるため、読み・変換済み表記・継続文字列の境界を追う。
 - 配布READMEのモデル精度・版数、`build-info.json` の上流版情報だけでは、現在のローカルソースや配布バイナリの品質・対応関係を確定できない。今回、起動状態・重みの由来・再現精度は検証していない。
 
+### Windowsのプライベートモード
+
+TSFの入力欄が `IS_PRIVATE`、パスワード、PINの入力スコープを通知すると、自動でプライベートモードになる。状態はタスクバーのIMEアイコンのツールチップに表示する。プライベート入力では、周辺テキストの取得、学習の参照と保存、タイポ補正、先読み、翻訳を停止し、基本のかな漢字変換を使う。
+
+クライアントは入力スコープを周辺テキストの取得前に確認し、`SetContext` で空の文脈とプライベート指定を送る。変換サーバーが指定を返してから打鍵を送信する。再接続時も変換状態を復元する前に指定を送り直す。TSFの通知に対応するアプリで自動切り替えが働く。
+
 ## モデル作成とAndroid
 
 学習経路は `data/` のJSONL生成→`training/train_*.py`によるLoRA/全層学習→`training/export_*.py`による重みのマージ→GGUF変換・量子化→評価。`training/export_nano_v2.py` 自体はGGUF変換器ではない。`training/train_nano_v2.py` の既定baseは `Miwa-Keita/zenz-v3.1-xsmall`、教師データはzenz-v3.2-small系の蒸留・辞書データ。配布名ZeroConと、ファイル名zenz/typo-corrector/nano-v2を区別し、各モデルの採用状況を名前から推測しない。

@@ -113,15 +113,24 @@ impl CandidateWindowVisibilityState {
 pub struct SurroundingTextContextState {
     connection_id: Option<(u64, u64)>,
     context: String,
+    private_input: bool,
 }
 
 impl SurroundingTextContextState {
-    pub fn should_send(&self, connection_id: (u64, u64), context: &str) -> bool {
-        self.connection_id != Some(connection_id) || self.context != context
+    pub fn should_send(
+        &self,
+        connection_id: (u64, u64),
+        context: &str,
+        private_input: bool,
+    ) -> bool {
+        self.connection_id != Some(connection_id)
+            || self.context != context
+            || self.private_input != private_input
     }
 
-    pub fn remember(&mut self, connection_id: (u64, u64), context: &str) {
+    pub fn remember(&mut self, connection_id: (u64, u64), context: &str, private_input: bool) {
         self.connection_id = Some(connection_id);
+        self.private_input = private_input;
         self.context.clear();
         self.context.push_str(context);
     }
@@ -145,6 +154,7 @@ pub struct TextService {
     pub candidate_window_position_state: CandidateWindowPositionState,
     pub candidate_window_visibility_state: CandidateWindowVisibilityState,
     pub surrounding_text_context_state: SurroundingTextContextState,
+    pub(crate) private_input: bool,
     pub sink_cookies: HashMap<GUID, u32>,
     pub display_attribute_atom: HashMap<GUID, u32>,
     pub mode: InputMode,
@@ -225,13 +235,19 @@ mod tests {
     fn surrounding_text_context_state_resends_after_connection_change() {
         let mut state = SurroundingTextContextState::default();
 
-        assert!(state.should_send((1, 0), "context"));
-        state.remember((1, 0), "context");
+        assert!(state.should_send((1, 0), "context", false));
+        state.remember((1, 0), "context", false);
 
-        assert!(!state.should_send((1, 0), "context"));
-        assert!(state.should_send((2, 0), "context"));
-        assert!(state.should_send((1, 1), "context"));
-        assert!(state.should_send((1, 0), "changed"));
+        assert!(!state.should_send((1, 0), "context", false));
+        assert!(state.should_send((2, 0), "context", false));
+        assert!(state.should_send((1, 1), "context", false));
+        assert!(state.should_send((1, 0), "changed", false));
+
+        state.remember((1, 0), "", false);
+        assert!(state.should_send((1, 0), "", true));
+        state.remember((1, 0), "", true);
+        assert!(!state.should_send((1, 0), "", true));
+        assert!(state.should_send((1, 0), "", false));
     }
 
     #[test]

@@ -30,7 +30,7 @@ use super::{
     romaji_lookup::RomajiLookup,
     state::{keyboard_disabled_from_context, AppConfigSnapshot, IMEState},
     text_util::{to_half_katakana, to_katakana},
-    user_action::{Function, Navigation},
+    user_action::{Function, Navigation, VK_PACKET_KEY_CODE},
 };
 #[cfg(test)]
 use shared::RomajiRule;
@@ -1907,6 +1907,7 @@ impl TextServiceFactory {
             ClientAction::SetIMEMode(_) => "SetIMEMode",
             ClientAction::SetSelection(_) => "SetSelection",
             ClientAction::CommitLearning { .. } => "CommitLearning",
+            ClientAction::CommitEnglishLearning { .. } => "CommitEnglishLearning",
             ClientAction::ShrinkText(_) => "ShrinkText",
             ClientAction::ShrinkTextRaw(_) => "ShrinkTextRaw",
             ClientAction::ShrinkTextDirect(_) => "ShrinkTextDirect",
@@ -2692,6 +2693,7 @@ impl TextServiceFactory {
             .typo
             .correction
             .hold_auto_commit
+            || ipc_service.is_private_input()
             || app_config.general.experimental_translation
             || app_config.general.jev_conversion
             || *transition != CompositionState::Composing
@@ -4870,7 +4872,7 @@ impl TextServiceFactory {
     }
 
     #[inline]
-    fn is_sensitive_input_scope(scope: InputScope) -> bool {
+    pub(crate) fn is_sensitive_input_scope(scope: InputScope) -> bool {
         matches!(
             scope,
             IS_PASSWORD
@@ -4954,10 +4956,13 @@ impl TextServiceFactory {
         Self::input_scope_list(&input_scope)
     }
 
-    fn current_context_has_sensitive_input_scope(&self) -> bool {
+    pub(crate) fn current_context_has_sensitive_input_scope(&self) -> bool {
         let (tid, context) = match self.borrow() {
             Ok(text_service) => {
                 let tid = text_service.tid;
+                if text_service.private_input {
+                    return true;
+                }
                 match text_service.context::<ITfContext>() {
                     Ok(context) => (tid, context),
                     Err(error) => {
@@ -5118,6 +5123,48 @@ impl TextServiceFactory {
             shared::conversion_policy::CursorCommitAction::CommitSuffixAndEnd => {}
         }
         (state, actions)
+    }
+
+    #[inline]
+    pub(super) fn plan_passthrough_packet_commit_actions(
+        composition: &Composition,
+        mode: &InputMode,
+    ) -> Option<(CompositionState, Vec<ClientAction>)> {
+        if composition.state == CompositionState::None {
+            return None;
+        }
+
+        if *mode == InputMode::Latin {
+            let mut actions = Vec::with_capacity(2);
+            if !composition.raw_input.is_empty() {
+                actions.push(ClientAction::CommitEnglishLearning {
+                    prefix: composition.raw_input.clone(),
+                    word: english::committed_word(composition),
+                    explicit_selection: composition.selection_index > 0,
+                });
+            }
+            actions.push(ClientAction::EndComposition);
+            return Some((CompositionState::None, actions));
+        }
+
+        let mut actions = Vec::with_capacity(4);
+        if composition.temporary_latin {
+            actions.push(ClientAction::SetTemporaryLatin(false));
+        }
+        if composition.temporary_latin_shift_pending {
+            actions.push(ClientAction::SetTemporaryLatinShiftPending(false));
+        }
+        if !composition.preview.is_empty() {
+            actions.push(ClientAction::CommitLearning {
+                scope: LearningCommitScope::Composition,
+                kind: LearningCommitKind::Normal,
+                was_temporary_latin: composition.temporary_latin,
+            });
+        } else if !composition.suffix.is_empty() {
+            actions.push(ClientAction::CommitWithText(composition.suffix.clone()));
+        }
+        actions.push(ClientAction::EndComposition);
+        Some((CompositionState::None, actions))
     }
 
     #[inline]
@@ -6428,7 +6475,7 @@ impl TextServiceFactory {
         Ok(Some(true))
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub(crate) fn process_key(
         &self,
         context: Option<&ITfContext>,
@@ -6492,13 +6539,32 @@ impl TextServiceFactory {
                     "config_snapshot",
                     config_snapshot_start.elapsed(),
                     format!(
-                        "romaji_rows={};max_input_len={};max_multi_char_input_len={};wparam={}",
+                        "romaji_rows={};max_input_len={};max_multi_char_input_len={}",
                         app_config.romaji_table.rows.len(),
                         romaji_lookup.max_input_len,
-                        romaji_lookup.max_multi_char_input_len,
-                        wparam.0
+                        romaji_lookup.max_multi_char_input_len
                     ),
                 );
+            }
+
+            if wparam.0 == VK_PACKET_KEY_CODE {
+                let (composition, mode) = {
+                    let text_service = self.borrow()?;
+                    let composition = text_service.borrow_composition()?.clone();
+                    let mode = IMEState::input_mode()?;
+                    (composition, mode)
+                };
+                let has_deferred_input = !composition.deferred_actions.is_empty()
+                    || !composition.deferred_inputs.is_empty();
+                let active_composition = composition.state != CompositionState::None
+                    || (has_deferred_input
+                        && Self::deferred_projection(&composition, mode).state
+                            != CompositionState::None);
+                return Ok(active_composition.then_some((
+                    Vec::new(),
+                    CompositionState::None,
+                    config_snapshot,
+                )));
             }
 
             // Windows-key chords belong to the shell. The configured Win+/ path is
@@ -6614,7 +6680,7 @@ impl TextServiceFactory {
 
             if mode == InputMode::Latin
                 && composition.state == CompositionState::None
-                && matches!(action, UserAction::Input(ch) if ch.is_ascii_alphabetic())
+                && matches!(action, UserAction::Input(ch) if ch.is_ascii_alphabetic() || ch == '@')
                 && self.current_context_has_sensitive_input_scope()
             {
                 return Ok(None);
@@ -6674,12 +6740,11 @@ impl TextServiceFactory {
         if let (Some(request_id), Some(total_start)) = (trace_request_id, total_start) {
             let details = match &result {
                 Ok(Some((actions, transition, _))) => format!(
-                    "status=success;handled=true;actions={};transition={transition:?};wparam={}",
-                    actions.len(),
-                    wparam.0
+                    "status=success;handled=true;actions={};transition={transition:?}",
+                    actions.len()
                 ),
-                Ok(None) => format!("status=success;handled=false;wparam={}", wparam.0),
-                Err(error) => format!("status=error;wparam={};error={error:?}", wparam.0),
+                Ok(None) => "status=success;handled=false".to_owned(),
+                Err(error) => format!("status=error;error={error:?}"),
             };
             Self::log_client_performance(
                 request_id,
@@ -6693,7 +6758,7 @@ impl TextServiceFactory {
         result
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub(crate) fn process_key_up(
         &self,
         context: Option<&ITfContext>,
@@ -6840,7 +6905,7 @@ impl TextServiceFactory {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn handle_key(
         &self,
         context: Option<&ITfContext>,
@@ -6901,6 +6966,34 @@ impl TextServiceFactory {
                     }
                 }
             }
+            if wparam.0 == VK_PACKET_KEY_CODE {
+                let (composition, mode) = {
+                    let text_service = self.borrow()?;
+                    let composition = text_service.borrow_composition()?.clone();
+                    let mode = IMEState::input_mode()?;
+                    (composition, mode)
+                };
+                if let Some((transition, actions)) =
+                    Self::plan_passthrough_packet_commit_actions(&composition, &mode)
+                {
+                    let config_snapshot = self.input_config_snapshot()?;
+                    if Self::ensure_ipc_service_for_key_event("handle_key_passthrough_packet") {
+                        self.handle_action_with_config_snapshot(
+                            &actions,
+                            transition,
+                            config_snapshot,
+                        )?;
+                    } else {
+                        self.end_composition()?;
+                        if let Ok(text_service) = self.borrow() {
+                            if let Ok(mut persisted) = text_service.borrow_mut_composition() {
+                                *persisted = Composition::default();
+                            }
+                        }
+                    }
+                }
+                return Ok(false);
+            }
             if let Some((actions, transition, config_snapshot)) =
                 self.process_key(context, wparam, lparam, KeyEventPhase::Handle)?
             {
@@ -6920,14 +7013,8 @@ impl TextServiceFactory {
         if let (Some(input_trace), Some(total_start)) = (input_trace.as_ref(), total_start) {
             let request_id = input_trace.request_id();
             let details = match &result {
-                Ok(handled) => format!(
-                    "status=success;handled={handled};wparam={};lparam={}",
-                    wparam.0, lparam.0
-                ),
-                Err(error) => format!(
-                    "status=error;wparam={};lparam={};error={error:?}",
-                    wparam.0, lparam.0
-                ),
+                Ok(handled) => format!("status=success;handled={handled}"),
+                Err(error) => format!("status=error;error={error:?}"),
             };
             Self::log_client_performance(
                 request_id,
@@ -6948,14 +7035,14 @@ impl TextServiceFactory {
                     ?error,
                     "Operation failed without invalidating local composition; preserving it"
                 );
-                Ok(true)
+                Ok(wparam.0 != VK_PACKET_KEY_CODE)
             }
             Err(error) if is_edit_session_error(&error) => {
                 tracing::warn!(
                     ?error,
                     "Edit-session callback failed after possible document mutation; preserving composition for recovery"
                 );
-                Ok(true)
+                Ok(wparam.0 != VK_PACKET_KEY_CODE)
             }
             Err(error) => {
                 tracing::error!("handle_key failed: {error:?}");
@@ -6965,7 +7052,7 @@ impl TextServiceFactory {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn handle_key_up(
         &self,
         context: Option<&ITfContext>,
@@ -7006,14 +7093,8 @@ impl TextServiceFactory {
         if let (Some(input_trace), Some(total_start)) = (input_trace.as_ref(), total_start) {
             let request_id = input_trace.request_id();
             let details = match &result {
-                Ok(handled) => format!(
-                    "status=success;handled={handled};wparam={};lparam={}",
-                    wparam.0, lparam.0
-                ),
-                Err(error) => format!(
-                    "status=error;wparam={};lparam={};error={error:?}",
-                    wparam.0, lparam.0
-                ),
+                Ok(handled) => format!("status=success;handled={handled}"),
+                Err(error) => format!("status=error;error={error:?}"),
             };
             Self::log_client_performance(
                 request_id,
@@ -7319,14 +7400,14 @@ impl TextServiceFactory {
         generation: u64,
         mode: InputMode,
         position: Option<shared::proto::WindowPosition>,
-    ) {
+    ) -> bool {
         let Ok(mut text_service) = self.borrow_mut() else {
             tracing::warn!("Failed to complete deferred input mode switch due to borrow conflict");
-            return;
+            return false;
         };
         if !text_service.clear_pending_mode_switch(generation) {
             tracing::debug!("Skip superseded deferred input mode switch");
-            return;
+            return false;
         }
         if let Ok(mut composition) = text_service.borrow_mut_composition() {
             *composition = Composition::default();
@@ -7365,6 +7446,7 @@ impl TextServiceFactory {
                 tracing::warn!(?error, "Failed to persist IPC state after mode switch");
             }
         }
+        true
     }
 
     fn is_current_mode_switch_request(
@@ -7417,13 +7499,36 @@ impl TextServiceFactory {
         mode: InputMode,
     ) -> Result<()> {
         self.cleanup_observed_disabled_context()?;
-        let (this, context, tip_composition, generation) = {
+        let (this, context, tip_composition, generation, pending_english_switch_learning) = {
             let mut text_service = self.borrow_mut()?;
             let tip_composition = text_service.borrow_composition()?.tip_composition.clone();
+            let pending_english_switch_learning = if tip_composition.is_some()
+                && IMEState::input_mode().ok() == Some(InputMode::Latin)
+            {
+                text_service
+                    .borrow_composition()
+                    .ok()
+                    .filter(|composition| !composition.raw_input.is_empty())
+                    .map(|composition| {
+                        (
+                            composition.raw_input.clone(),
+                            english::committed_word(&composition),
+                            composition.selection_index > 0,
+                        )
+                    })
+            } else {
+                None
+            };
             let this = text_service.this::<ITfTextInputProcessor>()?;
             let context = text_service.context::<ITfContext>()?;
             let generation = text_service.begin_mode_switch(mode.clone());
-            (this, context, tip_composition, generation)
+            (
+                this,
+                context,
+                tip_composition,
+                generation,
+                pending_english_switch_learning,
+            )
         };
 
         let Some(tip_composition) = tip_composition else {
@@ -7434,7 +7539,7 @@ impl TextServiceFactory {
                 move |position| {
                     let factory = unsafe { this.as_impl() };
                     if factory.is_current_idle_mode_switch_request(generation, &context) {
-                        factory.complete_input_mode_switch_best_effort(
+                        let _ = factory.complete_input_mode_switch_best_effort(
                             generation,
                             mode.clone(),
                             position,
@@ -7460,11 +7565,19 @@ impl TextServiceFactory {
                 );
                 let factory = unsafe { this.as_impl() };
                 if factory.is_current_idle_mode_switch_request(generation, &context) {
-                    factory.complete_input_mode_switch_best_effort(generation, mode, None);
+                    let _ = factory.complete_input_mode_switch_best_effort(generation, mode, None);
                 }
             }
             return Ok(());
         };
+        let pending_english_switch_learning = pending_english_switch_learning.filter(|_| {
+            !IMEState::keyboard_disabled().unwrap_or(true)
+                && !self.current_context_has_sensitive_input_scope()
+                && self
+                    .input_config_snapshot()
+                    .ok()
+                    .is_some_and(|snapshot| snapshot.app_config().learning.mode.capability().record)
+        });
         let position = match self.candidate_window_position() {
             Ok(position) => position,
             Err(error) => {
@@ -7486,9 +7599,30 @@ impl TextServiceFactory {
         });
         let on_success = Rc::new({
             let this = this.clone();
+            let pending_english = std::cell::RefCell::new(pending_english_switch_learning);
             move || {
                 let factory = unsafe { this.as_impl() };
-                factory.complete_input_mode_switch_best_effort(generation, mode.clone(), position);
+                if factory.complete_input_mode_switch_best_effort(
+                    generation,
+                    mode.clone(),
+                    position,
+                ) {
+                    if let Some((prefix, word, explicit_selection)) =
+                        pending_english.borrow_mut().take()
+                    {
+                        english::record_optimistic(&prefix, &word, explicit_selection);
+                        if let Ok(Some(ipc_service)) = IMEState::ipc_service() {
+                            let in_dictionary = english::is_dictionary_word(&word);
+                            ipc_service.record_english_learning_background(
+                                prefix,
+                                word,
+                                explicit_selection,
+                                in_dictionary,
+                                english::update_revision,
+                            );
+                        }
+                    }
+                }
             }
         });
         let on_terminal = Rc::new(move || {
@@ -7578,7 +7712,7 @@ impl TextServiceFactory {
         }
         let config_snapshot = self.input_config_snapshot()?;
         let mode = IMEState::input_mode()?;
-        let Some((transition, actions)) = Self::plan_actions_for_user_action_with_lookup(
+        let Some((transition, mut actions)) = Self::plan_actions_for_user_action_with_lookup(
             &composition,
             &UserAction::Enter,
             &mode,
@@ -7589,6 +7723,16 @@ impl TextServiceFactory {
         ) else {
             return Ok(true);
         };
+        if mode == InputMode::Latin {
+            for action in &mut actions {
+                if let ClientAction::CommitEnglishLearning {
+                    explicit_selection, ..
+                } = action
+                {
+                    *explicit_selection = true;
+                }
+            }
+        }
         self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)?;
         Ok(true)
     }
@@ -7608,25 +7752,62 @@ impl TextServiceFactory {
     /// learning target.
     #[tracing::instrument]
     pub fn forget_external_candidate_learning(&self, index: i32) -> Result<bool> {
-        if index < 0 {
+        if index < 0 || self.current_context_has_sensitive_input_scope() {
             return Ok(false);
         }
-        let candidate_id = {
+        let (candidate_id, surface, raw_input) = {
             let text_service = self.borrow()?;
             let composition = text_service.borrow_composition()?.clone();
             if composition.state == CompositionState::None {
                 return Ok(false);
             }
-            composition
+            let candidate_id = composition
                 .candidates
                 .candidate_ids
                 .get(index as usize)
                 .copied()
-                .unwrap_or(0)
+                .unwrap_or(0);
+            let surface = composition
+                .candidates
+                .texts
+                .get(index as usize)
+                .cloned()
+                .unwrap_or_default();
+            (candidate_id, surface, composition.raw_input)
         };
         if candidate_id == 0 {
             // Dictionary correction and AI assist candidates carry no engine id.
             return Ok(false);
+        }
+        if candidate_id == shared::ai_candidate::ENGLISH_LEARNING {
+            let config_snapshot = self.input_config_snapshot()?;
+            if !config_snapshot
+                .app_config()
+                .learning
+                .mode
+                .capability()
+                .forget
+            {
+                return Ok(false);
+            }
+            if !Self::ensure_ipc_service_for_key_event("forget_candidate_learning") {
+                return Ok(false);
+            }
+            let forgot = match IMEState::ipc_service() {
+                Ok(Some(mut ipc_service)) => {
+                    let forgot = ipc_service
+                        .forget_learning_candidate(candidate_id, &surface, &raw_input)
+                        .unwrap_or(false);
+                    let _ = IMEState::set_ipc_service(ipc_service);
+                    forgot
+                }
+                _ => false,
+            };
+            if forgot {
+                english::forget_local(&surface, Some(&raw_input));
+                self.refresh_english_candidates_after_learning_deletion(&config_snapshot)?;
+            }
+            return Ok(forgot);
         }
         if !Self::ensure_ipc_service_for_key_event("forget_candidate_learning") {
             return Ok(false);
@@ -7646,6 +7827,49 @@ impl TextServiceFactory {
             self.reconvert_after_learning_deletion()?;
         }
         Ok(forgot)
+    }
+
+    fn refresh_english_candidates_after_learning_deletion(
+        &self,
+        config_snapshot: &AppConfigSnapshot,
+    ) -> Result<()> {
+        let (raw_input, transition, candidates, selection_index, preview) = {
+            let text_service = self.borrow()?;
+            let mut composition = text_service.borrow_mut_composition()?;
+            if composition.state == CompositionState::None || composition.raw_input.is_empty() {
+                return Ok(());
+            }
+            let raw_input = composition.raw_input.clone();
+            let transition = composition.state.clone();
+            let read_learning = config_snapshot.app_config().learning.mode.capability().read;
+            let candidates = english::candidates_with_learning(&raw_input, read_learning);
+            let preview = candidates
+                .texts
+                .first()
+                .cloned()
+                .unwrap_or_else(|| raw_input.clone());
+            composition.candidates = candidates.clone();
+            composition.selection_index = 0;
+            composition.preview = preview.clone();
+            composition.suffix.clear();
+            composition.raw_hiragana = raw_input.clone();
+            composition.corresponding_count = raw_input.len() as i32;
+            (raw_input, transition, candidates, 0, preview)
+        };
+        let _ = raw_input;
+        self.set_text(&preview, "")?;
+        if let Ok(Some(mut ipc_service)) = IMEState::ipc_service() {
+            let result = self.sync_candidate_window_after_text_update(
+                &mut ipc_service,
+                &candidates,
+                selection_index,
+                config_snapshot.app_config(),
+                &transition,
+            );
+            let _ = IMEState::set_ipc_service(ipc_service);
+            result?;
+        }
+        Ok(())
     }
 
     /// Re-runs conversion for the current reading so the candidate list reflects
@@ -7681,7 +7905,7 @@ impl TextServiceFactory {
         ]
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn handle_action(
         &self,
         actions: &[ClientAction],
@@ -7800,9 +8024,14 @@ impl TextServiceFactory {
             let mut transition = transition;
             let mut deferred_clause_navigation_ready_ui_sync = None;
             let mut pending_learning_commits = Vec::new();
-            let has_learning_action = actions
-                .iter()
-                .any(|deferred| matches!(deferred.action, ClientAction::CommitLearning { .. }));
+            let mut pending_english_learning: Option<(String, String, bool)> = None;
+            let has_learning_action = actions.iter().any(|deferred| {
+                matches!(
+                    deferred.action,
+                    ClientAction::CommitLearning { .. }
+                        | ClientAction::CommitEnglishLearning { .. }
+                )
+            });
             let learning_blocked = has_learning_action
                 && (IMEState::keyboard_disabled().unwrap_or(true)
                     || self.current_context_has_sensitive_input_scope());
@@ -8147,6 +8376,16 @@ impl TextServiceFactory {
                             }),
                         );
                     }
+                    ClientAction::CommitEnglishLearning {
+                        prefix,
+                        word,
+                        explicit_selection,
+                    } => {
+                        if !learning_blocked && app_config.learning.mode.capability().record {
+                            pending_english_learning =
+                                Some((prefix.clone(), word.clone(), *explicit_selection));
+                        }
+                    }
                     ClientAction::EndComposition => {
                         ipc_service.clear_pending_conversion_continuation();
                         self.borrow()?.borrow_mut_composition()?.deferred_actions =
@@ -8185,6 +8424,19 @@ impl TextServiceFactory {
                             || self.hide_candidate_window_ui(&mut ipc_service),
                         )?;
                         ipc_service.record_typo_acceptances_background(typo_acceptances);
+                        if let Some((prefix, word, explicit_selection)) =
+                            pending_english_learning.take()
+                        {
+                            english::record_optimistic(&prefix, &word, explicit_selection);
+                            let in_dictionary = english::is_dictionary_word(&word);
+                            ipc_service.record_english_learning_background(
+                                prefix,
+                                word,
+                                explicit_selection,
+                                in_dictionary,
+                                english::update_revision,
+                            );
+                        }
                         self.borrow()?.borrow_mut_composition()?.typo = Default::default();
                         selection_index = 0;
                         corresponding_count = 0;
@@ -8422,8 +8674,19 @@ impl TextServiceFactory {
                     }
                     ClientAction::AppendTextDirect(text) => {
                         if mode == InputMode::Latin {
+                            let read_learning = !ipc_service.is_private_input()
+                                && app_config.learning.mode.capability().read;
+                            if raw_input.is_empty() && read_learning {
+                                let (session_id, revision) = english::cache_sync_cursor();
+                                ipc_service.sync_english_learning_background(
+                                    session_id,
+                                    revision,
+                                    |s, r, json| english::apply_server_snapshot(s, r, &json),
+                                );
+                            }
                             raw_input.push_str(text);
-                            candidates = english::candidates(&raw_input);
+                            candidates =
+                                english::candidates_with_learning(&raw_input, read_learning);
                             selection_index = 0;
                             corresponding_count = raw_input.len() as i32;
                             raw_hiragana = raw_input.clone();
@@ -8594,7 +8857,11 @@ impl TextServiceFactory {
                         if mode == InputMode::Latin {
                             if !is_delete_forward {
                                 raw_input.pop();
-                                candidates = english::candidates(&raw_input);
+                                candidates = english::candidates_with_learning(
+                                    &raw_input,
+                                    !ipc_service.is_private_input()
+                                        && app_config.learning.mode.capability().read,
+                                );
                                 selection_index = 0;
                                 corresponding_count = raw_input.len() as i32;
                                 raw_hiragana = raw_input.clone();
@@ -9332,6 +9599,17 @@ impl TextServiceFactory {
                         };
 
                         IMEState::set_input_mode(mode.clone())?;
+                        if matches!(mode, InputMode::Latin)
+                            && !self.current_context_has_sensitive_input_scope()
+                            && app_config.learning.mode.capability().read
+                        {
+                            let (session_id, revision) = english::cache_sync_cursor();
+                            ipc_service.sync_english_learning_background(
+                                session_id,
+                                revision,
+                                |s, r, json| english::apply_server_snapshot(s, r, &json),
+                            );
+                        }
 
                         // update the language bar
                         self.update_lang_bar()?;

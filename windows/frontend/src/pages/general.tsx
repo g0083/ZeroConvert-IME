@@ -22,10 +22,11 @@ import { downloadTranslationModel, getTranslationModelStatus } from "@/lib/trans
 
 type WidthMode = "half" | "full";
 type LearningMode = "enabled" | "read_only" | "disabled";
-type LearningScope = "conversion" | "typo";
+type LearningScope = "conversion" | "typo" | "english";
 type LearningStats = {
     selection_count: number;
     typo_count: number;
+    english_count: number;
     history_present: boolean;
     history_paused: boolean;
     learning_mode: string;
@@ -203,6 +204,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
     const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
     const [deleteConversionLearning, setDeleteConversionLearning] = useState(true);
     const [deleteTypoLearning, setDeleteTypoLearning] = useState(true);
+    const [deleteEnglishLearning, setDeleteEnglishLearning] = useState(true);
     const [romajiRows, setRomajiRows] = useState<RomajiRow[]>([]);
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
@@ -601,8 +603,8 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     <SettingsRow
                         label="学習データ"
                         description={learningStats
-                            ? `変換学習 ${learningStats.selection_count}件 / 補正学習 ${learningStats.typo_count}件${learningStats.history_paused ? "（学習は一時停止中）" : ""}。候補ウィンドウの右クリックからも1件ずつ削除できます。`
-                            : "変換学習と補正学習の履歴です。候補ウィンドウの右クリックからも1件ずつ削除できます。"}
+                            ? `変換学習 ${learningStats.selection_count}件 / 補正学習 ${learningStats.typo_count}件 / 英字学習 ${learningStats.english_count}件${learningStats.history_paused ? "（学習は一時停止中）" : ""}。候補ウィンドウの右クリックからも1件ずつ削除できます。`
+                            : "変換学習・補正学習・英字学習の履歴です。候補ウィンドウの右クリックからも1件ずつ削除できます。"}
                     >
                         <AlertDialog>
                             <AlertDialogTrigger asChild><Button variant="outline">学習を削除</Button></AlertDialogTrigger>
@@ -638,14 +640,27 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                                             <span className="block text-muted-foreground">誤入力の学習履歴（{learningStats?.typo_count ?? 0}件）</span>
                                         </span>
                                     </label>
+                                    <label className="flex items-start gap-3 text-sm">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-1 size-4"
+                                            checked={deleteEnglishLearning}
+                                            onChange={(event) => setDeleteEnglishLearning(event.target.checked)}
+                                        />
+                                        <span>
+                                            <span className="font-medium">英字学習</span>
+                                            <span className="block text-muted-foreground">英字モードで入力・選択した単語の学習履歴（{learningStats?.english_count ?? 0}件）</span>
+                                        </span>
+                                    </label>
                                 </div>
                                 <AlertDialogFooter>
                                     <AlertDialogCancel>キャンセル</AlertDialogCancel>
                                     <AlertDialogAction
-                                        disabled={!deleteConversionLearning && !deleteTypoLearning}
+                                        disabled={!deleteConversionLearning && !deleteTypoLearning && !deleteEnglishLearning}
                                         onClick={() => void resetLearningHistory([
                                             ...(deleteConversionLearning ? ["conversion" as LearningScope] : []),
                                             ...(deleteTypoLearning ? ["typo" as LearningScope] : []),
+                                            ...(deleteEnglishLearning ? ["english" as LearningScope] : []),
                                         ])}
                                     >削除</AlertDialogAction>
                                 </AlertDialogFooter>

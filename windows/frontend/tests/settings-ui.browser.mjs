@@ -62,16 +62,16 @@ function installMock() {
                     if (state.failRestart) throw new Error("mock restart failure");
                     return null;
                 case "get_learning_stats": return {
-                    selection_count: 3, typo_count: 1,
+                    selection_count: 3, typo_count: 1, english_count: 2,
                     history_present: true, history_paused: false, learning_mode: "enabled",
                 };
                 case "reset_learning_history":
                     state.learningResetScopes = state.learningResetScopes ?? [];
                     return {
                         reset: true, server_applied: true,
-                        applied: ["conversion", "typo"], failed: [],
+                        applied: ["conversion", "typo", "english"], failed: [],
                         stats: {
-                            selection_count: 0, typo_count: 0,
+                            selection_count: 0, typo_count: 0, english_count: 0,
                             history_present: false, history_paused: false, learning_mode: "enabled",
                         },
                     };

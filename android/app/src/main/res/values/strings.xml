@@ -7,4 +7,20 @@
     <string name="select_ime">入力方法を選択する</string>
     <string name="status_ready">推論エンジン (ZeroCon AI): 準備完了</string>
     <string name="status_loading">ZeroCon Model をロード中…</string>
+    <string name="private_mode_active">プライベートモード</string>
+    <string name="keyboard_placement_menu">キーボードの表示モード</string>
+    <string name="keyboard_placement_standard">標準</string>
+    <string name="keyboard_placement_return_to_standard">標準に戻す</string>
+    <string name="keyboard_placement_floating">フローティング</string>
+    <string name="keyboard_placement_one_handed">片手モード</string>
+    <string name="keyboard_placement_split">分割モード</string>
+    <string name="keyboard_placement_split_requirement">幅600 dp以上のQWERTYで利用できます</string>
+    <string name="split_keyboard_duplicate_keys">分割時に中央のキーを重複</string>
+    <string name="split_keyboard_duplicate_keys_description">日本語のV、英字のGとVを左右両方に表示します。</string>
+    <string name="split_keyboard_gap">分割キーボードの中央余白</string>
+    <string name="split_keyboard_gap_percent">%1$d%%</string>
+    <string name="split_keyboard_toward_center">中央寄せ</string>
+    <string name="split_keyboard_toward_edges">外側寄せ</string>
+    <string name="split_keyboard_preview">分割キーボードのプレビュー</string>
+    <string name="space_key">スペース</string>
 </resources>

@@ -50,7 +50,26 @@ static TRANSLATION_CANCEL: std::sync::Mutex<
     Option<Arc<ai_assist::translation::TranslationCancel>>,
 > = std::sync::Mutex::new(None);
 static AI_ENGINE_IS_LM_STUDIO: AtomicBool = AtomicBool::new(false);
+static SERVER_LEARNING_MODE: AtomicU8 = AtomicU8::new(0);
 static LAST_CONTEXT: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+static PRIVATE_INPUT: AtomicBool = AtomicBool::new(false);
+
+fn learning_mode_to_code(mode: shared::LearningMode) -> u8 {
+    match mode {
+        shared::LearningMode::Enabled => 0,
+        shared::LearningMode::ReadOnly => 1,
+        shared::LearningMode::Disabled => 2,
+    }
+}
+
+fn server_learning_capability() -> shared::learning_policy::LearningCapability {
+    let mode = match SERVER_LEARNING_MODE.load(Ordering::Relaxed) {
+        1 => shared::LearningMode::ReadOnly,
+        2 => shared::LearningMode::Disabled,
+        _ => shared::LearningMode::Enabled,
+    };
+    mode.capability()
+}
 const MAX_CONVERSION_CONTINUATION_READING_COUNT: usize = 64;
 const MAX_CONVERSION_CONTINUATION_SURFACE_COUNT: usize = 128;
 
@@ -64,6 +83,10 @@ static CONVERSION_CONTINUATION: std::sync::RwLock<Option<ConversionContinuation>
     std::sync::RwLock::new(None);
 
 fn reload_ai_assist_from_settings(config: &AppConfig) {
+    SERVER_LEARNING_MODE.store(
+        learning_mode_to_code(config.learning.mode),
+        Ordering::Relaxed,
+    );
     TRANSLATION_ENABLED.store(config.general.experimental_translation, Ordering::Relaxed);
     if let Ok(mut target) = TRANSLATION_TARGET.write() {
         *target = config.general.translation_target.clone();
@@ -585,12 +608,14 @@ fn should_log(level: ServerLogLevel) -> bool {
         return false;
     }
 
-    SERVER_LOG_ENABLED.load(Ordering::Relaxed)
+    !PRIVATE_INPUT.load(Ordering::Relaxed)
+        && SERVER_LOG_ENABLED.load(Ordering::Relaxed)
         && level <= ServerLogLevel::from_u8(SERVER_LOG_LEVEL.load(Ordering::Relaxed))
 }
 
 fn should_log_performance() -> bool {
-    SERVER_PERFORMANCE_LOG_ENABLED.load(Ordering::Relaxed)
+    !PRIVATE_INPUT.load(Ordering::Relaxed)
+        && SERVER_PERFORMANCE_LOG_ENABLED.load(Ordering::Relaxed)
         && ServerLogLevel::from_u8(SERVER_LOG_LEVEL.load(Ordering::Relaxed))
             >= ServerLogLevel::Debug
 }
@@ -643,6 +668,7 @@ struct FFICandidate {
 unsafe extern "C" {
     fn Initialize(path: *const c_char, use_zenzai: bool);
     fn SetContext(context: *const c_char);
+    fn SetPrivateInput(enabled: bool);
     fn SetConversionContinuation(reading: *const c_char, surface: *const c_char) -> bool;
     fn AppendText(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
     fn AppendTextDirect(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
@@ -1019,7 +1045,7 @@ fn log_event_with_component(component: Option<&str>, level: ServerLogLevel, mess
 }
 
 fn crash_trace_enabled() -> bool {
-    SERVER_CRASH_TRACE_ENABLED.load(Ordering::Relaxed)
+    !PRIVATE_INPUT.load(Ordering::Relaxed) && SERVER_CRASH_TRACE_ENABLED.load(Ordering::Relaxed)
 }
 
 fn json_escape(value: &str) -> String {
@@ -1679,6 +1705,7 @@ fn swift_get_learning_stats() -> Option<shared::proto::LearningStatsResponse> {
             .unwrap_or_default()
             .to_string(),
         typo_count: ai_assist::learning::learned_typo_count() as u32,
+        english_count: ai_assist::english_learning::learned_english_count() as u32,
     })
 }
 
@@ -2150,6 +2177,9 @@ fn clear_conversion_continuation() {
 }
 
 fn install_conversion_continuation(reading: &str, surface: &str) -> bool {
+    if PRIVATE_INPUT.load(Ordering::Relaxed) {
+        return false;
+    }
     let context = LAST_CONTEXT
         .read()
         .map(|context| context.clone())
@@ -2208,7 +2238,14 @@ fn release_composition_state() {
     clear_text(); // Also clears snapshots and cached/pinned learning candidates.
     unsafe { SetContext(c"".as_ptr()) };
     clear_conversion_continuation();
+    set_private_input(false);
     HAS_ACTIVE_COMPOSITION.store(false, Ordering::Relaxed);
+}
+
+fn set_private_input(private_input: bool) {
+    if PRIVATE_INPUT.swap(private_input, Ordering::Relaxed) != private_input {
+        unsafe { SetPrivateInput(private_input) };
+    }
 }
 
 #[tonic::async_trait]
@@ -3486,7 +3523,12 @@ impl AzookeyService for MyAzookeyService {
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
         let handler_start = Instant::now();
-        let context = request.context;
+        let private_input = request.private_input;
+        let context = if private_input {
+            String::new()
+        } else {
+            request.context
+        };
         let trimmed_context = context
             .split('\r')
             .rfind(|s| !s.is_empty())
@@ -3499,6 +3541,10 @@ impl AzookeyService for MyAzookeyService {
 
         run_ffi(move || {
             set_request_id(request_id);
+            set_private_input(private_input);
+            if private_input {
+                clear_conversion_continuation();
+            }
             if let Ok(mut lock) = LAST_CONTEXT.write() {
                 *lock = trimmed_context.clone();
             }
@@ -3534,6 +3580,7 @@ impl AzookeyService for MyAzookeyService {
         );
         Ok(Response::new(shared::proto::SetContextResponse {
             server_session_id: server_session_id(),
+            private_input,
         }))
     }
 
@@ -3624,6 +3671,13 @@ impl AzookeyService for MyAzookeyService {
         let mut mutation_guard = self.mutation_lock.lock().await;
         authorize_composition(&mut mutation_guard, &request, true).await?;
         let request = request.into_inner();
+        if PRIVATE_INPUT.load(Ordering::Relaxed) {
+            return Ok(Response::new(
+                shared::proto::CommitLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                },
+            ));
+        }
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
         let handler_start = Instant::now();
@@ -3696,6 +3750,14 @@ impl AzookeyService for MyAzookeyService {
     ) -> Result<Response<shared::proto::CommitLearningCandidatesResponse>, Status> {
         let mut mutation_guard = self.mutation_lock.lock().await;
         authorize_composition(&mut mutation_guard, &request, true).await?;
+        if PRIVATE_INPUT.load(Ordering::Relaxed) {
+            return Ok(Response::new(
+                shared::proto::CommitLearningCandidatesResponse {
+                    server_session_id: server_session_id(),
+                    committed_count: 0,
+                },
+            ));
+        }
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(true);
         let request_id = request_id_or_next(request.request_id);
@@ -3768,6 +3830,7 @@ impl AzookeyService for MyAzookeyService {
             vec![
                 shared::proto::LearningMemoryScope::Conversion as i32,
                 shared::proto::LearningMemoryScope::Typo as i32,
+                shared::proto::LearningMemoryScope::English as i32,
             ]
         } else {
             request.scopes.clone()
@@ -3775,6 +3838,7 @@ impl AzookeyService for MyAzookeyService {
         let wants_conversion =
             scopes.contains(&(shared::proto::LearningMemoryScope::Conversion as i32));
         let wants_typo = scopes.contains(&(shared::proto::LearningMemoryScope::Typo as i32));
+        let wants_english = scopes.contains(&(shared::proto::LearningMemoryScope::English as i32));
 
         let mut applied = Vec::new();
         let mut failed = Vec::new();
@@ -3818,6 +3882,15 @@ impl AzookeyService for MyAzookeyService {
                 // Clearing an empty store is not a failure.
                 applied.push(shared::proto::LearningMemoryScope::Typo as i32);
             }
+        }
+
+        if wants_english {
+            let _cleared =
+                tokio::task::spawn_blocking(ai_assist::english_learning::clear_english_learning)
+                    .await
+                    .map_err(|_| Status::internal("english learning reset failed"))?;
+            // Clearing an empty store is not a failure.
+            applied.push(shared::proto::LearningMemoryScope::English as i32);
         }
 
         let stats = run_ffi(swift_get_learning_stats).await?;
@@ -3867,6 +3940,43 @@ impl AzookeyService for MyAzookeyService {
                 request_id,
                 "forget_learning_candidate",
                 "typo_learning",
+                elapsed_ms(handler_start),
+                "candidate_id={};forgot={forgot}",
+                request.candidate_id
+            );
+            return Ok(Response::new(
+                shared::proto::ForgetLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                    forgot,
+                },
+            ));
+        }
+
+        if request.candidate_id == shared::ai_candidate::ENGLISH_LEARNING {
+            if request.surface.chars().count() > 64 || request.typo_reading.chars().count() > 64 {
+                return Err(Status::invalid_argument(
+                    "invalid english learning feedback",
+                ));
+            }
+            if !server_learning_capability().forget {
+                return Ok(Response::new(
+                    shared::proto::ForgetLearningCandidateResponse {
+                        server_session_id: server_session_id(),
+                        forgot: false,
+                    },
+                ));
+            }
+            let word = request.surface;
+            let prefix = (!request.typo_reading.is_empty()).then_some(request.typo_reading);
+            let forgot = tokio::task::spawn_blocking(move || {
+                ai_assist::english_learning::forget_english_word(&word, prefix.as_deref())
+            })
+            .await
+            .map_err(|_| Status::internal("english learning deletion failed"))?;
+            performance_event_lazy!(
+                request_id,
+                "forget_learning_candidate",
+                "english_learning",
                 elapsed_ms(handler_start),
                 "candidate_id={};forgot={forgot}",
                 request.candidate_id
@@ -3935,8 +4045,107 @@ impl AzookeyService for MyAzookeyService {
             history_paused: false,
             learning_mode: String::new(),
             typo_count: ai_assist::learning::learned_typo_count() as u32,
+            english_count: ai_assist::english_learning::learned_english_count() as u32,
         });
         Ok(Response::new(stats))
+    }
+
+    async fn get_english_learning(
+        &self,
+        request: Request<shared::proto::GetEnglishLearningRequest>,
+    ) -> Result<Response<shared::proto::GetEnglishLearningResponse>, Status> {
+        PipeClient::authorize_connection(&request)?;
+        let _request_guard = ServerRequestGuard::begin(false);
+        let request = request.into_inner();
+        let current_session = server_session_id();
+        if !server_learning_capability().read {
+            let empty_json = serde_json::to_string(
+                &shared::english_learning::EnglishLearningSnapshot::default(),
+            )
+            .unwrap_or_default();
+            return Ok(Response::new(shared::proto::GetEnglishLearningResponse {
+                server_session_id: current_session,
+                revision: 0,
+                unchanged: false,
+                snapshot_json: empty_json,
+            }));
+        }
+        let known_revision = if request.known_server_session_id == current_session {
+            request.known_revision
+        } else {
+            0
+        };
+        let result = tokio::task::spawn_blocking(move || {
+            ai_assist::english_learning::snapshot_if_changed(known_revision)
+        })
+        .await
+        .map_err(|_| Status::internal("english learning snapshot failed"))?;
+
+        match result {
+            None => Ok(Response::new(shared::proto::GetEnglishLearningResponse {
+                server_session_id: current_session,
+                revision: known_revision,
+                unchanged: true,
+                snapshot_json: String::new(),
+            })),
+            Some((revision, snapshot)) => {
+                let snapshot_json = serde_json::to_string(&snapshot)
+                    .map_err(|_| Status::internal("english learning serialization failed"))?;
+                Ok(Response::new(shared::proto::GetEnglishLearningResponse {
+                    server_session_id: current_session,
+                    revision,
+                    unchanged: false,
+                    snapshot_json,
+                }))
+            }
+        }
+    }
+
+    async fn record_english_learning(
+        &self,
+        request: Request<shared::proto::RecordEnglishLearningRequest>,
+    ) -> Result<Response<shared::proto::RecordEnglishLearningResponse>, Status> {
+        PipeClient::authorize_connection(&request)?;
+        let _request_guard = ServerRequestGuard::begin(false);
+        let request = request.into_inner();
+        if request.word.chars().count() > 64 || request.prefix.chars().count() > 64 {
+            return Err(Status::invalid_argument("invalid english learning record"));
+        }
+        let current_session = server_session_id();
+        if !server_learning_capability().record {
+            let revision =
+                tokio::task::spawn_blocking(ai_assist::english_learning::current_revision)
+                    .await
+                    .map_err(|_| Status::internal("english learning revision failed"))?;
+            return Ok(Response::new(
+                shared::proto::RecordEnglishLearningResponse {
+                    server_session_id: current_session,
+                    revision,
+                    saved: false,
+                },
+            ));
+        }
+        let prefix = request.prefix;
+        let word = request.word;
+        let explicit_selection = request.explicit_selection;
+        let in_dictionary = request.in_dictionary;
+        let (revision, saved) = tokio::task::spawn_blocking(move || {
+            ai_assist::english_learning::record_english_word(
+                &prefix,
+                &word,
+                explicit_selection,
+                in_dictionary,
+            )
+        })
+        .await
+        .map_err(|_| Status::internal("english learning record failed"))?;
+        Ok(Response::new(
+            shared::proto::RecordEnglishLearningResponse {
+                server_session_id: current_session,
+                revision,
+                saved,
+            },
+        ))
     }
 
     async fn log_performance(
@@ -4051,6 +4260,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_server() -> std::io::Result<()> {
     let service = MyAzookeyService::default();
+
+    tokio::task::spawn_blocking(|| {
+        let _ = ai_assist::english_learning::load_english_learning_store();
+    });
 
     let warmup_service = service.clone();
     tokio::spawn(async move {
@@ -4831,5 +5044,197 @@ mod conversion_continuation_tests {
         assert!(!valid_conversion_continuation("キョウ", "今日", ""));
         assert!(!valid_conversion_continuation("今日", "今日", ""));
         assert!(!valid_conversion_continuation("きょう1", "今日", ""));
+    }
+}
+
+#[cfg(test)]
+mod english_learning_rpc_tests {
+    use shared::proto::azookey_service_server::AzookeyService;
+    use std::sync::atomic::Ordering;
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn authorized_request<T>(
+        client: &std::sync::Arc<azookey_server::PipeClient>,
+        payload: T,
+    ) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(payload);
+        request
+            .extensions_mut()
+            .insert(std::sync::Arc::clone(client));
+        request
+    }
+
+    #[tokio::test]
+    async fn english_learning_rpcs_record_sync_forget_and_respect_learning_mode() {
+        let _guard = test_lock();
+        assert!(
+            super::ai_assist::english_learning::english_learning_store_path().is_none(),
+            "unit tests must never mutate the user's APPDATA english-learning.json"
+        );
+        super::SERVER_LEARNING_MODE.store(0, Ordering::Relaxed);
+        let _ = super::ai_assist::english_learning::clear_english_learning();
+
+        let service = super::MyAzookeyService::default();
+        let client = azookey_server::PipeClient::new_for_test(true);
+
+        // Record OOV word once directly -> not promoted yet.
+        let first = service
+            .record_english_learning(authorized_request(
+                &client,
+                shared::proto::RecordEnglishLearningRequest {
+                    prefix: "ZeroConvert".into(),
+                    word: "ZeroConvert".into(),
+                    explicit_selection: false,
+                    in_dictionary: false,
+                    request_id: 1,
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(first.saved);
+        assert_eq!(
+            super::ai_assist::english_learning::learned_english_count(),
+            0
+        );
+
+        // Second direct commit promotes it.
+        let second = service
+            .record_english_learning(authorized_request(
+                &client,
+                shared::proto::RecordEnglishLearningRequest {
+                    prefix: "ZeroConvert".into(),
+                    word: "ZeroConvert".into(),
+                    explicit_selection: false,
+                    in_dictionary: false,
+                    request_id: 2,
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(second.saved);
+        assert_eq!(
+            super::ai_assist::english_learning::learned_english_count(),
+            1
+        );
+
+        // Snapshot sync returns updated state, and subsequent sync with matching session/revision is unchanged.
+        let snapshot_res = service
+            .get_english_learning(authorized_request(
+                &client,
+                shared::proto::GetEnglishLearningRequest {
+                    known_server_session_id: 0,
+                    known_revision: 0,
+                    request_id: 3,
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!snapshot_res.unchanged);
+        assert!(snapshot_res.snapshot_json.contains("ZeroConvert"));
+
+        let unchanged_res = service
+            .get_english_learning(authorized_request(
+                &client,
+                shared::proto::GetEnglishLearningRequest {
+                    known_server_session_id: snapshot_res.server_session_id,
+                    known_revision: snapshot_res.revision,
+                    request_id: 4,
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(unchanged_res.unchanged);
+
+        // ReadOnly blocks writes, allows forget.
+        super::SERVER_LEARNING_MODE.store(1, Ordering::Relaxed);
+        let ro_record = service
+            .record_english_learning(authorized_request(
+                &client,
+                shared::proto::RecordEnglishLearningRequest {
+                    prefix: "hel".into(),
+                    word: "hello".into(),
+                    explicit_selection: true,
+                    in_dictionary: true,
+                    request_id: 5,
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!ro_record.saved);
+
+        let forget_res = service
+            .forget_learning_candidate(authorized_request(
+                &client,
+                shared::proto::ForgetLearningCandidateRequest {
+                    candidate_id: shared::ai_candidate::ENGLISH_LEARNING,
+                    request_id: 6,
+                    surface: "ZeroConvert".into(),
+                    typo_reading: "Zero".into(),
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(forget_res.forgot);
+        assert_eq!(
+            super::ai_assist::english_learning::learned_english_count(),
+            0
+        );
+
+        // Disabled blocks read and forget.
+        super::SERVER_LEARNING_MODE.store(0, Ordering::Relaxed);
+        let _ = service
+            .record_english_learning(authorized_request(
+                &client,
+                shared::proto::RecordEnglishLearningRequest {
+                    prefix: "hel".into(),
+                    word: "hello".into(),
+                    explicit_selection: true,
+                    in_dictionary: true,
+                    request_id: 7,
+                },
+            ))
+            .await
+            .unwrap();
+        super::SERVER_LEARNING_MODE.store(2, Ordering::Relaxed);
+        let disabled_sync = service
+            .get_english_learning(authorized_request(
+                &client,
+                shared::proto::GetEnglishLearningRequest {
+                    known_server_session_id: 0,
+                    known_revision: 0,
+                    request_id: 8,
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!disabled_sync.snapshot_json.contains("hello"));
+        let disabled_forget = service
+            .forget_learning_candidate(authorized_request(
+                &client,
+                shared::proto::ForgetLearningCandidateRequest {
+                    candidate_id: shared::ai_candidate::ENGLISH_LEARNING,
+                    request_id: 9,
+                    surface: "hello".into(),
+                    typo_reading: "hel".into(),
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!disabled_forget.forgot);
+
+        super::SERVER_LEARNING_MODE.store(0, Ordering::Relaxed);
+        let _ = super::ai_assist::english_learning::clear_english_learning();
     }
 }

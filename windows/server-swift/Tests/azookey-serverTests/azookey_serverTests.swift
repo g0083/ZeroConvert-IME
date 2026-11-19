@@ -2655,6 +2655,31 @@ private func testCandidate(
     #expect(predictionMode == .disabled)
 }
 
+@Test @MainActor func privateInputDisablesPersonalizationUntilLeavingTheField() {
+    let previousConfig = config
+    let previousLearning = currentLearningType
+    defer {
+        set_private_input(false)
+        config = previousConfig
+        currentLearningType = previousLearning
+    }
+
+    config["experimentalTypoCorrection"] = true
+    config["predictiveConversion"] = true
+    currentLearningType = .inputAndOutput
+    set_private_input(true)
+    let privateOptions = getOptions(context: "通常欄の文脈", zenzaiEnabled: true)
+    #expect(privateOptions.learningType == .nothing)
+    #expect(!privateOptions.experimentalKeyboardTypoCorrection)
+    #expect(privateOptions.requireJapanesePrediction == .disabled)
+
+    set_private_input(false)
+    let regularOptions = getOptions(zenzaiEnabled: false)
+    #expect(regularOptions.learningType == .inputAndOutput)
+    #expect(regularOptions.experimentalKeyboardTypoCorrection)
+    #expect(regularOptions.requireJapanesePrediction != .disabled)
+}
+
 @Test func keyboardTypoCorrectionDefaultsOffAndFollowsRuntimeConfig() async throws {
     let result = await MainActor.run {
         let previous = config["experimentalTypoCorrection"]

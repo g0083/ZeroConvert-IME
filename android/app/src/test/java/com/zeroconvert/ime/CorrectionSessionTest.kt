@@ -128,6 +128,23 @@ class CorrectionSessionTest {
         assertTrue(InputPrivacy.isSensitive(0xe1, 0)) // web password
         assertTrue(InputPrivacy.isSensitive(0x12, 0)) // numeric password
         assertTrue(InputPrivacy.isSensitive(1, 0x1000000)) // NO_PERSONALIZED_LEARNING
+        assertTrue(InputPrivacy.isSensitive(0, 0)) // TYPE_NULL skips learning
         assertFalse(InputPrivacy.isSensitive(1, 0))
+    }
+
+    @Test fun nonInputTypeNullDoesNotTriggerPrivateModeOrBlockExternalClipboard() {
+        assertFalse(InputPrivacy.isPrivateInput(0, 0)) // TYPE_NULL (outside input fields)
+        assertTrue(InputPrivacy.isPrivateInput(0, 0x1000000)) // TYPE_NULL + NO_PERSONALIZED_LEARNING
+        assertTrue(InputPrivacy.isPrivateInput(0x81, 0))
+        assertTrue(InputPrivacy.isPrivateInput(0x91, 0))
+        assertTrue(InputPrivacy.isPrivateInput(0xe1, 0))
+        assertTrue(InputPrivacy.isPrivateInput(0x12, 0))
+        assertFalse(InputPrivacy.isPrivateInput(1, 0))
+
+        assertTrue(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 5_000L, lastPrivateInputEndMillis = 0L))
+        assertFalse(InputPrivacy.shouldAcceptClipboardEvent(privateMode = true, clipTimestamp = 5_000L, lastPrivateInputEndMillis = 0L))
+        assertFalse(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 5_000L, lastPrivateInputEndMillis = 5_000L))
+        assertTrue(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 5_001L, lastPrivateInputEndMillis = 5_000L))
+        assertTrue(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 0L, lastPrivateInputEndMillis = 5_000L))
     }
 }

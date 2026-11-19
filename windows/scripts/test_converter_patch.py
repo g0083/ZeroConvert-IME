@@ -399,7 +399,10 @@ class ZenzEvaluatorTests(unittest.TestCase):
 
 class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
     def test_splits_zero_hint_csv_on_crlf_and_lf(self):
-        source = '            let csvLines = csvString.split(separator: "\\n")\n'
+        source = '\n'.join(
+            [converter_patch.DICDATA_ZERO_HINT_CRLF_ANCHOR]
+            + [anchor for anchor, _ in converter_patch.DICDATA_PREDICTION_LIMIT_REPLACEMENTS]
+        )
         patched = converter_patch.patch_dicdata_store(source)
         self.assertIn('split(whereSeparator: \\.isNewline)', patched)
         self.assertNotIn('split(separator: "\\n")', patched)

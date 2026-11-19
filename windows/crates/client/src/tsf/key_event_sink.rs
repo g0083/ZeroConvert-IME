@@ -38,7 +38,7 @@ fn translation_shortcut(wparam: WPARAM) -> bool {
 // sink (aka event listener) for key events
 impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
     #[macros::anyhow]
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     fn OnTestKeyDown(
         &self,
         pic: Option<&ITfContext>,
@@ -100,7 +100,7 @@ impl ITfKeyEventSink_Impl for TextServiceFactory_Impl {
     }
 
     #[macros::anyhow]
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     fn OnKeyDown(&self, pic: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         self.update_shift_key_state(wparam, true);
         self.cleanup_observed_disabled_context()?;

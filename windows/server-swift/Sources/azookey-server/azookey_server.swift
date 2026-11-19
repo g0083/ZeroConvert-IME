@@ -29,6 +29,7 @@ nonisolated(unsafe) var composingTextSnapshots: [ComposingText] = []
 nonisolated(unsafe) var currentInputStyle: InputStyle = .roman2kana
 nonisolated(unsafe) var customRomajiTableEnabled = false
 nonisolated(unsafe) var currentLearningType: LearningType = .inputAndOutput
+nonisolated(unsafe) private var privateInputActive = false
 nonisolated(unsafe) var currentLearningMemoryDirectoryURL: URL?
 nonisolated(unsafe) var learningCandidateCache = LearningCandidateCache()
 nonisolated(unsafe) var learningSelectionOverrides = LearningSelectionStore()
@@ -591,7 +592,7 @@ func serverLog(
     _ message: @autoclosure () -> String,
     flush: Bool = false
 ) {
-    guard serverLogCallbacks.isLogEnabled(level: level) else {
+    guard !privateInputActive, serverLogCallbacks.isLogEnabled(level: level) else {
         return
     }
 
@@ -616,7 +617,7 @@ private func crashTrace(
     state: String,
     details: @autoclosure () -> String = ""
 ) {
-    guard serverLogCallbacks.isCrashTraceEnabled() else {
+    guard !privateInputActive, serverLogCallbacks.isCrashTraceEnabled() else {
         return
     }
 
@@ -664,7 +665,7 @@ private func performanceLog(
     elapsedMs: Int,
     details: @autoclosure () -> String = ""
 ) {
-    guard serverLogCallbacks.isPerformanceLogEnabled() else {
+    guard !privateInputActive, serverLogCallbacks.isPerformanceLogEnabled() else {
         return
     }
 
@@ -765,10 +766,11 @@ let defaultPredictiveConversionEnabled = false
 #endif
 
 func isPredictiveConversionEnabled() -> Bool {
-    (config["predictiveConversion"] as? Bool) ?? defaultPredictiveConversionEnabled
+    !privateInputActive && ((config["predictiveConversion"] as? Bool) ?? defaultPredictiveConversionEnabled)
 }
 
 func isPostCompositionPredictionEnabled() -> Bool {
+    guard !privateInputActive else { return false }
     if let explicit = config["postCompositionPrediction"] as? Bool {
         return explicit
     }
@@ -1140,6 +1142,7 @@ private func clearLearningCandidateCache() {
 }
 
 func cacheLearningCandidates(_ candidates: [Candidate]) -> UInt64? {
+    guard !privateInputActive else { return nil }
     recordRecentPublishedPostCompositionCandidates(candidates)
     guard currentLearningType == .inputAndOutput else {
         return nil
@@ -1442,7 +1445,7 @@ func prioritizeLearningSelectionOverrides<Element>(
     candidate: (Element) -> Candidate,
     synthesizeElement: ((Candidate) -> Element)? = nil
 ) -> [Element] {
-    guard currentLearningType != .nothing else {
+    guard !privateInputActive, currentLearningType != .nothing else {
         return elements
     }
     let normalizedRuby = normalizedLearningRuby(ruby)
@@ -2312,22 +2315,23 @@ func getOptions(
     context: String = "",
     zenzaiEnabled: Bool
 ) -> ConvertRequestOptions {
+    let zenzaiEnabled = zenzaiEnabled && !privateInputActive
     configureEngineRuntime(zenzaiEnabled: zenzaiEnabled)
     let emojiURL = execURL
         .appendingPathComponent("EmojiDictionary")
         .appendingPathComponent("emoji_all_E15.1.txt")
     return makeConvertRequestOptions(
-        context: context,
+        context: privateInputActive ? "" : context,
         zenzaiEnabled: zenzaiEnabled,
         runtimeDirectoryURL: converterRuntimeDirectoryURL(),
         emojiDictionaryURL: emojiURL,
         textReplacer: emojiTextReplacerCache.value(for: emojiURL),
         zenzaiWeightURL: converterModelURL(),
         profile: (config["profile"] as? String) ?? "",
-        learningType: currentLearningType,
+        learningType: privateInputActive ? .nothing : currentLearningType,
         learningMemoryDirectoryURL: currentLearningMemoryDirectoryURL,
-        experimentalKeyboardTypoCorrection:
-            (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection,
+        experimentalKeyboardTypoCorrection: !privateInputActive
+            && ((config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection),
         predictiveConversion: isPredictiveConversionEnabled()
     )
 }
@@ -2341,8 +2345,8 @@ func currentRuntimeZenzaiEnabled() -> Bool {
 }
 
 /// 未確定のローマ字（子音アルファベット）が末尾に残っているかを判定する。
-/// この状態では予測変換のプレフィックス全件探索が多重に走り大きな入力遅延を引き起こすため、
-/// ひらがな（音節）が完成するまで予測変換を抑制する。
+/// この状態では通常の文節ごとの予測探索を止め、末尾に合う既出候補と
+/// 探索量を制限した読み全体の辞書候補を使う。
 func hasTrailingUncompletedRoman(in composingText: ComposingText) -> Bool {
     guard let lastChar = composingText.convertTarget.last else {
         return false
@@ -2398,7 +2402,7 @@ private func zenzaiDiagnosticSnapshot() -> ZenzaiDiagnosticSnapshot {
         profileLength: profile.count,
         cpuBackendSupported: cpuBackendSupported,
         runtimeEnabled: effectiveZenzaiRuntimeEnabled(
-            isConfigured: configuredEnabled,
+            isConfigured: configuredEnabled && !privateInputActive,
             backend: backend,
             cpuBackendSupported: cpuBackendSupported
         )
@@ -2743,7 +2747,8 @@ func mergePredictiveSupplementCandidates(
     exactMerged: [Candidate],
     predictionResults: [Candidate],
     hiragana: String,
-    maxPredictions: Int = 3
+    maxPredictions: Int = 3,
+    preferPredictionsAfterTopCandidate: Bool = false
 ) -> [Candidate] {
     guard maxPredictions > 0, !predictionResults.isEmpty else {
         return exactMerged
@@ -2773,17 +2778,39 @@ func mergePredictiveSupplementCandidates(
     guard !filteredPredictions.isEmpty else {
         return exactMerged
     }
-    // Keep all full-span exact conversions (and at least Top1) ahead of predictive
-    // completions, while surfacing predictions before partial sub-clause fragments.
-    let splitIndex = exactMerged.indices.dropFirst().first { index in
-        exactMerged[index].rubyCount < hiragana.count
-    } ?? exactMerged.endIndex
+    // With a pending syllable the other full-span entries often differ only in
+    // how they display the raw consonant. Leave room for completions near Top 1.
+    let splitIndex = preferPredictionsAfterTopCandidate
+        ? min(1, exactMerged.count)
+        : (exactMerged.indices.dropFirst().first { exactMerged[$0].rubyCount < hiragana.count }
+            ?? exactMerged.endIndex)
     var combined: [Candidate] = []
     combined.reserveCapacity(exactMerged.count + filteredPredictions.count)
     combined.append(contentsOf: exactMerged[..<splitIndex])
     combined.append(contentsOf: filteredPredictions)
     combined.append(contentsOf: exactMerged[splitIndex...])
     return combined
+}
+
+func extendsKanaReading(_ candidate: Candidate, normalizedReading: String) -> Bool {
+    guard candidate.rubyCount > normalizedReading.count,
+          candidate.inputable,
+          candidate.keyboardTypoCorrections.isEmpty,
+          !candidate.data.contains(where: { $0.metadata.contains(.isKeyboardTypoCorrection) }) else {
+        return false
+    }
+    return learningCandidateRuby(candidate).hasPrefix(normalizedReading)
+}
+
+func promoteKanaReadingCompletion(in candidates: inout [Candidate], normalizedReading: String) {
+    guard normalizedReading.count >= 2,
+          let first = candidates.first,
+          !extendsKanaReading(first, normalizedReading: normalizedReading),
+          let index = candidates.dropFirst().firstIndex(where: {
+              extendsKanaReading($0, normalizedReading: normalizedReading)
+          }), index > 1 else { return }
+    let completion = candidates.remove(at: index)
+    candidates.insert(completion, at: 1)
 }
 
 func cursorPrefixBoundaryFirstClauseResults(
@@ -3868,12 +3895,13 @@ public func get_composed_text_for_cursor_range(lengthPtr: UnsafeMutablePointer<C
     )
 }
 
-private func get_composed_text_impl(
+func get_composed_text_impl(
     lengthPtr: UnsafeMutablePointer<CInt>,
     allowZenzai: Bool,
     sourceComposingText: ComposingText? = nil,
     suffixAfterCursor: String = "",
-    isCursorAtEndOverride: Bool? = nil
+    isCursorAtEndOverride: Bool? = nil,
+    onReadingCompletion: ((Int) -> Void)? = nil
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
     let targetComposingText = sourceComposingText ?? composingText
     let isCursorAtEnd = isCursorAtEndOverride ?? targetComposingText.isAtEndIndex
@@ -3960,6 +3988,7 @@ private func get_composed_text_impl(
     let options = getOptions(context: contextString, zenzaiEnabled: useZenzai)
     let japanesePredictionEnabled = options.requireJapanesePrediction != .disabled
     let cacheOnlyPrediction = hasTrailingRoman
+    let completePendingRoman = isCursorAtEnd && suffixAfterCursor.isEmpty && cacheOnlyPrediction && japanesePredictionEnabled
     let predictiveContinuationRequest: ConversionContinuationRequest?
     if suffixAfterCursor.isEmpty, japanesePredictionEnabled {
         if let continuationRequest {
@@ -4120,6 +4149,18 @@ private func get_composed_text_impl(
             hiragana: previewHiragana
         )
     } ?? zenzaiMainResults
+    let pendingRomanCompletions: [Candidate]
+    if completePendingRoman {
+        let start = performanceEnabled ? performanceNow() : 0
+        pendingRomanCompletions = (useZenzai ? normalNBestSupplementConverter : converter)
+            .requestPendingRomanCompletions(previewComposingText, options: options)
+        if performanceEnabled {
+            performanceLog(operation: "get_composed_text", stage: "pending_roman_predictions",
+                           elapsedMs: elapsedPerformanceMilliseconds(since: start))
+        }
+    } else {
+        pendingRomanCompletions = []
+    }
     let effectivePredictionResults: [Candidate]?
     if suffixAfterCursor.isEmpty, japanesePredictionEnabled {
         let basePredictions = normalNBestConverted?.predictionResults
@@ -4157,7 +4198,7 @@ private func get_composed_text_impl(
                 fallback: basePredictions,
                 hiragana: previewHiragana
             )
-        } else if useZenzai || continuationRequest != nil {
+        } else if useZenzai || continuationRequest != nil || completePendingRoman {
             effectivePredictionResults = basePredictions
         } else {
             effectivePredictionResults = nil
@@ -4166,10 +4207,15 @@ private func get_composed_text_impl(
         effectivePredictionResults = nil
     }
     let mergedMainResults = effectivePredictionResults.map {
-        mergePredictiveSupplementCandidates(
+        let predictions = pendingRomanCompletions.isEmpty
+            ? $0
+            : Array($0.prefix(1)) + pendingRomanCompletions + $0.dropFirst()
+        return mergePredictiveSupplementCandidates(
             exactMerged: mergedExactResults,
-            predictionResults: $0,
-            hiragana: previewHiragana
+            predictionResults: predictions,
+            hiragana: previewHiragana,
+            maxPredictions: completePendingRoman ? 6 : 3,
+            preferPredictionsAfterTopCandidate: completePendingRoman
         )
     } ?? mergedExactResults
     let touchCandidates = suffixAfterCursor.isEmpty
@@ -4210,6 +4256,14 @@ private func get_composed_text_impl(
             mainResults.insert(exactCandidate, at: 0)
         }
     }
+    // Android's compact candidate strip reserves the second position for the
+    // highest-ranked completion after dictionary and learning priorities are applied.
+    let kanaCompletionReading = (onReadingCompletion != nil && japanesePredictionEnabled &&
+        isCursorAtEnd && suffixAfterCursor.isEmpty && !hasTrailingRoman)
+        ? normalizedLearningRuby(previewHiragana) : nil
+    if let kanaCompletionReading {
+        promoteKanaReadingCompletion(in: &mainResults, normalizedReading: kanaCompletionReading)
+    }
     if let normalNBestConverted {
         serverLog(
             "DEBUG",
@@ -4231,12 +4285,26 @@ private func get_composed_text_impl(
     var result: [FFICandidate] = []
     result.reserveCapacity(mainResults.count)
     let learningCandidateBatchFirstId = cacheLearningCandidates(mainResults)
+    let pendingCompletionTexts: Set<String> = onReadingCompletion == nil
+        ? [] : Set(pendingRomanCompletions.map(\.text))
+    let normalizedNasalReading = previewHiragana.last == "n"
+        ? hiraganaToKatakana(String(previewHiragana.dropLast()) + "ん") : nil
 
     for i in 0..<mainResults.count {
         let candidate = mainResults[i]
 
         let constructStart = performanceEnabled ? performanceNow() : 0
         let candidateText = constructCandidateString(candidate: candidate, hiragana: previewHiragana)
+        if let onReadingCompletion {
+            if let kanaCompletionReading,
+               extendsKanaReading(candidate, normalizedReading: kanaCompletionReading) {
+                onReadingCompletion(i)
+            } else if completePendingRoman,
+                      candidate.rubyCount > previewHiragana.count ||
+                        (i > 0 && pendingCompletionTexts.contains(candidateText) && learningCandidateRuby(candidate) != normalizedNasalReading) {
+                onReadingCompletion(i)
+            }
+        }
         if performanceEnabled {
             constructCandidateStringMs += elapsedPerformanceMilliseconds(since: constructStart)
         }
@@ -4691,11 +4759,21 @@ public func shrink_text(
     return _strdup(composingText.convertTarget)!
 }
 
+@_silgen_name("SetPrivateInput")
+public func set_private_input(_ enabled: Bool) {
+    privateInputActive = enabled
+    if enabled {
+        config["context"] = ""
+        clearLearningCandidateCache()
+        clearPostCompositionPredictionState()
+    }
+}
+
 @_silgen_name("SetContext")
 public func set_context(
     context: UnsafePointer<CChar>
 ) {
-    let contextString = String(cString: context)
+    let contextString = privateInputActive ? "" : String(cString: context)
     config["context"] = contextString
     serverLog("DEBUG", "SetContext: contextLength=\(contextString.count)")
 }

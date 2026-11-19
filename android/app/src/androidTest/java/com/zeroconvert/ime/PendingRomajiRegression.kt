@@ -114,11 +114,48 @@ class PendingRomajiRegression(private val instrumentation: Instrumentation) {
                 check(candidates.isNotEmpty()) { "Normal conversion disappeared for completed $raw" }
             }
         }
+        test("native_pending_completion_keeps_full_span_and_stays_out_of_inline_preview") {
+            val converter = KanaKanjiConverter()
+            for ((raw, expected) in listOf("shing" to "シンギュラリティ", "yorosh" to "よろしく")) {
+                val input = ComposingText().apply {
+                    raw.forEach { insertAtCursorPosition(it.toString(), InputStyle.ROMAN2KANA) }
+                }
+                val candidates = kotlinx.coroutines.runBlocking {
+                    converter.requestCandidates(input, "", enableAI = true, personalize = false)
+                }
+                val completion = checkNotNull(candidates.take(6).firstOrNull { it.text == expected }) {
+                    "$raw -> ${candidates.take(10).map { it.text }}"
+                }
+                check(completion.isReadingCompletion && completion.engineConsumedReading == input.convertTarget.length)
+                check(InlinePreviewPolicy.select(candidates, input.convertTarget)?.isReadingCompletion == false)
+            }
+        }
+
+        test("kana_prediction_reaches_second_slot_in_flick_and_qwerty") {
+            val converter = KanaKanjiConverter()
+            for ((keys, style) in listOf("よろ" to InputStyle.DIRECT, "yoro" to InputStyle.ROMAN2KANA)) {
+                val input = ComposingText().apply {
+                    keys.forEach { insertAtCursorPosition(it.toString(), style) }
+                }
+                val candidates = kotlinx.coroutines.runBlocking {
+                    converter.requestCandidates(input, "", enableAI = true, personalize = false, predictiveConversion = true)
+                }
+                check(candidates.firstOrNull()?.isReadingCompletion == false)
+                val completion = candidates.getOrNull(1)
+                check(completion?.isReadingCompletion == true && completion.engineConsumedReading == input.convertTarget.length) {
+                    "$keys -> ${candidates.take(6).map { it.text }}"
+                }
+                val disabled = kotlinx.coroutines.runBlocking {
+                    converter.requestCandidates(input, "", enableAI = true, personalize = false, predictiveConversion = false)
+                }
+                check(disabled.none { it.isReadingCompletion })
+            }
+        }
 
         val prefs = context.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
         val keys = listOf(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, ZeroConvertInputMethodService.KEY_REALTIME_INLINE,
             ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST, ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION,
-            ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED)
+            ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION)
         val saved = prefs.all.filterKeys { it in keys }
         var activity: PortTestActivity? = null
         try {
@@ -146,6 +183,28 @@ class PendingRomajiRegression(private val instrumentation: Instrumentation) {
                 }
             }
             waitFor("Japanese QWERTY unavailable") { node("入力モード:日本語") != null && node("nを入力") != null }
+            test("real_keys_offer_and_commit_a_completion_after_pending_consonant") {
+                onUi {
+                    prefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_REALTIME_INLINE, false)
+                        .putBoolean(ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION, true).apply()
+                    editor.field.setText("")
+                    (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(editor.field)
+                }
+                "shing".forEach { click("${it}を入力") }
+                waitFor("Pending g was not retained in composition") {
+                    onUi { editor.field.text.toString() == "しんg" }
+                }
+                val label = "変換候補 シンギュラリティ"
+                waitFor("No candidates for pending g") { node(label) != null || node("候補一覧を開く") != null }
+                if (node(label) == null) click("候補一覧を開く")
+                click(label)
+                waitFor("Completing pending g did not commit the whole word") {
+                    onUi {
+                        editor.field.text.toString() == "シンギュラリティ" &&
+                            BaseInputConnection.getComposingSpanStart(editor.field.text) == -1
+                    }
+                }
+            }
             for (live in listOf(false, true)) for ((raw, reading) in listOf("nan" to "な", "non" to "の", "man" to "ま")) test("real_keys_pause_delete_resume_${raw}_live_$live") {
                 onUi {
                     prefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_REALTIME_INLINE, live).apply()

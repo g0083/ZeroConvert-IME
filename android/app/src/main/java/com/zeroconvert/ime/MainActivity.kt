@@ -60,14 +60,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -228,8 +234,24 @@ fun MainScreen(
             )
         )
     }
+    fun saveOneHandedMode(mode: OneHandedMode) {
+        oneHandedMode = mode
+        val editor = imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, mode.name)
+        if (mode != OneHandedMode.OFF) editor.putBoolean(ZeroConvertInputMethodService.KEY_SPLIT_KEYBOARD, false)
+        editor.apply()
+    }
     var keyboardBottomPaddingDp by remember {
         mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32))
+    }
+    var splitGapPercent by rememberSaveable {
+        mutableStateOf(QwertySplitLayout.clampGapPercent(imePrefs.getInt(
+            ZeroConvertInputMethodService.KEY_SPLIT_GAP_PERCENT, QwertySplitLayout.DEFAULT_GAP_PERCENT
+        )))
+    }
+    var splitDuplicateKeys by remember {
+        mutableStateOf(imePrefs.getBoolean(
+            ZeroConvertInputMethodService.KEY_SPLIT_DUPLICATE_KEYS, QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS
+        ))
     }
     val initialTouchAssistSettings = remember { TouchAssistSettings.load(imePrefs) }
     var isDynamicTouchAssistEnabled by remember {
@@ -335,21 +357,25 @@ fun MainScreen(
     var newDictWord by remember { mutableStateOf("") }
     var learningCount by remember { mutableStateOf(0) }
     var typoLearningCount by remember { mutableStateOf(0) }
+    var englishLearningCount by remember { mutableStateOf(0) }
     var showLearningResetDialog by remember { mutableStateOf(false) }
     LaunchedEffect(context) {
         val loaded = withContext(Dispatchers.IO) {
             // The learned counts live in the shared engine, so settings must wait for
             // the same initialization the IME performs instead of showing a stale zero.
             ZenzNative.init(context)
-            Triple(
+            listOf(
                 KanaKanjiConverter.getUserDictionary(context),
                 KanaKanjiConverter.getLearningCount(context),
-                KanaKanjiConverter.getTypoLearningCount(context)
+                KanaKanjiConverter.getTypoLearningCount(context),
+                KanaKanjiConverter.getEnglishLearningCount(context)
             )
         }
-        userDictList = loaded.first
-        learningCount = loaded.second
-        typoLearningCount = loaded.third
+        @Suppress("UNCHECKED_CAST")
+        userDictList = loaded[0] as List<UserDictEntry>
+        learningCount = loaded[1] as Int
+        typoLearningCount = loaded[2] as Int
+        englishLearningCount = loaded[3] as Int
     }
 
     var benchmarkProgress by remember {
@@ -599,7 +625,7 @@ fun MainScreen(
                                                 onDelete = {},
                                                 onSpace = {},
                                                 onEnter = {},
-                                                onCycleMode = {},
+                                                onSwitchMode = {},
                                                 onOpenSymbols = {},
                                                 onOpenEmoji = {},
                                                 onCursorLeft = {},
@@ -617,7 +643,7 @@ fun MainScreen(
                                                 onDelete = {},
                                                 onSpace = {},
                                                 onEnter = {},
-                                                onCycleMode = {},
+                                                onSwitchMode = {},
                                                 onOpenEmoji = {},
                                                 isComposing = false,
                                                 onCursorLeft = {},
@@ -634,12 +660,6 @@ fun MainScreen(
                                         if (oneHandedMode == OneHandedMode.OFF) {
                                             previewKeyboardBody()
                                         } else {
-                                            val saveOneHanded: (OneHandedMode) -> Unit = { next ->
-                                                oneHandedMode = next
-                                                imePrefs.edit()
-                                                    .putString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, next.name)
-                                                    .apply()
-                                            }
                                             Row(modifier = Modifier.fillMaxSize()) {
                                                 if (oneHandedMode == OneHandedMode.RIGHT) {
                                                     OneHandedSideRail(
@@ -648,8 +668,8 @@ fun MainScreen(
                                                         textColor = palette.textPrimary,
                                                         palette = palette,
                                                         isLeftAligned = false,
-                                                        onFlipSide = { saveOneHanded(OneHandedMode.LEFT) },
-                                                        onExitOneHanded = { saveOneHanded(OneHandedMode.OFF) }
+                                                        onFlipSide = { saveOneHandedMode(OneHandedMode.LEFT) },
+                                                        onExitOneHanded = { saveOneHandedMode(OneHandedMode.OFF) }
                                                     )
                                                     Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
                                                         previewKeyboardBody()
@@ -664,8 +684,8 @@ fun MainScreen(
                                                         textColor = palette.textPrimary,
                                                         palette = palette,
                                                         isLeftAligned = true,
-                                                        onFlipSide = { saveOneHanded(OneHandedMode.RIGHT) },
-                                                        onExitOneHanded = { saveOneHanded(OneHandedMode.OFF) }
+                                                        onFlipSide = { saveOneHandedMode(OneHandedMode.RIGHT) },
+                                                        onExitOneHanded = { saveOneHandedMode(OneHandedMode.OFF) }
                                                     )
                                                 }
                                             }
@@ -764,13 +784,7 @@ fun MainScreen(
                     ),
                     selected = oneHandedMode.name,
                     palette = palette,
-                    onSelected = { modeName ->
-                        val next = OneHandedMode.fromName(modeName)
-                        oneHandedMode = next
-                        imePrefs.edit()
-                            .putString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, next.name)
-                            .apply()
-                    }
+                    onSelected = { modeName -> saveOneHandedMode(OneHandedMode.fromName(modeName)) }
                 )
                 Text(
                     text = "キーボードの幅を約82%にして左右どちらかに寄せます。ツールバーや側面ボタンからいつでも解除できます。",
@@ -836,6 +850,30 @@ fun MainScreen(
                 onCheckedChange = { checked ->
                     isQwertyNumberRow = checked
                     imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = stringResource(R.string.split_keyboard_duplicate_keys),
+                description = stringResource(R.string.split_keyboard_duplicate_keys_description),
+                checked = splitDuplicateKeys,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    splitDuplicateKeys = checked
+                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_SPLIT_DUPLICATE_KEYS, checked).apply()
+                }
+            )
+            SettingsDivider(palette)
+            SplitKeyboardGapSetting(
+                gapPercent = splitGapPercent,
+                duplicateMiddleKeys = splitDuplicateKeys,
+                keyHeight = keyboardKeyHeight.dp,
+                showNumberRow = isQwertyNumberRow,
+                keyBordersEnabled = isKeyBordersEnabled,
+                palette = palette,
+                onValueChange = { splitGapPercent = it },
+                onValueChangeFinished = {
+                    imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_SPLIT_GAP_PERCENT, splitGapPercent).apply()
                 }
             )
             SettingsDivider(palette)
@@ -1294,7 +1332,7 @@ fun MainScreen(
             SettingsDivider(palette)
             SettingsRow(
                 title = "学習データ",
-                description = "変換学習 ${learningCount}件 / 補正学習 ${typoLearningCount}件。候補バーで選択した結果を記憶し、次回同じ読みで優先表示します。",
+                description = "変換学習 ${learningCount}件 / 補正学習 ${typoLearningCount}件 / 英字学習 ${englishLearningCount}件。候補バーで選択した結果を記憶し、次回同じ読みで優先表示します。",
                 palette = palette
             ) {
                 SettingsSecondaryButton(
@@ -1307,22 +1345,24 @@ fun MainScreen(
                 LearningResetDialog(
                     palette = palette,
                     onDismiss = { showLearningResetDialog = false },
-                    onConfirm = { conversion, typo ->
+                    onConfirm = { conversion, typo, english ->
                         showLearningResetDialog = false
                         coroutineScope.launch {
                             val result = withContext(Dispatchers.IO) {
-                                val ok = KanaKanjiConverter.clearAllLearning(context, conversion, typo)
-                                Triple(
+                                val ok = KanaKanjiConverter.clearAllLearning(context, conversion, typo, english)
+                                listOf(
                                     ok,
                                     KanaKanjiConverter.getLearningCount(context),
-                                    KanaKanjiConverter.getTypoLearningCount(context)
+                                    KanaKanjiConverter.getTypoLearningCount(context),
+                                    KanaKanjiConverter.getEnglishLearningCount(context)
                                 )
                             }
-                            learningCount = result.second
-                            typoLearningCount = result.third
+                            learningCount = result[1] as Int
+                            typoLearningCount = result[2] as Int
+                            englishLearningCount = result[3] as Int
                             Toast.makeText(
                                 context,
-                                if (result.first) "学習を削除しました" else "一部の学習を削除できませんでした",
+                                if (result[0] as Boolean) "学習を削除しました" else "一部の学習を削除できませんでした",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -2329,13 +2369,100 @@ fun MainScreen(
 }
 
 @Composable
+private fun SplitKeyboardGapSetting(
+    gapPercent: Int,
+    duplicateMiddleKeys: Boolean,
+    keyHeight: Dp,
+    showNumberRow: Boolean,
+    keyBordersEnabled: Boolean,
+    palette: ZeroConPalette,
+    onValueChange: (Int) -> Unit,
+    onValueChangeFinished: () -> Unit
+) {
+    val title = stringResource(R.string.split_keyboard_gap)
+    val previewLabel = stringResource(R.string.split_keyboard_preview)
+    Column(Modifier.padding(16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(title, color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(stringResource(R.string.split_keyboard_gap_percent, gapPercent), color = palette.primaryAccentSoft, fontSize = 13.sp)
+        }
+        Slider(
+            value = gapPercent.toFloat(),
+            onValueChange = { onValueChange(it.roundToInt()) },
+            onValueChangeFinished = onValueChangeFinished,
+            modifier = Modifier.semantics { contentDescription = title },
+            valueRange = QwertySplitLayout.MIN_GAP_PERCENT.toFloat()..QwertySplitLayout.MAX_GAP_PERCENT.toFloat(),
+            steps = QwertySplitLayout.MAX_GAP_PERCENT - QwertySplitLayout.MIN_GAP_PERCENT - 1,
+            colors = SliderDefaults.colors(
+                thumbColor = palette.primaryAccent,
+                activeTrackColor = palette.primaryAccent,
+                inactiveTrackColor = palette.surfaceElevated
+            )
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(stringResource(R.string.split_keyboard_toward_center), color = palette.textSecondary, fontSize = 12.sp)
+            Text(stringResource(R.string.split_keyboard_toward_edges), color = palette.textSecondary, fontSize = 12.sp)
+        }
+        Text(previewLabel, Modifier.padding(top = 12.dp, bottom = 4.dp), color = palette.textSecondary, fontSize = 12.sp)
+        val keyboardWidth = maxOf(LocalConfiguration.current.screenWidthDp.toFloat(), QwertySplitLayout.MIN_WIDTH_DP).dp
+        val keyboardHeight = keyboardContentHeight(keyHeight, if (showNumberRow) 5 else 4)
+        Layout(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(palette.canvas)
+                .clearAndSetSemantics { contentDescription = previewLabel },
+            content = {
+                CompositionLocalProvider(
+                    LocalZeroConPalette provides palette,
+                    LocalKeyboardKeyHeight provides keyHeight,
+                    LocalKeyBordersEnabled provides keyBordersEnabled,
+                    LocalKeyPreviewEnabled provides false
+                ) {
+                    JapaneseQwertyLayout(
+                        isShifted = false,
+                        keyBgColor = palette.keyNormal,
+                        actionKeyBg = palette.keyModifier,
+                        textColor = palette.textPrimary,
+                        palette = palette,
+                        onKeyPress = {},
+                        onShiftToggle = {},
+                        onDelete = {},
+                        onSpace = {},
+                        onEnter = {},
+                        onSwitchMode = {},
+                        onOpenEmoji = {},
+                        onCursorLeft = {},
+                        onCursorRight = {},
+                        showNumberRow = showNumberRow,
+                        splitGap = QwertySplitLayout.gapDp(keyboardWidth.value, gapPercent).dp,
+                        duplicateMiddleKeys = duplicateMiddleKeys
+                    )
+                }
+            }
+        ) { measurables, constraints ->
+            val widthPx = keyboardWidth.roundToPx()
+            val heightPx = keyboardHeight.roundToPx()
+            val scale = (constraints.maxWidth.toFloat() / widthPx).coerceAtMost(1f)
+            val keyboard = measurables.single().measure(Constraints.fixed(widthPx, heightPx))
+            val previewWidth = (widthPx * scale).roundToInt()
+            layout(constraints.maxWidth, (heightPx * scale).roundToInt()) {
+                keyboard.placeRelativeWithLayer((constraints.maxWidth - previewWidth) / 2, 0) {
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(0f, 0f)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LearningResetDialog(
     palette: ZeroConPalette,
     onDismiss: () -> Unit,
-    onConfirm: (conversion: Boolean, typo: Boolean) -> Unit
+    onConfirm: (conversion: Boolean, typo: Boolean, english: Boolean) -> Unit
 ) {
     var conversion by remember { mutableStateOf(true) }
     var typo by remember { mutableStateOf(true) }
+    var english by remember { mutableStateOf(true) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("学習データを削除") },
@@ -2349,12 +2476,13 @@ private fun LearningResetDialog(
                 )
                 LearningScopeRow("変換学習", "選んだ変換結果と読みの対応", conversion, palette) { conversion = it }
                 LearningScopeRow("補正学習", "誤入力の学習履歴", typo, palette) { typo = it }
+                LearningScopeRow("英字学習", "英字モードで入力・選択した単語の学習履歴", english, palette) { english = it }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = conversion || typo,
-                onClick = { onConfirm(conversion, typo) }
+                enabled = conversion || typo || english,
+                onClick = { onConfirm(conversion, typo, english) }
             ) { Text("削除") }
         },
         dismissButton = {

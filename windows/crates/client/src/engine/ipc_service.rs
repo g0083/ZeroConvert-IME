@@ -102,6 +102,7 @@ pub struct IPCService {
     server_session_id: Option<u64>,
     server_reset_recovered: bool,
     pending_conversion_continuation: Option<(String, String)>,
+    private_input: bool,
     recovery: Arc<ServerRecoveryState>,
     transport: Arc<TransportLifecycle>,
     #[cfg(test)]
@@ -850,6 +851,62 @@ impl IPCService {
         });
     }
 
+    pub(crate) fn sync_english_learning_background(
+        &self,
+        known_server_session_id: u64,
+        known_revision: u64,
+        on_snapshot: impl FnOnce(u64, u64, String) + Send + 'static,
+    ) {
+        let mut client = self.azookey_client.clone();
+        self.runtime.spawn(async move {
+            let request = shared::proto::GetEnglishLearningRequest {
+                known_server_session_id,
+                known_revision,
+                request_id: 0,
+            };
+            if let Ok(Ok(response)) = tokio::time::timeout(
+                Duration::from_millis(250),
+                client.get_english_learning(request),
+            )
+            .await
+            {
+                let inner = response.into_inner();
+                if !inner.unchanged && !inner.snapshot_json.is_empty() {
+                    on_snapshot(inner.server_session_id, inner.revision, inner.snapshot_json);
+                }
+            }
+        });
+    }
+
+    pub(crate) fn record_english_learning_background(
+        &self,
+        prefix: String,
+        word: String,
+        explicit_selection: bool,
+        in_dictionary: bool,
+        on_revision: impl FnOnce(u64, u64) + Send + 'static,
+    ) {
+        let mut client = self.azookey_client.clone();
+        self.runtime.spawn(async move {
+            let request = shared::proto::RecordEnglishLearningRequest {
+                prefix,
+                word,
+                explicit_selection,
+                in_dictionary,
+                request_id: 0,
+            };
+            if let Ok(Ok(response)) = tokio::time::timeout(
+                Duration::from_secs(1),
+                client.record_english_learning(request),
+            )
+            .await
+            {
+                let inner = response.into_inner();
+                on_revision(inner.server_session_id, inner.revision);
+            }
+        });
+    }
+
     /// Cloud ranking is stateless and must never occupy the TSF input thread or recovery ledger.
     pub(crate) fn rerank_candidates_background(
         &self,
@@ -902,6 +959,7 @@ impl IPCService {
             server_session_id: None,
             server_reset_recovered: false,
             pending_conversion_continuation: None,
+            private_input: false,
             recovery: Arc::new(ServerRecoveryState {
                 pending: AtomicBool::new(pending),
                 generation: AtomicU64::new(u64::from(pending)),
@@ -975,6 +1033,7 @@ impl IPCService {
             server_session_id: None,
             server_reset_recovered: false,
             pending_conversion_continuation: None,
+            private_input: false,
             recovery: Arc::new(ServerRecoveryState::default()),
             transport,
             #[cfg(test)]
@@ -1904,10 +1963,20 @@ impl IPCService {
         Ok(())
     }
 
-    fn send_set_context(&mut self, context: &str, request_id: u64) -> anyhow::Result<()> {
+    fn send_set_context(
+        &mut self,
+        context: &str,
+        private_input: bool,
+        request_id: u64,
+    ) -> anyhow::Result<()> {
         let mut request = tonic::Request::new(shared::proto::SetContextRequest {
-            context: context.to_string(),
+            context: if private_input {
+                String::new()
+            } else {
+                context.to_string()
+            },
             request_id,
+            private_input,
         });
         request.set_timeout(STATE_RPC_DEADLINE);
         let response = Self::block_on_server_rpc(
@@ -1919,6 +1988,14 @@ impl IPCService {
         )?;
         let response = response.into_inner();
         self.observe_server_session("set_context", response.server_session_id);
+        anyhow::ensure!(
+            response.private_input == private_input,
+            "Conversion server did not acknowledge the input privacy mode"
+        );
+        self.private_input = private_input;
+        if private_input {
+            self.clear_pending_conversion_continuation();
+        }
         Ok(())
     }
 
@@ -1927,6 +2004,9 @@ impl IPCService {
         input_ledger: &InputLedger,
         request_id: u64,
     ) -> anyhow::Result<Candidates> {
+        if self.private_input {
+            self.send_set_context("", true, request_id)?;
+        }
         let operations = input_ledger
             .operations
             .iter()
@@ -2044,6 +2124,10 @@ impl IPCService {
         )
     }
 
+    pub(crate) fn is_private_input(&self) -> bool {
+        self.private_input
+    }
+
     pub(crate) fn assist_snapshot_key(&self) -> (u64, u64, u64) {
         let (connection, epoch) = self.context_cache_key();
         (
@@ -2085,7 +2169,7 @@ impl IPCService {
         elapsed: Duration,
         details: String,
     ) {
-        if !client_performance_log_enabled() {
+        if self.private_input || !client_performance_log_enabled() {
             return;
         }
 
@@ -2100,7 +2184,7 @@ impl IPCService {
         stage: &str,
         details: impl FnOnce() -> String,
     ) {
-        if let Some(start) = start {
+        if let Some(start) = start.filter(|_| !self.private_input) {
             self.enqueue_client_performance(
                 request_id,
                 operation,
@@ -2111,12 +2195,12 @@ impl IPCService {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn append_text(&mut self, text: String) -> anyhow::Result<Candidates> {
         self.append_text_with_style(text, INPUT_STYLE_ROMAN2KANA)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn append_text_with_context(
         &mut self,
         text: String,
@@ -2129,12 +2213,12 @@ impl IPCService {
         )
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn append_text_direct(&mut self, text: String) -> anyhow::Result<Candidates> {
         self.append_text_with_style(text, INPUT_STYLE_DIRECT)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn append_text_direct_with_context(
         &mut self,
         text: String,
@@ -2143,7 +2227,7 @@ impl IPCService {
         self.append_text_with_style_and_context(text, INPUT_STYLE_DIRECT, Some(previous_candidates))
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     fn append_text_with_style(
         &mut self,
         text: String,
@@ -2152,7 +2236,7 @@ impl IPCService {
         self.append_text_with_style_and_context(text, input_style, None)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     fn append_text_with_style_and_context(
         &mut self,
         text: String,
@@ -2237,7 +2321,7 @@ impl IPCService {
         Ok(candidates)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn remove_text(&mut self) -> anyhow::Result<TextRemoval> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -2259,7 +2343,7 @@ impl IPCService {
         result.map(|(removal, _)| removal)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn delete_forward_text(&mut self) -> anyhow::Result<TextRemoval> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -2281,7 +2365,7 @@ impl IPCService {
         result.map(|(removal, _)| removal)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn clear_text(&mut self) -> anyhow::Result<()> {
         // Shared by all IPC clones: ClearText also clears the server context.
         self.recovery.context_epoch.fetch_add(1, Ordering::AcqRel);
@@ -2350,7 +2434,7 @@ impl IPCService {
         result.map(|(value, _)| value)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn commit_learning_candidate(
         &mut self,
         candidate_id: u64,
@@ -2433,7 +2517,7 @@ impl IPCService {
     /// forwards the identity it was given. Failures are reported instead of
     /// retried: the server has no deletion ledger, so a replay could delete a
     /// candidate that a later conversion re-created with the same id.
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn forget_learning_candidate(
         &mut self,
         candidate_id: u64,
@@ -2460,7 +2544,7 @@ impl IPCService {
         Ok(response.forgot)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn shrink_text(&mut self, offset: i32) -> anyhow::Result<Candidates> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -2484,7 +2568,7 @@ impl IPCService {
         Ok(candidates)
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub(crate) fn advance_clause(
         &mut self,
         offset: i32,
@@ -2622,7 +2706,7 @@ impl IPCService {
         result
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn move_cursor(&mut self, offset: i32) -> anyhow::Result<Candidates> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -2757,7 +2841,7 @@ impl IPCService {
         result.map(|_| ())
     }
 
-    pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
+    pub fn set_context(&mut self, context: String, private_input: bool) -> anyhow::Result<()> {
         self.recovery
             .assist_context_revision
             .fetch_add(1, Ordering::AcqRel);
@@ -2765,7 +2849,7 @@ impl IPCService {
         let performance_start = client_performance_start();
         let context_len = performance_start.map(|_| context.chars().count());
         let result = self.run_rpc_with_reconnect("set_context", |this| {
-            this.send_set_context(&context, request_id)
+            this.send_set_context(&context, private_input, request_id)
         });
         self.log_client_performance_from_start(
             performance_start,
@@ -2949,7 +3033,7 @@ impl IPCService {
         }
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn show_window(&mut self) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -2964,7 +3048,7 @@ impl IPCService {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn hide_window(&mut self) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -2979,7 +3063,7 @@ impl IPCService {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn set_window_position(
         &mut self,
         top: i32,
@@ -3016,7 +3100,7 @@ impl IPCService {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     pub fn set_candidates(&mut self, candidates: Vec<String>) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -3042,7 +3126,7 @@ impl IPCService {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn set_selection(&mut self, index: i32) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -3061,7 +3145,7 @@ impl IPCService {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     pub fn set_input_mode(&mut self, mode: &str) -> anyhow::Result<()> {
         let request_id = current_or_next_request_id();
         let performance_start = client_performance_start();
@@ -3082,7 +3166,7 @@ impl IPCService {
         Ok(())
     }
 
-    #[tracing::instrument(skip(candidates))]
+    #[tracing::instrument(skip(self, candidates))]
     pub(crate) fn update_candidate_window(
         &mut self,
         visible: Option<bool>,
@@ -3105,7 +3189,7 @@ impl IPCService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip(candidates))]
+    #[tracing::instrument(skip(self, candidates, reading))]
     pub(crate) fn update_candidate_window_with_reading(
         &mut self,
         visible: Option<bool>,
@@ -3976,12 +4060,12 @@ mod tests {
         let mut service = IPCService::recovery_for_test(false);
         let other_clone = service.clone();
         let mut context = crate::tsf::text_service::SurroundingTextContextState::default();
-        context.remember(other_clone.context_cache_key(), "same preceding text");
-        assert!(!context.should_send(service.context_cache_key(), "same preceding text"));
+        context.remember(other_clone.context_cache_key(), "", true);
+        assert!(!context.should_send(service.context_cache_key(), "", true));
         // The fake channel cannot succeed; even an ambiguous/failed release
         // must not leave a successful SetContext entry eligible for dedup.
         let _ = service.clear_text();
-        assert!(context.should_send(other_clone.context_cache_key(), "same preceding text"));
+        assert!(context.should_send(other_clone.context_cache_key(), "", true));
     }
 
     #[test]

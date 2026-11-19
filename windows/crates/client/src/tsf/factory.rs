@@ -41,9 +41,17 @@ use super::text_service::TextService;
     ITfFunctionProvider,
     ITfFnReconversion
 )]
-#[derive(Debug)]
 pub struct TextServiceFactory {
     text_service: RefCell<TextService>,
+}
+
+impl std::fmt::Debug for TextServiceFactory {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Tracing spans may format the factory while a private composition is active.
+        formatter
+            .debug_struct("TextServiceFactory")
+            .finish_non_exhaustive()
+    }
 }
 
 impl IClassFactory_Impl for TextServiceFactory_Impl {

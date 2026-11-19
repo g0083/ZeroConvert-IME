@@ -116,6 +116,21 @@ class InlinePreviewCoverageTest {
         assertEquals("今日n", InlinePreviewPolicy.select(kyouN, "きょうn")?.previewForReading("きょうn"))
     }
 
+    @Test fun aPendingCompletionInTheCandidateBarDoesNotReplaceInlineInput() {
+        val completion = native("シンギュラリティ", "シンg", 3).copy(isReadingCompletion = true)
+        val raw = native("しんg", "シンg", 3)
+        val prefix = native("新", "シン", 2)
+        assertEquals("新g", InlinePreviewPolicy.select(listOf(raw, completion, prefix), "しんg")?.previewForReading("しんg"))
+        assertEquals(raw, InlinePreviewPolicy.select(listOf(raw, completion), "しんg"))
+    }
+
+    @Test fun aKanaCompletionRequiresExplicitSelectionEvenIfRankedBeforeTheExactCandidate() {
+        val completion = native("今日中", "キョウ", 3).copy(isReadingCompletion = true, isAI = true)
+        val exact = native("今日", "キョウ", 3)
+        assertEquals(exact, InlinePreviewPolicy.select(listOf(completion, exact), "きょう"))
+        assertNull(InlinePreviewPolicy.select(listOf(completion), "きょう"))
+    }
+
     @Test fun tentativePrefixPreservesConvertedPrefixAcrossRomajiAndModifiers() {
         val history = listOf(InferenceSnapshot("きょう", "今日"), InferenceSnapshot("きょうは", "今日は"))
 

@@ -29,22 +29,22 @@ object InlinePreviewPolicy {
             val treatTrailingNAsComplete = pending.equals("n", ignoreCase = true)
             if (treatTrailingNAsComplete) {
                 results.firstOrNull {
-                    it.coversReading(reading) &&
+                    !it.isReadingCompletion && it.coversReading(reading) &&
                         !isRawPendingKanaEcho(
                             it.text, reading, completed, pending, katakanaCompleted, allowKanaN = true
                         )
                 }?.let { return it }
             }
             results.firstOrNull {
-                it.coversCompletedPrefix(completedLen) &&
+                !it.isReadingCompletion && it.coversCompletedPrefix(completedLen) &&
                     !isRawPendingKanaEcho(
                         it.text, reading, completed, pending, katakanaCompleted,
                         allowKanaN = treatTrailingNAsComplete
                     )
             }?.let { return it }
         }
-        return results.firstOrNull { it.coversReading(reading) }
-            ?: results.firstOrNull()
+        return results.firstOrNull { !it.isReadingCompletion && it.coversReading(reading) }
+            ?: results.firstOrNull { !it.isReadingCompletion }
     }
 
     /**
