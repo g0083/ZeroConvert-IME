@@ -72,15 +72,16 @@ Chromeのシークレットタブなど、入力欄が `IME_FLAG_NO_PERSONALIZED
 
 ## ビルド環境とモデル
 
+> [!NOTE]
+> 以下にリンクする [第2段階〜第10段階・完了監査](../reports/port-history/README.md) は初期移植フェーズの歴史的記録です。2026-11-08 に旧 `:app` モジュールを廃止し、独立 Corrector モデルや旧形態素頻度バイナリも廃止されたため、現在の全体構成は [Android新構成](android-shared-engine.md) を正本として参照してください。
+
 現行の移植範囲と検証状況は [完了監査](../reports/port-history/android-port-completion-audit.md) を参照。[第5段階の移植記録](../reports/port-history/android-windows-port-stage5.md) にある専用の範囲変換UIは取り下げ済み。Windows現行のロジックを既存の入力操作へ接続し、独自の文節操作モードは追加しない。既存のカーソル前部分確定と末尾の入力状態を保持する修正は維持する。
 
-最新の補正規則・登録語保護・APKは [第4段階の移植記録](../reports/port-history/android-windows-port-stage4.md) を参照。語彙生成スクリプトは `WindowsTypoData.kt` も生成し、`--check` で語彙TSVと合わせて照合する。このKotlinファイルは手編集せず、Windowsの生成元を確認して再生成する。ユーザー辞書の更新は補正側の参照マップと要求世代にも反映される。
+補正規則・登録語保護は `WindowsTypoData.kt`（生成元確認と `--check` で照合し手編集しない）と共有エンジン側で扱う。ユーザー辞書の更新は補正側の参照マップと要求世代にも反映される。（関連履歴: [第4段階](../reports/port-history/android-windows-port-stage4.md)）
 
-通常辞書側の補正・探索・ユーザー辞書・学習モードは [第8段階](../reports/port-history/android-windows-port-stage8.md) を参照。`node scripts/generate-android-keyboard-typos.mjs` がWindowsの選択データと生成関数からnative用の104エントリ、端末検査用データ、APK同梱NOTICEを生成する。`--check` で同期を検査し、生成された `keyboard_typo_dictionary.inc` を手編集しない。`experimental_typo_correction` は既定trueで、通常変換内の補正とモデルの補正候補生成をまとめて制御する。既存の明示的なfalseは保持する。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。
+通常辞書側の補正・探索・ユーザー辞書・学習モードでは、`node scripts/generate-android-keyboard-typos.mjs` がWindowsの選択データと生成関数からnative用の104エントリ、端末検査用データ、APK同梱NOTICEを生成する。`--check` で同期を検査し、生成された `keyboard_typo_dictionary.inc` を手編集しない。`experimental_typo_correction` は既定trueで、通常変換内の補正とモデルの補正候補生成をまとめて制御する。既存の明示的なfalseは保持する。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。（関連履歴: [第8段階](../reports/port-history/android-windows-port-stage8.md)）
 
-通常確定の学習は共有エンジン（Swift）の1系統に統合した。選択表記は初回に `LearningMemory/selection-overrides.json` へ移行し、Android独自の `learning_memory_v2_json` と形態素頻度バイナリ `files/conversion-learning-v1.bin` は廃止した。第9段階・第10段階の記録は当時の実装であり現在の構成ではない。学習の削除は2経路ある。設定画面は `KanaKanjiConverter.clearAllLearning` で変換学習と補正学習をスコープ別に消し、候補バーの長押しは `WindowsEngine.forgetCandidate` で候補IDをエンジンへ渡す。どちらも削除の判断と辞書操作はSwift/Rust側にあり、Kotlinは候補IDと確認UIだけを持つ。変換学習のリセットは世代カウンタで削除前の未処理通知を捨てる。過去の検証内容は [第9段階](../reports/port-history/android-windows-port-stage9.md) と [第10段階](../reports/port-history/android-windows-port-stage10.md) を参照。
-
-最新の実装・APK・検証範囲は [第3段階の移植記録](../reports/port-history/android-windows-port-stage3.md) を参照。資産準備はWindows補正語彙から `assets/assist-vocabulary.tsv` も生成する。このTSVはGit対象であり、Windows語彙更新後は `node scripts/generate-android-assist-vocabulary.mjs` で再生成し、`--check` で一致を検査する。重みと逆引き辞書は引き続きGit対象外。
+通常確定の学習は共有エンジン（Swift）の1系統に統合した。選択表記は初回に `LearningMemory/selection-overrides.json` へ移行し、Android独自の `learning_memory_v2_json` と形態素頻度バイナリ `files/conversion-learning-v1.bin` は廃止した。第9段階・第10段階の記録は当時の実装であり現在の構成ではない。学習の削除は2経路ある。設定画面は `KanaKanjiConverter.clearAllLearning` で変換学習・補正学習・英字学習をスコープ別に消し、候補バーの長押しは `WindowsEngine.forgetCandidate` で候補IDをエンジンへ渡す。どちらも削除の判断と辞書操作はSwift/Rust側にあり、Kotlinは候補IDと確認UIだけを持つ。変換学習のリセットは世代カウンタで削除前の未処理通知を捨てる。（関連履歴: [第9段階](../reports/port-history/android-windows-port-stage9.md) / [第10段階](../reports/port-history/android-windows-port-stage10.md)）
 
 設定画面の「タイポ補正」は `experimental_typo_correction` に対応し、通常変換内の補正と未補正入力に対するモデルの補正候補生成を制御する。「文の先読み」は既存の `experimental_ai_assist` キーを引き継ぎ、文の続きを提案する。補正と先読みの実行計画は共通Rustの `assist_policy::request_plan` が決める。通常変換で補正済みならフォールバックを抑え、先読みは補正後の読みを使う。「補正候補を自動で反映」は `auto_typo_correction` に対応し、既定trueで「タイポ補正」と併せて読み直す。自動補正は取消可能で、自動適用自体を学習しない。既存の学習回数は保持するが、自動適用には新しい確定成功回数を使う。選択文字列の再変換は辞書のみで、通常のモデル変換・補正・先読みとは別経路。
 
@@ -95,13 +96,13 @@ Chromeのシークレットタブなど、入力欄が `IME_FLAG_NO_PERSONALIZED
 従来の `dynamic_touch_assist` の値を保存して引き継ぐ。新規設定では両方とも既定trueとなる。
 その後は各項目を個別に保存し、当たり判定の設定変更で入力後の補正が再び有効になることを防ぐ。
 
-モデル補正・二段先読みの資産準備が追加された。初回や資産更新時はルートで `./scripts/prepare-android-assist-assets.ps1` を実行する。CorrectorはWindowsカタログのSHA-256で検証し、逆引き辞書はAndroid同梱のLOUDSソースから生成する。どちらもGit対象外のため新しいcloneには含まれない。GradleのpreBuildは不足や不整合を検出して停止する。用途別JNI・現在の資産・テスト・未確認点は [第2段階の移植記録](../reports/port-history/android-windows-port-stage2.md) を参照。
+補正語彙・辞書・逆引き辞書の資産準備は、ルートで `./scripts/prepare-android-assist-assets.ps1` を実行する（`assist-vocabulary.tsv`、`keyboard_typo_dictionary.inc`、Android 同梱 LOUDS ソースからの `reverse-v2.bin` 生成、および旧 `zerocon-model-corrector.gguf` の削除）。`assist-vocabulary.tsv` は Git 対象であり、`reverse-v2.bin` とモデル重みは Git 対象外のため新しい clone には含まれない。Gradle の preBuild は不足や不整合を検出して停止する。
 
 JDK 17、上表のSDK/NDK/CMake、Gradle wrapperを使う。SDKのPC固有パスは `android/local.properties` 等のローカル設定で管理する。既存の設定を上書きせず、SDKライセンスや端末認証を無断で通過しない。
 
 llama.cppはルートのgitlinkで固定し、独自変更は `patches/llama.cpp/` と [setupスクリプト](../scripts/setup-dependencies.ps1) で管理する。依存ソースやビルド出力を直接書き換えて済ませない。
 
-組込みモデルは `android/app/src/main/assets/zenz.gguf` と `assets/models/`。現在の選択肢・名前・期待サイズは [ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) を照合する。重みはGit対象外なので、新しいclone/worktreeだけではそろわない。モデルを含むAPKと、端末で実際に選択中の取込モデルも区別する。
+組込みモデルは `android/app/src/main/assets/models/` に配置する（`Nano v4.1 IQ4_emb8` と `Q8`）。現在の選択肢・名前・期待サイズは [ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) を照合する。重みはGit対象外なので、新しいclone/worktreeだけではそろわない。モデルを含むAPKと、端末で実際に選択中の取込モデルも区別する。
 
 絵文字パレットの `assets/emoji_catalog.tsv` は、固定したUnicodeデータ `data/emoji/emoji-test-15.1.txt`（Unicode License v3、CLDR順）と、変換辞書と同じ `assets/emoji_all_E15.1.txt` の日本語キーワードから `node scripts/generate-android-emoji-catalog.mjs` が生成する。1,921件を9カテゴリに分け、肌色5段階を持つ323件は長押しで展開する。`--check` で同期を検査し、生成TSVを手編集しない。Unicodeデータを更新するときは版を上げたファイルを追加し、生成スクリプトの `SOURCE` と `UNICODE_GROUP_ORDER` を合わせて確認する。パレットの解析・検索・最近使用は `EmojiCatalog.kt`、最近使用の保存は `ime_settings` の `emoji_recent`。
 

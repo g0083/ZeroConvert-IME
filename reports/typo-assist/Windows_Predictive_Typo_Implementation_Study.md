@@ -1,5 +1,8 @@
 # Windows版: 🐙「もしかして」/ 🔮「先読み」の実装方式調査
 
+> [!NOTE]
+> **歴史的記録（2026-10-21）**: llama.cpp b4846 時代・LFM2.5 モデル検証時の初期調査です。その後 llama.cpp は更新され（b12125）、独立 Corrector・LFM モデルは廃止されて現行のメイン変換モデル（Nano v4.1）統合方式へ刷新されました。現行仕様は [docs/typo-correction.md](../../docs/typo-correction.md) および [docs/predictive-assist.md](../../docs/predictive-assist.md) を参照してください。
+
 調査日: 2026-10-21
 対象: `scratch/batao_src` (batao9/azooKey-Windows) および `ZeroConvertIME-windows` 同梱物
 

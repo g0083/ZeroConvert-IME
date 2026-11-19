@@ -174,9 +174,10 @@ OPD2415への更新と基本18項目は成功。精度検査には不合格が�
 Swift開発用/未使用runtimeの除外を行う。圧縮ライブラリはAndroidがインストール時に
 展開する。APKの転送容量は減るが、展開されたライブラリ自体の保存容量が減るとは限らない。
 [Android Gradle Pluginの梱包設定](https://developer.android.com/reference/tools/gradle-api/8.3/com/android/build/api/dsl/JniLibsPackaging)。
-モデルは従来と同じ4ファイルを保持し、APK内のSHA-256も検査する。
-逆引き辞書はWindows正本から生成した1つをSwift/Rust/Kotlinで利用し、旧資産の重複梱包を除く。
-通常の旧Android辞書は、補正の辞書照合とユーザー辞書の検査に使うため保持する。
+現行の組込みモデルは Nano v4.1 の 2 ファイル（`IQ4_emb8` / `Q8`）を保持し、APK 内の SHA-256 も `verifyConversionModels` 等で検査する（旧 4 ファイル構成や独立 Corrector モデルは廃止）。
+逆引き辞書は Windows 正本から生成した 1 つを Swift/Rust/Kotlin で利用し、旧資産の重複梱包を除く。
+通常の旧 Android 辞書は、補正の辞書照合とユーザー辞書の検査に使うため保持する。
+v0.8.0 では確定後予測（`PostCompositionPrediction.swift`）、英字単語補完の共有学習（`english_learning.rs`）、`InputTypeMode.kt`、フローティング／片手／分割キーボード等も統合されている。
 
 llama.cppのpinは変更せず、公式のARM CPU variantsとCPU feature scoreで実装を選ぶ。
 基本ARM実装も保持し、DOTPROD/i8mm等を非対応CPUで強制しない。JNIはAndroidの

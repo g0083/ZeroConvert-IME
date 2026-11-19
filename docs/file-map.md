@@ -6,18 +6,19 @@
 
 | タスク | 最初に読む → 必要なら読む |
 | --- | --- |
-| タイポ候補が生成されない・誤補正する | `W/crates/server/src/ai_assist/mod.rs` の `fetch_typo_suggestion` → 同階層の `romaji_decoder.rs` / `typo_variant.rs` / `learning.rs` |
+| タイポ候補が生成されない・誤補正する | `W/crates/server/src/ai_assist/corrector.rs` / `mod.rs` → 同階層の `romaji_decoder.rs` / `typo_variant.rs` / `learning.rs` / `reading_check.rs` |
 | 元の打鍵列による隣接キー補正 | `W/crates/server/src/ai_assist/keyboard_hybrid.rs` → `W/native/keyboard-prior/`。生成・配布は `W/scripts/build-keyboard-prior.ps1` / `build-trial.ps1` / `deployment/model-catalog.json` |
-| 補正があるのに表示・Tab採用できない | `W/crates/server/src/main.rs` の `append_ai_assist_candidates` → `W/crates/client/src/engine/composition.rs` の `ai_assist_priority_index` と候補フィルタ・キー処理 → `W/crates/ui/src/ruby.rs` |
-| Swift変換側のタイポ補正 | `W/server-swift/Sources/azookey-server/azookey_server.swift` の `getOptions` / `confidentKeyboardTypoCorrectionForZenzaiMerge` → `W/data/keyboard-typo-dictionary.tsv` |
-| 先読みが不自然・出ない | `W/crates/server/src/main.rs` の先読み呼び出し → `W/crates/server/src/ai_assist/mod.rs` の `fetch_predictive_candidate_internal` → `collocation.rs` → launcherの起動モデル |
-| 入力遅延・モデル接続・設定と違うモデル | `W/crates/launcher/src/main.rs` の `start_ai_server_process` → `W/crates/server/src/ai_assist/mod.rs` の `simple_http_post` → 配布先のモデル・backend |
-| 自動確定・削除・カーソル・文節の不整合 | `W/crates/client/src/engine/composition.rs` → `composition/tests/` → `W/crates/server/src/composition_owner.rs` / Swiftの対応操作 |
-| 選択範囲の再変換・文字数表示 | `W/crates/client/src/engine/composition.rs` の再変換キー判定 → `W/crates/client/src/tsf/edit_session.rs` / `selection_count.rs` |
+| 補正があるのに表示・Tab採用できない | `W/crates/server/src/main.rs` の `append_ai_assist_candidates` → `W/crates/shared/src/assist_policy.rs` → `W/crates/client/src/engine/composition.rs` / `composition/typo.rs` → `W/crates/ui/src/ruby.rs` / `correction_diff.js` |
+| Swift変換側のタイポ補正・確定後予測 | `W/server-swift/Sources/azookey-server/azookey_server.swift` → `KeyboardCorrectionPolicy.swift` / `PostCompositionPrediction.swift` → `W/data/keyboard-typo-dictionary.tsv` |
+| 先読みが不自然・出ない | `W/crates/server/src/main.rs` の先読み呼び出し → `W/crates/server/src/ai_assist/prediction.rs` → launcherの起動モデル（18091番） |
+| 入力遅延・モデル接続・設定と違うモデル | `W/crates/launcher/src/main.rs` → `W/crates/server/src/ai_assist/runtime.rs` → `W/crates/shared/src/runtime_assets.rs` → 配布先のモデル・backend |
+| 自動確定・削除・カーソル・文節の不整合 | `W/crates/client/src/engine/composition.rs` → `composition/tests/` → `W/crates/server/src/composition_owner.rs` / `ConversionContinuation.swift` / `AutomaticConversionContinuation.swift` |
+| 選択範囲の再変換・文字数・翻訳ポップアップ | `W/crates/client/src/engine/composition.rs` の再変換キー判定 → `W/crates/client/src/tsf/selection_count.rs` → `W/crates/selection-ui/src/lib.rs` / `W/crates/ui/src/copy_translation.rs` |
+| 英字補完・英字学習 | `W/crates/client/src/engine/composition/english.rs` → `W/crates/shared/src/english_learning.rs` → `W/crates/server/src/ai_assist/english_learning.rs` |
 | 設定変更が反映されない | `W/crates/shared/src/lib.rs` → `W/frontend/src/lib/config.ts` / `pages/general.tsx` → `W/frontend/src-tauri/src/lib.rs` → serverの `reload_ai_assist_from_settings` / Swiftの `LoadConfig` |
-| 起動・DLL登録・配布差分 | `ZeroConvertIME-windows/Start-ZeroConvertIME.ps1` / `Status-ZeroConvertIME.ps1` → `W/crates/launcher/src/main.rs` → `W/Makefile.toml` / `installer/Installer.iss` |
+| 起動・DLL登録・配布差分 | `ZeroConvertIME-windows/Start-ZeroConvertIME.ps1` / `Status-ZeroConvertIME.ps1` → `W/crates/launcher/src/main.rs` → `W/scripts/prepare-distribution.ps1` / `installer/Installer.iss` |
 | モデル切替・画面内ベンチマーク | `W/frontend/src/pages/zenzai.tsx` / `benchmark.tsx` → `W/frontend/src-tauri/src/lib.rs` の `switch_model` / `run_ai_assist_benchmark_item` |
-| 学習モデル・量子化比較 | 目的の `training/train_*.py` / `training/export_*.py` → `benchmarks/research/benchmark_nano_v2.py` / `benchmark_typo_300.py` → 対応する `artifacts/results/` |
+| 学習モデル・量子化比較 | 目的の `training/train_*.py` / `training/export_*.py` → `benchmarks/research/` → 対応する `artifacts/results/` |
 
 探索例: `rg -n 'fetch_typo_suggestion|TYPO_CORRECTION' windows/crates/server`。まず対象ディレクトリと拡張子を絞り、ワークスペース全体の再帰検索は必要になってから行う。
 
@@ -29,17 +30,20 @@
 | `W/crates/client/` | TSF DLL、キー・編集セッション・composition・IPC |
 | `W/crates/server/` | Rust変換RPCサーバー、Swift FFI呼び出し、composition所有権、AIアシスト |
 | `W/native/keyboard-prior/` | 元の打鍵列・辞書・小型読みモデルを使う補正専用ワーカーの正本。研究用C++実行器もこの実装を共有 |
-| `W/crates/shared/` | IPC契約、共通設定、候補ID、文字幅・ローマ字規則 |
-| `W/crates/ui/` | 候補一覧・読み表示・入力モード表示、表示用IPC |
-| `W/crates/launcher/` | セッション単位の子プロセス起動・監視、llamaバックエンド選択 |
+| `W/crates/shared/` | IPC契約、共通設定、候補ID、文字幅・ローマ字規則、共有入力/自動確定/アシスト/学習ポリシー |
+| `W/crates/selection-ui/` | 選択範囲・コピー翻訳ポップアップの共通ネイティブUI |
+| `W/crates/ui/` | 候補一覧・読み表示・入力モード表示・コピー翻訳コントローラー・クリップボード履歴 |
+| `W/crates/launcher/` | セッション単位の子プロセス起動・監視、llamaバックエンド選択（18091/18092） |
 | `W/crates/macros/` | Rust手続きマクロ |
 | `W/server-swift/` | Swift変換ラッパー、FFI、変換・辞書テスト、辞書サブモジュール |
-| `W/frontend/src/` / `src-tauri/` | React設定画面 / Rustの設定保存・IPC・更新・モデル切替・評価コマンド |
+| `W/frontend/src/` / `src-tauri/` | React設定画面 / Rustの設定保存・IPC・更新・モデル切替・翻訳DL・評価コマンド |
 | `W/data/` | Windowsタイポ辞書の選択データ・規則・NOTICE・評価方針。ルートの学習用 `data/` とは別 |
-| `W/scripts/` / `installer/` | 生成器・検証・VM補助 / Inno Setup配布定義 |
-| `W/docs/` / `.github/workflows/` | 上流系の開発・検証・配布手順 / CI。ワークスペースの本 `docs/` とは別 |
+| `W/scripts/` / `installer/` | 生成器・検証・配布パッケージ/VM補助 / Inno Setup配布定義 |
+| `W/docs/` / `.github/workflows/` | `windows/` 配下固有の運用・VM・テーマ手順 / CI。ワークスペースの本 `docs/` とは別 |
 | `android/` | Androidアプリ・Gradle設定・JNI・ローカル単体テスト。Gradleモジュールは `:rebuilt` だけで、`android/app/` は共有ソースの置き場 |
 | `engine/` | WindowsとAndroidが共有するRust/Swift/native。`Package.resolved` がAndroidのSwift pin、`shared-engine.lock.json` がAPKと突き合わせるエンジン指紋 |
+| `web/` | ブラウザ体験版（Swift/Rust/llama.cpp Wasm）、Web Worker、パリティ検証スクリプト |
+| `tests/` | Windows/Android共有の入力ポリシー・自動確定シナリオ仕様表（`tests/input-policy/*.tsv`） |
 | `data/` | 学習・検証・ベンチマークJSONLと生成Python |
 | `benchmarks/research/` | モデル比較、タイポ・文脈・先読み評価、試作 |
 | `training/` | モデル学習、LoRAマージ、GGUF変換補助 |
@@ -48,8 +52,8 @@
 | `artifacts/models/` | 学習・量子化したGGUFや比較用モデル。配布先 `ZeroConvertIME-windows/models/` とは別 |
 | `artifacts/checkpoints/` | LoRA、マージ済み重み、全層学習、チェックポイント等の実験成果物 |
 | `artifacts/results/` / `artifacts/logs/` | 評価JSON / ログ。実装の一次情報にはしない |
-| `docs/` | 現行の仕様書・設計書・開発手順（恒久文書）。個別調査は `docs/investigations/` |
-| `reports/` | 過去の実験・実装調査レポート。`models/`（モデル実験）、`typo-assist/`（タイポ・先読み）、`port-history/`（移植記録）に分類 |
+| `docs/` | 現行の仕様書・設計書・開発手順・文書管理ルール（[索引](README.md)）。個別調査・実装計画は `docs/investigations/` |
+| `reports/` | 過去の実験・実装調査レポート（[索引](../reports/README.md)）。`models/`・`typo-assist/`・`port-history/`・`web/` に分類 |
 | `scratch/` | このPCだけの旧チェックアウト・調査資料保管先。新規クローンには含まれない |
 | `.venv/` / `.venv_train/` / `__pycache__/` | Python環境・キャッシュ。通常のソース探索から除外 |
 
@@ -60,26 +64,31 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | ファイル | 役割 |
 | --- | --- |
 | `W/crates/client/src/tsf/key_event_sink.rs` / `edit_session.rs` | TSFキー入口 / 編集セッション |
-| `W/crates/client/src/tsf/selection_count.rs` | 選択変更通知、非同期文字数カウント、フォーカスを奪わない文字数表示 |
+| `W/crates/client/src/tsf/selection_count.rs` | 選択変更通知、非同期文字数カウント、フォーカスを奪わない文字数/翻訳表示 |
+| `W/crates/client/src/engine/input_scope_mode.rs` | InputScopeに応じた入力モード自動切替 |
+| `W/crates/client/src/engine/composition/english.rs` | 英字モードの単語補完と学習連携 |
 | `W/crates/client/src/engine/ipc_service.rs` | 変換サーバーとの通信 |
 | `W/crates/server/src/composition_owner.rs` | 操作元接続とcompositionの所有管理 |
 | `W/crates/shared/service.proto` / `window.proto` | 変換・管理RPC / 表示メッセージ |
-| `W/crates/server/src/ai_assist/romaji_decoder.rs` | ローマ字子音混入の復元 |
-| 同 `typo_variant.rs` / `builtin_vocab.tsv` | QWERTY変種・軽量辞書 / 埋込み語彙 |
-| 同 `learning.rs` / `collocation.rs` / `dynamic_macro.rs` | 補正採用学習（削除・全消去を含む） / 共起語予測 / 日時・計算等の展開 |
-| `W/server-swift/Sources/azookey-server/azookey_server.swift` の `forget_learning_candidate` / `get_learning_stats` | 候補ID単位の学習削除と削除結果の件数。単語削除はここだけが辞書を引く |
+| `W/crates/shared/src/assist_policy.rs` / `conversion_policy.rs` / `english_learning.rs` | アシスト採用ポリシー / 自動確定・入力ポリシー正本 / 英字単語学習ストア |
+| `W/crates/server/src/ai_assist/corrector.rs` / `prediction.rs` | モデル補正（`nam`マスキング含む） / ZeroCon 2段先読み |
+| 同 `romaji_decoder.rs` / `typo_variant.rs` / `builtin_vocab.tsv` | ローマ字子音混入の復元 / QWERTY変種・軽量辞書 / 埋込み語彙 |
+| 同 `learning.rs` / `reading_check.rs` / `dynamic_macro.rs` / `translation.rs` / `runtime.rs` | 補正採用学習 / 逆引き読み検証 / 日時・計算展開 / PLaMo翻訳 / 推論ランタイム境界 |
+| `W/server-swift/Sources/azookey-server/azookey_server.swift` | 変換・辞書・学習・`forget_learning_candidate` / `get_learning_stats` |
+| 同 `PostCompositionPrediction.swift` / `ConversionContinuation.swift` / `KeyboardCorrectionPolicy.swift` | 確定後予測 / 境界継続変換 / キーボード・タッチ補正統合 |
 | `W/server-swift/Sources/ffi/include/ffi.h` / `ffi.c` | C ABIの宣言と橋渡し |
 | `W/server-swift/Sources/azookey-server/romaji_table_compiler.swift` | カスタムローマ字規則のコンパイル |
 | `W/frontend/src/lib/config.ts` | TypeScript側の設定型・既定値 |
-| `W/frontend/src-tauri/src/ipc.rs` | 設定アプリからサーバーへのIPC |
-| `W/Makefile.toml` / `.github/workflows/actions.yml` | 全体ビルド・配布コピー / 正式なチェック定義 |
+| `W/frontend/src-tauri/src/ipc.rs` / `translation_model.rs` | 設定アプリからサーバーへのIPC / 翻訳モデルDL・検証 |
+| `W/Makefile.toml` / `.github/workflows/actions.yml` | 全体ビルド・配布コピー / 参考定義 |
 | `W/app-version.json` / `scripts/sync-version.mjs` | 版の入力 / メタデータ同期・生成 |
 | `A/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt` | Android IMEライフサイクルと入力連携 |
-| 同 `KanaKanjiConverter.kt` / `ZenzNative.kt` | 共有エンジンへの変換要求・ユーザー辞書・native辞書検索。変換学習は持たない |
-| 同 `KeyboardCandidateArea.kt` / `MainActivity.kt` | 候補バーの長押し削除・学習削除ダイアログ。削除の判断はエンジンへ委ねる |
-| 同 `assist/TypoCorrectionEngine.kt` / `PredictiveAssistEngine.kt` | Android固有の補正 / 先読み |
+| 同 `KanaKanjiConverter.kt` / `ZenzNative.kt` / `engine/WindowsEngine.kt` | 共有エンジンへの変換要求・ユーザー辞書・native辞書検索 |
+| 同 `KeyboardCandidateArea.kt` / `MainActivity.kt` / `InputTypeMode.kt` | 候補バーの長押し削除 / 設定UI / `inputType` 連動モード切替 |
+| 同 `FloatingKeyboard*.kt` / `QwertySplitLayout.kt` / `ImeUndoHistory.kt` | フローティング・片手・分割キーボード / Undo履歴 |
+| 同 `EnglishWordDictionary.kt` / `assist/SharedAssistPolicy.kt` / `assist/NamMasking.kt` | 英字補完・共有学習 / 共有アシストポリシー / 数値マスク |
 | 同 `translation/` | 翻訳プロンプト・モデルDL/検証・世代管理・遅延ロード（試験機能） |
-| 同 `model/ModelManager.kt` | 組込み・取込みモデル選択 |
+| 同 `model/ModelManager.kt` | 組込み（Nano v4.1 2種）・取込みモデル選択 |
 | 同 `InputPolicy.kt` / `PanelTextCommit.kt` | 入力ポリシー（即確定記号・句読点正規化・数字組成・幅既定値）のAndroid側参照とフォールバック表。正本は `W/crates/shared/src/conversion_policy.rs` |
 | `tests/input-policy/cases.tsv` | 両OS共通の入力ポリシー仕様。`cargo test -p shared` と Android JVMテストが同じ行を検証する |
 | `scripts/check-input-policy-parity.ps1` | 仕様表・Rust正本・Kotlinフォールバックの一致と両OSテストをまとめて検査する |

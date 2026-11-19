@@ -1,5 +1,8 @@
 # ZeroCon-Origin の学習・互換検証
 
+> [!NOTE]
+> **位置づけ**: ランダム初期化・独自語彙による3タスク統合モデルの研究系（ZeroCon-Origin）手順書です。現行 IME 本番モデルの仕様・配布は [model-assets.md](model-assets.md) を参照してください。
+
 ZeroCon-Originは、同じstudent重みでかな漢字変換・読み修復・先読みを行う研究用学習系。
 現行IMEから独立し、既存の重み・語彙ID・設定・配布カタログを変更しない。
 方針は[構築計画](../reports/models/zerocon-origin-build-plan-20261029.md)、

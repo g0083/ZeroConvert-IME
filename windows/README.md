@@ -1,4 +1,7 @@
-# azooKey for Windows
+# azooKey for Windows (ZeroConvert-IME Windows 基盤)
+
+> [!NOTE]
+> このファイルは fork 元である `azooKey-Windows` の README を保持しています。**ZeroConvert-IME の最新リリース・仕様・ビルド・試験環境への適用手順**は、リポジトリルートの [README.md](../README.md)、[docs/windows-conversion-logic.md](../docs/windows-conversion-logic.md)、[docs/development-workflow.md](../docs/development-workflow.md) を正本として参照してください。
 
 > [!IMPORTANT]
 > このリポジトリは [fkunn1326/azooKey-Windows](https://github.com/fkunn1326/azooKey-Windows) からの fork です。

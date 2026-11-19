@@ -1,5 +1,8 @@
 # v4派生・Standard-QWERTY統合モデルの学習
 
+> [!NOTE]
+> **位置づけ**: Standard v4 を親とする3タスク統合モデル（R1〜R7）の研究用学習手順書です。現行 IME 本番モデルの仕様・配布は [model-assets.md](model-assets.md) を参照してください。
+
 Standard v4の保存済みHFから、同じ重みでかな変換・ローマ字の読み修復・suffix先読みを学習する研究系。
 計画は[統合モデル構築計画](../reports/models/zerocon-v4-unified-ime-build-plan-20261029.md)。
 この手順自体はIME、配布カタログ、ユーザー設定を更新しない。Nano-QWERTY／Nano-Flickは別の必須成果物として残る。

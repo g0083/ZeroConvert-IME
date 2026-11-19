@@ -1,5 +1,8 @@
 # 隣接キー・辞書・小型AI補正のWindows実IME適用
 
+> [!NOTE]
+> **歴史的記録（2026-10-28）**: 当時同梱していた専用モデル `zerocon-model-keyboard-prior.gguf`（18.5MB）および `llama_cpu/keyboard-prior.exe` 配置はその後刷新・廃止されました。現在は `{app}\keyboard-prior.exe` がメイン変換モデル（Nano v4.1）と連携する統合アーキテクチャに移行しています。詳細は [unified-converter-corrector-20261104.md](unified-converter-corrector-20261104.md) および [docs/typo-correction.md](../../docs/typo-correction.md) を参照してください。
+
 2026-10-28。研究で選んだ小型・厳しめ設定をWindowsの実IMEへ統合し、Build-Trial.batでビルド・適用した。今回の確認で実使用の「体感50%以上」を達成したとは判断しない。オフラインの読み復元60.7%と、実IMEの最終表記・操作成功を区別する。
 
 ## 実装・反映範囲

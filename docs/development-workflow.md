@@ -37,19 +37,19 @@ Gitのコミット・pushは、この図のどの適用操作の代わりにも�
 
 | 直したいもの | 最初に読むファイル |
 |---|---|
-| Windowsのかな漢字変換・辞書候補・文脈 | `windows/server-swift/Sources/azookey-server/azookey_server.swift` |
-| Windowsのタイポ補正生成 | `windows/crates/server/src/ai_assist/corrector.rs`、`mod.rs`、`romaji_decoder.rs` |
+| Windowsのかな漢字変換・辞書候補・確定後予測 | `windows/server-swift/Sources/azookey-server/azookey_server.swift`、`PostCompositionPrediction.swift`、`ConversionContinuation.swift` |
+| Windowsのタイポ補正生成 | `windows/crates/server/src/ai_assist/corrector.rs`、`keyboard_hybrid.rs`、`romaji_decoder.rs`、`windows/native/keyboard-prior/` |
 | Windowsの先読み生成・出力検査 | `windows/crates/server/src/ai_assist/prediction.rs` |
-| 入力・自動確定・候補選択 | `windows/crates/client/src/engine/composition.rs` |
-| 補正採用・取消・非同期結果の照合 | `windows/crates/client/src/engine/composition/typo.rs` |
-| サーバーとの受渡し | `windows/crates/server/src/main.rs`、`windows/crates/shared/service.proto`、clientの `ipc_service.rs` |
-| 補正・候補・読みの見た目 | `windows/crates/ui/src/ruby.rs`、`candidate.rs`、`theme.rs` 等 |
+| 入力・自動確定・候補選択・英字補完・InputScope | `windows/crates/client/src/engine/composition.rs`、`composition/english.rs`、`input_scope_mode.rs` |
+| 補正採用・取消・非同期結果の照合 | `windows/crates/client/src/engine/composition/typo.rs`、`windows/crates/shared/src/assist_policy.rs` |
+| サーバーとの受渡し・英字学習 | `windows/crates/server/src/main.rs`、`windows/crates/shared/service.proto`、`english_learning.rs`、`ipc_service.rs` |
+| 補正・候補・読み・コピー翻訳の見た目 | `windows/crates/ui/src/ruby.rs`、`candidate.rs`、`copy_translation.rs`、`windows/crates/selection-ui/` |
 | 設定画面 | `windows/frontend/src/`、`windows/frontend/src-tauri/src/` |
 | 設定の定義・既定値 | `windows/crates/shared/src/lib.rs`、`windows/frontend/src/lib/config.ts`、`windows/deployment/settings.json` 等。画面・Swiftへの受渡しも確認する |
 | モデルの起動・監視 | `windows/crates/launcher/src/main.rs`、`windows/crates/shared/src/runtime_assets.rs` |
 | このPCへのビルド・適用 | ルートのbatと `windows/scripts/` |
 | インストーラーの導入動作・梱包 | `windows/installer/Installer.iss`、`windows/scripts/build-local-installer.ps1` 等 |
-| Androidの入力・補正・先読み | `android/app/src/main/java/com/zeroconvert/ime/`。Windowsの修正だけではAndroidに反映されない |
+| Androidの入力・補正・先読み・共有エンジン | `android/app/src/main/java/com/zeroconvert/ime/`、`engine/`。Windowsの共有ソース変更後は `Build-Android.bat` で反映する |
 
 詳細は [ファイル探索ガイド](file-map.md)。モデルの重みは `artifacts/models/zerocon/` が正本でGit対象外。名前・用途・SHA-256は `windows/deployment/model-catalog.json` 等で管理し、重みそのものの変更はコード編集と区別する。
 

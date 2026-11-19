@@ -1,5 +1,8 @@
 # 学習削除の共通化（スコープ別リセット＋候補単位削除）
 
+> [!NOTE]
+> **状態: 実装済み**（v0.8.0 では `"english"` スコープおよび候補ごとの英字学習削除も追加済み）。現行仕様は [windows-conversion-logic.md](../windows-conversion-logic.md)・[android-conversion-logic.md](../android-conversion-logic.md)・[english-completion.md](../english-completion.md) を参照してください。
+
 ## 目的
 
 Androidの候補バーから候補1件の学習を削除できるようにし、全削除も削除対象を選べるようにする。判断と辞書操作は共有エンジン（Swift/Rust）に置き、ホストは候補IDと確認UIだけを持つ。

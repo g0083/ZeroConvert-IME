@@ -1,5 +1,8 @@
 # Standard v4 QWERTY候補順位付けの開発手順
 
+> [!NOTE]
+> **位置づけ**: Standard v4 を用いた QWERTY 候補順位付けの研究手順書です。現行 IME 本番のタイポ補正仕様は [typo-correction.md](typo-correction.md) を参照してください。
+
 2026-11-03。実験結果は`reports/typo-assist/`、データ・重み・実行ログは`artifacts/`へ保存する。
 
 ## 処理と境界

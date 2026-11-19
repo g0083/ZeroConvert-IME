@@ -22,7 +22,7 @@ python scripts/run.py data/test_dataset_isolation.py
 
 `build_corrector_dataset.py` は分離済み統合データへ、英字が残る打鍵ミス・正常読み・表記保持例を追加し、評価との衝突を除外して再分割する。出力は `artifacts/datasets/corrector-v2-20261027/`。Pythonのローマ字表による合成データであり、実IMEでの打鍵再現評価とは区別する。
 
-`build_corrector_ablation.py` は元の語句と既存逆引き辞書の語句を同じ方法で増補し、学習行数・誤り種別を揃えた多様化比較用セットを生成する。表記生成／読み生成の入力は同一で、教師出力だけを変更する。全条件の検証グループを共通で予約し、評価由来の語句を除外する。実行例・比較の範囲は [実験記録](../reports/corrector-ablation-20261027.md) を参照。
+`build_corrector_ablation.py` は元の語句と既存逆引き辞書の語句を同じ方法で増補し、学習行数・誤り種別を揃えた多様化比較用セットを生成する。表記生成／読み生成の入力は同一で、教師出力だけを変更する。全条件の検証グループを共通で予約し、評価由来の語句を除外する。実行例・比較の範囲は [実験記録](../reports/typo-assist/corrector-ablation-20261027.md) を参照。
 
 `build_qwerty_corrector.py`は正規読みから新しいQWERTYキー誤りを作り、`native_qwerty.py`経由でWindowsの
 ComposingText DLLへ1キーずつ通す。元グループを分けてから編集し、rawキー・物理編集・native観測・修復/保持/待機を保存する。

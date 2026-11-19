@@ -23,14 +23,16 @@ Androidは `scripts/prepare-android-conversion-models.ps1` でハッシュ検証
 
 ## バックエンド
 
-- CPU / Vulkanはインストーラーへ同梱する。
-- LFMは配布・起動処理から外す。Correctorも他の機能と同じCPU / Vulkan / CUDAを使用する。
-- CUDAは設定画面で選択した際、未導入ならダウンロード確認を表示する。確認前・キャンセル時は通信も設定変更も行わない。完了後だけCUDA設定を保存する。バックエンドの適用には再起動が必要。
-- 追加取得は既存エンジンと互換性のあるb4846 / CUDA 12.4に固定する。エンジンは `fkunn1326/llama.cpp`、CUDAランタイムは `ggml-org/llama.cpp` のGitHub releaseから取得する。URL・正確なサイズ・SHA-256は `cuda_backend.rs` に固定。合計584,036,396 bytes（確認画面では約585 MB）。NVIDIAドライバーは別途必要で、自動インストールしない。
-- 取得中は進捗を表示。ハッシュ一致後、必要な11ファイルだけを一時フォルダへ展開し、全ファイルを確認してからフォルダを公開する。任意のZIPパスを展開・実行しない。失敗時は一時ファイルを破棄し、現行設定・バックエンドを保持する。
-- 保存先は `%LOCALAPPDATA%/ZeroConIME/backends/cuda-b4846-cu12.4/`。管理者権限やProgram Filesへの書き込みを必要としない。通常のインストーラー更新ではキャッシュを保持する。launcher・設定画面からの再起動・先読み・Corrector・ベンチマークは共通の `runtime_assets::backend` で探索する。
-- 更新インストーラーは既知の旧同梱 `llama_cuda` / `llama_lfm` と旧名モデルだけをインストール先から削除する。配布外の研究モデルは対象外。
+- **対応バックエンド**: `vulkan`（既定）および `cpu` の2種類。Windows 配布パッケージには `llama_vulkan/` と `llama_cpu/` を同梱する（依存準備は `windows/scripts/prepare-modern-llama.py` が llama.cpp `7d516e2` / b12125 を取得・適用）。
+- **廃止済みバックエンド**: CUDA（`llama_cuda` / `cuda_backend.rs`）および LFM（`llama_lfm`）は廃止された。旧設定の `"cuda"` は読み込み時に `vulkan` へ移行／フォールバックする。更新インストーラーは旧 `llama_cuda` / `llama_lfm` や旧名モデルをインストール先から削除する。
+- **ワーカーとの共有**: 変換サーバー（18091番）、`keyboard-prior.exe`、翻訳サーバー（18092番）、設定画面のベンチマーク（8090番）はすべて共通の `shared::runtime_assets` を参照する。
+
+## 翻訳モデル（PLaMo 3 Translate）
+
+- 翻訳モデルは Windows インストーラー・Android APK のいずれにも同梱しない。設定画面で翻訳機能を有効化した際、ユーザーの同意のもとで Hugging Face のピン留めリビジョンからオンデマンドダウンロードし、SHA-256 で検証する。
+- **Windows 保存先**: `%LOCALAPPDATA%\ZeroConIME\models\`（0.8B 既定、任意で 2B も選択可）。
+- **Android 保存先**: アプリ内 `files/translation/`（0.8B のみ）。詳細は [windows-translation-input.md](investigations/windows-translation-input.md) および [android-translation-input.md](investigations/android-translation-input.md) を参照。
 
 ## 検証
 
-共有設定の旧形式読み込み・モデル役割・名前と探索、モデル一覧、launcher、ベンチマーク、ZIP展開制限を回帰テストする。`cargo test -p frontend --lib cuda_backend -- --include-ignored` は `.local/downloads/` に固定アーカイブがある場合、両SHA-256・実展開・`llama-server --version` 起動も確認する。GPU推論や設定画面の実操作と、これらのテストの成功は区別する。
+共有設定の旧形式読み込み（`"cuda"` → `"vulkan"` 移行を含む）・モデル役割・名前と探索、モデル一覧、launcher、ベンチマーク、翻訳モデル検証を回帰テストする。GPU推論や設定画面の実操作と、単体テストの成功は区別する。

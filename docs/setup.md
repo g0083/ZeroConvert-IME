@@ -22,9 +22,9 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-dependencies.ps1
 
 ビルド要件とコマンドは [architecture.md](architecture.md) に集約する。コマンドは `windows/` で実行する。辞書は上記submodule、Swift変換依存は `server-swift/Package.swift` が取得する。
 
-llamaのライブラリ・CPU/CUDA/Vulkanランタイムと `zenz.gguf` はGit対象外。`windows/Makefile.toml` と `windows/.github/workflows/actions.yml` の取得・配置手順を参照し、使用するモデルを明示して配置する。後者は上流の参考ワークフローで、このリポジトリのActionsとしては実行されない。現行ZeroConモデルの公式配布URLはこの整理作業では確定していない。
+llamaのライブラリ・CPU/Vulkanランタイムと変換ライブラリは `windows/scripts/prepare-modern-llama.py`（`Initialize-ModernLlama`）が管理し、`windows/deployment/model-catalog.json` に定義された ZeroCon Model（Nano v4.1 `IQ4_emb8` / `Q8`）は `artifacts/models/zerocon/` から `windows/scripts/sync-distribution-models.ps1` で配置する（CUDAは廃止済み）。モデル重みやランタイムバイナリはGit対象外。
 
-`windows/deployment/` は配布用PowerShell・初期設定・NOTICEのソース。全体ビルドのpost_buildが `windows/build/` にコピーする。スクリプトは隣接するバイナリを管理するため、`deployment/` から直接インストール・起動せず、必要なバイナリと同じ配布フォルダで実行する。
+`windows/deployment/` は配布用PowerShell・初期設定・NOTICEのソース。パッケージ作成時に配布先へコピーされる。スクリプトは隣接するバイナリを管理するため、`deployment/` から直接インストール・起動せず、必要なバイナリと同じ配布フォルダで実行する。
 
 既存の `ZeroConvertIME-windows/` は、このPCで利用していたローカル実行環境として場所を維持している。Gitには含めない。設定UIの開発時モデル探索は実行ファイルの祖先からリポジトリを検出する。別配置の場合は環境変数 `ZEROCON_ROOT` でモデル・ローカル配布物を置くルートを指定できる。
 
@@ -36,28 +36,19 @@ JDK 17、Android SDK 34、NDK 27.1.12297006、CMake 3.22.1を用意する。`and
 
 AndroidのSwift依存は `engine/Package.resolved` から解決するため、WindowsのcheckoutやSwift toolchainを用意しなくても共有エンジンをステージングできる。Swift変換ライブラリは `node scripts/prepare-shared-engine.mjs` がWindowsと同じvendored converterを用意する。手順と検査コマンドは [Android新構成](android-shared-engine.md) を参照する。
 
-GGUFモデルは `android/app/src/main/assets/zenz.gguf` と `assets/models/` に別途配置する。候補と名前・期待サイズは `model/ModelManager.kt` が正本。モデルのないクローンをそのまま動作品質検証に使わない。
+GGUFモデルは `scripts/prepare-android-conversion-models.ps1` で `android/app/src/main/assets/models/` に配置する（`Nano v4.1 IQ4_emb8` / `Q8`）。候補と名前・期待サイズは `model/ModelManager.kt` が正本。モデルのないクローンをそのまま動作品質検証に使わない。
+
+## Web（ブラウザ体験版）
+
+Web版（Wasm / Web Worker）の構成とテスト実行手順は [web/README.md](../web/README.md) と [docs/investigations/browser-ime.md](investigations/browser-ime.md) を参照する。
 
 ## Python・データ
 
 `python scripts/run.py <リポジトリ相対の.py> [引数]` が実行ディレクトリをルートへ揃え、学習・評価用importパスを設定する。既存スクリプトの相対データ・モデルパスを保つため、この入口を使う。結果の保存先 `artifacts/results/` と `artifacts/logs/` は実行前に作成する（runnerも作成する）。
 
-PyTorch、Transformers、Datasets、PEFT等は各学習スクリプトのimportに応じて準備する。移行前に統一された依存ロックはなく、今回も動作未確認の版固定を追加していない。データ生成の出力は `data/`、既存の学習チェックポイントは`artifacts/checkpoints/`に保持する。これらの生成物は `.gitignore` で除外する。
+PyTorch、Transformers、Datasets、PEFT等は各学習スクリプトのimportに応じて準備する。データ生成の出力は `data/`、既存の学習チェックポイントは`artifacts/checkpoints/`に保持する。これらの生成物は `.gitignore` で除外する。
 
-## 移行時の保全と公開対象
+## ソース整合確認と旧移行メモ
 
-- 元のWindowsチェックアウトは `scratch/batao_src/` に保管し、今後の編集は `windows/` に限定する。
-- `.local/migration-backup/windows-history.bundle` は元の全参照のGit履歴、`windows-working-tree.patch` は追跡ファイルの差分、`windows-source-manifest.json` はコピー前303ファイルのSHA-256。未追跡ソースも新しい `windows/` に取り込んだ。
-- 旧チェックアウト・バックアップ・配布物・モデル・環境・ログは削除せずGitから除外した。`experiments/legacy/` の旧パスは歴史的記録として残す。実行すると旧チェックアウトを書き換えるものもあるため、通常手順として使わない。
-- 公開予定ファイルは `python scripts/check_repository.py`、ステージ後は `git diff --cached --stat` と `git diff --cached --check` で確認する。
-- 整理作業はコミット・pushを含めない。GitHubへの公開は、確認したステージ内容をコミットしてから行う。
-
-## 移行時の検証結果
-
-- 公開ソースのPython構文・通常JSON・容量・生成物除外のチェックを実施。
-- 設定UIのNodeテスト18件、辞書取得後の逆引き辞書生成テスト4件が成功。
-- Python runner経由の学習CLI `--help`、評価コードの正規表現、PowerShell構文、Cargoのオフラインmetadataを確認。
-- 候補UIテストは8件中7件成功、1件は既存CSSと期待値の不一致。保管した旧ソースでも同じ失敗を確認。ルートCIでは手動実行の `check_candidate_ui` を有効にした場合に実行する。
-- `cargo fmt --all -- --check` は既存のcompositionテストとUIコードの書式で失敗。`sync-version.mjs --check-release` も既存のTauri版情報不一致で失敗。いずれも旧ソースで再現し、今回の整理では既存の変更を保持した。
-- 初回全体差分のwhitespaceチェックには取り込んだ既存ファイルの行末空白が含まれる。辞書バイナリは `.gitattributes` でbinary指定し、データ破損につながる改行変換を防ぐ。
-- Windows/Androidのフルビルド、インストール、実IME入力、モデル精度評価は未実施。
+- ソース検証は `python scripts/check_repository.py`、差分確認は `git diff --cached --stat` と `git diff --cached --check` で行う。
+- 2026-10-22 の初期リポジトリ統合時の保全物（`scratch/batao_src/`、`.local/migration-backup/`、`experiments/legacy/`）は歴史的保管物であり、通常の開発・編集対象ではない。当時の復旧記録は [windows-source-recovery.md](../reports/port-history/windows-source-recovery.md) を参照。

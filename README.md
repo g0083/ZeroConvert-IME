@@ -1,6 +1,6 @@
 # ZeroConvert-IME
 
-Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減らす日本語IMEを開発しています。現在はタイポ補正の安定動作と先読み精度の改善に加え、Windows/Androidの翻訳入力を試験提供しています。Android実装とモデル学習・評価コードも同じリポジトリで管理します。
+Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減らす日本語IMEを開発しています。メイン変換モデル統合のタイポ補正、文の先読み、確定後予測、英字単語補完・学習に加え、Windows/Androidのローカル翻訳入力を試験提供しています。Android実装・共有エンジン・Webデモ・モデル学習・評価コードも同じリポジトリで管理します。
 
 ## 📥 すぐに試す（最新リリース）
 
@@ -18,7 +18,7 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 Windowsでは `Ctrl+T` の翻訳バーから日本語→英語／英語→日本語の翻訳入力を、文字選択中の翻訳ポップアップからコピー・挿入を行えます。Androidではキーボードの翻訳アイコンで翻訳モードに入り、未確定文を休止後に訳文へ置き換えてEnterで確定します。選択文字列の翻訳バーにも対応します。
 
-翻訳は端末/PC内の **PLaMo 3 Translate 0.8B** で実行し、入力文を外部サーバーへ送信しません。Windowsインストーラーには0.8Bモデル（約573MB）を同梱しています。Android APKには同梱せず、初回ON時に確認のうえHugging Faceから約547MiBをダウンロードします（SHA-256・リビジョン固定）。2Bモデルは未同梱・未検証です。翻訳は試験機能で、品質・遅延・メモリは環境依存です。
+翻訳は端末/PC内の **PLaMo 3 Translate 0.8B**（Windowsでは任意で2Bも選択可能）で実行し、入力文を外部サーバーへ送信しません。Windowsインストーラー・Android APKのいずれにも翻訳モデルは同梱しておらず、設定で翻訳機能を有効化した際に確認のうえHugging Faceからダウンロードします（SHA-256・リビジョン固定。0.8Bは約547MiB / 573,123,200 bytes）。翻訳は試験機能で、品質・遅延・メモリは環境依存です。
 
 モデルはPLaMo Community Licenseで提供されます。ライセンス条件は [Androidの表示](android/THIRD_PARTY_LICENSES.md) / [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) を確認してください。
 
@@ -90,16 +90,18 @@ ZeroConvert-IMEは、重みを差し替えるだけのIMEではありません�
 | パス | 用途 |
 | --- | --- |
 | `windows/` | Rust/SwiftのWindows IMEとTauri設定アプリ |
-| `android/` | Kotlin/JNIのAndroid IME |
+| `android/` | Kotlin/JNIのAndroid IME（`:rebuilt`） |
 | `engine/` | WindowsのSwift/Rustを直接利用するAndroid向け共通エンジン |
+| `web/` | ブラウザ体験版（Swift/Rust/llama.cpp Wasm）とパリティ検証 |
+| `tests/` | Windows/Android共有の入力ポリシー・自動確定テスト仕様表 |
 | `training/` | LoRA・全層学習、マージ、GGUF変換補助 |
 | `benchmarks/` | 評価・解析、`research/` に研究用試作 |
 | `data/` | 共有評価データと学習データ生成コード |
 | `scripts/` | 依存準備、Python実行、公開対象の検証 |
 | `patches/` | 外部依存への独自変更 |
-| `docs/` | アーキテクチャ・ファイル地図・開発環境 |
+| `docs/` | アーキテクチャ・ファイル地図・開発環境・ルール（[索引](docs/README.md)） |
 | `experiments/legacy/` | 過去のパッチ・調査断片。通常の開発手順では実行しない |
-| `reports/` | 過去の調査・実験レポート |
+| `reports/` | モデル実験・タイポ検証・移植履歴・Web比較レポート（[索引](reports/README.md)） |
 | `artifacts/` | ローカルのモデル・学習結果・評価結果・ログ（Git対象外） |
 
 エージェントの入口は [AGENTS.md](AGENTS.md)。詳細は [構成](docs/architecture.md)、[探索ガイド](docs/file-map.md)、[セットアップ](docs/setup.md) を参照してください。

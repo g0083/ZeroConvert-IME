@@ -1,8 +1,8 @@
 # Android版の変換ロジック
 
-本ドキュメントは、ZeroConvert-IME の Android 版における「入力 → 変換 → 表示 → 確定」までの処理を、層ごとに解説する。対象は `android/` 配下の Kotlin IME サービス、`azookey` 入力状態、ネイティブ JNI/llama.cpp、設定 UI。Windows 版（Rust/Swift）とは実装が別であり、RPC や IPC は持たない。Windows 側の時間予算やモデル経路をそのまま Android に適用しない。
+本ドキュメントは、ZeroConvert-IME の Android 版（`:rebuilt`）における「入力 → 変換 → 表示 → 確定」までの処理を、層ごとに解説する。対象は `android/` 配下の Kotlin IME サービス、`azookey` 入力状態、共有エンジン（`engine/` 配下で Windows の Swift/Rust ソースを直接コンパイル）、ネイティブ JNI/llama.cpp、設定 UI である。Windows の別プロセス RPC/IPC や TSF の仕組み自体は持たず、同一プロセス内の JNI（`WindowsEngine` / `ZenzNative`）経由で共有エンジンを呼び出す。Windows 側の時間予算をそのまま Android に適用しない。
 
-関連ドキュメント: [architecture.md](architecture.md)（構成）、[file-map.md](file-map.md)（探索先）、[android-development.md](android-development.md)（開発手順）、[android-port-completion-audit.md](../reports/port-history/android-port-completion-audit.md)。
+関連ドキュメント: [architecture.md](architecture.md)（構成）、[file-map.md](file-map.md)（探索先）、[android-shared-engine.md](android-shared-engine.md)（共有エンジン構成）、[android-development.md](android-development.md)（開発手順）。
 
 ---
 
@@ -56,7 +56,9 @@ Android には Windows のような別プロセス RPC はない。モデル推�
 
 QWERTY のシフト記号 (`isImmediateCommitChar`) は composition を即時確定する。数字は Windows の `UserAction::Number` → `AppendText` と同じく composition に加わり、読みと変換に含まれる（`n` 直後の数字は「ん」を確定させる）。句読点（`、。，．？！`）も Windows 既定の `punctuation_commit = false` に合わせて composition に加わり、`,` `.` `?` `!` は入力時に `、` `。` `？` `！` へ正規化する（`InputPolicy.punctuationForReading`）。ただし読み末尾が未確定ローマ字（`n` など）のときは句読点がその読みを確定させてから追記する。翻訳モードでは数字と句読点も `isTranslationLiteralChar` で読みへ反映して再翻訳する。
 
-これらの文字集合・正規化表・幅既定値の正本は `windows/crates/shared/src/conversion_policy.rs` にあり、Android は初期化時に共有エンジンの `op=inputPolicy` から同じ表を受け取って `InputPolicy.kt` に保持する（入力経路に JNI 呼び出しは入れない）。起動時の取得に失敗した場合だけ `InputPolicy.kt` のフォールバック表を使う。両者の仕様は [tests/input-policy/cases.tsv](../../tests/input-policy/cases.tsv) を共有し、`cargo test -p shared`、`:rebuilt:testDebugUnitTest`、`scripts/check-input-policy-parity.ps1` が検証する。
+これらの文字集合・正規化表・幅既定値の正本は `windows/crates/shared/src/conversion_policy.rs` にあり、Android は初期化時に共有エンジンの `op=inputPolicy` から同じ表を受け取って `InputPolicy.kt` に保持する（入力経路に JNI 呼び出しは入れない）。起動時の取得に失敗した場合だけ `InputPolicy.kt` のフォールバック表を使う。両者の仕様は [tests/input-policy/cases.tsv](../tests/input-policy/cases.tsv) を共有し、`cargo test -p shared`、`:rebuilt:testDebugUnitTest`、`scripts/check-input-policy-parity.ps1` が検証する。
+
+また `follow_input_type_mode`（`InputTypeMode.kt`、既定 false）を有効にすると、`onStartInputView` 時に `EditorInfo.inputType` / `imeOptions` に応じて `NUMERIC`（数値・電話・日時）または `ENGLISH`（URI・メール等）へ自動で切り替える（機密入力欄では維持）。英字モードの単語補完と共有学習（`english-learning.json`）については [english-completion.md](english-completion.md) を参照。
 
 ### 2.2 ローマ字→かな
 
@@ -242,10 +244,11 @@ Windows と同様:
 
 ### 7.5 設定・モデル
 
-- モデルは `ModelManager` が assets から `filesDir` に展開。組み込みモデル 3 種 (Nano Q4_K_M 17.6MB, Nano Lite Q3_K_M 15.3MB, Standard Q4_K_M 61.3MB)。
-- corrector モデルは別ディレクトリ (`filesDir/assist/corrector-*.gguf`) に SHA-256 で検証して展開。
-- 辞書は `filesDir/dictionary` に展開 (LOUDS)。
-- `predictiveModelState` は `"zerocon"` 固定 (旧設定は互換のため残存)。
+- モデルは `ModelManager` が `assets/models/` から `filesDir/models/` へ展開・SHA-256 検証する。組込みモデルは **Nano v4.1 IQ4_emb8**（既定、18.7 MiB / 19,602,048 bytes）と **Nano v4.1 Q8**（27.7 MiB / 29,039,232 bytes）の 2 種類。
+- 旧バージョンの独立した `filesDir/assist/`（Corrector モデル）は廃止され、`ModelManager.cleanupLegacyCorrector` で削除される。補正・先読みともにメイン変換モデルを使用する。
+- 辞書は `filesDir/dictionary` に展開（LOUDS + `reverse-v2.bin`）。
+- `predictiveModelState` は `"zerocon"` 固定（旧設定は互換のため残存）。
+- 翻訳用 PLaMo 3 Translate 0.8B は APK に同梱せず、設定画面での同意後に `files/translation/` へダウンロードして `assist_jni.cpp` の独立した Translation Runtime で推論する（[android-translation-input.md](investigations/android-translation-input.md)）。
 
 ---
 
@@ -315,9 +318,9 @@ Windows と同様:
 
 ## 10. 表示 (UI)
 
-- `ComposeKeyboardView` / `FlickKeyboardView`: キーボード + 候補表示 (Compose)
-- `aiAssistResultState` で補正/先読みの結果を UI に反映
-- `aiAssistAdoptedState` で採用済み状態を表示 (Esc で戻す)
+- `ComposeKeyboardView` / `FlickKeyboardView` / `KeyboardCandidateArea`: キーボード + 候補表示 (Compose)。分割キーボード（`QwertySplitLayout.kt`）、フローティング・片手モード（`FloatingKeyboardHost.kt` / `FloatingKeyboardControls.kt`）、Undo 履歴（`ImeUndoHistory.kt`）に対応
+- `aiAssistResultState` で補正/先読みの結果を UI に反映（`SharedAssistPolicy.kt` 経由で共有 Rust ポリシーと連携）
+- `aiAssistAdoptedState` で採用済み状態を表示 (Esc / 戻すボタンで復元)
 - 候補一覧は `candidatesList` (mutableStateListOf)
 
 ---

@@ -1,7 +1,9 @@
-# Windows: 入力先の InputScope に合わせた入力モード自動切替（実装計画）
+# Windows: 入力先の InputScope に合わせた入力モード自動切替（実装記録）
 
-状態: 実装計画（未実装）。対象: `windows/` のみ。Androidは別計画
-[android-input-type-mode.md](android-input-type-mode.md) を使う。
+> [!NOTE]
+> **状態: 実装済み**。`windows/crates/client/src/engine/input_scope_mode.rs` および設定項目 `general.follow_input_scope_mode` として実装されています。現行仕様は [windows-conversion-logic.md](../windows-conversion-logic.md) を参照してください。以下は実装時の設計計画です。
+
+対象: `windows/` のみ。Androidは別計画 [android-input-type-mode.md](android-input-type-mode.md) を使う。
 
 ## 目的
 

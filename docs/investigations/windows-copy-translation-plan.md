@@ -1,8 +1,9 @@
 # 入力欄外のコピーから文字数・翻訳フローティングを表示する計画
 
-作成日: 2026-11-06
+> [!NOTE]
+> **状態: 実装済み**。`windows/crates/selection-ui/src/lib.rs`、`windows/crates/ui/src/copy_translation.rs`、`copy_translation.html`、`general.copy_translation_popup` として実装されています。現行の Windows 翻訳仕様は [windows-translation-input.md](windows-translation-input.md) を参照してください。以下は 2026-11-06 作成時の設計計画です。
 
-状態: **実装前の計画書**。この文書の作成では、ソース変更・ビルド・試験IMEへの適用を行わない。
+作成日: 2026-11-06
 
 ## 1. 目的と合意した操作
 

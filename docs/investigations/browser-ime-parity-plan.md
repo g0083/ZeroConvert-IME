@@ -1,5 +1,8 @@
 # ZeroConvert IME Web 版 完全再現計画
 
+> [!NOTE]
+> **状態: 段階実装中**（Web Wasm プロトタイプは `web/` にて実装・検証進行中）。現行構成は [browser-ime.md](browser-ime.md)、最新の検証記録は [browser-ime-parity-2026-11-17.md](../../reports/web/browser-ime-parity-2026-11-17.md) を参照してください。
+
 Web 版と配布済み Windows 版を比較したところ、4つの入力例の計43打鍵で、読みと先頭候補が一致した。この範囲ではモデルと通常変換の接続を確認できた。補正候補の到着順、確定境界、読みルビの表示、学習後の候補順まで揃えるには、Windows クライアントとサーバーが変換前後に担う処理を共有する必要がある。 [現行 Web 版の構成](browser-ime.md) · [公開ビルド](https://github.com/g0083/ZeroConvert-IME/actions/runs/43809266180)
 
 ## 完全再現の範囲

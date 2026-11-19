@@ -16,9 +16,9 @@
 - **再変換**: 未変換入力がない状態で既存テキストを選択すると、ツールバーの「再変換」から逆引きした読みの辞書候補を出す。この経路はモデル変換・補正・先読み・自動確定を抑止する。元表記を先頭に残し、候補選択まで表示を保つ。読みが不明なら文書を変更しない。
 - **編集状態の検査**: 選択範囲・入力先・要求世代・設定が変わった結果は反映しない。外部から未確定範囲の外へカーソルを動かした場合は管理中の入力状態を終了する。
 
-主な入口は [入力サービス](../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)、[候補UI](../android/app/src/main/java/com/zeroconvert/ime/ComposeKeyboardView.kt)、[通常変換](../android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt)、[native通常変換](../android/app/src/main/cpp/zenz_jni.cpp)。
+主な入口は [入力サービス](../../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)、[候補UI](../../android/app/src/main/java/com/zeroconvert/ime/ComposeKeyboardView.kt)、[通常変換](../../android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt)、[native通常変換](../../android/app/src/main/cpp/zenz_jni.cpp)。
 
-追加した独立ロジックは [AutoCorrectionEvidence](../android/app/src/main/java/com/zeroconvert/ime/assist/AutoCorrectionEvidence.kt)、[AssistPresentation](../android/app/src/main/java/com/zeroconvert/ime/assist/AssistPresentation.kt)、[候補統合](../android/app/src/main/java/com/zeroconvert/ime/ConversionCandidateMerge.kt)、[再変換計画](../android/app/src/main/java/com/zeroconvert/ime/ReconversionPlan.kt)、[語彙生成](../scripts/generate-android-assist-vocabulary.mjs)。Windowsのコード・モデル重みは変更していない。
+追加した独立ロジックは [AutoCorrectionEvidence](../../android/app/src/main/java/com/zeroconvert/ime/assist/AutoCorrectionEvidence.kt)、[AssistPresentation](../../android/app/src/main/java/com/zeroconvert/ime/assist/AssistPresentation.kt)、[候補統合](../../android/app/src/main/java/com/zeroconvert/ime/ConversionCandidateMerge.kt)、[再変換計画](../../android/app/src/main/java/com/zeroconvert/ime/ReconversionPlan.kt)、[語彙生成](../../scripts/generate-android-assist-vocabulary.mjs)。Windowsのコード・モデル重みは変更していない。
 
 ## 検証とAPK
 
@@ -28,7 +28,7 @@ android/で実行:
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --offline
 ```
 
-- 成功。JVMテスト62件、失敗・エラー・スキップ0件。追加の [AutomaticAssistTest](../android/app/src/test/java/com/zeroconvert/ime/AutomaticAssistTest.kt) は、自動補正の根拠・曖昧性・旧履歴移行・取消と学習・逐次表示・候補順序・繰返し表記・再変換計画を検査する。
+- 成功。JVMテスト62件、失敗・エラー・スキップ0件。追加の [AutomaticAssistTest](../../android/app/src/test/java/com/zeroconvert/ime/AutomaticAssistTest.kt) は、自動補正の根拠・曖昧性・旧履歴移行・取消と学習・逐次表示・候補順序・繰返し表記・再変換計画を検査する。
 - lint: Error/Fatal 0、Warning 28、Information 14。警告が残るため警告ゼロとは扱わない。
 - `node scripts/generate-android-assist-vocabulary.mjs --check` 成功。生成元との一致を確認した。
 - `apksigner verify --verbose --print-certs` 成功、APK Signature Scheme v2。debug証明書SHA-256: `ed89c1107e5d4c2e543bf37a18fd63acec06e8f2482e13802c7945a9578ff3a5`。

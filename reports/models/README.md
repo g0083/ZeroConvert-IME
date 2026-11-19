@@ -1,19 +1,39 @@
 # モデル実験・比較レポート (`reports/models/`)
 
-ZeroCon Model の学習、蒸留、量子化、CPU/GPU推論比較などの実験レポート群です。
+ZeroCon Model の学習、蒸留、量子化、CPU/GPU 推論比較などの実験レポート群です。現行配布モデルの正本仕様は [docs/model-assets.md](../../docs/model-assets.md) を参照してください。
 
-## 主なレポート
+## Nano v4 / v4.1・プラットフォーム比較
 
-- [Standard-QWERTY R7実行記録](zerocon-standard-qwerty-unified-r7-20261030.md): 混在文字列保持データ、共有更新と更新干渉制約の比較
-- [R6d以降の学習計画](zerocon-standard-qwerty-unified-next-training-plan-20261029.md): 通常変換の回復、更新の干渉対策、補正候補選択、先読みとNanoへの展開
-- [v4派生3機能モデルの構築計画](zerocon-v4-unified-ime-build-plan-20261029.md): Standard-QWERTY／Nano-QWERTY／Nano-Flickを必須とする新計画
-- [Standard-QWERTY統合モデルの試作](zerocon-standard-qwerty-unified-20261029.md): 親重み・codec・corrector継承・実生成の結果と未達事項
-- [Standard-QWERTY統合モデルの改善案](zerocon-standard-qwerty-unified-improvement-plan-20261029.md): 現行v3.2 correctorとの比較、入出力・候補選択・段階統合の実験順序
-- [Standard-QWERTY統合モデルR6の改善検証](zerocon-standard-qwerty-unified-r6-20261029.md): R6dの学習・Q8書き出し、同条件の補正改善、通常変換の退行と採用保留
-- `zerocon_model_standard_v4_experiment_report.md`: standard-v4 の学習・評価レポート
-- `nano-standard-v4-cpu-comparison.md`: nano-v4 と standard-v4 のCPU推論性能・精度比較
-- `zerocon_model_nano_v3_experiment_report.md`: nano-v3 の実験レポート
-- `zerocon_model_standard_v3_experiment_report.md`: standard-v3 の実験レポート
-- `zerocon_model_standard_v3_plan.md`: standard-v3 の実験計画書
-- `zerocon_model_nano_v2_experiment_report.md`: nano-v2 の実験レポート
-- `ZeroConvert_Experiment_Report.md`: 初期モデル開発の総合実験レポート
+- [nano-v4-platform-model-switch.md](nano-v4-platform-model-switch.md): Nano v4 への通常変換モデル統一記録（現行は Nano v4.1 へ更新）
+- [nano-standard-v4-cpu-comparison.md](nano-standard-v4-cpu-comparison.md): Nano v4 と Standard v4 の CPU 推論性能・精度比較
+- [zerocon_v4_capability_r1_report.md](zerocon_v4_capability_r1_report.md): Standard v4 / Nano v4 変換基礎能力向上（`cap-r1`）実験レポート
+- [zerocon_model_standard_v4_experiment_report.md](zerocon_model_standard_v4_experiment_report.md): Standard v4 の学習・評価レポート
+- [weight-space-programming-zerocon-v4-experiment.md](weight-space-programming-zerocon-v4-experiment.md): 重み空間プログラミング実験の記録
+- [upstream-merge-20261106.md](upstream-merge-20261106.md): llama.cpp API 更新（7d516e2 / b12125）対応追記
+
+## Standard-QWERTY 3タスク統合研究（R1〜R7）
+
+- [zerocon-v4-unified-ime-build-plan-20261029.md](zerocon-v4-unified-ime-build-plan-20261029.md): v4 派生3機能モデルの構築計画
+- [zerocon-standard-qwerty-unified-20261029.md](zerocon-standard-qwerty-unified-20261029.md): Standard-QWERTY 統合モデルの試作
+- [zerocon-standard-qwerty-unified-improvement-plan-20261029.md](zerocon-standard-qwerty-unified-improvement-plan-20261029.md): Standard-QWERTY 統合モデルの改善案
+- [zerocon-standard-qwerty-unified-r6-20261029.md](zerocon-standard-qwerty-unified-r6-20261029.md): Standard-QWERTY 統合モデル R6 の改善検証
+- [zerocon-standard-qwerty-unified-next-training-plan-20261029.md](zerocon-standard-qwerty-unified-next-training-plan-20261029.md): R6d 以降の学習計画
+- [zerocon-standard-qwerty-unified-r7-20261030.md](zerocon-standard-qwerty-unified-r7-20261030.md): Standard-QWERTY R7 実行記録
+
+## ZeroCon-Origin 研究系
+
+- [zerocon-origin-build-plan-20261029.md](zerocon-origin-build-plan-20261029.md): ZeroCon-Origin 構築計画
+- [zerocon-origin-t0-20261029.md](zerocon-origin-t0-20261029.md): T0 接続試作の記録
+- [zerocon-origin-pilot-20261029.md](zerocon-origin-pilot-20261029.md): 初期 pilot 記録
+- [zerocon-origin-n33-50m-20261029.md](zerocon-origin-n33-50m-20261029.md): N33 50M 検証
+- [zerocon-origin-s68-spans-20261029.md](zerocon-origin-s68-spans-20261029.md): S68 途中診断・短語句実験
+- [zerocon-origin-operating-curriculum-20261029.md](zerocon-origin-operating-curriculum-20261029.md): 補正スコア・継続経路・S68 記録
+- [zerocon-origin-t2-final-analysis-20261029.md](zerocon-origin-t2-final-analysis-20261029.md): T2 最終解析
+
+## 初期〜v3 実験レポート（歴史的記録）
+
+- [zerocon_model_nano_v3_experiment_report.md](zerocon_model_nano_v3_experiment_report.md): Nano v3 / v4 系実験レポート
+- [zerocon_model_standard_v3_experiment_report.md](zerocon_model_standard_v3_experiment_report.md): Standard v3 実験レポート
+- [zerocon_model_standard_v3_plan.md](zerocon_model_standard_v3_plan.md): Standard v3 実験計画書
+- [zerocon_model_nano_v2_experiment_report.md](zerocon_model_nano_v2_experiment_report.md): Nano v2 実験レポート
+- [ZeroConvert_Experiment_Report.md](ZeroConvert_Experiment_Report.md): 初期モデル開発（汎用LLM〜zenz-v3.2量子化）の総合実験レポート

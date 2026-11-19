@@ -69,7 +69,7 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 - 記号の幅既定値は `symbol_default_fullwidth` と `CHARACTER_WIDTH_SYMBOL_DEFAULTS` の組で決まり、`full_width.rs` はその定数から表を組む。
 - 設定ON時の `punctuation_commit` 分岐は Windows 固有で、共有仕様の対象外。
 
-仕様は [tests/input-policy/cases.tsv](../../tests/input-policy/cases.tsv) にあり、Android と共有している。変更時はこの TSV を先に更新し、`cargo test -p shared --offline` と `scripts/check-input-policy-parity.ps1` を通す。
+仕様は [tests/input-policy/cases.tsv](../tests/input-policy/cases.tsv) にあり、Android と共有している。変更時はこの TSV を先に更新し、`cargo test -p shared --offline` と `scripts/check-input-policy-parity.ps1` を通す。
 
 ---
 
@@ -218,18 +218,19 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 ### 6.6 関連ファイル
 
 - `windows/crates/server/src/ai_assist/mod.rs`
-- `windows/crates/server/src/ai_assist/corrector.rs` (推定、mod 配下)
+- `windows/crates/server/src/ai_assist/corrector.rs`（`nam` 数値マスキング含む）
+- `windows/crates/server/src/ai_assist/keyboard_hybrid.rs`（`keyboard-prior.exe` 連携）
 - `windows/crates/server/src/ai_assist/romaji_decoder.rs`
 - `windows/crates/server/src/ai_assist/typo_variant.rs`
 - `windows/crates/server/src/ai_assist/learning.rs`
-- `windows/crates/server/src/ai_assist/collocation.rs`
+- `windows/crates/server/src/ai_assist/reading_check.rs`
 - `windows/crates/server/src/ai_assist/dynamic_macro.rs`
 
 ---
 
-## 7. 先読み (予測変換)
+## 7. 先読み・確定後予測
 
-補正候補が出ていれば生成を省略する（`kind=2` の先読み要求では補正を生成しないが、補正が既に表示中なら先読みは補正を待たない）。共起語を優先し、それがなければ定型句→確定履歴→同一プロンプトキャッシュ→モデル推論へ進む。モデル推論には 60ms の連続呼び出し抑制と同時リクエスト抑制がある。
+AI による文の先読み（`prediction.rs`）では、補正候補が出ていれば生成を省略する（`kind=2` の先読み要求では補正を生成しないが、補正が既に表示中なら先読みは補正を待たない）。同一プロンプトキャッシュ（32件）にヒットしなければ 18091 番のメイン変換モデルへ推論を送り、60ms の連続呼び出し抑制と同時リクエスト抑制（`IN_FLIGHT`）で過負荷を防ぐ。これとは別に、Swift 側の `PostCompositionPrediction.swift` が確定直後の文脈に応じた次語・絵文字の確定後予測（`post-composition-bigrams.json`）も担う。
 
 ### 7.1 生成と表示
 
@@ -270,7 +271,8 @@ ZeroCon は `EE02 + 左文脈 + EE00 + カタカナ読み` から読みの続き
 
 | 用途 | 接続先・モデル |
 |---|---|
-| Rust 補正・ZeroCon 先読み（統合） | 18091、実行フォルダの `zenz.gguf`（メイン変換モデル）、漢字変換と共通の `zenzai.backend`（既定 Vulkan、CPU/CUDA も選択可） |
+| Rust 補正・ZeroCon 先読み（統合） | 18091、設定で選ばれたメイン変換モデル（Nano v4.1 IQ4_emb8 / Q8）、漢字変換と共通の `zenzai.backend`（既定 Vulkan、CPU も選択可。CUDA は廃止） |
+| 翻訳（試験機能） | 18092、PLaMo 3 Translate（0.8B 既定 / 2B 任意） |
 | 設定画面のベンチマーク | 8090。実 IME の先読み・補正とは別プロセス |
 | （旧構成）Corrector 専用 | 18090。v0.2.3で完全撤廃され、18091のメイン変換モデルへ一本化 |
 
@@ -283,8 +285,8 @@ launcher は AI アシスト有効時に常駐推論サーバー（ポート 180
 ### 7.5 関連ファイル
 
 - `windows/crates/server/src/main.rs` の `append_ai_assist_candidates`（先読み呼び出し）
-- `windows/crates/server/src/ai_assist/mod.rs` の `fetch_predictive_candidate_internal` / `prediction::suggest`
-- `windows/crates/server/src/ai_assist/collocation.rs`
+- `windows/crates/server/src/ai_assist/prediction.rs`（`suggest`、ZeroCon 2段生成、`nam` マスキング）
+- `windows/server-swift/Sources/azookey-server/PostCompositionPrediction.swift`（確定後予測）
 
 ---
 
@@ -331,11 +333,13 @@ launcher は AI アシスト有効時に常駐推論サーバー（ポート 180
 | 設定 | 意味 |
 |---|---|
 | `general.experimental_ai_assist` | Rust 側補正・先読みの有効化 |
-| `general.experimental_typo_correction` | Swift 側キーボードタイポ補正 |
+| `general.experimental_typo_correction` | Swift 側キーボードタイポ補正・Rust 側補正の有効化 |
+| `general.follow_input_scope_mode` | InputScope に応じた入力モード自動切替（`input_scope_mode.rs`） |
+| `general.copy_translation_popup` | 入力欄外のコピーに対する文字数・翻訳ポップアップ（`selection-ui` / `copy_translation.rs`） |
 | `general.jev_conversion` | JEV 変換モード（自動確定無効化など） |
-| `zenzai.backend` | Vulkan/CPU/CUDA |
+| `zenzai.backend` | Vulkan / CPU（旧 CUDA 設定は読み込み時に Vulkan へ移行） |
 | `predictive_model` | 旧設定、読み込み時に無視・次回保存時に除去 |
-| `experimental_ai_engine` | corrector 用エンジン (embedded/LM Studio) |
+| `experimental_ai_engine` | 未補正入力のフォールバック推論先 (`embedded` / `lm_studio`) |
 | `experimental_predictive_model` | 廃止 |
 
 ### 9.3 モデル・ポート
@@ -368,8 +372,7 @@ launcher は AI アシスト有効時に常駐推論サーバー（ポート 180
 
 - 入力順序、読み、未確定ローマ字、文字数、候補 ID、文脈を別々に扱う。
 - タイポ補正と先読みの優先順、通常候補の非破壊性を保つ。
-- `ai_assist/mod.rs` 冒頭コメントは推論エンジン非依存だが、実際には同期 TCP/HTTP フォールバックがある。タイポ補正 150ms 等のタイムアウトを含めて遅延を調べる。
-- 先読み関数の引数名は `partial_surface` だが、server からは `hiragana_text` が渡る。定型句表には漢字表記もあるため、読み・変換済み表記・継続文字列の境界を追う。
+- 英字モードの単語補完と共有学習（`english.rs` / `english-learning.json`）の詳細は [english-completion.md](english-completion.md)、翻訳入力とコピー翻訳の詳細は [windows-translation-input.md](investigations/windows-translation-input.md) を参照。
 - 実行バイナリとソースが一致するとは限らない。モデル名・設定・ポート・実行パスを確認してから不具合を判断する。
 - 配布 DLL/EXE、モデル重み、ビルド出力、依存取得物を直接修正しない。
 
@@ -413,7 +416,7 @@ cargo test -p azookey-server --lib --offline live_prediction_evaluation -- --ign
 | タイポ候補が生成されない・誤補正する | `crates/server/src/ai_assist/mod.rs` の `fetch_typo_suggestion` → `romaji_decoder.rs` / `typo_variant.rs` / `learning.rs` |
 | 補正があるのに表示・Tab 採用できない | `crates/server/src/main.rs` の `append_ai_assist_candidates` → `crates/client/src/engine/composition.rs` の `ai_assist_priority_index` と候補フィルタ・キー処理 → `crates/ui/src/ruby.rs` |
 | Swift 変換側のタイポ補正 | `server-swift/Sources/azookey-server/azookey_server.swift` の `getOptions` / `confidentKeyboardTypoCorrectionForZenzaiMerge` → `data/keyboard-typo-dictionary.tsv` |
-| 先読みが不自然・出ない | `crates/server/src/main.rs` の先読み呼び出し → `crates/server/src/ai_assist/mod.rs` の `fetch_predictive_candidate_internal` → `collocation.rs` → launcher の起動モデル |
+| 先読みが不自然・出ない | `crates/server/src/main.rs` の先読み呼び出し → `crates/server/src/ai_assist/prediction.rs` → launcher の起動モデル（18091） |
 | 入力遅延・モデル接続・設定と違うモデル | `crates/launcher/src/main.rs` の `start_ai_server_process` → `crates/server/src/ai_assist/mod.rs` の `simple_http_post` → 配布先のモデル・backend |
 | 自動確定・削除・カーソル・文節の不整合 | `crates/client/src/engine/composition.rs` → `composition/tests/` → `crates/server/src/composition_owner.rs` |
 | 設定変更が反映されない | `crates/shared/src/lib.rs` → `frontend/src/lib/config.ts` / `pages/general.tsx` → `frontend/src-tauri/src/lib.rs` → server の `reload_ai_assist_from_settings` / Swift の `LoadConfig` |

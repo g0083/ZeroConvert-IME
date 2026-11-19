@@ -28,11 +28,11 @@
 
 主な変更元:
 
-- [入力サービス](../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)
-- [CorrectionSession](../android/app/src/main/java/com/zeroconvert/ime/assist/CorrectionSession.kt)、[AssistRequestGate](../android/app/src/main/java/com/zeroconvert/ime/assist/AssistRequestGate.kt)、[InputPrivacy](../android/app/src/main/java/com/zeroconvert/ime/assist/InputPrivacy.kt)
-- [変換器](../android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt)、[ComposingText](../android/app/src/main/java/com/zeroconvert/ime/azookey/input/ComposingText.kt)、[ZenzNative](../android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt)
-- [ローマ字復元](../android/app/src/main/java/com/zeroconvert/ime/assist/RomajiDecoder.kt)、[補正](../android/app/src/main/java/com/zeroconvert/ime/assist/TypoCorrectionEngine.kt)、[補正学習](../android/app/src/main/java/com/zeroconvert/ime/assist/TypoLearning.kt)
-- [Manifest](../android/app/src/main/AndroidManifest.xml)、[基本テーマ](../android/app/src/main/res/values/styles.xml)、[API29以降のテーマ](../android/app/src/main/res/values-v29/styles.xml)
+- [入力サービス](../../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)
+- [CorrectionSession](../../android/app/src/main/java/com/zeroconvert/ime/assist/CorrectionSession.kt)、[AssistRequestGate](../../android/app/src/main/java/com/zeroconvert/ime/assist/AssistRequestGate.kt)、[InputPrivacy](../../android/app/src/main/java/com/zeroconvert/ime/assist/InputPrivacy.kt)
+- [変換器](../../android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt)、[ComposingText](../../android/app/src/main/java/com/zeroconvert/ime/azookey/input/ComposingText.kt)、[ZenzNative](../../android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt)
+- [ローマ字復元](../../android/app/src/main/java/com/zeroconvert/ime/assist/RomajiDecoder.kt)、[補正](../../android/app/src/main/java/com/zeroconvert/ime/assist/TypoCorrectionEngine.kt)、[補正学習](../../android/app/src/main/java/com/zeroconvert/ime/assist/TypoLearning.kt)
+- [Manifest](../../android/app/src/main/AndroidManifest.xml)、[基本テーマ](../../android/app/src/main/res/values/styles.xml)、[API29以降のテーマ](../../android/app/src/main/res/values-v29/styles.xml)
 
 ## 検証
 
@@ -45,7 +45,7 @@ android/で実行:
 - JVMテスト: 34件、失敗0、エラー0、スキップ0。
 - lint: エラー0、警告28。警告は残しており、lint抑制やbaselineによる隠蔽はしていない。
 - debug APK: ビルド成功。ABIはarm64-v8aとx86_64。
-- 回帰テストは [CorrectionSessionTest](../android/app/src/test/java/com/zeroconvert/ime/CorrectionSessionTest.kt)、[AiAssistTest](../android/app/src/test/java/com/zeroconvert/ime/AiAssistTest.kt)、[AutoCommitAndPipelineTest](../android/app/src/test/java/com/zeroconvert/ime/AutoCommitAndPipelineTest.kt) を追加・更新した。
+- 回帰テストは [CorrectionSessionTest](../../android/app/src/test/java/com/zeroconvert/ime/CorrectionSessionTest.kt)、[AiAssistTest](../../android/app/src/test/java/com/zeroconvert/ime/AiAssistTest.kt)、[AutoCommitAndPipelineTest](../../android/app/src/test/java/com/zeroconvert/ime/AutoCommitAndPipelineTest.kt) を追加・更新した。
 - JVMは実InputConnection・JNIモデル推論を検証していない。エディターが成功を返した場合の判定を実装したが、端末上の確定成功まで確認した意味ではない。
 - 初回のoffline lintはlint-gradle未取得で失敗した。通常モードで必要な依存を取得後、上記offline検証を実施した。
 

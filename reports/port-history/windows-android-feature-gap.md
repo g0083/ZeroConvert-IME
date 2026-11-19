@@ -28,23 +28,23 @@
 
 | 記号 | ファイル・主な入口 |
 |---|---|
-| W変換 | [azookey_server.swift](../windows/server-swift/Sources/azookey-server/azookey_server.swift): `getOptions`, `get_composed_text_impl`, `mergeZenzaiMainResultsWithNormalNBest`, `confidentKeyboardTypoCorrectionForZenzaiMerge`, `get_composed_text_for_cursor_prefix`, `commit_learning_candidates` |
-| W補正 | [corrector.rs](../windows/crates/server/src/ai_assist/corrector.rs): `suggest`, `suggest_composition`, `completed_surface`, `can_auto_apply` |
-| W規則 | [mod.rs](../windows/crates/server/src/ai_assist/mod.rs): `heuristic_typo_suggestion`, `rule_based_typo_correction`, `correction_for_embedded_typo` |
-| W語彙 | [typo_variant.rs](../windows/crates/server/src/ai_assist/typo_variant.rs)、[builtin_vocab.tsv](../windows/crates/server/src/ai_assist/builtin_vocab.tsv)、[romaji_decoder.rs](../windows/crates/server/src/ai_assist/romaji_decoder.rs) |
-| W読み | [reading_check.rs](../windows/crates/server/src/ai_assist/reading_check.rs): `has_same_reading`, `reading_for_surface` |
-| W予測 | [prediction.rs](../windows/crates/server/src/ai_assist/prediction.rs): `suggest`, `zerocon`, `reading_extension`, `surface_suffix` |
-| W統合 | [main.rs](../windows/crates/server/src/main.rs): `append_ai_assist_candidates`, `get_assist_candidates` |
-| W入力 | [composition.rs](../windows/crates/client/src/engine/composition.rs)、[typo.rs](../windows/crates/client/src/engine/composition/typo.rs): `begin_typo_assist`, `apply_typo_correction`, `undo_typo_correction`, `matches_snapshot` |
-| W運用 | [launcher/main.rs](../windows/crates/launcher/src/main.rs)、[shared/lib.rs](../windows/crates/shared/src/lib.rs)、[model-catalog.json](../windows/deployment/model-catalog.json)、[settings.json](../windows/deployment/settings.json) |
-| W学習 | [learning.rs](../windows/crates/server/src/ai_assist/learning.rs): `lookup_learned_typo`, `record_learned_typo` |
-| A変換 | [KanaKanjiConverter.kt](../android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt): `requestCandidates`, `buildEffectiveProfile`, `recordSelection` |
-| A入力 | [ZeroConvertInputMethodService.kt](../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt): `triggerDebouncedConversion`, `adoptAiAssist`, `revertAiAssist`, `confirmAsync`, `clearInput` |
-| A補正 | [TypoCorrectionEngine.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/TypoCorrectionEngine.kt)、[RomajiDecoder.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/RomajiDecoder.kt) |
-| A補助 | [TypoVariant.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/TypoVariant.kt)、[ReadingCheck.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/ReadingCheck.kt)、[TypoLearning.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/TypoLearning.kt)、[DynamicMacro.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/DynamicMacro.kt) |
-| A予測 | [PredictiveAssistEngine.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/PredictiveAssistEngine.kt)、[AiAssistManager.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/AiAssistManager.kt) |
-| A推論 | [ZenzNative.kt](../android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt)、[zenz_jni.cpp](../android/app/src/main/cpp/zenz_jni.cpp)、[azookey_louds.cpp](../android/app/src/main/cpp/azookey_louds.cpp) |
-| A設定 | [MainActivity.kt](../android/app/src/main/java/com/zeroconvert/ime/MainActivity.kt)、[ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) |
+| W変換 | [azookey_server.swift](../../windows/server-swift/Sources/azookey-server/azookey_server.swift): `getOptions`, `get_composed_text_impl`, `mergeZenzaiMainResultsWithNormalNBest`, `confidentKeyboardTypoCorrectionForZenzaiMerge`, `get_composed_text_for_cursor_prefix`, `commit_learning_candidates` |
+| W補正 | [corrector.rs](../../windows/crates/server/src/ai_assist/corrector.rs): `suggest`, `suggest_composition`, `completed_surface`, `can_auto_apply` |
+| W規則 | [mod.rs](../../windows/crates/server/src/ai_assist/mod.rs): `heuristic_typo_suggestion`, `rule_based_typo_correction`, `correction_for_embedded_typo` |
+| W語彙 | [typo_variant.rs](../../windows/crates/server/src/ai_assist/typo_variant.rs)、[builtin_vocab.tsv](../../windows/crates/server/src/ai_assist/builtin_vocab.tsv)、[romaji_decoder.rs](../../windows/crates/server/src/ai_assist/romaji_decoder.rs) |
+| W読み | [reading_check.rs](../../windows/crates/server/src/ai_assist/reading_check.rs): `has_same_reading`, `reading_for_surface` |
+| W予測 | [prediction.rs](../../windows/crates/server/src/ai_assist/prediction.rs): `suggest`, `zerocon`, `reading_extension`, `surface_suffix` |
+| W統合 | [main.rs](../../windows/crates/server/src/main.rs): `append_ai_assist_candidates`, `get_assist_candidates` |
+| W入力 | [composition.rs](../../windows/crates/client/src/engine/composition.rs)、[typo.rs](../../windows/crates/client/src/engine/composition/typo.rs): `begin_typo_assist`, `apply_typo_correction`, `undo_typo_correction`, `matches_snapshot` |
+| W運用 | [launcher/main.rs](../../windows/crates/launcher/src/main.rs)、[shared/lib.rs](../../windows/crates/shared/src/lib.rs)、[model-catalog.json](../../windows/deployment/model-catalog.json)、[settings.json](../../windows/deployment/settings.json) |
+| W学習 | [learning.rs](../../windows/crates/server/src/ai_assist/learning.rs): `lookup_learned_typo`, `record_learned_typo` |
+| A変換 | [KanaKanjiConverter.kt](../../android/app/src/main/java/com/zeroconvert/ime/KanaKanjiConverter.kt): `requestCandidates`, `buildEffectiveProfile`, `recordSelection` |
+| A入力 | [ZeroConvertInputMethodService.kt](../../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt): `triggerDebouncedConversion`, `adoptAiAssist`, `revertAiAssist`, `confirmAsync`, `clearInput` |
+| A補正 | [TypoCorrectionEngine.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/TypoCorrectionEngine.kt)、[RomajiDecoder.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/RomajiDecoder.kt) |
+| A補助 | [TypoVariant.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/TypoVariant.kt)、[ReadingCheck.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/ReadingCheck.kt)、[TypoLearning.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/TypoLearning.kt)、`DynamicMacro.kt`（共有Rustエンジン一本化により削除） |
+| A予測 | [PredictiveAssistEngine.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/PredictiveAssistEngine.kt)、[AiAssistManager.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/AiAssistManager.kt) |
+| A推論 | [ZenzNative.kt](../../android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt)、[zenz_jni.cpp](../../android/app/src/main/cpp/zenz_jni.cpp)、[azookey_louds.cpp](../../android/app/src/main/cpp/azookey_louds.cpp) |
+| A設定 | [MainActivity.kt](../../android/app/src/main/java/com/zeroconvert/ime/MainActivity.kt)、[ModelManager.kt](../../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) |
 
 ## かな漢字変換・ライブ変換
 
@@ -128,7 +128,7 @@
 | I12 | 期限・同時実行上限 | 補正HTTP450ms、先読み250ms＋300ms、クライアント待機1600ms。サーバーの先読み要求枠も制限。 | 通常変換前に50msのdebounce、Job取消とnative abortはある。補正探索・将来の二段先読みを含む同じ期限/実行枠はない。数値の直輸入はせず端末で決める。〔W補正/W予測/W入力/W統合/A入力/A推論〕 |
 | I13 | 推論資源の分離 | 補正と先読みは別モデルサーバー。通常変換とは要求経路を分離。 | nativeモデルは単一g_ctx・g_mutex。辞書は別mutexで改善済みだが、モデル補正・先読みを追加する資源設計は未実装。〔W運用/A推論〕 |
 | I14 | 動的マクロ | 日時・計算等をローカル候補として追加する入口あり。 | DynamicMacroはファイルあり、製品入力経路には未接続。アシスト移植の隣接機能。〔W統合/A補助〕 |
-| I15 | 補正表示と取消案内 | UIのruby.rsで変更前→変更後・変更箇所強調・共通部分省略・適用済み/取消案内を表示できる。 | ComposeKeyboardViewは単一ラベルのバナー。適用済み補正状態・変更差分・取消案内を独立して渡すUI契約がない。〔W入力/[ruby.rs](../windows/crates/ui/src/ruby.rs)/A入力〕 |
+| I15 | 補正表示と取消案内 | UIのruby.rsで変更前→変更後・変更箇所強調・共通部分省略・適用済み/取消案内を表示できる。 | ComposeKeyboardViewは単一ラベルのバナー。適用済み補正状態・変更差分・取消案内を独立して渡すUI契約がない。〔W入力/[ruby.rs](../../windows/crates/ui/src/ruby.rs)/A入力〕 |
 
 ## 設定・モデル・テスト
 
@@ -144,9 +144,9 @@
 | S08 | 入力状態の回帰テスト | typo.rsに補正取消、古い応答、候補ID/順序、表示採用先保持のテスト。compositionやSwiftにも関連テストあり。 | 入力状態・フリック・自動確定のJVMテストあり。補正採用から追加入力・取消・確定・入力先切替までの同等検証は未整備。〔W入力/Aテスト〕 |
 | S09 | テスト期待値 | 一般補正が先読みを隠さず、モデル不通時は固定先読みを出さないことを検証。 | 現在は補正の絶対優先と固定先読みの出力をテストしている。移植時は実装と一緒に期待する振る舞いも改訂する必要がある。〔W入力/W予測/Aテスト〕 |
 | S10 | 実機の検証経路 | TSF・プロセス・Windows入力アプリでの検証が必要。 | JVMではJNIロード失敗を許容。androidTestは未作成で、JVMテストだけでは辞書/モデル/IME接続を保証しない。端末で別途確認する。〔Android開発手順〕 |
-| S11 | 画面内ベンチマーク | 実IMEと評価経路の共通性を個別確認する必要がある。 | BenchmarkRunnerは現在のルール補正・定型句先読みを直接呼ぶ。最新モデル推論へ移植する際は評価側も接続し、実IMEの編集成功とは別に扱う。〔[BenchmarkRunner.kt](../android/app/src/main/java/com/zeroconvert/ime/benchmark/BenchmarkRunner.kt)/A設定〕 |
+| S11 | 画面内ベンチマーク | 実IMEと評価経路の共通性を個別確認する必要がある。 | BenchmarkRunnerは現在のルール補正・定型句先読みを直接呼ぶ。最新モデル推論へ移植する際は評価側も接続し、実IMEの編集成功とは別に扱う。〔[BenchmarkRunner.kt](../../android/app/src/main/java/com/zeroconvert/ime/benchmark/BenchmarkRunner.kt)/A設定〕 |
 
-ここでAテストは [AiAssistTest.kt](../android/app/src/test/java/com/zeroconvert/ime/AiAssistTest.kt)、[AutoCommitAndPipelineTest.kt](../android/app/src/test/java/com/zeroconvert/ime/AutoCommitAndPipelineTest.kt)、[ComposingTextTest.kt](../android/app/src/test/java/com/zeroconvert/ime/ComposingTextTest.kt)、[FlickInputAndModifierTest.kt](../android/app/src/test/java/com/zeroconvert/ime/FlickInputAndModifierTest.kt) を指す。
+ここでAテストは [AiAssistTest.kt](../../android/app/src/test/java/com/zeroconvert/ime/AiAssistTest.kt)、[AutoCommitAndPipelineTest.kt](../../android/app/src/test/java/com/zeroconvert/ime/AutoCommitAndPipelineTest.kt)、[ComposingTextTest.kt](../../android/app/src/test/java/com/zeroconvert/ime/ComposingTextTest.kt)、[FlickInputAndModifierTest.kt](../../android/app/src/test/java/com/zeroconvert/ime/FlickInputAndModifierTest.kt) を指す。
 
 ## Androidで既に存在し、保持する機能
 

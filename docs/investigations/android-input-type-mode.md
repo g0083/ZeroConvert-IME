@@ -1,7 +1,9 @@
-# Android: 入力先の inputType に合わせたキーボードモード自動切替（実装計画）
+# Android: 入力先の inputType に合わせたキーボードモード自動切替（実装記録）
 
-状態: 実装計画（未実装）。対象: `android/` のみ。Windowsは別計画
-[windows-input-scope-mode.md](windows-input-scope-mode.md) を使う。
+> [!NOTE]
+> **状態: 実装済み**。`InputTypeMode.kt` および `InputTypeModeTest.kt` として実装されています（現在 `:app` モジュールは廃止され `:rebuilt` に一本化済み）。現行仕様は [android-conversion-logic.md](../android-conversion-logic.md) を参照してください。以下は実装時の設計計画です。
+
+対象: `android/` のみ。Windowsは別計画 [windows-input-scope-mode.md](windows-input-scope-mode.md) を使う。
 
 ## 目的
 

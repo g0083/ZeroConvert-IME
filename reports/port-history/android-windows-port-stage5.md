@@ -19,7 +19,7 @@
 
 範囲内へ入力した際、ライブ変換ONで末尾が一時的に表示から消える既存経路も修正した。打鍵・かな入力・濁点変更・かな置換の即時表示に末尾を加える。
 
-主な変更: [ConversionRangeSession](../android/app/src/main/java/com/zeroconvert/ime/ConversionRangeSession.kt)、[入力サービス](../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)、[共通キーボードUI](../android/app/src/main/java/com/zeroconvert/ime/ComposeKeyboardView.kt)、[要求ゲート](../android/app/src/main/java/com/zeroconvert/ime/assist/AssistRequestGate.kt)。Windowsソース・native辞書・モデル重みは変更していない。
+主な変更: [ConversionRangeSession](../../android/app/src/main/java/com/zeroconvert/ime/ConversionRangeSession.kt)、[入力サービス](../../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)、[共通キーボードUI](../../android/app/src/main/java/com/zeroconvert/ime/ComposeKeyboardView.kt)、[要求ゲート](../../android/app/src/main/java/com/zeroconvert/ime/assist/AssistRequestGate.kt)。Windowsソース・native辞書・モデル重みは変更していない。
 
 ## 検証
 
@@ -29,7 +29,7 @@ android/で次を実行し、成功した。
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --offline
 ```
 
-- JVMテスト80件、失敗・エラー・スキップ0件。[ConversionRangeTest](../android/app/src/test/java/com/zeroconvert/ime/ConversionRangeTest.kt) の8件を追加した。原打鍵の保存・伸縮・取消、部分確定後の入力と削除、サロゲートペア、拗音内の確定、候補の読み一致、編集後の取消抑止、要求モード変更、末尾の即時表示を検査する。
+- JVMテスト80件、失敗・エラー・スキップ0件。[ConversionRangeTest](../../android/app/src/test/java/com/zeroconvert/ime/ConversionRangeTest.kt) の8件を追加した。原打鍵の保存・伸縮・取消、部分確定後の入力と削除、サロゲートペア、拗音内の確定、候補の読み一致、編集後の取消抑止、要求モード変更、末尾の即時表示を検査する。
 - lint: Error/Fatal 0、Warning 28、Information 14。
 - `apksigner verify --verbose --print-certs` 成功。APK内DEXに範囲変換クラスが含まれることを確認した。
 - `git -c submodule.recurse=false diff --check --ignore-submodules=all` と文書のローカルリンクを確認。改行コードの警告は残る。

@@ -1,5 +1,8 @@
 # Nano v4への通常変換モデル統一（2026-10-29）
 
+> [!NOTE]
+> **歴史的記録**: 本レポートは 2026-10-29 時点の Nano v4 統一記録です。現在は **Nano v4.1**（`IQ4_emb8` / `Q8`）へ更新され、独立 Corrector および Keyboard Prior 専用モデルは廃止されました。現行仕様は [docs/model-assets.md](../../docs/model-assets.md) を参照してください。
+
 Windows・Androidの通常変換選択肢をNano v4 IQ4_NL_emb8（Blend85）とNano v4 Q8_0（100%マージ）に統一した。新規既定値はIQ4_emb8。旧Standard選択をQ8へ、旧Nano/Lite選択をIQ4_emb8へ移行する。旧ファイルとユーザーのインポート済みモデルは削除しない。CorrectorとKeyboard Priorは補正専用として維持する。
 
 カタログ・Android読込側のCorrector識別情報も、作業前から存在する実ファイルのSHA-256とサイズに整合させた。Correctorの重み自体は変更していない。通常変換モデルの名前・サイズ・ハッシュは`windows/deployment/model-catalog.json`を正本とする。

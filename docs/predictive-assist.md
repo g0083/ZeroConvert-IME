@@ -43,9 +43,11 @@ ZeroConは、`EE02 + 左文脈 + EE00 + カタカナ読み` から読みの続�
 
 | 用途 | 接続先・モデル |
 |---|---|
-| Rust補正・ZeroCon先読み（統合） | 18091、実行フォルダの `zenz.gguf`（メイン変換モデル）、漢字変換と共通の `zenzai.backend`（既定Vulkan、CPU/CUDAも選択可） |
+| Rust補正・ZeroCon先読み（統合） | 18091、設定で選択されたメイン変換モデル（Nano v4.1 IQ4_emb8 / Q8）、漢字変換と共通の `zenzai.backend`（既定Vulkan、CPUも選択可。CUDAは廃止） |
 | 設定画面のベンチマーク | 8090。実IMEの先読み・補正とは別プロセス |
 | （旧構成）Corrector専用 | 18090。v0.2.3で完全撤廃され、18091のメイン変換モデルへ一本化 |
+
+なお、確定直後の次語・絵文字を提案する「確定後予測」は Swift 側の `PostCompositionPrediction.swift`（`post-composition-bigrams.json`）が別途担当しており、ここでの AI 文先読み（`prediction.rs`、`nam` 数値マスキング対応）とは役割が分かれている。
 
 launcherはAIアシスト有効時に常駐推論サーバー（ポート18091）を監視する。従来の独立したCorrectorサーバー（18090番）は廃止され、メイン変換モデル1本で先読み・タイポ補正（2段リランキング）・漢字変換を担う。先読みモデル選択は廃止し、旧 `experimental_predictive_model` は読み込み時に無視・次回保存時に除去する。タイポ補正の `experimental_ai_engine` は先読みには影響しない。所有するプロセスだけ設定変更・異常終了に応じて停止/再起動する。Job Objectによりlauncher終了時も先読みプロセスを終了する。外部の待受プロセスは停止しない。
 

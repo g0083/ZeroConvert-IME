@@ -20,11 +20,11 @@
 
 ## 主なソース
 
-- [assist_jni.cpp](../android/app/src/main/cpp/assist_jni.cpp)、[assist_jni.h](../android/app/src/main/cpp/assist_jni.h)、[CMakeLists.txt](../android/app/src/main/cpp/CMakeLists.txt)、[zenz_jni.cpp](../android/app/src/main/cpp/zenz_jni.cpp)
-- [AssistInference.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/AssistInference.kt)、[ModelCorrector.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/ModelCorrector.kt)、[PredictiveAssistEngine.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/PredictiveAssistEngine.kt)、[AiAssistManager.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/AiAssistManager.kt)
-- [ReadingCheck.kt](../android/app/src/main/java/com/zeroconvert/ime/assist/ReadingCheck.kt)、[ZenzNative.kt](../android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt)、[ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt)
-- [入力サービス](../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)、[設定画面](../android/app/src/main/java/com/zeroconvert/ime/MainActivity.kt)、[BenchmarkRunner.kt](../android/app/src/main/java/com/zeroconvert/ime/benchmark/BenchmarkRunner.kt)
-- [資産準備](../scripts/prepare-android-assist-assets.ps1)、[Gradleの資産検証](../android/app/build.gradle.kts)、[ModelAssistTest.kt](../android/app/src/test/java/com/zeroconvert/ime/ModelAssistTest.kt)
+- [assist_jni.cpp](../../android/app/src/main/cpp/assist_jni.cpp)、[assist_jni.h](../../android/app/src/main/cpp/assist_jni.h)、`android/app/src/main/cpp/CMakeLists.txt`（現 [engine/native/CMakeLists.txt](../../engine/native/CMakeLists.txt)）、[zenz_jni.cpp](../../android/app/src/main/cpp/zenz_jni.cpp)
+- [AssistInference.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/AssistInference.kt)、[ModelCorrector.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/ModelCorrector.kt)、[PredictiveAssistEngine.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/PredictiveAssistEngine.kt)、[AiAssistManager.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/AiAssistManager.kt)
+- [ReadingCheck.kt](../../android/app/src/main/java/com/zeroconvert/ime/assist/ReadingCheck.kt)、[ZenzNative.kt](../../android/app/src/main/java/com/zeroconvert/ime/ZenzNative.kt)、[ModelManager.kt](../../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt)
+- [入力サービス](../../android/app/src/main/java/com/zeroconvert/ime/ZeroConvertInputMethodService.kt)、[設定画面](../../android/app/src/main/java/com/zeroconvert/ime/MainActivity.kt)、[BenchmarkRunner.kt](../../android/app/src/main/java/com/zeroconvert/ime/benchmark/BenchmarkRunner.kt)
+- [資産準備](../../scripts/prepare-android-assist-assets.ps1)、`android/app/build.gradle.kts`（`:app`廃止により削除）、[ModelAssistTest.kt](../../android/app/src/test/java/com/zeroconvert/ime/ModelAssistTest.kt)
 
 ## 準備・ビルド・検証
 

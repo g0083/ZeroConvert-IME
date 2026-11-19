@@ -15,7 +15,7 @@
 - **部分確定の実機不具合**: VIVOの実IMEテストで、先頭だけを確定した後に末尾のcomposing spanが消える不具合を再現した。確定と末尾の再設定の間の選択通知が外部移動と判定されていたため、両操作をバッチ編集にまとめた。手動の部分確定と自動確定の両方へ適用した。
 - **実機テスト経路**: platform Instrumentationのrunnerとdebug専用入力欄を追加した。フリックキー・通常キーにアクセシビリティ入力操作、候補と入力モードに識別可能な説明を追加し、実IMEの操作を検証できるようにした。タッチ/フリックの処理は保持する。
 
-主な追加ソース: [AutoCommitRewind](../android/app/src/main/java/com/zeroconvert/ime/AutoCommitRewind.kt)、[VerifiedModelFile](../android/app/src/main/java/com/zeroconvert/ime/model/VerifiedModelFile.kt)、[DictionarySegments](../android/app/src/main/java/com/zeroconvert/ime/DictionarySegments.kt)、[PortInstrumentationRunner](../android/app/src/androidTest/java/com/zeroconvert/ime/PortInstrumentationRunner.kt)、[検証用Activity](../android/app/src/debug/java/com/zeroconvert/ime/PortTestActivity.kt)。
+主な追加ソース: [AutoCommitRewind](../../android/app/src/main/java/com/zeroconvert/ime/AutoCommitRewind.kt)、[VerifiedModelFile](../../android/app/src/main/java/com/zeroconvert/ime/model/VerifiedModelFile.kt)、[DictionarySegments](../../android/app/src/main/java/com/zeroconvert/ime/DictionarySegments.kt)、[PortInstrumentationRunner](../../android/app/src/androidTest/java/com/zeroconvert/ime/PortInstrumentationRunner.kt)、[検証用Activity](../../android/app/src/debug/java/com/zeroconvert/ime/PortTestActivity.kt)。
 
 ## ビルドとホスト検証
 
@@ -25,7 +25,7 @@ android/で実行:
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --offline
 ```
 
-- 成功。JVMテスト90件、失敗・エラー・スキップ0件。[PortIntegrityTest](../android/app/src/test/java/com/zeroconvert/ime/PortIntegrityTest.kt) 7件、[DictionarySegmentsTest](../android/app/src/test/java/com/zeroconvert/ime/DictionarySegmentsTest.kt) 3件を追加した。
+- 成功。JVMテスト90件、失敗・エラー・スキップ0件。[PortIntegrityTest](../../android/app/src/test/java/com/zeroconvert/ime/PortIntegrityTest.kt) 7件、[DictionarySegmentsTest](../../android/app/src/test/java/com/zeroconvert/ime/DictionarySegmentsTest.kt) 3件を追加した。
 - lint: Error/Fatal 0、Warning 28、Information 14。
 - arm64-v8a/x86_64のnativeビルド成功。語彙生成の `--check`、Gitの `diff --check --ignore-submodules=all` も成功。改行コードの警告は残る。
 

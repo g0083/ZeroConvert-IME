@@ -3,29 +3,31 @@
 ## 目的・現在地
 
 - Windows版 azooKey を基盤に、zenz系の独自 ZeroCon Model を利用し、変換操作を減らす日本語IMEを開発する（開発方針はユーザー指定）。
-- コードにはライブ変換、安定した先頭部分の自動確定、タイポ補正、先読み、設定UIが存在する。ユーザー報告ではタイポ補正の不動作・先読み精度が課題。実装の存在と動作品質を区別する。
-- Windowsが開発の基準。Android実装とモデル学習・評価も同居するが、Windowsの修正時に一括探索しない。
+- コードにはライブ変換、安定した先頭部分の自動確定、メインモデル統合のタイポ補正、先読み、確定後予測、英字補完・学習、ローカル翻訳、設定UIが存在する。実装の存在と実IME上での動作品質を区別して扱う。
+- Windowsが開発の基準。共有エンジン（`engine/`）、Android実装（`android/`）、ブラウザ版（`web/`）、モデル学習・評価も同居するが、Windowsの修正時に一括探索しない。
 
 ## 最初に見る場所
 
-- ルートのGit管理先は `https://github.com/g0083/ZeroConvert-IME.git`（`origin`）。Windowsソースは `windows/`、Androidは `android/`。ルートのGitで管理する。
+- ルートのGit管理先は `https://github.com/g0083/ZeroConvert-IME.git`（`origin`）。Windowsソースは `windows/`、共有エンジンは `engine/`、Androidは `android/`、ブラウザ版は `web/`。ルートのGitで管理する。
 - `windows/` の作業には、その配下の [AGENTS.md](windows/AGENTS.md) と必要な開発手順も適用する。
-- `android/` の作業には、その配下の [AGENTS.md](android/AGENTS.md) と [Android開発手順](docs/android-development.md) を適用する。Windows用のビルド・適用スクリプトやスキルをAndroidへそのまま流用しない。
+- `android/` の作業には、その配下の [AGENTS.md](android/AGENTS.md)、`engine/` の作業には [engine/AGENTS.md](engine/AGENTS.md) と [Android開発手順](docs/android-development.md) を適用する。Windows用のビルド・適用スクリプトやスキルをAndroidへそのまま流用しない。
 - 学習は `training/`、評価は `benchmarks/`、共有データは `data/`。Pythonは `python scripts/run.py <対象.py> [引数]` でルート基準のパス・importを揃える。
 - モデルは `artifacts/models/`、学習出力は `artifacts/checkpoints/`、評価結果・ログは `artifacts/results/` / `artifacts/logs/`。いずれもGit対象外。
 - `scratch/` は旧チェックアウト・実験保管先でGit対象外。`scratch/batao_src/` は移行前の保全用であり、今後の編集先ではない。ローカル履歴バックアップは `.local/migration-backup/`。既存の実行環境 `ZeroConvertIME-windows/` もGit対象外で保持する。
 - 外部依存はルートの `.gitmodules` で固定。Android llama.cppの独自変更は `patches/llama.cpp/` に保存し、`scripts/setup-dependencies.ps1` で適用する。
-- 構造・データフロー・設定・コマンドは [docs/architecture.md](docs/architecture.md)、症状別の探索先・詳細なファイル一覧は [docs/file-map.md](docs/file-map.md)。
+- ドキュメント全体の索引は [docs/README.md](docs/README.md)、構造・データフロー・設定・コマンドは [docs/architecture.md](docs/architecture.md)、症状別の探索先・詳細なファイル一覧は [docs/file-map.md](docs/file-map.md)。
 
 ## ドキュメント・レポートの配置原則
 
-- **`docs/`（現行仕様・運用ガイド）**: システム設計、アーキテクチャ、セットアップ・開発手順など、継続的に参照・保守される恒久文書のみを配置する。
-  - `docs/investigations/`: 特定機能の詳細調査、特定バージョンでの不具合解析、実装メモなどを配置する。
-- **`reports/`（実験・検証・過去の進捗レポート）**: スナップショット的な記録、実験結果、移行フェーズの記録などをサブディレクトリに分類して格納する。新規レポートを `reports/` や `docs/` の直下に散らかさない。
-  - `reports/models/`: ZeroCon Model（nano / standard / 各バージョン）の学習・評価・比較実験レポート
-  - `reports/typo-assist/`: タイポ補正、先読み、キーボードハイブリッドの調査・検証レポート
+詳細な作成・更新・リンク規約は [ドキュメント作成・管理ルール](docs/documentation-guide.md) を参照する。
+
+- **`docs/`（現行仕様・運用ガイド）**: システム設計、アーキテクチャ、セットアップ・開発手順など、継続的に参照・保守される恒久文書のみを配置する（一覧: [docs/README.md](docs/README.md)）。
+  - `docs/investigations/`: 個別機能の設計メモ、実装計画（冒頭に状態を明記）、特定バージョンでの不具合解析などを配置する（一覧: [docs/investigations/README.md](docs/investigations/README.md)）。
+- **`reports/`（実験・検証・過去の進捗レポート）**: スナップショット的な記録、実験結果、移行フェーズの記録などをサブディレクトリに分類して格納する（一覧: [reports/README.md](reports/README.md)）。新規レポートを `reports/` や `docs/` の直下に散らかさない。
+  - `reports/models/`: ZeroCon Model（nano / standard / Origin / 各バージョン）の学習・評価・比較実験レポート
+  - `reports/typo-assist/`: タイポ補正、先読み、キーボードハイブリッド、翻訳検証の調査・検証レポート
   - `reports/port-history/`: Android移植の各ステージ進捗記録（stage2〜10等）や過去の監査ドキュメント
-  - `reports/web/`: 外部向け紹介HTMLや技術比較ページ
+  - `reports/web/`: ブラウザ版パリティ検証記録、外部向け紹介HTMLや技術比較ページ
 - **一時ファイル・ログの管理**:
   - 実験結果JSONやビルド・評価ログは `artifacts/results/` や `artifacts/logs/` を利用する。
   - ルートやソースディレクトリ直下に一時ログ（`*.log`）や差分テキストを放置しない。不要になった一時ファイルは速やかに掃除する。

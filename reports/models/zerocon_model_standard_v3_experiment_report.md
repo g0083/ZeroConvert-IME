@@ -117,11 +117,11 @@ GPT-2 アーキテクチャ（`Conv1D` 転置重み）において量子化方�
 すべての学習データ・チェックポイント・GGUFモデル・評価ログはリポジトリ内の管理対象ディレクトリに保存されており、**ユーザーの既存実行環境（`ZeroConvertIME-windows/`）のバイナリ・設定は変更していない**。
 
 - **データセット生成・検証**:
-  - [data/build_standard_v3_dataset.py](file:///d:/angra/ZeroConvert-IME/data/build_standard_v3_dataset.py) (`Train: 713`, `Val: 73`, `Excluded: 0`, 5評価セット1,626キー完全隔離検証済み)
-  - [data/build_hard_context_testset.py](file:///d:/angra/ZeroConvert-IME/data/build_hard_context_testset.py) (12件のテスト定義バグ修正済み)
+  - [data/build_standard_v3_dataset.py](../../data/build_standard_v3_dataset.py) (`Train: 713`, `Val: 73`, `Excluded: 0`, 5評価セット1,626キー完全隔離検証済み)
+  - [data/build_hard_context_testset.py](../../data/build_hard_context_testset.py) (12件のテスト定義バグ修正済み)
 - **学習・校正スクリプト**:
-  - [training/train_standard_v3.py](file:///d:/angra/ZeroConvert-IME/training/train_standard_v3.py) (EOS整合、空白トークナイズ整合、層別学習率DoRA、Target-Corrected KL + Contrastive Margin + EOS Anti-Hallucination Margin)
-  - [training/build_calibration_corpus.py](file:///d:/angra/ZeroConvert-IME/training/build_calibration_corpus.py)
+  - [training/train_standard_v3.py](../../training/train_standard_v3.py) (EOS整合、空白トークナイズ整合、層別学習率DoRA、Target-Corrected KL + Contrastive Margin + EOS Anti-Hallucination Margin)
+  - [training/build_calibration_corpus.py](../../training/build_calibration_corpus.py)
 - **生成モデル (`artifacts/models/`)**:
   - `artifacts/models/zerocon-standard-v3-f16.gguf` (183.2 MB)
   - `artifacts/models/zerocon-standard-v3-q8_0.gguf` (99.0 MB)

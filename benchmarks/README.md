@@ -39,10 +39,10 @@ raw読み指標、共通の入力途中保護、物理キー証拠を要求す�
 
 `research/benchmark_corrector_pipeline.py` は `engine/rust/examples/evaluate_corrector.rs` を使って現行Windows補正関数を直接評価する。`--corrector`、`--normal`、新しい `--out` を指定し、専用ポートの所有モデルプロセスを終了まで管理する。評価器は `cargo build --manifest-path engine/rust/Cargo.toml --example evaluate_corrector` でビルドする。実IME・個人設定・採用履歴を変更しない。基準の表記は通常モデルの直接推論であり、Swift辞書・TSF・表示操作は対象外。正解表記は採点にだけ使い、基準候補へ渡さない。クラッシュ・通信失敗・誤提案・誤自動適用を区別して保存する。
 
-`windows-rpc/` は稼働中のWindows IMEサーバーへ専用クライアントで接続する確認用ツール。`cargo run --manifest-path benchmarks/windows-rpc/Cargo.toml -- <新しい結果JSONパス>` で実行する。compositionと文脈をテスト用に操作するため、入力を確定してから使う。確定学習は行わない。TSF・画面上のTab採用を代替するものではない。今回の改善結果・適用状態・制約は [2026-10-27の改善記録](../reports/typo-improvement-20261027.md) を参照。
+`windows-rpc/` は稼働中のWindows IMEサーバーへ専用クライアントで接続する確認用ツール。`cargo run --manifest-path benchmarks/windows-rpc/Cargo.toml -- <新しい結果JSONパス>` で実行する。compositionと文脈をテスト用に操作するため、入力を確定してから使う。確定学習は行わない。TSF・画面上のTab採用を代替するものではない。今回の改善結果・適用状態・制約は [2026-10-27の改善記録](../reports/typo-assist/typo-improvement-20261027.md) を参照。
 
-同じ追加学習データ・条件で約18.5MB版と約64.3MB版を比較した結果は [タイポ補正モデル大型化の比較](../reports/corrector-size-comparison-20261027.md) を参照。開発評価300問の再測定、補助35問、誤提案とCPU遅延を記録し、実IMEへの適用とは区別している。
+同じ追加学習データ・条件で約18.5MB版と約64.3MB版を比較した結果は [タイポ補正モデル大型化の比較](../reports/typo-assist/corrector-size-comparison-20261027.md) を参照。開発評価300問の再測定、補助35問、誤提案とCPU遅延を記録し、実IMEへの適用とは区別している。
 
-語句の多様化・読み補正分離を両サイズで比較する手順は [8条件の実験記録](../reports/corrector-ablation-20261027.md) を参照。`benchmark_corrector_pipeline.py --reading-stage` は実験用に「かなの修正→固定の通常変換」を仲介し、両段の時間を計上する。`analyze_corrector_ablation.py` は16結果ファイルのモデル・実行器の同一性を確認し、条件間の正答増減を集計する。製品の補正方式を切り替える設定ではない。
+語句の多様化・読み補正分離を両サイズで比較する手順は [8条件の実験記録](../reports/typo-assist/corrector-ablation-20261027.md) を参照。`benchmark_corrector_pipeline.py --reading-stage` は実験用に「かなの修正→固定の通常変換」を仲介し、両段の時間を計上する。`analyze_corrector_ablation.py` は16結果ファイルのモデル・実行器の同一性を確認し、条件間の正答増減を集計する。製品の補正方式を切り替える設定ではない。
 
-ローマ字の隣接キー誤りを「打鍵候補＋辞書＋読み言語モデル」で補正する試作は [ハイブリッド補正の検証](../reports/keyboard-hybrid-20261027.md) を参照。`research/benchmark_keyboard_hybrid.py` はデータ分離・候補生成・HF採点、`benchmark_keyboard_native.py` はQ4 CPU採点、`analyze_keyboard_hybrid.py` は開発用のしきい値固定と別区分の評価を行う。ネイティブ評価器は `build_keyboard_native.py --output <新しいフォルダー>` で既存b4846 DLLと一致するヘッダーからビルドする。候補生成条件・モデル・tokenizer・実行器をhashで照合し、未採点データや別条件の評価を拒否する。これは原文ローマ字由来の読み復元評価で、最終漢字表記や実IMEの動作を保証しない。
+ローマ字の隣接キー誤りを「打鍵候補＋辞書＋読み言語モデル」で補正する試作は [ハイブリッド補正の検証](../reports/typo-assist/keyboard-hybrid-20261027.md) を参照。`research/benchmark_keyboard_hybrid.py` はデータ分離・候補生成・HF採点、`benchmark_keyboard_native.py` はQ4 CPU採点、`analyze_keyboard_hybrid.py` は開発用のしきい値固定と別区分の評価を行う。ネイティブ評価器は `build_keyboard_native.py --output <新しいフォルダー>` で既存b4846 DLLと一致するヘッダーからビルドする。候補生成条件・モデル・tokenizer・実行器をhashで照合し、未採点データや別条件の評価を拒否する。これは原文ローマ字由来の読み復元評価で、最終漢字表記や実IMEの動作を保証しない。
