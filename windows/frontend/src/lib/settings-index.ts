@@ -18,7 +18,7 @@ export const settingsIndex: SettingsEntry[] = [
     { url: "/", page: "入力と文字", section: "半角・全角", label: "数字", keywords: "はんかく ぜんかく すうじ" },
     { url: "/", page: "入力と文字", section: "半角・全角", label: "英字", keywords: "はんかく ぜんかく えいじ alphabet" },
     { url: "/", page: "入力と文字", section: "半角・全角", label: "記号", keywords: "はんかく ぜんかく きごう" },
-    { url: "/conversion", page: "変換と候補", section: "ZeroCon AI", label: "利用モデル", keywords: "モデル 選択 nano 先読みモデル タイポ補正モデル ZeroCon" },
+    { url: "/conversion", page: "変換と候補", section: "ZeroCon AI", label: "利用モデル", keywords: "モデル 選択 ダウンロード 削除 取得 キャッシュ nano standard 先読みモデル タイポ補正モデル ZeroCon" },
     { url: "/conversion", page: "変換と候補", section: "ZeroCon AI", label: "バックエンド", keywords: "cpu vulkan gpu 推論" },
     { url: "/conversion", page: "変換と候補", section: "ZeroCon AI", label: "クイックベンチマーク", keywords: "速度 測定 ベンチ" },
     { url: "/conversion", page: "変換と候補", section: "ZeroCon AI", label: "GPUに載せる層数", keywords: "gpu layers vram" },

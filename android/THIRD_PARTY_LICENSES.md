@@ -33,7 +33,7 @@ Distributed under the same MIT terms reproduced in section 1.
 
 ## 2. ZeroCon Model Nano v4.1 / Zenz Neural Kana-Kanji Conversion Models
 - **Modifications**: rank-64 DoRA, target-corrected dual-anchor distillation and self-copy/EOS margin training from zenz-v3.2-xsmall using a fine-tuned Standard v3 teacher, plus v4.1 conversational/anti-over-kanji & numeral (`nam` digit-masking) refinement.
-- **Bundled variants**: `zerocon-nano-v4.1-iq4nl-emb8.gguf` (IQ4_NL body with Q8_0 input/output) and `zerocon-nano-v4.1-q8_0.gguf` (Q8_0).
+- **Acquired variants**: `zerocon-nano-v4.1-iq4nl-emb8.gguf` / `zerocon-nano-v4.1-q8_0.gguf` (nano), `zerocon-standard-v4.1-iq4nl-emb8.gguf` / `zerocon-standard-v4.1-q8_0.gguf` (standard; IQ4_NL body with Q8_0 input/output, or Q8_0). Downloaded on demand from the pinned GitHub release and not redistributed with the APK.
 - **License of the upstream base**: Apache License 2.0 (`app/src/main/assets/licenses/Apache-2.0.txt`)
 - **License of these derivatives**: ZeroCon Model Nano の重み・学習物は独自改変物であり、本製品外での利用・再配布を許諾しません。上流部分には Apache License 2.0 の条件（著作権表示・ライセンス文の同梱・変更の明示）が及び、本アプリはそれを満たしています。
 - **Author**: Miwa Keita (ensan-hcl)

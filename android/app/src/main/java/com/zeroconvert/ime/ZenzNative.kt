@@ -272,32 +272,45 @@ object ZenzNative {
             val savedName = prefs.getString("selected_model_name", null)
 
             val builtIn = ModelManager.selectedBuiltInSpec(context, savedPath)
+            val cached = builtIn?.let { ModelManager.cachedFile(context, it) }
             val modelFile = if (builtIn != null) {
                 currentModelName = builtIn.displayName
-                ModelManager.ensureBuiltInModel(context, builtIn)
+                if (cached == null) {
+                    // 未取得のまま初期化を通さない。取得UI（設定画面の必須対話）で取得後に再 init する。
+                    // 辞書側（isDictInitialized）は別処理で続行するため、モデル無しの IME でも入力状態を保つ。
+                    Log.e(TAG, "Conversion model not downloaded yet: ${builtIn.fileName}")
+                }
+                cached
             } else if (!savedPath.isNullOrEmpty() && File(savedPath).isFile) {
                 currentModelName = savedName ?: File(savedPath).name
                 File(savedPath)
             } else {
                 currentModelName = ModelManager.DEFAULT_MODEL_SPEC.displayName
-                ModelManager.ensureBuiltInModel(context, ModelManager.DEFAULT_MODEL_SPEC)
+                ModelManager.cachedFile(context, ModelManager.DEFAULT_MODEL_SPEC)
+            }
+            if (modelFile == null) {
+                isInitialized = false
+                // 辞書の初期化（下記2）へ進むため、モデル側だけ未初期化として抜ける。
+                // isInitialized が false のまま呼び返される側では、変換は辞書のみに制限される。
+            } else {
+                val file = modelFile
+                val loaded = if (BuildConfig.WINDOWS_ENGINE) com.zeroconvert.ime.engine.WindowsEngine.initialize(context, file) else nativeInit(file.absolutePath, File(context.filesDir, "zenz_debug.log").absolutePath)
+                if (loaded) {
+                    converterPath = file.absolutePath
+                    prefs.edit().putString("selected_model_path", file.absolutePath).putString("selected_model_name", currentModelName).apply()
+                    modelEpoch.incrementAndGet()
+                    try {
+                        ModelManager.cleanupLegacyCorrector(context)
+                        com.zeroconvert.ime.assist.AssistVocabulary.load(context)
+                        com.zeroconvert.ime.assist.ReadingCheck.load(context)
+                        assistReady = nativeInitAssist(file.absolutePath, "")
+                    } finally { modelEpoch.incrementAndGet() }
+                }
+                isInitialized = loaded
+                if (loaded) { /* fall through to dictionary init below */ }
             }
 
-            val logFile = File(context.filesDir, "zenz_debug.log")
-            isInitialized = if (BuildConfig.WINDOWS_ENGINE) com.zeroconvert.ime.engine.WindowsEngine.initialize(context, modelFile)
-                else nativeInit(modelFile.absolutePath, logFile.absolutePath)
-            if (isInitialized) {
-                converterPath = modelFile.absolutePath
-                prefs.edit().putString("selected_model_path", modelFile.absolutePath)
-                    .putString("selected_model_name", currentModelName).apply()
-                modelEpoch.incrementAndGet()
-                try {
-                    ModelManager.cleanupLegacyCorrector(context)
-                    com.zeroconvert.ime.assist.AssistVocabulary.load(context)
-                    com.zeroconvert.ime.assist.ReadingCheck.load(context)
-                    assistReady = nativeInitAssist(modelFile.absolutePath, "")
-                } finally { modelEpoch.incrementAndGet() }
-            }
+
         }
 
         // 2. Initialize azooKey System Dictionary

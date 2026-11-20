@@ -7,9 +7,9 @@ $testRoot = Join-Path $repoRoot ('.local/distribution-tests/' + [guid]::NewGuid(
 $packageRoot = Join-Path $testRoot 'package'
 $payload = Join-Path $packageRoot 'payload'
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
+# 変換モデルは同梱しない（%LOCALAPPDATA%\ZeroConIME\models へ設定画面から取得）。
 $required = @('frontend.exe','launcher.exe','ui.exe','azookey-server.exe','azookey-server.dll',
     'azookey.dll','azookey32.dll','settings.json',
-    'models/zerocon-nano-v4.1-q8_0.gguf','models/zerocon-nano-v4.1-iq4nl-emb8.gguf',
     'llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe',('Dictionary/' + [char]0x3064 + '.louds'),('Dictionary/' + [char]0x309D + '.louds'),('Dictionary/' + [char]0x30FD + '.louds'))
 foreach ($name in $required) {
     $file = Get-ArtifactPath $payload $name

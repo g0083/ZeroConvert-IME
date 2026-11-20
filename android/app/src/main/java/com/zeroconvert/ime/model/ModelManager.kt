@@ -15,7 +15,9 @@ data class ModelInfo(
     val file: File,
     val sizeBytes: Long,
     val isDefault: Boolean,
-    val isSelected: Boolean
+    val isSelected: Boolean,
+    val downloaded: Boolean = false,
+    val mandatory: Boolean = false
 ) {
     val sizeMb: String
         get() = String.format("%.1f MB", sizeBytes.toDouble() / (1024 * 1024))
@@ -34,27 +36,46 @@ object ModelManager {
     }
 
     data class BuiltInModelSpec(
-        val assetPath: String,
         val fileName: String,
         val displayName: String,
         val expectedSize: Long,
-        val sha256: String
+        val sha256: String,
+        val downloadUrl: String,
+        val mandatory: Boolean = false
     )
+
+    private const val RELEASE_DOWNLOAD_BASE =
+        "https://github.com/g0083/ZeroConvert-IME/releases/download/models-v4.1/"
 
     val BUILT_IN_MODELS = listOf(
         BuiltInModelSpec(
-            assetPath = "models/${ConversionModelSelection.IQ4}",
             fileName = ConversionModelSelection.IQ4,
             displayName = "ZeroCon Model Nano v4.1 IQ4_emb8 (18.7 MiB)",
             expectedSize = 19602048L,
-            sha256 = "6a99ca4e1c46b3f6fb86dcf884ea0652c967d86d606c12268b33d894d3853b24"
+            sha256 = "6a99ca4e1c46b3f6fb86dcf884ea0652c967d86d606c12268b33d894d3853b24",
+            downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.IQ4,
+            mandatory = true
         ),
         BuiltInModelSpec(
-            assetPath = "models/${ConversionModelSelection.Q8}",
             fileName = ConversionModelSelection.Q8,
             displayName = "ZeroCon Model Nano v4.1 Q8 (27.7 MiB)",
             expectedSize = 29039232L,
-            sha256 = "001d2cf3acd75343d2dd4ea11472e28258bc7429d7d46091b50a78776dead378"
+            sha256 = "001d2cf3acd75343d2dd4ea11472e28258bc7429d7d46091b50a78776dead378",
+            downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.Q8
+        ),
+        BuiltInModelSpec(
+            fileName = ConversionModelSelection.STANDARD_IQ4,
+            displayName = "ZeroCon Model Standard v4.1 IQ4_emb8 (58.5 MiB)",
+            expectedSize = 61399072L,
+            sha256 = "61af7b70aaf664a7c5b380bc373149fe0e0c67122c697f7127d7e8985fdbfb41",
+            downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.STANDARD_IQ4
+        ),
+        BuiltInModelSpec(
+            fileName = ConversionModelSelection.STANDARD_Q8,
+            displayName = "ZeroCon Model Standard v4.1 Q8 (99.0 MiB)",
+            expectedSize = 103866400L,
+            sha256 = "5065b64d9d0cabdd41bef8cd748863adb84691426be24d2a9be95fa23269c8ca",
+            downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.STANDARD_Q8
         )
     )
 
@@ -70,18 +91,21 @@ object ModelManager {
         }
     }
 
+    /** The managed cache file for a spec, if it is present and complete.
+     *  Does not download and does not extract assets (APK no longer
+     *  bundles GGUF weights). */
+    fun cachedFile(context: Context, spec: BuiltInModelSpec): File? {
+        val file = File(getModelsDir(context), spec.fileName)
+        return if (file.isFile && file.length() == spec.expectedSize) file else null
+    }
+
+    /** Same as [ensureBuiltInModel], kept for the instrumentation test seam:
+     *  returns the verified cache file; throws when it is not downloaded yet. */
     fun ensureBuiltInModel(context: Context, spec: BuiltInModelSpec): File {
-        val destFile = if (spec.fileName == "zenz.gguf") {
-            File(context.filesDir, "zenz.gguf")
-        } else {
-            File(getModelsDir(context), spec.fileName)
+        check(ConversionModelDownloadManager.hasVerified(context, spec)) {
+            "Cached model is missing or invalid: ${spec.fileName} (download it first)"
         }
-
-        if (destFile.parentFile?.exists() != true) {
-            destFile.parentFile?.mkdirs()
-        }
-
-        return VerifiedModelFile.ensure(destFile, spec.expectedSize, spec.sha256) { context.assets.open(spec.assetPath) }
+        return ConversionModelDownloadManager.modelFile(context, spec)
     }
 
     /** Resolve only managed selections; user-imported paths remain intact. */
@@ -104,14 +128,11 @@ object ModelManager {
 
         val builtInFiles = mutableSetOf<String>()
 
-        // 1. Built-in bundled models
+        // 1. Downloadable catalog models (Nano / Standard, IQ4_emb8 / Q8)
         for (spec in BUILT_IN_MODELS) {
-            val file = if (spec.fileName == "zenz.gguf") {
-                File(context.filesDir, "zenz.gguf")
-            } else {
-                File(getModelsDir(context), spec.fileName)
-            }
+            val file = File(getModelsDir(context), spec.fileName)
             builtInFiles.add(file.name)
+            val downloaded = file.isFile && file.length() == spec.expectedSize
 
             val isSel = if (selectedPath == null) {
                 // Default to Nano v4.1 IQ4_emb8 if no selection yet
@@ -124,9 +145,11 @@ object ModelManager {
                 ModelInfo(
                     name = spec.displayName,
                     file = file,
-                    sizeBytes = spec.expectedSize,
+                    sizeBytes = if (downloaded) file.length() else spec.expectedSize,
                     isDefault = true,
-                    isSelected = isSel
+                    isSelected = isSel,
+                    downloaded = downloaded,
+                    mandatory = spec.mandatory
                 )
             )
         }
@@ -143,7 +166,8 @@ object ModelManager {
                         file = f,
                         sizeBytes = f.length(),
                         isDefault = false,
-                        isSelected = isSel
+                        isSelected = isSel,
+                        downloaded = true
                     )
                 )
             }
@@ -184,7 +208,8 @@ object ModelManager {
                 file = destFile,
                 sizeBytes = destFile.length(),
                 isDefault = false,
-                isSelected = false
+                isSelected = false,
+                downloaded = true
             )
             Result.success(info)
         } catch (e: Exception) {
@@ -194,16 +219,8 @@ object ModelManager {
     }
 
     suspend fun selectModel(context: Context, modelInfo: ModelInfo): Boolean = withContext(Dispatchers.IO) {
-        val fileToLoad = if (modelInfo.isDefault) {
-            val spec = BUILT_IN_MODELS.find { it.displayName == modelInfo.name }
-            if (spec != null) {
-                ensureBuiltInModel(context, spec)
-            } else {
-                modelInfo.file
-            }
-        } else {
-            modelInfo.file
-        }
+        if (modelInfo.isDefault && !modelInfo.downloaded) return@withContext false
+        val fileToLoad = modelInfo.file
 
         val ok = ZenzNative.loadModel(fileToLoad, modelInfo.name)
         if (ok) {
@@ -217,22 +234,21 @@ object ModelManager {
     }
 
     fun deleteModel(context: Context, modelInfo: ModelInfo): Boolean {
-        if (modelInfo.isDefault) return false
+        if (modelInfo.isDefault) return false // catalog models (incl. mandatory Nano IQ4) are kept
         val deleted = modelInfo.file.delete()
         if (deleted) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val selectedPath = prefs.getString(KEY_PATH, null)
             if (selectedPath == modelInfo.file.absolutePath) {
-                // Fallback to default
-                val defaultFile = ensureBuiltInModel(context, DEFAULT_MODEL_SPEC)
-                selectModelDirect(context, defaultFile, DEFAULT_MODEL_SPEC.displayName)
+                // Fall back to the mandatory model selection (downloaded or not).
+                selectModelDirect(context, File(getModelsDir(context), DEFAULT_MODEL_SPEC.fileName), DEFAULT_MODEL_SPEC.displayName)
             }
         }
         return deleted
     }
 
     private fun selectModelDirect(context: Context, file: File, name: String) {
-        ZenzNative.loadModel(file, name)
+        if (file.isFile) ZenzNative.loadModel(file, name)
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_PATH, file.absolutePath)

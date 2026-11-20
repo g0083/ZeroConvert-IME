@@ -69,22 +69,14 @@ def main():
                 raise ValueError(f'{apk.name}: packaged engine lock differs from engine/shared-engine.lock.json')
             engine_lock = json.loads(packaged_lock)
             catalog = json.loads((ROOT / 'windows/deployment/model-catalog.json').read_text(encoding='utf-8'))
-            specs = [m for m in catalog['models'] if m['id'].startswith('nano_v4_1_')]
-            expected_models = {'assets/models/' + m['filename'] for m in specs}
-            actual_models = {name for name in names if name.endswith('.gguf')}
-            if actual_models != expected_models:
-                raise ValueError(f'{apk.name}: unexpected model set: {actual_models ^ expected_models}')
+            specs = catalog['models']
+            # 変換モデルはAPKに同梱しない。端末側のキャッシュへ GitHub リリースの
+            # 固定アセット（models-v4.1）から取得し、サイズ+SHA-256で検証する。
+            if any(name.endswith('.gguf') for name in names):
+                raise ValueError(f'{apk.name}: bundled converter model; models must be downloaded on device')
             for spec in specs:
-                payload = archive.read('assets/models/' + spec['filename'])
-                if len(payload) != spec['bytes'] or hashlib.sha256(payload).hexdigest() != spec['sha256']:
-                    raise ValueError(f'{apk.name}: model differs from catalog: {spec["filename"]}')
-            for model in (ROOT / 'android/app/src/main/assets').rglob('*.gguf'):
-                if 'assets/' + model.relative_to(ROOT / 'android/app/src/main/assets').as_posix() not in expected_models:
-                    continue
-                name = 'assets/' + model.relative_to(ROOT / 'android/app/src/main/assets').as_posix()
-                if hashlib.sha256(archive.read(name)).digest() != hashlib.sha256(model.read_bytes()).digest():
-                    raise ValueError(f'{apk.name}: model was changed or omitted: {name}')
-        print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; models, runtime and {dictionary["reverse"]["pairs"]:,}-pair dictionary verified.')
+                assert spec['sha256'] and len(spec['sha256']) == 64 and spec['bytes'] > 0, f'bad catalog entry: {spec["id"]}'
+        print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; no bundled models, runtime and {dictionary["reverse"]["pairs"]:,}-pair dictionary verified.')
         print(f'  engine lock: converter {engine_lock["converterRevision"]}, swift {engine_lock["swiftSources"][:12]}')
 
 

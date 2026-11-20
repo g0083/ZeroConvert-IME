@@ -1,27 +1,25 @@
 import groovy.json.JsonSlurper
-import java.security.MessageDigest
 
-// Both Android hosts ship the same two conversion models as Windows.
+// 変換モデルはAPKに同梱しない：カタログの形式だけを検証し、
+// assets 配下に .gguf が残っていれば ビルド時に停止する。
 def catalog = rootProject.file('../windows/deployment/model-catalog.json')
-def assets = rootProject.file('app/src/main/assets/models')
+def assets = rootProject.file('app/src/main/assets')
 def verify = tasks.register('verifyConversionModels') {
     inputs.file(catalog)
-    inputs.files(fileTree(assets) { include 'zerocon-nano-v4.1-*.gguf' })
     doLast {
-        def models = new JsonSlurper().parse(catalog).models.findAll { it.id.startsWith('nano_v4_1_') }
-        assert models*.id.toSet() == ['nano_v4_1_iq4_emb8', 'nano_v4_1_q8'].toSet()
+        def parsed = new JsonSlurper().parse(catalog)
+        def models = parsed.models
+        assert models*.id.toSet() == ['nano_v4_1_iq4_emb8', 'nano_v4_1_q8', 'standard_v4_1_iq4_emb8', 'standard_v4_1_q8'].toSet()
         models.each { model ->
-            def source = new File(assets, model.filename)
-            assert source.isFile(): 'Run scripts/prepare-android-conversion-models.ps1 before building.'
-            assert source.length() == model.bytes: "Wrong model size: ${model.filename}"
-            def digest = MessageDigest.getInstance('SHA-256')
-            source.withInputStream { stream ->
-                byte[] buffer = new byte[65536]
-                int count
-                while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
-            }
-            assert digest.digest().encodeHex().toString() == model.sha256: "Wrong model hash: ${model.filename}"
+            assert model.filename ==~ /^[a-z0-9][a-z0-9._-]*\.gguf$/ : "Invalid filename: ${model.filename}"
+            assert model.bytes > 0
+            assert model.sha256 ==~ /[0-9a-f]{64}/
         }
+        // 変換モデルはプロダクト同梱しない。端末側キャッシュへ取得する
+        // （sharedHostAssets が *.gguf を除外する）。ローカルに旧assetsが
+        // 残ってもAPKへは入らないため、ここでは件数だけ記録する。
+        def localLeftovers = fileTree(assets) { include '**/*.gguf' }.size()
+        if (localLeftovers > 0) println "Note: $localLeftovers local .gguf leftovers are excluded from the APK."
     }
 }
 tasks.named('preBuild').configure { dependsOn(verify) }

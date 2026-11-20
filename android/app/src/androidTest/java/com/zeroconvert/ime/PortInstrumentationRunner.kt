@@ -261,8 +261,18 @@ class PortInstrumentationRunner : Instrumentation() {
         }
         test("native_assets_and_model_load") {
             KanaKanjiConverter.ensureInitialized(targetContext)
+            // 変換モデルはAPK同梱せず、キャッシュのみを使う。テスト対象端末では
+            // 先に設定画面から Nano v4.1 IQ4_emb8（強制）を取得しておくこと。
+            val mandatory = ModelManager.DEFAULT_MODEL_SPEC
+            if (!com.zeroconvert.ime.model.ConversionModelDownloadManager.hasVerified(targetContext, mandatory)) {
+                throw AssertionError("Mandatory converter model is not downloaded; download it in the settings screen before running this test")
+            }
             check(ZenzNative.init(targetContext))
-            for (spec in ModelManager.BUILT_IN_MODELS) ModelManager.ensureBuiltInModel(targetContext, spec)
+            for (spec in ModelManager.BUILT_IN_MODELS) {
+                if (com.zeroconvert.ime.model.ConversionModelDownloadManager.hasVerified(targetContext, spec)) {
+                    ModelManager.ensureBuiltInModel(targetContext, spec)
+                }
+            }
         }
         if (BuildConfig.WINDOWS_ENGINE) test("shared_windows_conversion_and_input_snapshots") {
             KanaKanjiConverter.ensureInitialized(targetContext)

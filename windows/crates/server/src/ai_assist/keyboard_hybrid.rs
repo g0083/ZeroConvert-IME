@@ -195,14 +195,11 @@ fn find_runtime_dir_and_layers(
 }
 
 fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
-    let filename = match selected_id {
-        "nano_v4_1_q8" | "nano_v4_q8" | "standard" | "standard_q4km" => {
-            "zerocon-nano-v4.1-q8_0.gguf"
-        }
-        _ => "zerocon-nano-v4.1-iq4nl-emb8.gguf",
-    };
+    let filename = shared::runtime_assets::model_filename(selected_id)
+        .unwrap_or(shared::runtime_assets::NANO_IQ4);
     for candidate in [
         root.join("models").join(filename),
+        shared::runtime_assets::model_download_root().join(filename),
         root.join("models/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
         root.join("models/zerocon-nano-v4.1-q8_0.gguf"),
     ] {

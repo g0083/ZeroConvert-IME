@@ -13,6 +13,10 @@ class ConversionModelSelectionTest {
         assertEquals(Selection.Q8, Selection.replacement("zerocon-nano-v4-q8_0.gguf"))
         assertEquals(Selection.Q8, Selection.replacement(Selection.Q8))
         assertEquals(Selection.IQ4, Selection.replacement(Selection.IQ4))
+        assertEquals(Selection.STANDARD_IQ4, Selection.replacement("standard-v4-cap-nam-r3-iq4nl-emb8.gguf"))
+        assertEquals(Selection.STANDARD_Q8, Selection.replacement("standard-v4-cap-nam-r3-q8_0.gguf"))
+        assertEquals(Selection.STANDARD_IQ4, Selection.replacement(Selection.STANDARD_IQ4))
+        assertEquals(Selection.STANDARD_Q8, Selection.replacement(Selection.STANDARD_Q8))
         assertNull(Selection.replacement("personal.gguf"))
         assertNull(Selection.replacement("zerocon-model-corrector.gguf"))
     }

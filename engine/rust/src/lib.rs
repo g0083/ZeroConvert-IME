@@ -25,3 +25,6 @@ pub mod session_policy;
 
 #[path = "../../../windows/crates/shared/src/learning_policy.rs"]
 pub mod learning_policy;
+
+#[path = "../../../windows/crates/shared/src/runtime_assets.rs"]
+pub mod runtime_assets;

@@ -14,9 +14,8 @@ fun requiredProperty(name: String): String =
 val sharedHostAssets by tasks.registering(Sync::class) {
     from("../app/src/main/assets") {
         exclude("dictionary/reverse-v2.bin")
-        exclude { it.file.extension == "gguf" && it.file.name !in setOf(
-            "zerocon-nano-v4.1-iq4nl-emb8.gguf", "zerocon-nano-v4.1-q8_0.gguf"
-        ) }
+        // 変換モデルはAPKに同梱しない（端末のキャッシュへ取得）。
+        exclude { it.file.extension == "gguf" }
     }
     into(layout.buildDirectory.dir("sharedHostAssets"))
     from("../THIRD_PARTY_LICENSES.md") {

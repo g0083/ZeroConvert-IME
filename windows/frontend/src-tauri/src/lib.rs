@@ -1,4 +1,5 @@
 mod benchmark_runtime;
+mod conversion_model;
 mod english_dictionary;
 mod ipc;
 mod jev_api;
@@ -664,6 +665,7 @@ fn get_models_search_dirs() -> Vec<PathBuf> {
             dirs.push(parent.to_path_buf());
         }
     }
+    dirs.push(shared::runtime_assets::model_download_root());
     if let Some(root) = get_workspace_root() {
         dirs.push(root.join("ZeroConvertIME-windows").join("models"));
         dirs.push(root.join("artifacts/models/zerocon"));
@@ -677,8 +679,13 @@ fn get_active_model(
     state: tauri::State<AppState>,
 ) -> Result<model_catalog::ModelListResponse, String> {
     let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
-    let active = get_benchmark_model_path(&config)?;
-    model_catalog::list(&active, &get_models_search_dirs()).map_err(|error| error.to_string())
+    // 現在選択中のモデルファイルがまだ無い（削除済み・未取得）場合でも一覧は返す。
+    // `list()` は active が無いとき active_id を空にして処理を続ける。
+    let active = get_benchmark_model_path(&config)
+        .unwrap_or_else(|_| shared::runtime_assets::model_download_root().join("active-model.gguf"));
+    let install_dir = install_dir_from_current_exe();
+    model_catalog::list(&active, &install_dir, &get_models_search_dirs())
+        .map_err(|error| error.to_string())
 }
 
 fn install_dir_from_current_exe() -> PathBuf {
@@ -717,6 +724,32 @@ async fn translation_model_download(
     translation_model::install(&install_dir, app, &model_id)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn conversion_model_status(model_id: String) -> Result<conversion_model::Status, String> {
+    let install_dir = install_dir_from_current_exe();
+    conversion_model::status(&install_dir, &model_id)
+}
+
+#[tauri::command]
+async fn conversion_model_download(
+    app: tauri::AppHandle,
+    model_id: String,
+) -> Result<conversion_model::Status, String> {
+    let install_dir = install_dir_from_current_exe();
+    conversion_model::install(&install_dir, app, &model_id).await
+}
+
+#[tauri::command]
+fn conversion_model_cancel() {
+    conversion_model::cancel();
+}
+
+#[tauri::command]
+fn conversion_model_delete(model_id: String) -> Result<conversion_model::Status, String> {
+    let install_dir = install_dir_from_current_exe();
+    conversion_model::delete(&install_dir, &model_id)
 }
 
 #[tauri::command]
@@ -1341,6 +1374,10 @@ pub fn run() {
             run_quick_benchmark,
             translation_model_status,
             translation_model_download,
+            conversion_model_status,
+            conversion_model_download,
+            conversion_model_cancel,
+            conversion_model_delete,
             english_dictionary_status,
             english_dictionary_download,
             run_ai_assist_benchmark_item,

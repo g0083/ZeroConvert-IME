@@ -138,9 +138,9 @@ function Read-PreparedPackage([string]$Directory) {
     Test-ArtifactEntries $payload $manifest.files
     $actual = @(Get-ArtifactEntries $payload @('package-manifest.json') -NamesOnly)
     if ($actual.Count -ne @($manifest.files).Count) { throw 'Unexpected files in prepared payload.' }
+    # 変換モデルは同梱しない（%LOCALAPPDATA%\ZeroConIME\models へ設定画面から取得）。
     foreach ($required in @('frontend.exe','launcher.exe','ui.exe','azookey-server.exe','azookey-server.dll',
         'azookey.dll','azookey32.dll','settings.json','build-info.json',
-        'models/zerocon-nano-v4.1-q8_0.gguf','models/zerocon-nano-v4.1-iq4nl-emb8.gguf',
         'llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe')) {
         if ($required -notin @($manifest.files.path)) { throw "Incomplete package: $required" }
     }

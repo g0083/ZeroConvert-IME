@@ -24,8 +24,7 @@ foreach ($entry in $dependencies.files) {
     }
 }
 # The model store is canonical; this build never reads the live trial environment.
-& (Join-Path $PSScriptRoot 'sync-distribution-models.ps1') -RuntimeDirectory $dependencyRoot | Out-Host
-$modelCatalog = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $windowsRoot 'deployment/model-catalog.json') | ConvertFrom-Json
+& (Join-Path $PSScriptRoot 'sync-distribution-models.ps1') | Out-Host
 $packagesRoot = Join-Path $repoRoot 'dist/packages'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $packageRoot = Join-Path $packagesRoot $stamp
@@ -70,10 +69,10 @@ try {
         Copy-PayloadFile (Get-ArtifactPath $dependencyRoot $entry.path) $entry.path
     }
     Test-ArtifactEntries $payloadRoot $dependencies.files
-    foreach ($model in $modelCatalog.models) {
-        Copy-PayloadFile (Join-Path $repoRoot ('artifacts\models\zerocon\' + $model.filename)) ('models\' + $model.filename)
-        if ((Get-ArtifactHash (Join-Path $payloadRoot ('models\' + $model.filename))) -ne $model.sha256) { throw "Distribution model changed: $($model.name)" }
-    }
+    # 変換モデルは配布物に同梱しない。英字辞書・翻訳モデルと同じく、利用者が
+    # cache（%LOCALAPPDATA%\ZeroConIME\models）を持たない場合は設定画面から
+    # model-catalog.json の GitHub リリース固定アセットをダウンロードする。
+    # 既定モデル nano_v4_1_iq4_emb8 は必須として扱う（docs/model-assets.md）。
     # Use maintained distribution defaults, never this user's live settings or learning.
     # The translation model is not bundled: enabling 翻訳機能 in the settings app
     # downloads the pinned PLaMo 3 GGUF from Hugging Face on demand.

@@ -8,8 +8,8 @@
 
 ## 主な特徴
 
-- **ZeroCon Model Nano v4.1 搭載**:
-  - **Nano v4.1 IQ4_emb8**（既定、約 18.7 MiB）および **Nano v4.1 Q8**（高精度版、約 27.7 MiB）の 2 種類を同梱（正確な仕様は `model-catalog.json` を参照）。
+- **ZeroCon Model Nano / Standard v4.1 搭載**:
+  - **Nano v4.1 IQ4_emb8**（既定・強制、約 18.7 MiB）、**Nano v4.1 Q8**、**Standard v4.1 IQ4_emb8**、**Standard v4.1 Q8** の 4 種類を選択できます。モデルはインストーラーに含まれず、`%LOCALAPPDATA%\ZeroConIME\models\` にキャッシュが無い場合は設定画面から GitHub リリースの固定アセットをダウンロードします（正確な仕様は `model-catalog.json` を参照）。
   - 辞書ラティス＋ニューラル変換により、文脈・同音異義語・日常会話・数値変換（`nam` 連携）を高精度かつ低遅延で実行します。
 - **メインモデル統合のタイポ補正と文の先読み**:
   - 打鍵候補探索（`keyboard-prior.exe`）とメイン変換モデル（ポート `18091`）による 2 段リランキングで誤入力を補正し、同じモデルで文の先読みも提案します。

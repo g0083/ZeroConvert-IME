@@ -47,7 +47,7 @@ SOFTWARE.
 - **License of the upstream base**: Apache License 2.0 (`LICENSE-Apache-2.0.txt`)
 - **License of these derivatives**: ZeroCon Model Nano の重み・学習物は独自改変物であり、本製品外での利用・再配布を許諾しません。上流部分には Apache License 2.0 の条件（著作権表示・ライセンス文の同梱・変更の明示）が及び、本パッケージはそれを満たしています。
 - **Notice**:
-  - `models/zerocon-nano-v4.1-iq4nl-emb8.gguf` and `models/zerocon-nano-v4.1-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall`, trained with rank-64 DoRA, target-corrected dual-anchor distillation from a fine-tuned Standard v3 teacher, and v4.1 conversational/anti-over-kanji & numeral robustness tuning (`nam` digit-masking compatibility).
+  - `models/zerocon-nano-v4.1-iq4nl-emb8.gguf`, `models/zerocon-nano-v4.1-q8_0.gguf`, `models/zerocon-standard-v4.1-iq4nl-emb8.gguf`, `models/zerocon-standard-v4.1-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall` (nano) / `Miwa-Keita/zenz-v3.2-small` (standard), trained with rank-64 DoRA, target-corrected dual-anchor distillation, and v4.1 conversational/anti-over-kanji & numeral robustness tuning (`nam` digit-masking compatibility). The weights are fetched on demand from the pinned GitHub release and are not redistributed with the bundled installer/APK.
   - The IQ4_NL variant protects input/output tensors with Q8_0 (`IQ4_NL` body with `Q8_0` embeddings/output). The Q8_0 variant preserves full precision quantization across all tensors.
 
 ---

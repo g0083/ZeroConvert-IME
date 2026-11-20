@@ -823,8 +823,24 @@ func converterModelURL() -> URL {
         return URL(filePath: embeddedPath)
     }
     let model = (config["model"] as? String) ?? "nano_v4_1_iq4_emb8"
-    let isQ8 = ["nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km"].contains(model)
-    let filename = isQ8 ? "zerocon-nano-v4.1-q8_0.gguf" : "zerocon-nano-v4.1-iq4nl-emb8.gguf"
+    let filename: String
+    switch model {
+    case "nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km":
+        filename = "zerocon-nano-v4.1-q8_0.gguf"
+    case "standard_v4_1_iq4_emb8", "standard_v4_iq4_emb8":
+        filename = "zerocon-standard-v4.1-iq4nl-emb8.gguf"
+    case "standard_v4_1_q8", "standard_v4_q8", "standard_v4_1":
+        filename = "zerocon-standard-v4.1-q8_0.gguf"
+    default:
+        filename = "zerocon-nano-v4.1-iq4nl-emb8.gguf"
+    }
+    // 取得済みキャッシュ（%LOCALAPPDATA%\ZeroConIME\models\）を優先し、
+    // 旧配布物に残ったモデルがあればそのまま使う。
+    if let root = ProcessInfo.processInfo.environment["LOCALAPPDATA"], !root.isEmpty {
+        let cached = URL(filePath: root)
+            .appendingPathComponent("ZeroConIME/models/\(filename)")
+        if FileManager.default.fileExists(atPath: cached.path) { return cached }
+    }
     return execURL.appendingPathComponent("models/" + filename)
 }
 

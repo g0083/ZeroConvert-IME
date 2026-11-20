@@ -83,6 +83,7 @@ import com.zeroconvert.ime.assist.AutoTypoCorrectionStrength
 import com.zeroconvert.ime.benchmark.BenchmarkKind
 import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
+import com.zeroconvert.ime.model.ConversionModelDownloadManager
 import com.zeroconvert.ime.model.ModelInfo
 import com.zeroconvert.ime.model.ModelManager
 import com.zeroconvert.ime.translation.TranslationEngine
@@ -343,6 +344,21 @@ fun MainScreen(
     var englishDictionaryProgress by remember { mutableStateOf<EnglishDictionaryManager.Progress?>(null) }
     var englishDictionaryError by remember { mutableStateOf<String?>(null) }
     var englishDictionaryJob by remember { mutableStateOf<Job?>(null) }
+    // 変換モデルはキャッシュに無い場合だけ取得する。Nano v4.1 IQ4_emb8 は必須で、
+    // 無い間はかな漢字変換レベルの候補化が止まるため、英字辞書と同じく初回表示する。
+    var mandatoryModelReady by remember {
+        mutableStateOf(
+            ConversionModelDownloadManager.hasVerified(context, ModelManager.DEFAULT_MODEL_SPEC)
+        )
+    }
+    var showMandatoryModelDialog by remember { mutableStateOf(!mandatoryModelReady) }
+    var mandatoryModelProgress by remember { mutableStateOf<ConversionModelDownloadManager.Progress?>(null) }
+    var mandatoryModelError by remember { mutableStateOf<String?>(null) }
+    var mandatoryModelJob by remember { mutableStateOf<Job?>(null) }
+    var downloadingModelName by remember { mutableStateOf<String?>(null) }
+    var modelDownloadProgress by remember { mutableStateOf<ConversionModelDownloadManager.Progress?>(null) }
+    var modelDownloadJob by remember { mutableStateOf<Job?>(null) }
+    var modelDownloadError by remember { mutableStateOf<String?>(null) }
     var translationTestInput by remember { mutableStateOf("会議は明日です。") }
     var translationTestResult by remember { mutableStateOf("未実行") }
     var translationTestRunning by remember { mutableStateOf(false) }
@@ -462,6 +478,99 @@ fun MainScreen(
                 .apply()
         } else if (translationDownloadJob?.isActive != true) {
             showTranslationDownloadDialog = true
+        }
+    }
+
+    fun startMandatoryModelDownload() {
+        if (mandatoryModelJob?.isActive == true) return
+        mandatoryModelError = null
+        mandatoryModelProgress = ConversionModelDownloadManager.Progress(0, ModelManager.DEFAULT_MODEL_SPEC.expectedSize)
+        mandatoryModelJob = coroutineScope.launch {
+            val result = ConversionModelDownloadManager.download(context, ModelManager.DEFAULT_MODEL_SPEC) { progress ->
+                coroutineScope.launch(Dispatchers.Main) { mandatoryModelProgress = progress }
+            }
+            mandatoryModelProgress = null
+            result.onSuccess {
+                mandatoryModelError = null
+                mandatoryModelReady = true
+                showMandatoryModelDialog = false
+                // 取得したモデルで再 init し、モデル欄の状態も更新する。
+                val ready = withContext(Dispatchers.IO) { ZenzNative.init(context) }
+                onModelStatusChange(if (ready) "${ZenzNative.currentModelName} — 準備完了" else "エラー: モデルのロードに失敗しました")
+                availableModels = ModelManager.getAvailableModels(context)
+                Toast.makeText(context, "変換モデルを保存しました", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                mandatoryModelError = error.message ?: "ダウンロードに失敗しました"
+                mandatoryModelReady = ConversionModelDownloadManager.hasVerified(context, ModelManager.DEFAULT_MODEL_SPEC)
+            }
+        }
+    }
+
+    fun startModelDownload(spec: ModelManager.BuiltInModelSpec) {
+        if (modelDownloadJob?.isActive == true) return
+        downloadingModelName = spec.displayName
+        modelDownloadError = null
+        modelDownloadProgress = ConversionModelDownloadManager.Progress(0, spec.expectedSize)
+        modelDownloadJob = coroutineScope.launch {
+            val result = ConversionModelDownloadManager.download(context, spec) { progress ->
+                coroutineScope.launch(Dispatchers.Main) { modelDownloadProgress = progress }
+            }
+            downloadingModelName = null
+            modelDownloadProgress = null
+            result.onSuccess {
+                availableModels = ModelManager.getAvailableModels(context)
+                if (spec.mandatory) {
+                    val ready = withContext(Dispatchers.IO) { ZenzNative.init(context) }
+                    onModelStatusChange(if (ready) "${ZenzNative.currentModelName} — 準備完了" else "エラー: モデルのロードに失敗しました")
+                }
+                Toast.makeText(context, "${spec.displayName} を保存しました", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                modelDownloadError = error.message ?: "ダウンロードに失敗しました"
+                Toast.makeText(context, "取得に失敗しました: ${error.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun cancelModelDownload() {
+        modelDownloadJob?.cancel()
+        modelDownloadJob = null
+        downloadingModelName = null
+        modelDownloadProgress = null
+        modelDownloadError = "ダウンロードを中断しました（次回再開できます）"
+    }
+
+    fun deleteDownloadedModel(spec: ModelManager.BuiltInModelSpec) {
+        if (spec.mandatory) return
+        val file = ConversionModelDownloadManager.modelFile(context, spec)
+        val wasSelected = availableModels.any { it.isSelected && it.file.absolutePath == file.absolutePath }
+        if (file.delete()) {
+            ConversionModelDownloadManager.discardPart(context, spec)
+            availableModels = ModelManager.getAvailableModels(context)
+            if (wasSelected) {
+                // 必須モデル（Nano v4.1 IQ4_emb8）の選択へ落とす。
+                val mandatoryFile = ConversionModelDownloadManager.modelFile(context, ModelManager.DEFAULT_MODEL_SPEC)
+                if (mandatoryFile.isFile) {
+                    coroutineScope.launch {
+                        val ready = withContext(Dispatchers.IO) { ZenzNative.loadModel(mandatoryFile, ModelManager.DEFAULT_MODEL_SPEC.displayName) }
+                        if (ready) {
+                            context.getSharedPreferences("model_prefs", Context.MODE_PRIVATE).edit()
+                                .putString("selected_model_path", mandatoryFile.absolutePath)
+                                .putString("selected_model_name", ModelManager.DEFAULT_MODEL_SPEC.displayName)
+                                .apply()
+                        }
+                        availableModels = ModelManager.getAvailableModels(context)
+                        onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                    }
+                } else {
+                    context.getSharedPreferences("model_prefs", Context.MODE_PRIVATE).edit()
+                        .putString("selected_model_path", mandatoryFile.absolutePath)
+                        .putString("selected_model_name", ModelManager.DEFAULT_MODEL_SPEC.displayName)
+                        .apply()
+                }
+            }
+            Toast.makeText(context, "${spec.displayName} を削除しました", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "削除できませんでした", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1438,11 +1547,48 @@ fun MainScreen(
             ) {
                 if (!englishDictionaryReady) {
                     SettingsSecondaryButton(
-                        text = "ダウンロード",
+                        text = if (englishDictionaryProgress != null) "取得中…" else "ダウンロード",
                         palette = palette,
+                        enabled = englishDictionaryProgress == null,
                         onClick = { showEnglishDictionaryDialog = true }
                     )
                 }
+            }
+            val englishDownloading = englishDictionaryProgress
+            if (englishDownloading != null) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    LinearProgressIndicator(
+                        progress = { englishDownloading.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = palette.primaryAccent,
+                        trackColor = palette.surfaceElevated
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${englishDownloading.received / 1024} / ${englishDownloading.total / 1024} KB",
+                            color = palette.textSecondary,
+                            fontSize = 12.sp
+                        )
+                        TextButton(onClick = {
+                            englishDictionaryJob?.cancel()
+                            englishDictionaryJob = null
+                            englishDictionaryProgress = null
+                            englishDictionaryError = "ダウンロードを中断しました（次回再開できます）"
+                        }) {
+                            Text("中断", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+            englishDictionaryError?.let { message ->
+                SettingsNote(text = message, palette = palette)
             }
             SettingsDivider(palette)
             SettingsRow(
@@ -1902,6 +2048,7 @@ fun MainScreen(
                 }
                 availableModels.forEach { model ->
                     SettingsInnerCard(palette) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1930,7 +2077,11 @@ fun MainScreen(
                                     }
                                 }
                                 Text(
-                                    text = model.sizeMb,
+                                    text = when {
+                                        model.isDefault && !model.downloaded -> model.sizeMb + " · 未ダウンロード"
+                                        model.mandatory -> model.sizeMb + " · 強制"
+                                        else -> model.sizeMb
+                                    },
                                     color = palette.textMuted,
                                     fontSize = 11.sp
                                 )
@@ -1939,7 +2090,18 @@ fun MainScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (!model.isSelected) {
+                                if (model.isDefault && !model.downloaded) {
+                                    val spec = ModelManager.BUILT_IN_MODELS.find { it.displayName == model.name }
+                                    SettingsPrimaryButton(
+                                        text = if (downloadingModelName == model.name) "取得中…" else "ダウンロード",
+                                        palette = palette,
+                                        modifier = Modifier.height(32.dp),
+                                        enabled = downloadingModelName == null && spec != null,
+                                        onClick = {
+                                            if (spec != null) startModelDownload(spec)
+                                        }
+                                    )
+                                } else if (!model.isSelected) {
                                     SettingsPrimaryButton(
                                         text = "切替",
                                         palette = palette,
@@ -1952,6 +2114,21 @@ fun MainScreen(
                                             }
                                         }
                                     )
+                                }
+                                // 取得済みの任意モデルはキャッシュ削除できる（必須 Nano IQ4 は強制）。
+                                val catalogSpec = ModelManager.BUILT_IN_MODELS.find { it.displayName == model.name }
+                                if (catalogSpec != null && !catalogSpec.mandatory && model.downloaded) {
+                                    IconButton(
+                                        onClick = { deleteDownloadedModel(catalogSpec) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Delete,
+                                            contentDescription = "${model.name}を削除",
+                                            tint = palette.textSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                                 if (!model.isDefault) {
                                     IconButton(
@@ -1977,7 +2154,39 @@ fun MainScreen(
                                 }
                             }
                         }
+                        val activeProgress = modelDownloadProgress
+                        if (activeProgress != null && downloadingModelName == model.name) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                LinearProgressIndicator(
+                                    progress = { activeProgress.fraction },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = palette.primaryAccent,
+                                    trackColor = palette.surfaceElevated
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${activeProgress.downloaded / (1024 * 1024)} / ${activeProgress.total / (1024 * 1024)} MB",
+                                        color = palette.textSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                    TextButton(onClick = { cancelModelDownload() }) {
+                                        Text("中断", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                        }
                     }
+                }
+                modelDownloadError?.let { message ->
+                    SettingsNote(text = message, palette = palette)
                 }
                 SettingsSecondaryButton(
                     text = if (isImporting) "モデルをコピー中…" else "GGUFモデルを追加",
@@ -2519,6 +2728,54 @@ fun MainScreen(
             )
         }
 
+        if (showMandatoryModelDialog) {
+            val progress = mandatoryModelProgress
+            val error = mandatoryModelError
+            AlertDialog(
+                onDismissRequest = { showMandatoryModelDialog = false },
+                title = { Text("変換モデルをダウンロード") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "かな漢字変換に使う ZeroCon Model Nano v4.1 IQ4_emb8（約18.7MB）を初回のみダウンロードします。端末のキャッシュに無い場合だけ取得し、無い間は辞書変換のみが利用できます。",
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "モデルはAPKに含まれません。取得時にサイズとSHA-256を検証し、中途半端なキャッシュは次回再開します。",
+                            fontSize = 12.sp
+                        )
+                        if (progress != null) {
+                            LinearProgressIndicator(
+                                progress = { (progress.fraction * 100).roundToInt() / 100f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text("ダウンロード中 ${progress.downloaded / 1024}KB / ${progress.total / 1024}KB", fontSize = 12.sp)
+                        }
+                        if (error != null) {
+                            Text("取得に失敗しました: $error", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showMandatoryModelDialog = false
+                            startMandatoryModelDownload()
+                            showMandatoryModelDialog = true
+                        },
+                        enabled = mandatoryModelProgress == null
+                    ) {
+                        Text("同意してダウンロード")
+                    }
+                },
+                dismissButton = {
+                    // 無い間は辞書変換だけのため、次回表示時に再案内される。
+                    TextButton(onClick = { showMandatoryModelDialog = false }) {
+                        Text("後で")
+                    }
+                }
+            )
+        }
         if (showEnglishDictionaryDialog) {
             val progress = englishDictionaryProgress
             val error = englishDictionaryError

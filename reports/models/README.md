@@ -6,6 +6,7 @@ ZeroCon Model の学習、蒸留、量子化、CPU/GPU 推論比較などの実�
 
 - [nano-v4-platform-model-switch.md](nano-v4-platform-model-switch.md): Nano v4 への通常変換モデル統一記録（現行は Nano v4.1 へ更新）
 - [nano-standard-v4-cpu-comparison.md](nano-standard-v4-cpu-comparison.md): Nano v4 と Standard v4 の CPU 推論性能・精度比較
+- [zerocon-v41-q5km-comparison.md](zerocon-v41-q5km-comparison.md): v4.1 Q5_K_M 作成と Nano / Standard 比較（Q5_K_M 不採用）
 - [zerocon_v4_capability_r1_report.md](zerocon_v4_capability_r1_report.md): Standard v4 / Nano v4 変換基礎能力向上（`cap-r1`）実験レポート
 - [zerocon_model_standard_v4_experiment_report.md](zerocon_model_standard_v4_experiment_report.md): Standard v4 の学習・評価レポート
 - [weight-space-programming-zerocon-v4-experiment.md](weight-space-programming-zerocon-v4-experiment.md): 重み空間プログラミング実験の記録

@@ -9,10 +9,11 @@ export function SettingsSection({ title, children }: { title: string; children: 
     );
 }
 
-export function SettingsRow({ label, description, htmlFor, children }: {
+export function SettingsRow({ label, description, htmlFor, footer, children }: {
     label: string;
     description?: string;
     htmlFor?: string;
+    footer?: ReactNode;
     children: ReactNode;
 }) {
     return (
@@ -23,6 +24,7 @@ export function SettingsRow({ label, description, htmlFor, children }: {
                 {description && <p className="settings-description">{description}</p>}
             </div>
             <div className="settings-control">{children}</div>
+            {footer && <div className="col-span-full">{footer}</div>}
         </div>
     );
 }
