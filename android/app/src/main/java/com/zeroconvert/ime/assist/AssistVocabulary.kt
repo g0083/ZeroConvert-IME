@@ -48,8 +48,7 @@ object AssistVocabulary {
         }
     }
     fun builtinEntries(): Map<String, String> = index?.surfaces ?: WindowsTypoData.standard
-    fun surface(reading: String): String? = builtinEntries()[reading] ?: users.surfaces[reading] ?:
-        TypoCorrectionEngine.STANDARD_VOCAB[reading]
+    fun surface(reading: String): String? = builtinEntries()[reading] ?: users.surfaces[reading]
     fun containsReading(reading: String): Boolean = surface(reading) != null
     fun isKnownCleanReading(reading: String): Boolean = containsReading(reading)
 }

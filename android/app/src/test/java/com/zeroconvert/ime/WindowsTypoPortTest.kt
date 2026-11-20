@@ -8,16 +8,12 @@ class WindowsTypoPortTest {
     private val standard = WindowsTypoData.standard
     private val rules = WindowsTypoRules(standard) { standard[it] }
 
-    @Test fun explicitTableHandlesNasalLongVowelAndTranspositionMistakes() {
-        assertEquals("こんにちは", rules.suggest("こんいちは"))
-        assertEquals("新橋", rules.suggest("しmばし"))
-        assertEquals("入院", rules.suggest("にゅいん"))
-        assertEquals("なかった", rules.suggest("なっかた"))
-        assertEquals("ファッション", rules.suggest("ふぁしょん"))
+    @Test fun legacyRulesStillHandleAdjacentKeyMistakes() {
+        assertEquals("こんにちは", rules.suggest("きんにちは"))
+        assertEquals("テスト", rules.suggest("てそと"))
     }
 
     @Test fun longestExplicitPrefixPreservesTheTail() {
-        assertEquals("専用車です", rules.suggest("せにょうしゃです"))
         assertEquals("お疲れ様でした", rules.suggest("おつくれさまでした"))
     }
 
@@ -86,8 +82,8 @@ class WindowsTypoPortTest {
             override val revision = 0L
             override fun complete(model: AssistModel, prompt: String, maxTokens: Int, timeoutMs: Int) = ModelCompletion("", "unavailable")
         }
-        val result = ModelCorrector(offline, sameReading = { _, _ -> false }).suggest("", "なっかた", "なっかた")!!
-        assertEquals("なかった", result.text)
+        val result = ModelCorrector(offline, sameReading = { _, _ -> false }).suggest("", "おつくれさま", "おつくれさま")!!
+        assertEquals("お疲れ様", result.text)
         assertFalse(result.autoApply)
     }
 

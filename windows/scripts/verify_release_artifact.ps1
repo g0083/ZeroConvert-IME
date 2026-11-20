@@ -79,8 +79,7 @@ function Assert-InstallPayload {
         "launcher.exe",
         "ui.exe",
         "build-info.json",
-        "keyboard-typo-dictionary-NOTICE.md",
-        "keyboard-typo-rewrite-NOTICE.md",
+        "THIRD_PARTY_LICENSES.md",
         "zenz.gguf",
         "Dictionary",
         "Dictionary\Reverse\reverse-v2.bin",
@@ -93,6 +92,12 @@ function Assert-InstallPayload {
         $path = Join-Path $InstallLocation $relativePath
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Required install payload is missing: $path"
+        }
+    }
+
+    foreach ($notice in @('keyboard-typo-dictionary-NOTICE.md', 'keyboard-typo-rewrite-NOTICE.md')) {
+        if (Test-Path -LiteralPath (Join-Path $InstallLocation $notice)) {
+            throw "Obsolete keyboard typo notice was installed: $notice"
         }
     }
 

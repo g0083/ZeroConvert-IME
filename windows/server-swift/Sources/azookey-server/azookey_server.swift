@@ -1809,7 +1809,7 @@ struct UserDictionarySnapshot: Sendable {
     let reverseEntries: [String: [ReconversionDictionaryEntry]]
     let prefixes: [String: [DicdataElement]]
 
-    init(entries source: [UserDictionaryEntry], experimentalTypoCorrection: Bool) {
+    init(entries source: [UserDictionaryEntry]) {
         var registered: [DicdataElement] = []
         var normal: [DicdataElement] = []
         var shortcuts: [DicdataElement] = []
@@ -1848,7 +1848,7 @@ struct UserDictionarySnapshot: Sendable {
         self.prefixes = prefixes
         self.reverseEntries = ReconversionDictionary.makeUserEntries(registered)
         self.conversion = PreparedDynamicUserDictionary(
-            makeConversionDictionaryEntries(userEntries: normal, experimentalTypoCorrectionEnabled: experimentalTypoCorrection),
+            normal,
             shortcuts: shortcuts
         )
     }
@@ -2850,7 +2850,7 @@ private func displayRubyForKeyboardTypoLookup(_ ruby: String) -> String {
 private func hasLexicalAlternativeAcrossWholeSpan(
     candidate: Candidate,
     rawTypoSpan: String,
-    originalSurfaceRange: Range<Int>? = nil
+    originalSurfaceRange: Range<Int>
 ) -> Bool {
     guard !rawTypoSpan.isEmpty else {
         return false
@@ -2873,7 +2873,7 @@ private func hasLexicalAlternativeAcrossWholeSpan(
 
     for startIndex in elements.indices {
         let startOffset = elementStartOffsets[startIndex]
-        if let originalSurfaceRange, startOffset != originalSurfaceRange.lowerBound {
+        if startOffset != originalSurfaceRange.lowerBound {
             continue
         }
 
@@ -2896,7 +2896,7 @@ private func hasLexicalAlternativeAcrossWholeSpan(
 
             let endOffset = elementStartOffsets[endIndex]
                 + element.ruby.count
-            if let originalSurfaceRange, endOffset != originalSurfaceRange.upperBound {
+            if endOffset != originalSurfaceRange.upperBound {
                 break
             }
             return hiraganaToKatakana(word) != rawTypoSpan
@@ -2950,21 +2950,7 @@ func confidentKeyboardTypoCorrectionForZenzaiMerge(
         return normalTop
     }
 
-    guard let normalTop = normalNBestResults.first,
-          let correctionEntry = keyboardTypoDictionaryEntry(in: normalTop)
-    else {
-        return nil
-    }
-
-    let rawTypoSpan = displayRubyForKeyboardTypoLookup(correctionEntry.ruby)
-    let hasWholeSpanLexicalAlternative = hasLexicalAlternativeAcrossWholeSpan(
-        candidate: zenzaiTop,
-        rawTypoSpan: rawTypoSpan
-    )
-    guard !rawTypoSpan.isEmpty, !hasWholeSpanLexicalAlternative else {
-        return nil
-    }
-    return normalTop
+    return nil
 }
 
 func mergeZenzaiMainResultsWithNormalNBest(
@@ -3274,12 +3260,11 @@ public func load_config() {
     }
     let legacyEntries = loadedSettings?.user_dictionary?.entries ?? []
     let dictionaryURL = loadedSettingsPath.deletingLastPathComponent().appendingPathComponent("user-dictionary.json")
-    let dictionaryTypoCorrection = currentExperimentalTypoCorrection
     if installedUserDictionary == nil {
         userDictionaryReloader.invalidatePending()
         if let entries = loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacyEntries) {
             installUserDictionarySnapshot(
-                UserDictionarySnapshot(entries: entries, experimentalTypoCorrection: dictionaryTypoCorrection)
+                UserDictionarySnapshot(entries: entries)
             )
         }
     } else {
@@ -3287,7 +3272,7 @@ public func load_config() {
             guard let entries = loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacyEntries) else {
                 return nil
             }
-            return UserDictionarySnapshot(entries: entries, experimentalTypoCorrection: dictionaryTypoCorrection)
+            return UserDictionarySnapshot(entries: entries)
         }
     }
     invalidateAutomaticConversionContinuationCache()

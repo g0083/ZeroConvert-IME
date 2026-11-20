@@ -12,6 +12,7 @@
 #include <locale>
 #include <map>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -612,6 +613,15 @@ public:
       }
     }
   }
+  bool has_reading(std::u32string_view reading) const {
+    uint32_t node = 0;
+    for (char32_t ch : reading) {
+      node = find_child(node, ch);
+      if (node == 0)
+        return false;
+    }
+    return trie[node].has_word;
+  }
   struct DictionaryMarginals {
     std::vector<double> fwd;
     std::vector<double> bwd;
@@ -827,6 +837,21 @@ struct ReadingCandidate {
   size_t edit_l = 0;
   size_t edit_r = 0;
 };
+
+inline constexpr double assist_rerank_margin = 12.0;
+
+template <typename Ranked>
+inline bool has_clear_assist_lead(const std::vector<Ranked> &ranked) {
+  if (ranked.size() < 2)
+    return false;
+  const auto &winner = ranked.front();
+  // Compare only scores with the same original reading and left context.
+  return ranked[1].win_idx == winner.win_idx &&
+         std::none_of(ranked.begin() + 1, ranked.end(), [&](const auto &other) {
+           return other.win_idx == winner.win_idx &&
+                  winner.stage1_delta - other.stage1_delta < assist_rerank_margin;
+         });
+}
 inline std::vector<ReadingCandidate>
 channel_candidates(const std::string &keys,
                    const ChannelDictionary &dictionary) {
@@ -1218,6 +1243,7 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   static const std::string vowels = "aiueo";
   static const std::string cons_chars = "kstnhmyrwgzdbp";
   static const std::string ins_chars = "aiueokstnhmyrwgzdbp";
+  const bool original_is_word = dictionary.has_reading(orig);
 
   std::vector<std::pair<std::string, bool>> rom_forms = {{rom, using_aligned_raw}};
   if (!using_aligned_raw) {
@@ -1249,6 +1275,23 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       const char ch = r[i];
       if (!active_rom[i] || ((ch < 'a' || ch > 'z') && ch != '-'))
         continue;
+
+      // When the physical keys agree with the composing reading, a doubled
+      // key missing at a yōon boundary is cheaper than an arbitrary insertion.
+      if (rf.second && !original_is_word) {
+        const auto k = rom_to_kana[i];
+        const bool nasal = ch == 'n' && k + 1 < H && orig[k] == U'に' &&
+                           i + 2 < r.size() && r[i + 1] == 'y' &&
+                           (r[i + 2] == 'a' || r[i + 2] == 'u' || r[i + 2] == 'o');
+        const bool long_vowel = ch == 'u' && i > 0 && r[i - 1] == 'y' &&
+                                k + 2 < H && orig[k + 1] == U'ゅ' &&
+                                orig[k + 2] != U'う';
+        if (nasal || long_vowel) {
+          auto variant = r;
+          variant.insert(i, 1, ch);
+          add(roman_decode(variant), 0.60);
+        }
+      }
 
       if (ch == '-') {
         const double hint_l = r_has_hints ? lookup_touch_hint(i, 'l') : 0.0;
@@ -1443,9 +1486,39 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   }
 
   // Kana-level structured omissions, deletions, transpositions, and n/particle fixes
+  static constexpr std::u32string_view small_kana = U"ぁぃぅぇぉゃゅょゎ";
+  static constexpr std::u32string_view contracted_y = U"ゃゅょ";
+  static constexpr std::u32string_view full_y = U"やゆよ";
   for (size_t k = 0; k < H; ++k) {
     if (!active_kana[k])
       continue;
+    // Repeating a romaji syllable repeats the whole mora, not a single key.
+    if (k + 1 < H && orig[k] == orig[k + 1] &&
+        orig[k] >= U'か' && orig[k] <= U'ゔ' &&
+        orig[k] != U'っ' && orig[k] != U'ん' &&
+        small_kana.find(orig[k]) == small_kana.npos &&
+        (k + 2 == H || small_kana.find(orig[k + 2]) == small_kana.npos))
+      add(orig.substr(0, k) + orig.substr(k + 1), 1.05, true);
+    // A missed repeated key can drop the う after ゅ, or fuse ん + や/ゆ/よ
+    // into にゃ/にゅ/にょ. Favor the repair only with whole-word evidence.
+    if (!original_is_word && k + 1 < H) {
+      const auto next = orig[k + 1];
+      if (orig[k] == U'ゅ' && next != U'う') {
+        auto candidate = orig;
+        candidate.insert(k + 1, 1, U'う');
+        if (dictionary.has_reading(candidate))
+          add(candidate, 0.75);
+      } else if (k > 0 && orig[k] == U'に') {
+        const auto y = contracted_y.find(next);
+        if (y != contracted_y.npos) {
+          auto candidate = orig;
+          candidate[k] = U'ん';
+          candidate[k + 1] = full_y[y];
+          if (dictionary.has_reading(candidate))
+            add(candidate, 1.15);
+        }
+      }
+    }
     if (specials.find(orig[k]) != std::u32string::npos)
       add(orig.substr(0, k) + orig.substr(k + 1), 1.05, true);
     if (sokuon_next.find(orig[k]) != std::u32string::npos)

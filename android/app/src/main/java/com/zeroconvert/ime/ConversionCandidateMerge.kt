@@ -6,12 +6,12 @@ object ConversionCandidateMerge {
         if (it.endsWith('n')) it.dropLast(1) + "ン" else it
     }
 
-    private fun hasLexicalAlternative(top: Candidate, raw: String, from: Int? = null, to: Int? = null): Boolean {
+    private fun hasLexicalAlternative(top: Candidate, raw: String, from: Int, to: Int): Boolean {
         var offset = 0
         for (start in top.segments.indices) {
             val first = offset
             offset += displayRuby(top.segments[start].reading).codePointCount(0, displayRuby(top.segments[start].reading).length)
-            if (from != null && from != first) continue
+            if (from != first) continue
             var ruby = ""
             var word = ""
             var end = first
@@ -23,7 +23,7 @@ object ConversionCandidateMerge {
                 end += displayRuby(segment.reading).codePointCount(0, displayRuby(segment.reading).length)
                 if (!raw.startsWith(ruby)) break
                 if (raw != ruby) continue
-                if (to != null && end != to) break
+                if (end != to) break
                 return KanaKanjiConverter.toKatakana(word) != raw
             }
         }
@@ -41,9 +41,6 @@ object ConversionCandidateMerge {
             if (rewrites.size == 1) {
                 val rewrite = rewrites.single()
                 if (!hasLexicalAlternative(top, displayRuby(rewrite.reading), rewrite.originalStart, rewrite.originalEnd)) promotion = first
-            }
-            if (promotion == null) first?.segments?.firstOrNull { it.correctionKind == 3 }?.let { entry ->
-                if (!hasLexicalAlternative(top, displayRuby(entry.reading))) promotion = first
             }
         }
         val result = mutableListOf<Candidate>()

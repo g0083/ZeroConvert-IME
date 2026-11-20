@@ -598,7 +598,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     </div>}
                 </SettingsSection>
                 <SettingsSection title="タイポ補正と先読み">
-                    <SettingsRow label="タイポ補正" description="辞書・打鍵の補正規則とZeroCon Modelで誤入力を補正します。通常変換で補正できなかった入力は、モデルによる補正候補を提案します。補正候補はTabキーで反映できます。" htmlFor="dictionary-typo-correction">
+                    <SettingsRow label="タイポ補正" description="打鍵の補正規則とZeroCon Modelで誤入力を補正します。通常変換で補正できなかった入力は、モデルによる補正候補を提案します。補正候補はTabキーで反映できます。" htmlFor="dictionary-typo-correction">
                         <Switch id="dictionary-typo-correction" checked={generalValue.experimental_typo_correction} onCheckedChange={(value) => void updateGeneralConfig("experimental_typo_correction", value)} />
                     </SettingsRow>
                     {generalValue.experimental_typo_correction && (

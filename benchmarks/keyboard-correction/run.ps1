@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [string]$ModelPath,
-    [string]$TestFilter = 'sharedTouchCorrection|touchWeightCannot|fixedDictionaryCorrection|keyboardTypoReadinessEvaluation'
+    [string]$TestFilter = 'sharedTouchCorrection|touchWeightCannot|touchCorrectionCarries|keyboardTypoReadinessEvaluation'
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))

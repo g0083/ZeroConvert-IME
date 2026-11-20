@@ -12,7 +12,6 @@
 
 namespace azookey {
 
-#include "keyboard_typo_dictionary.inc"
 
 // AzooKeyKanaKanjiConverter's CIDData/MIDData and DicdataElement.BOSData/EOSData.
 static constexpr int BOS_CID = 0;
@@ -514,15 +513,6 @@ std::vector<DicdataElement> AzooKeyDictionary::lookup(const std::string& katakan
                 if (aborted()) return candidates;
                 const int end = std::clamp(keyboardSurfaceEnds[start], start, std::min(N, start + MAX_WORD_SPAN));
                 if (end <= start) continue;
-
-                // Fixed dictionary entries are exact spans inside a roman-input run.
-                for (const auto& entry : keyboardTypoEntries) {
-                    const auto ruby = utf8ToUtf32(entry.ruby);
-                    const int next = start + static_cast<int>(ruby.size());
-                    if (next <= end && std::equal(ruby.begin(), ruby.end(), chars.begin() + start)) {
-                        lattice[start][next - start].push_back(entry);
-                    }
-                }
 
                 // Swift KeyboardTypoCorrection.correctedPrefixes: one rewrite per prefix.
                 std::vector<char32_t> output;

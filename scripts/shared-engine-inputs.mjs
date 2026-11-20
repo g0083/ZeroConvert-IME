@@ -12,7 +12,6 @@ export const NATIVE_INPUTS = [
   'android/app/src/main/cpp/assist_jni.h',
   'android/app/src/main/cpp/azookey_louds.cpp',
   'android/app/src/main/cpp/azookey_louds.h',
-  'android/app/src/main/cpp/keyboard_typo_dictionary.inc',
 ];
 
 // Build inputs that change the staged sources without touching the pinned

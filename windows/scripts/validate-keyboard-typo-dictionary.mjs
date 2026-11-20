@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseLoudstxt3 } from "./generate-reverse-dictionary.mjs";
 
 // The rewrite contract model follows Mozc KeyCorrector. Its BSD-3-Clause
-// notice is retained in data/keyboard-typo-rewrite-NOTICE.md.
+// notice is retained in deployment/THIRD_PARTY_LICENSES.md.
 
 const EXPECTED_COLUMNS = [
   "id",

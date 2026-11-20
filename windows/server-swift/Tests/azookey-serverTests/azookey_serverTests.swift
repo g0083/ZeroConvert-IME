@@ -362,7 +362,6 @@ private func testLearningConvertRequestOptions(memoryURL: URL) -> ConvertRequest
         dictionaryURL: dictionaryURL,
         preloadDictionary: true
     )
-    converter.importDynamicUserDictionary(makeKeyboardTypoDictionaryEntries())
     return converter.requestCandidates(
         composingText,
         options: testConvertRequestOptions(
@@ -2119,76 +2118,6 @@ private func testCandidate(
     )
 }
 
-@Test func zenzaiMergePromotesConfidentDictionaryCorrectionOverRawTypoSpan() async throws {
-    let hiragana = "しますた"
-    let typoEntry = makeKeyboardTypoDictionaryEntries()[0]
-    let correction = Candidate(
-        text: typoEntry.word,
-        value: -1,
-        composingCount: .surfaceCount(typoEntry.ruby.count),
-        lastMid: typoEntry.mid,
-        data: [typoEntry]
-    )
-    let zenzaiRaw = testCandidate(
-        word: hiragana,
-        ruby: typoEntry.ruby,
-        composingCount: .surfaceCount(typoEntry.ruby.count)
-    )
-    var normalRaw = zenzaiRaw
-    normalRaw.value = -2
-
-    let merged = mergeZenzaiMainResultsWithNormalNBest(
-        zenzaiResults: [zenzaiRaw],
-        normalNBestResults: [correction, normalRaw],
-        hiragana: hiragana
-    )
-
-    #expect(
-        merged.map { constructCandidateString(candidate: $0, hiragana: hiragana) } == [
-            "しました",
-            "しますた",
-        ]
-    )
-}
-
-@Test func zenzaiMergeKeepsModelTopWhenCorrectionIsNotNormalTopOrIsConvertedAlternative() async throws {
-    let hiragana = "しますた"
-    let typoEntry = makeKeyboardTypoDictionaryEntries()[0]
-    let correction = Candidate(
-        text: typoEntry.word,
-        value: -1,
-        composingCount: .surfaceCount(typoEntry.ruby.count),
-        lastMid: typoEntry.mid,
-        data: [typoEntry]
-    )
-    let zenzaiRaw = testCandidate(
-        word: hiragana,
-        ruby: typoEntry.ruby,
-        composingCount: .surfaceCount(typoEntry.ruby.count)
-    )
-    var normalRawTop = zenzaiRaw
-    normalRawTop.value = -0.5
-    let convertedAlternative = testCandidate(
-        word: "済ました",
-        ruby: typoEntry.ruby,
-        composingCount: .surfaceCount(typoEntry.ruby.count)
-    )
-
-    let nonTopCorrectionMerged = mergeZenzaiMainResultsWithNormalNBest(
-        zenzaiResults: [zenzaiRaw],
-        normalNBestResults: [normalRawTop, correction],
-        hiragana: hiragana
-    )
-    let convertedMerged = mergeZenzaiMainResultsWithNormalNBest(
-        zenzaiResults: [convertedAlternative],
-        normalNBestResults: [correction, zenzaiRaw],
-        hiragana: hiragana
-    )
-
-    #expect(constructCandidateString(candidate: nonTopCorrectionMerged[0], hiragana: hiragana) == "しますた")
-    #expect(constructCandidateString(candidate: convertedMerged[0], hiragana: hiragana) == "済ました")
-}
-
 @Test func zenzaiMergePromotesSingleRewritePathWhenModelTopIsUncorrected() async throws {
     let hiragana = "ぱんをきっってくれる"
     let rewrite = KeyboardTypoCorrectionProvenance(
@@ -2707,44 +2636,9 @@ private func testCandidate(
     #expect(result.1)
 }
 
-@Test func keyboardTypoCorrectionDictionaryIsOnlyMergedWhenEnabled() {
-    let entries = makeKeyboardTypoDictionaryEntries()
-    #expect(entries.count == keyboardTypoDictionaryEntryCount)
-    #expect(keyboardTypoDictionarySelectionCount == 92)
-    #expect(entries.count == 104)
-    #expect(entries.contains { $0.ruby == "シマスタ" && $0.word == "しました" })
-    #expect(entries.contains { $0.ruby == "ゴカクニ" && $0.word == "ご確認" })
-    #expect(Set(entries.map { $0.ruby + "\u{0}" + $0.word }).count == entries.count)
-    #expect(entries[0].lcid == 610)
-    #expect(entries[0].rcid == 435)
-    #expect(entries[0].mid == 17)
-    #expect(abs(entries[0].value() - (-8.4169)) < 0.0001)
-    #expect(entries[1].lcid == 560)
-    #expect(entries[1].rcid == 1283)
-    #expect(entries[1].mid == 17)
-    #expect(abs(entries[1].value() - (-11.0794)) < 0.0001)
-
-    let userEntry = DicdataElement(
-        word: "ユーザー語",
-        ruby: "ユーザーゴ",
-        cid: CIDData.固有名詞.cid,
-        mid: MIDData.一般.mid,
-        value: -5
-    )
-    let disabled = makeConversionDictionaryEntries(
-        userEntries: [userEntry],
-        experimentalTypoCorrectionEnabled: false
-    )
-    let enabled = makeConversionDictionaryEntries(
-        userEntries: [userEntry],
-        experimentalTypoCorrectionEnabled: true
-    )
-    #expect(disabled.count == 1)
-    #expect(enabled.count == 105)
-}
-
-@Test func keyboardTypoCorrectionDictionaryCandidatesAreNotLearnedWhileEnabled() {
-    let typoEntry = makeKeyboardTypoDictionaryEntries()[0]
+@Test func keyboardTypoCorrectionCandidatesAreNotLearnedWhileEnabled() {
+    let typoEntry = DicdataElement(word: "私", ruby: "ワタシ", cid: 1285, mid: 0,
+        value: -5, metadata: .isKeyboardTypoCorrection)
     let typoCandidate = Candidate(
         text: typoEntry.word,
         value: typoEntry.value(),
@@ -2782,7 +2676,7 @@ private func testCandidate(
 }
 
 @Test func keyboardTypoCorrectionEntriesDoNotTriggerUserDictionaryProtection() throws {
-    let entry = try #require(makeKeyboardTypoDictionaryEntries().first)
+    let entry = DicdataElement(word: "私", ruby: "ワタシ", cid: 1285, mid: 0, value: -5)
     var importedTypo = entry
     importedTypo.metadata = [.isFromUserDictionary, .isKeyboardTypoCorrection]
     var userEntry = entry
@@ -2849,38 +2743,13 @@ private func testCandidate(
     )
 }
 
-@Test func keyboardTypoCorrectionProducesDictionaryAndRewriteCandidates() async throws {
+@Test func keyboardTypoCorrectionProducesRewriteCandidates() async throws {
     let memoryURL = FileManager.default.temporaryDirectory
         .appending(path: "azookey-typo-correction-test-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: memoryURL) }
 
     let results = await MainActor.run {
         (
-            dictionary: keyboardTypoCandidateTexts(
-                keys: "simasuta",
-                enabled: true,
-                memoryURL: memoryURL
-            ),
-            phrase: keyboardTypoCandidateTexts(
-                keys: "gokakunionegaisimasu",
-                enabled: true,
-                memoryURL: memoryURL
-            ),
-            sentenceShimasuta: keyboardTypoCandidateTexts(
-                keys: "iikagentouitusimasuta",
-                enabled: true,
-                memoryURL: memoryURL
-            ),
-            sentenceGokakuni: keyboardTypoCandidateTexts(
-                keys: "syoruinogokakunionegaisimasu",
-                enabled: true,
-                memoryURL: memoryURL
-            ),
-            unresolvedN: keyboardTypoCandidateTexts(
-                keys: "fashon",
-                enabled: true,
-                memoryURL: memoryURL
-            ),
             smallTsu: keyboardTypoCandidateTexts(
                 keys: "kixtuxtute",
                 enabled: true,
@@ -2894,11 +2763,6 @@ private func testCandidate(
         )
     }
 
-    #expect(results.dictionary.contains("しました"), "candidates: \(results.dictionary)")
-    #expect(results.phrase.contains("ご確認お願いします"), "candidates: \(results.phrase)")
-    #expect(results.sentenceShimasuta.first == "いい加減統一しました", "candidates: \(results.sentenceShimasuta)")
-    #expect(results.sentenceGokakuni.first == "書類のご確認お願いします", "candidates: \(results.sentenceGokakuni)")
-    #expect(results.unresolvedN.contains("ファッション"), "candidates: \(results.unresolvedN)")
     #expect(results.smallTsu.contains("切って"), "candidates: \(results.smallTsu)")
     #expect(results.doubleNn.contains("こんにちは"), "candidates: \(results.doubleNn)")
 }
@@ -3001,7 +2865,6 @@ private func testCandidate(
             dictionaryURL: dictionaryURL,
             preloadDictionary: true
         )
-        testConverter.importDynamicUserDictionary(makeKeyboardTypoDictionaryEntries())
         let options = testConvertRequestOptions(
             memoryURL: memoryURL,
             experimentalKeyboardTypoCorrection: true
@@ -3050,7 +2913,6 @@ private func testCandidate(
             dictionaryURL: dictionaryURL,
             preloadDictionary: true
         )
-        testConverter.importDynamicUserDictionary(makeKeyboardTypoDictionaryEntries())
         let options = testConvertRequestOptions(
             memoryURL: memoryURL,
             experimentalKeyboardTypoCorrection: true
@@ -4438,7 +4300,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 }
 
 @Test func userDictionaryPosPresetsMapToExpectedCidsAndStableScoresAt10000Entries() {
-    let snapshot = UserDictionarySnapshot(entries: largeDictionaryFixture(), experimentalTypoCorrection: true)
+    let snapshot = UserDictionarySnapshot(entries: largeDictionaryFixture())
     #expect(snapshot.entries.count == 10_000)
     #expect(snapshot.shortcuts.count == 2000)
     #expect(Array(snapshot.entries.prefix(5)).map(\.lcid) == [1288, 1285, 1283, 5, 1288])
@@ -4453,7 +4315,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 
 @MainActor @Test func userDictionary10000EntryLoadCompletesWithinBudget() throws {
     let start = ContinuousClock.now
-    let snapshot = UserDictionarySnapshot(entries: largeDictionaryFixture(), experimentalTypoCorrection: true)
+    let snapshot = UserDictionarySnapshot(entries: largeDictionaryFixture())
     let elapsed = start.duration(to: .now)
     #expect(snapshot.entries.count == 10_000)
     #expect(elapsed < .seconds(5), "LOUDS build took \(elapsed)")
@@ -4479,7 +4341,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     for index in 0..<5 {
         reloader.schedule {
             builds.withLock { $0.append(index) }
-            return UserDictionarySnapshot(entries: [.init(reading: "よみ", word: "更新\(index)")], experimentalTypoCorrection: false)
+            return UserDictionarySnapshot(entries: [.init(reading: "よみ", word: "更新\(index)")])
         }
     }
     var published: UserDictionarySnapshot?
@@ -4521,8 +4383,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     reloader.schedule {
         built.withLock { $0 = true }
         return UserDictionarySnapshot(
-            entries: [.init(reading: "ふるい", word: "旧辞書")],
-            experimentalTypoCorrection: false
+            entries: [.init(reading: "ふるい", word: "旧辞書")]
         )
     }
     reloader.invalidatePending()
@@ -4597,7 +4458,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
             (UserDictionaryEntry(reading: "めあど", word: "test@example.com", pos: .shortcut), "めあど", "test@example.com"),
             (UserDictionaryEntry(reading: "かおもじ", word: "(^o^)", pos: .symbol), "かおもじ", "(^o^)"),
         ]
-        let dictionary = UserDictionarySnapshot(entries: cases.map { $0.0 }, experimentalTypoCorrection: false)
+        let dictionary = UserDictionarySnapshot(entries: cases.map { $0.0 })
         converter.installPreparedDynamicUserDictionary(dictionary.conversion)
         for (entry, reading, expected) in cases {
             print("Prepared dictionary model probe: \(expected)")

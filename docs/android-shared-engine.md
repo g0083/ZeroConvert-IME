@@ -121,7 +121,7 @@ converterのパッチは `windows/scripts/converter_patch.py` のアンカーが
 `prepare-modern-llama.py` はそれを適用するだけ。converterのpinを上げるときは
 同じコミットでアンカーを直し、`--check-converter` で確認する。指紋の対象は
 `scripts/shared-engine-inputs.mjs` が正本で、`libzenz_jni.so` に実際に
-コンパイルされる `assist_jni.h` と `keyboard_typo_dictionary.inc` を含む。
+コンパイルされる `assist_jni.h` を含む。
 未コンパイルの `mod.rs.bak` は対象外。
 
 `engine/shared-engine.lock.json` は、そのソース群から作ったAPKを識別する記録で、

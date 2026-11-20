@@ -17,6 +17,13 @@ def main():
         apk = OUTPUT / artifact['outputFile']
         with zipfile.ZipFile(apk) as archive:
             names = set(archive.namelist())
+            if 'assets/NOTICE-keyboard-typo-dictionary.md' in names or 'assets/keyboard-typo-cases.tsv' in names:
+                raise ValueError(f'{apk.name}: obsolete keyboard typo dictionary asset')
+            if 'assets/NOTICE-keyboard-typo-rewrite.md' in names:
+                raise ValueError(f'{apk.name}: obsolete standalone Mozc rewrite notice')
+            mozc_notice = 'assets/licenses/NOTICE-Mozc.txt'
+            if archive.read(mozc_notice) != (ROOT / 'android/app/src/main' / mozc_notice).read_bytes():
+                raise ValueError(f'{apk.name}: bundled Mozc notice differs from source')
             abis = {name.split('/')[1] for name in names if name.startswith('lib/') and name.endswith('.so')}
             expected = {item['value'] for item in artifact['filters'] if item['filterType'] == 'ABI'}
             if expected and abis != expected:

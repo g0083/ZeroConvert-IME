@@ -127,4 +127,4 @@ JWTD v2 の統計は、Yu Tanaka、Yugo Murawaki、Daisuke Kawahara、Sadao Kuro
 
 このTSV、rewrite調査表、本文中のJWTD由来の集計・選定データは [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) で提供します。リポジトリ内のプログラム本体に適用されるMIT Licenseとは別です。検証コードにはリポジトリのMIT Licenseが適用されます。
 
-JWTD由来データの帰属表示は `keyboard-typo-dictionary-NOTICE.md`、MozcのBSD-3-Clause表示は `keyboard-typo-rewrite-NOTICE.md` に保持し、インストーラーにも同梱します。GitHub Typo Corpusは公式配布先から元データを取得できなかったため、この候補の根拠には使用していません。MSR Spelling Correction Dataは非商用条件のため、配布辞書の派生元には使用していません。
+JWTD由来データの帰属表示は `keyboard-typo-dictionary-NOTICE.md`、MozcのBSD-3-Clause表示は [Windowsの第三者ライセンス文書](../deployment/THIRD_PARTY_LICENSES.md) に収録しています。GitHub Typo Corpusは公式配布先から元データを取得できなかったため、この候補の根拠には使用していません。MSR Spelling Correction Dataは非商用条件のため、配布辞書の派生元には使用していません。

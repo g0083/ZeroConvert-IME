@@ -36,48 +36,7 @@ object TypoCorrectionEngine {
         'm' to listOf('n', 'j', 'k')
     )
 
-    // Standard baseline vocabulary (from JWTD v2 and IME benchmark datasets)
-    val STANDARD_VOCAB = mapOf(
-        "こんにちは" to "こんにちは",
-        "おかえり" to "おかえり",
-        "おつかれ" to "お疲れ",
-        "ありがとう" to "ありがとう",
-        "ありがとうございます" to "ありがとうございます",
-        "よろしくおねがい" to "よろしくお願い",
-        "くらうど" to "クラウド",
-        "あしたの" to "明日の",
-        "おはよう" to "おはよう",
-        "おきゃくさん" to "お客さん",
-        "おつかれさま" to "お疲れ様",
-        "しんちょく" to "進捗",
-        "きっぷ" to "切符",
-        "けっか" to "結果",
-        "いってらっしゃい" to "いってらっしゃい",
-        "がっこう" to "学校",
-        "しっぱい" to "失敗",
-        "はっけん" to "発見",
-        "しんぶん" to "新聞",
-        "かんたん" to "簡単",
-        "てんけん" to "点検",
-        "でんわ" to "電話",
-        "あんぜん" to "安全",
-        "てすと" to "テスト",
-        "ひんと" to "ヒント",
-        "すぐ" to "すぐ",
-        "かいいん" to "会員",
-        "こういん" to "校正",
-        "さーびす" to "サービス",
-        "ゆーざー" to "ユーザー",
-        "こぴー" to "コピー",
-        "りーだー" to "リーダー",
-        "てーま" to "テーマ",
-        "かさをさす" to "傘を差す",
-        "めにゅーをみせて" to "メニューを見せて",
-        "かくにんをすぐに" to "確認をすぐに",
-        "じかんは" to "時間は",
-        "せってい" to "設定",
-        "せってぃんぐ" to "セッティング"
-    )
+    val STANDARD_VOCAB: Map<String, String> get() = WindowsTypoData.standard
 
     // 12-key Flick row mapping: base key -> row characters [あ, い, う, え, お]
     private val FLICK_ROWS = listOf(
@@ -300,7 +259,7 @@ object TypoCorrectionEngine {
         //    does not depend on the iteration order of the candidate set.
         val candidateReadings = generateCandidateReadings(hiraInput)
         for (cand in candidateReadings.sorted()) {
-            val match = WindowsTypoData.standard[cand] ?: STANDARD_VOCAB[cand]
+            val match = STANDARD_VOCAB[cand]
             if (match != null && match != hiraInput && match != rawInput) {
                 return match
             }

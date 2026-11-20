@@ -79,7 +79,7 @@ Chromeのシークレットタブなど、入力欄が `IME_FLAG_NO_PERSONALIZED
 
 補正規則・登録語保護は `WindowsTypoData.kt`（生成元確認と `--check` で照合し手編集しない）と共有エンジン側で扱う。ユーザー辞書の更新は補正側の参照マップと要求世代にも反映される。（関連履歴: [第4段階](../reports/port-history/android-windows-port-stage4.md)）
 
-通常辞書側の補正・探索・ユーザー辞書・学習モードでは、`node scripts/generate-android-keyboard-typos.mjs` がWindowsの選択データと生成関数からnative用の104エントリ、端末検査用データ、APK同梱NOTICEを生成する。`--check` で同期を検査し、生成された `keyboard_typo_dictionary.inc` を手編集しない。`experimental_typo_correction` は既定trueで、通常変換内の補正とモデルの補正候補生成をまとめて制御する。既存の明示的なfalseは保持する。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。（関連履歴: [第8段階](../reports/port-history/android-windows-port-stage8.md)）
+通常変換では促音・撥音の補正規則とタッチ位置による候補の重み付けを使う。`experimental_typo_correction` は既定trueで、通常変換内の補正とモデルの補正候補生成をまとめて制御する。既存の明示的なfalseは保持する。通常辞書は語長20・全文最大512まで探索する。登録語は要求ごとにnativeへ渡し、キャッシュキーにも含める。（関連履歴: [第8段階](../reports/port-history/android-windows-port-stage8.md)）
 
 通常確定の学習は共有エンジン（Swift）の1系統に統合した。選択表記は初回に `LearningMemory/selection-overrides.json` へ移行し、Android独自の `learning_memory_v2_json` と形態素頻度バイナリ `files/conversion-learning-v1.bin` は廃止した。第9段階・第10段階の記録は当時の実装であり現在の構成ではない。学習の削除は2経路ある。設定画面は `KanaKanjiConverter.clearAllLearning` で変換学習・補正学習・英字学習をスコープ別に消し、候補バーの長押しは `WindowsEngine.forgetCandidate` で候補IDをエンジンへ渡す。どちらも削除の判断と辞書操作はSwift/Rust側にあり、Kotlinは候補IDと確認UIだけを持つ。変換学習のリセットは世代カウンタで削除前の未処理通知を捨てる。（関連履歴: [第9段階](../reports/port-history/android-windows-port-stage9.md) / [第10段階](../reports/port-history/android-windows-port-stage10.md)）
 
@@ -96,7 +96,7 @@ Chromeのシークレットタブなど、入力欄が `IME_FLAG_NO_PERSONALIZED
 従来の `dynamic_touch_assist` の値を保存して引き継ぐ。新規設定では両方とも既定trueとなる。
 その後は各項目を個別に保存し、当たり判定の設定変更で入力後の補正が再び有効になることを防ぐ。
 
-補正語彙・辞書・逆引き辞書の資産準備は、ルートで `./scripts/prepare-android-assist-assets.ps1` を実行する（`assist-vocabulary.tsv`、`keyboard_typo_dictionary.inc`、Android 同梱 LOUDS ソースからの `reverse-v2.bin` 生成、および旧 `zerocon-model-corrector.gguf` の削除）。`assist-vocabulary.tsv` は Git 対象であり、`reverse-v2.bin` とモデル重みは Git 対象外のため新しい clone には含まれない。Gradle の preBuild は不足や不整合を検出して停止する。
+補正語彙・辞書・逆引き辞書の資産準備は、ルートで `./scripts/prepare-android-assist-assets.ps1` を実行する（`assist-vocabulary.tsv`、Android 同梱 LOUDS ソースからの `reverse-v2.bin` 生成、および旧 `zerocon-model-corrector.gguf` の削除）。`assist-vocabulary.tsv` は Git 対象であり、`reverse-v2.bin` とモデル重みは Git 対象外のため新しい clone には含まれない。Gradle の preBuild は不足や不整合を検出して停止する。
 
 JDK 17、上表のSDK/NDK/CMake、Gradle wrapperを使う。SDKのPC固有パスは `android/local.properties` 等のローカル設定で管理する。既存の設定を上書きせず、SDKライセンスや端末認証を無断で通過しない。
 

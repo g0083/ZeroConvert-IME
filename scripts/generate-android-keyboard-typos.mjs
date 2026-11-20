@@ -16,9 +16,9 @@ outputs.push(['android/app/src/androidTest/assets/keyboard-typo-cases.tsv',
   '# Generated from Windows keyboard typo selections. CC BY-SA 3.0; see bundled NOTICE.\n' +
   rows.flatMap(row => lookupReadings(row).map(reading =>
     [reading, row.expected_candidate, row.reference_lcid, row.reference_rcid, row.reference_mid, scoreFor(row)].join('\t'))).join('\n') + '\n']);
-for (const kind of ['dictionary', 'rewrite']) outputs.push([
-  `android/app/src/main/assets/NOTICE-keyboard-typo-${kind}.md`,
-  await readFile(new URL(`windows/data/keyboard-typo-${kind}-NOTICE.md`, root), 'utf8')
+outputs.push([
+  'android/app/src/main/assets/NOTICE-keyboard-typo-dictionary.md',
+  await readFile(new URL('windows/data/keyboard-typo-dictionary-NOTICE.md', root), 'utf8')
 ]);
 for (const [path, content] of outputs) {
   const url = new URL(path, root);

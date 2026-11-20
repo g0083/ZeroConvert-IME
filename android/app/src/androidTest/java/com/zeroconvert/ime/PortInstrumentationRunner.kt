@@ -355,16 +355,6 @@ class PortInstrumentationRunner : Instrumentation() {
             }
             return candidates
         }
-        test("native_keyboard_typo_dictionary") {
-            val input = romanInput("simasuta")
-            check(input.convertTarget == "しますた")
-            val found = corrected(input).firstOrNull { it.text == "しました" && it.segments.any { span -> span.correctionKind == 3 } }
-            checkNotNull(found) { "Windows fixed typo dictionary did not participate in the lattice" }
-            check(!found.isLearningTarget)
-            check(found.segments.joinToString("") { it.reading } == "シマスタ")
-            val disabled = ZenzNative.lookupDict("シマスタ", false, 64)
-            check(disabled.all { it.segments.none { span -> span.correctionKind != 0 } })
-        }
         test("native_long_compositions_and_unknown_characters") {
             for (reading in listOf("トウキョウニイク".repeat(20), "トウキョウ😀ニイク", "😀".repeat(512))) {
                 var candidates = emptyList<Candidate>()
@@ -469,24 +459,6 @@ class PortInstrumentationRunner : Instrumentation() {
             // characters, so they run last as the control family.
             probe("repeat", "トウキョウニイク", listOf(4, 8, 12, 16, 20, 24, 40, 50, 60, 70))
         }
-        test("all_windows_keyboard_dictionary_entries") {
-            val cases = context.assets.open("keyboard-typo-cases.tsv").bufferedReader().useLines { lines ->
-                lines.filter { it.isNotBlank() && !it.startsWith('#') }.map { it.split('\t') }.toList()
-            }
-            check(cases.size == 104)
-            val missing = mutableListOf<String>()
-            for (fields in cases) {
-                val reading = fields[0]
-                val count = reading.codePointCount(0, reading.length)
-                val candidates = ZenzNative.lookupDict(reading, false, 64, IntArray(count) { count })
-                if (candidates.none { candidate -> candidate.text == fields[1] && candidate.segments.any {
-                    it.correctionKind == 3 && it.reading == reading && it.surface == fields[1] &&
-                        it.lcid == fields[2].toInt() && it.rcid == fields[3].toInt() && it.mid == fields[4].toInt() &&
-                        kotlin.math.abs(it.cost - fields[5].toFloat()) < 0.0002f
-                } }) missing.add("$reading -> ${fields[1]}")
-            }
-            check(missing.isEmpty()) { "Missing Windows dictionary entries (${missing.size}): ${missing.joinToString()}" }
-        }
         test("native_bounded_keyboard_rewrites") {
             val small = romanInput("kittte")
             check(small.convertTarget == "きっって")
@@ -504,17 +476,16 @@ class PortInstrumentationRunner : Instrumentation() {
             check(repeated.convertTarget == "きっっって")
             check(corrected(repeated).all { it.segments.none { span -> span.correctionKind == 1 } })
         }
-        test("conversion_pipeline_dictionary_correction") {
-            val input = romanInput("simasuta")
+        test("conversion_pipeline_keyboard_rewrite") {
+            val input = romanInput("kittte")
             val result = runBlocking {
                 KanaKanjiConverter().requestCandidates(input, "", enableAI = false, personalize = false,
                     experimentalKeyboardCorrection = true)
             }
-            val selected = result.firstOrNull { it.text == "しました" }
-            checkNotNull(selected) { "Dictionary correction was lost in the Kotlin candidate pipeline" }
+            val selected = result.firstOrNull { it.text == "切って" }
+            checkNotNull(selected) { "The bounded rewrite was lost in the Kotlin candidate pipeline" }
             check(!selected.isLearningTarget)
-            check(selected.reading == "シマスタ")
-            check(input.convertTarget == "しますた")
+            check(input.convertTarget == "きっって")
         }
         if (BuildConfig.WINDOWS_ENGINE) test("zenzai_11b_exact_and_predictions") {
             KanaKanjiConverter.ensureInitialized(targetContext)

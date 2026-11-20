@@ -559,7 +559,7 @@ int main(int argc, char **argv) {
           if (win_ranked.size() >= 2 &&
               (ranked[win_ranked[0]].stage1_delta -
                    ranked[win_ranked[1]].stage1_delta <
-               12.0)) {
+               assist_rerank_margin)) {
             std::vector<std::vector<llama_token>> surf_sequences;
             std::vector<int> surf_prefixes;
             std::vector<size_t> valid_pos;
@@ -611,6 +611,8 @@ int main(int argc, char **argv) {
             const size_t alt = ranked[1].index;
             std::cout << ",\"alt_reading\":"
                       << json_string(encode_utf8(candidates[alt].reading));
+            if (has_clear_assist_lead(ranked))
+              std::cout << ",\"clear_lead\":true";
           }
           std::cout << ",\"gain\":" << std::setprecision(14) << best_delta
                     << "}" << std::endl;

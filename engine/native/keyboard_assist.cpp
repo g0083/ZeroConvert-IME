@@ -451,7 +451,7 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
   }
   if (win_ranked.size() >= 2 &&
       (ranked[win_ranked[0]].stage1_delta - ranked[win_ranked[1]].stage1_delta <
-       12.0)) {
+       assist_rerank_margin)) {
     std::vector<std::vector<llama_token>> surf_sequences;
     std::vector<int> surf_prefixes;
     std::vector<size_t> valid_pos;
@@ -502,6 +502,8 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
   if (ranked.size() >= 2 && ranked[1].stage1_delta >= 35.0) {
     out << ",\"alt_reading\":"
         << json_string(encode_utf8(candidates[ranked[1].index].reading));
+    if (has_clear_assist_lead(ranked))
+      out << ",\"clear_lead\":true";
   }
   out << ",\"gain\":" << std::setprecision(14) << best_delta << "}";
   return out.str();

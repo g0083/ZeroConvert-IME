@@ -415,7 +415,7 @@ cargo test -p azookey-server --lib --offline live_prediction_evaluation -- --ign
 |---|---|
 | タイポ候補が生成されない・誤補正する | `crates/server/src/ai_assist/mod.rs` の `fetch_typo_suggestion` → `romaji_decoder.rs` / `typo_variant.rs` / `learning.rs` |
 | 補正があるのに表示・Tab 採用できない | `crates/server/src/main.rs` の `append_ai_assist_candidates` → `crates/client/src/engine/composition.rs` の `ai_assist_priority_index` と候補フィルタ・キー処理 → `crates/ui/src/ruby.rs` |
-| Swift 変換側のタイポ補正 | `server-swift/Sources/azookey-server/azookey_server.swift` の `getOptions` / `confidentKeyboardTypoCorrectionForZenzaiMerge` → `data/keyboard-typo-dictionary.tsv` |
+| Swift 変換側のタイポ補正 | `server-swift/Sources/azookey-server/azookey_server.swift` の `getOptions` / `confidentKeyboardTypoCorrectionForZenzaiMerge` → `KeyboardCorrectionPolicy.swift` |
 | 先読みが不自然・出ない | `crates/server/src/main.rs` の先読み呼び出し → `crates/server/src/ai_assist/prediction.rs` → launcher の起動モデル（18091） |
 | 入力遅延・モデル接続・設定と違うモデル | `crates/launcher/src/main.rs` の `start_ai_server_process` → `crates/server/src/ai_assist/mod.rs` の `simple_http_post` → 配布先のモデル・backend |
 | 自動確定・削除・カーソル・文節の不整合 | `crates/client/src/engine/composition.rs` → `composition/tests/` → `crates/server/src/composition_owner.rs` |

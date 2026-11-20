@@ -783,6 +783,11 @@ pub fn can_auto_apply_channel_repair_with_strength(
         return false;
     }
     let has_floating_ascii = has_floating_ascii(input);
+    // Removing the unmatched key can give several repairs a large gain over
+    // the same malformed input. A large gain does not resolve that ambiguity.
+    if has_floating_ascii && confidence.has_alt_reading && !confidence.clear_lead {
+        return false;
+    }
     let touches_tail = orig_hira.chars().last() != cand_hira.chars().last();
     let (non_tail_min, tail_min, alt_min) = match strength {
         AutoTypoCorrectionStrength::Off => return false,
@@ -1249,6 +1254,7 @@ mod tests {
         let conf = |gain_tenths, has_alt_reading| super::super::ChannelConfidence {
             gain_tenths,
             has_alt_reading,
+            clear_lead: false,
         };
         // Non-tail kana: >= 65.0 without alt_reading; >= 95.0 with alt_reading.
         assert!(!can_auto_apply_channel_repair(
@@ -1294,21 +1300,47 @@ mod tests {
             conf(950, true)
         ));
 
-        // Floating ASCII: >= 55.0 even with an alternative reading.
+        // Floating ASCII: automatic application requires an uncontested repair.
         assert!(!can_auto_apply_channel_repair(
             "pもってる",
             "おもってる",
-            conf(549, true)
+            conf(549, false)
         ));
         assert!(can_auto_apply_channel_repair(
             "pもってる",
             "おもってる",
-            conf(550, true)
+            conf(550, false)
         ));
         assert!(can_auto_apply_channel_repair(
             "かlど",
             "かーど",
-            conf(550, true)
+            conf(550, false)
+        ));
+        assert!(!can_auto_apply_channel_repair(
+            "しmばし",
+            "しまし",
+            conf(1500, true)
+        ));
+        let competing = TypoSuggestion {
+            surface: "しまし".into(),
+            token_reading: "しmばし".into(),
+            token_surface: "しまし".into(),
+            learned: false,
+            channel_confidence: Some(conf(1500, true)),
+        };
+        assert!(!can_auto_apply_composition_suggestion_with_strength(
+            "しmばし",
+            "しmばし",
+            &competing,
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "しmばしえきでまちあわせ",
+            "しんばしえきでまちあわせ",
+            super::super::ChannelConfidence {
+                clear_lead: true,
+                ..conf(1500, true)
+            }
         ));
 
         // Pending romaji tail and user dictionary readings remain blocked.
@@ -1333,6 +1365,7 @@ mod tests {
         let conf = |gain_tenths, has_alt_reading| super::super::ChannelConfidence {
             gain_tenths,
             has_alt_reading,
+            clear_lead: false,
         };
         let non_tail = ("おせわになております", "おせわになっております");
         let tail = ("ふるいしゃしんをいちま", "ふるいしゃしんをいちまい");

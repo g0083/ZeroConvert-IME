@@ -21,9 +21,7 @@ private func typed(_ keys: String) -> ComposingText {
 }
 
 @MainActor private func dictionaryConverter() -> KanaKanjiConverter {
-    let converter = KanaKanjiConverter(dictionaryURL: correctionPackageRoot.appending(path: "azooKey_dictionary_storage/Dictionary"), preloadDictionary: true)
-    converter.importDynamicUserDictionary(makeKeyboardTypoDictionaryEntries())
-    return converter
+    KanaKanjiConverter(dictionaryURL: correctionPackageRoot.appending(path: "azooKey_dictionary_storage/Dictionary"), preloadDictionary: true)
 }
 
 @Test func sharedTouchCorrectionPreservesObservedInputAndPublishesCorrectedReading() async {
@@ -86,11 +84,12 @@ private func typed(_ keys: String) -> ComposingText {
     #expect(merged.map(\.text) == ["傘", "課題"])
 }
 
-@Test func fixedDictionaryCorrectionCarriesItsIntendedReadingAndUntouchedSuffix() {
-    let entry = makeKeyboardTypoDictionaryEntries()[0]
+@Test func touchCorrectionCarriesItsIntendedReadingAndUntouchedSuffix() {
+    let entry = DicdataElement(word: "私", ruby: "ワタシ", cid: 1285, mid: 0,
+        value: -5, metadata: .isKeyboardTypoCorrection)
     let candidate = Candidate(text: entry.word, value: -1, composingCount: .inputCount(8),
         lastMid: entry.mid, data: [entry])
-    #expect(keyboardCorrectionReading(candidate, remainingReading: "ので") == "しましたので")
+    #expect(keyboardCorrectionReading(candidate, remainingReading: "ので") == "わたしので")
 }
 
 @Test func sharedTouchCorrectionFFIPreservesLongerReadingAndOriginalConsumption() async {
@@ -153,20 +152,16 @@ private func typed(_ keys: String) -> ComposingText {
 }
 
 /// Run this alone with an output path to compare the actual converter on the
-/// registered typo set, correct counterparts, and held-out normal controls.
+/// Bounded rewrites and held-out normal controls.
 @Test func keyboardTypoReadinessEvaluation() async throws {
     guard let output = ProcessInfo.processInfo.environment["ZEROCON_TYPO_EVALUATION_OUTPUT"] else { return }
     let model = ProcessInfo.processInfo.environment["ZEROCON_TYPO_EVALUATION_MODEL"]
     let windows = correctionPackageRoot.deletingLastPathComponent()
     let root = windows.deletingLastPathComponent()
-    let table = try String(contentsOf: windows.appending(path: "data/keyboard-typo-dictionary.tsv"), encoding: .utf8)
-        .split(whereSeparator: \.isNewline).map { $0.split(separator: "\t", omittingEmptySubsequences: false).map(String.init) }
-    let header = table[0]
-    func column(_ name: String) -> Int { header.firstIndex(of: name)! }
-    let rows = table.dropFirst()
-    var cases: [(keys: String, expected: String?, clean: Bool, context: String, group: String)] = rows.map {
-        ($0[column("typed_keys")], $0[column("expected_candidate")], false, "", "registered")
-    }
+    var cases: [(keys: String, expected: String?, clean: Bool, context: String, group: String)] = [
+        ("kixtuxtute", "切って", false, "", "rewrite"),
+        ("konnnnitiha", "こんにちは", false, "", "rewrite"),
+    ]
     cases += ["gakkou", "konnnitiha", "onnna", "kitte", "massugu", "honntou", "etto", "honnto",
         "kyouhatenkigayoi", "watashihagakuseidesu", "toukyouniikimasu", "korehatesutodesu",
         "arigatougozaimasu", "shinjuku", "shinnbashi", "nyuuyooku", "syujutu", "iPhone", "https://example.com"].map { ($0, nil, true, "", "normal-control") }
@@ -193,14 +188,6 @@ private func typed(_ keys: String) -> ComposingText {
             else { keys.append(reading.removeFirst()) }
         }
         return keys
-    }
-    for row in rows {
-        let reading = row[column("corrected_reading")]
-        let keys = romanKeys(reading)
-        cases.append((keys, nil, true, "", "normal-counterpart"))
-        if typed(row[column("corrected_keys")]).convertTarget != reading {
-            cases.append((row[column("corrected_keys")], row[column("expected_candidate")], false, "", "romaji-compatibility"))
-        }
     }
     for row in heldout {
         let clean = row["is_clean"] as! Bool

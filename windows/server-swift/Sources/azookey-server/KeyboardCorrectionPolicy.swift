@@ -19,13 +19,12 @@ struct KeyboardTouchCandidates {
 func isTouchWeightedKeyboardCandidate(_ candidate: Candidate) -> Bool {
     candidate.data.count == 1
         && candidate.data[0].metadata.contains(.isKeyboardTypoCorrection)
-        && keyboardTypoDictionaryEntry(in: candidate) == nil
 }
 
 func keyboardCorrectionReading(_ candidate: Candidate, remainingReading: String = "") -> String? {
     guard !candidate.keyboardTypoCorrections.isEmpty
         || candidate.data.contains(where: { $0.metadata.contains(.isKeyboardTypoCorrection) }) else { return nil }
-    let reading = candidate.data.map { correctedKeyboardTypoReading($0) }.joined() + remainingReading
+    let reading = candidate.data.map(\.ruby).joined() + remainingReading
     guard !reading.isEmpty, !reading.contains(where: { $0.isASCII && $0.isLetter }) else { return nil }
     return reading.applyingTransform(.hiraganaToKatakana, reverse: true)
 }
@@ -122,4 +121,22 @@ func mergeTouchWeightedKeyboardCandidates(
         insertion += 1
     }
     return result
+}
+
+func disableLearningForKeyboardTypoCorrectionCandidates(
+    _ candidates: [Candidate],
+    experimentalTypoCorrectionEnabled: Bool
+) -> [Candidate] {
+    guard experimentalTypoCorrectionEnabled else {
+        return candidates
+    }
+    return candidates.map { source in
+        var candidate = source
+        if candidate.data.contains(where: { $0.metadata.contains(.isKeyboardTypoCorrection) })
+            || !candidate.keyboardTypoCorrections.isEmpty
+        {
+            candidate.isLearningTarget = false
+        }
+        return candidate
+    }
 }

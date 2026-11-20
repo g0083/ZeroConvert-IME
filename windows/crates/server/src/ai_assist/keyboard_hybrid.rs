@@ -425,6 +425,7 @@ fn validated_repair_candidate(response: &Value, input: &str) -> Option<ChannelRe
         confidence: super::ChannelConfidence {
             gain_tenths: (gain.clamp(0.0, 100_000.0) * 10.0).round() as u32,
             has_alt_reading,
+            clear_lead: has_alt_reading && response["clear_lead"].as_bool() == Some(true),
         },
     })
 }
@@ -657,6 +658,19 @@ mod tests {
         );
         assert_eq!(validated_reading(&response, "あした"), None);
         assert_eq!(validated_reading(&response, "ああたs"), None);
+    }
+
+    #[test]
+    fn legacy_worker_alternatives_do_not_imply_a_clear_lead() {
+        let mut response = json!({
+            "observed":"しmばし", "reading":"しまし", "alt_reading":"しんばし", "gain":150.
+        });
+        let candidate = validated_repair_candidate(&response, "しmばし").unwrap();
+        assert!(candidate.confidence.has_alt_reading);
+        assert!(!candidate.confidence.clear_lead);
+        response["clear_lead"] = json!(true);
+        let candidate = validated_repair_candidate(&response, "しmばし").unwrap();
+        assert!(candidate.confidence.clear_lead);
     }
 
     #[test]
