@@ -282,11 +282,8 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         if bytes.len() > 32 * 1024 * 1024 {
             return Err("english dictionary payload exceeds limits".into());
         }
-        let words = crate::english_dictionary::import(
-            &bytes,
-            std::path::Path::new(destination),
-            limit,
-        )?;
+        let words =
+            crate::english_dictionary::import(&bytes, std::path::Path::new(destination), limit)?;
         return Ok(json!({ "words": words }));
     }
     if envelope["op"] == "englishPromotedWords" {
