@@ -44,7 +44,7 @@ try {
         $builtFiles = & (Join-Path $PSScriptRoot 'build-installer-sources.ps1') -SwiftRuntimeDirectory $SwiftRuntimeDirectory
     }
     $receipt = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $windowsRoot 'target/installer-source-build.json') | ConvertFrom-Json
-    if ($receipt.assetLayout -ne 3) { throw 'Run without -SkipBuild to generate a complete build receipt.' }
+    if ($receipt.assetLayout -ne 4) { throw 'Run without -SkipBuild to generate a complete build receipt.' }
     $builtFiles = [ordered]@{}
     foreach ($entry in $receipt.files.PSObject.Properties) {
         if ((Get-ArtifactHash $entry.Value.path) -ne $entry.Value.sha256) { throw "Cached build changed: $($entry.Name). Run without -SkipBuild." }
@@ -78,23 +78,17 @@ try {
     # The translation model is not bundled: enabling 翻訳機能 in the settings app
     # downloads the pinned PLaMo 3 GGUF from Hugging Face on demand.
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $windowsRoot 'deployment') -File) {
-        if ($file.Extension -in @('.ps1', '.bat', '.md', '.json')) {
+        if ($file.Extension -in @('.ps1', '.bat', '.md', '.json', '.txt')) {
             Copy-PayloadFile $file.FullName $file.Name
         }
     }
 
-    if ($builtFiles) {
-        # Copy current dictionary sources, then overlay generated artifacts.
-        foreach ($pair in @(
-            @('Dictionary', 'server-swift\azooKey_dictionary_storage\Dictionary'),
-            @('EmojiDictionary', 'server-swift\azooKey_emoji_dictionary_storage\EmojiDictionary')
-        )) {
-            $source = Join-Path $windowsRoot $pair[1]
-            foreach ($file in Get-ChildItem -LiteralPath $source -File -Recurse) {
-                $relative = $file.FullName.Substring($source.TrimEnd('\').Length + 1)
-                Copy-PayloadFile $file.FullName (Join-Path $pair[0] $relative)
-            }
-        }
+    & python (Join-Path $repoRoot 'scripts/prepare_dictionary.py') --output (Join-Path $payloadRoot 'Dictionary')
+    if ($LASTEXITCODE -ne 0) { throw 'Default dictionary preparation failed.' }
+    $emojiSource = Join-Path $windowsRoot 'server-swift\azooKey_emoji_dictionary_storage\EmojiDictionary'
+    foreach ($file in Get-ChildItem -LiteralPath $emojiSource -File -Recurse) {
+        $relative = $file.FullName.Substring($emojiSource.TrimEnd('\').Length + 1)
+        Copy-PayloadFile $file.FullName (Join-Path 'EmojiDictionary' $relative)
     }
     if ($builtFiles) {
         foreach ($name in $builtFiles.Keys) { Copy-PayloadFile $builtFiles[$name] $(if ($name -eq 'azookey_windows.dll') { 'azookey.dll' } elseif ($name -eq 'x86\azookey_windows.dll') { 'azookey32.dll' } else { $name }) }
@@ -104,12 +98,12 @@ try {
         if ((Get-ArtifactHash (Join-Path $payloadRoot $name)) -ne $entry.Value.sha256) { throw "Build changed during packaging: $name" }
     }
     Copy-PayloadFile $builtFiles['frontend.exe'] 'azookey-updater-helper.exe'
+    # Keep the installer's license page in step with the repository root LICENSE file.
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $packageRoot 'USE-TERMS.txt') -Force
+    if ((Get-ArtifactHash (Join-Path $packageRoot 'USE-TERMS.txt')) -ne (Get-ArtifactHash (Join-Path $repoRoot 'LICENSE'))) { throw 'Installer license page does not match the repository LICENSE.' }
     Copy-PayloadFile (Join-Path $windowsRoot 'installer/Azookey Startup.xml') '.azookey-startup-task.xml'
     Copy-PayloadFile $metadataFiles.buildInfo 'build-info.json'
     Copy-Item -LiteralPath $metadataFiles.installer -Destination (Join-Path $packageRoot 'AppVersion.iss')
-    foreach ($notice in @('keyboard-typo-dictionary-NOTICE.md', 'keyboard-typo-rewrite-NOTICE.md')) {
-        Copy-PayloadFile (Join-Path $windowsRoot ('data/' + $notice)) $notice
-    }
     $info = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $payloadRoot 'build-info.json') | ConvertFrom-Json
     $manifest = [ordered]@{
         schemaVersion = 1; packageType = 'prepared-windows-distribution'

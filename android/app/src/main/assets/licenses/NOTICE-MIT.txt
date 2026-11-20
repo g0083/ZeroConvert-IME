@@ -1,0 +1,42 @@
+MIT License notices for ZeroCon Keyboard
+========================================
+
+This file covers the MIT-licensed components bundled in the Android app.
+The full permission text is reproduced once at the end of this file and
+applies to every component listed above it.
+
+1. azooKey / AzooKeyKanaKanjiConverter
+   Copyright (c) 2023-2026 Miwa (ensan-hcl) and contributors
+   https://github.com/azooKey/AzooKeyKanaKanjiConverter
+   Used as: conversion engine (statically linked into libzerocon_swift.so),
+   input state machine and romaji table ported to Kotlin in
+   app/src/main/java/com/zeroconvert/ime/azookey/input/.
+
+2. azooKey-Windows
+   Copyright (c) 2026 fkunn1326
+   https://github.com/fkunn1326/azooKey-Windows
+   Used as: upstream Windows front end of the shared engine sources.
+
+3. llama.cpp / ggml
+   Copyright (c) 2023-2024 The ggml authors
+   Copyright (c) 2023-2024 Georgi Gerganov and llama.cpp contributors
+   https://github.com/ggerganov/llama.cpp
+   Used as: on-device inference runtime (libllama.so, libggml*.so).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

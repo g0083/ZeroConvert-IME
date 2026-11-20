@@ -19,6 +19,13 @@ val sharedHostAssets by tasks.registering(Sync::class) {
         ) }
     }
     into(layout.buildDirectory.dir("sharedHostAssets"))
+    from("../THIRD_PARTY_LICENSES.md") {
+        into("licenses")
+    }
+    // Shared with the Windows settings app; the single source is licenses/third-party.json.
+    from("../../licenses/third-party.json") {
+        into("licenses")
+    }
 }
 
 android {
@@ -91,7 +98,6 @@ android {
         getByName("debug").java.srcDir("../app/src/debug/java")
         getByName("debug").manifest.srcFile("../app/src/debug/AndroidManifest.xml")
         getByName("androidTest").java.srcDir("../app/src/androidTest/java")
-        getByName("androidTest").assets.srcDir("../app/src/androidTest/assets")
         getByName("test").java.apply {
             srcDir("../app/src/test/java")
         }

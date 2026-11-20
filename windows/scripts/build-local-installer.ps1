@@ -66,7 +66,7 @@ Write-ArtifactJson (Join-Path $outputRoot 'package-source.json') @{ packageDirec
     $outputName = "ZeroConvert-IME-setup-$($info.version)"
     Write-Host "Compiler: $compiler"
     Write-Host "Output: $outputRoot"
-    & $compiler '/Qp' '/DLocalZeroConPackage=1' "/DPayloadDir=$payloadRoot" "/DBuildMetadataFile=$packageRoot\AppVersion.iss" "/O$outputRoot" "/F$outputName" (Join-Path $windowsRoot 'installer\Installer.iss')
+    & $compiler '/Qp' '/DLocalZeroConPackage=1' "/DPayloadDir=$payloadRoot" "/DBuildMetadataFile=$packageRoot\AppVersion.iss" "/DTermsFile=$packageRoot\USE-TERMS.txt" "/O$outputRoot" "/F$outputName" (Join-Path $windowsRoot 'installer\Installer.iss')
     if ($LASTEXITCODE -ne 0) { throw "Installer compiler failed: $LASTEXITCODE" }
     $null = Read-PreparedPackage $packageRoot
     $installer = Join-Path $outputRoot "$outputName.exe"

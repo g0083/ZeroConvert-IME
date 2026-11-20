@@ -9,7 +9,7 @@
 | タイポ候補が生成されない・誤補正する | `W/crates/server/src/ai_assist/corrector.rs` / `mod.rs` → 同階層の `romaji_decoder.rs` / `typo_variant.rs` / `learning.rs` / `reading_check.rs` |
 | 元の打鍵列による隣接キー補正 | `W/crates/server/src/ai_assist/keyboard_hybrid.rs` → `W/native/keyboard-prior/`。生成・配布は `W/scripts/build-keyboard-prior.ps1` / `build-trial.ps1` / `deployment/model-catalog.json` |
 | 補正があるのに表示・Tab採用できない | `W/crates/server/src/main.rs` の `append_ai_assist_candidates` → `W/crates/shared/src/assist_policy.rs` → `W/crates/client/src/engine/composition.rs` / `composition/typo.rs` → `W/crates/ui/src/ruby.rs` / `correction_diff.js` |
-| Swift変換側のタイポ補正・確定後予測 | `W/server-swift/Sources/azookey-server/azookey_server.swift` → `KeyboardCorrectionPolicy.swift` / `PostCompositionPrediction.swift` → `W/data/keyboard-typo-dictionary.tsv` |
+| Swift変換側のタイポ補正・確定後予測 | `W/server-swift/Sources/azookey-server/azookey_server.swift` → `KeyboardCorrectionPolicy.swift` / `PostCompositionPrediction.swift` |
 | 先読みが不自然・出ない | `W/crates/server/src/main.rs` の先読み呼び出し → `W/crates/server/src/ai_assist/prediction.rs` → launcherの起動モデル（18091番） |
 | 入力遅延・モデル接続・設定と違うモデル | `W/crates/launcher/src/main.rs` → `W/crates/server/src/ai_assist/runtime.rs` → `W/crates/shared/src/runtime_assets.rs` → 配布先のモデル・backend |
 | 自動確定・削除・カーソル・文節の不整合 | `W/crates/client/src/engine/composition.rs` → `composition/tests/` → `W/crates/server/src/composition_owner.rs` / `ConversionContinuation.swift` / `AutomaticConversionContinuation.swift` |
@@ -19,6 +19,7 @@
 | 起動・DLL登録・配布差分 | `ZeroConvertIME-windows/Start-ZeroConvertIME.ps1` / `Status-ZeroConvertIME.ps1` → `W/crates/launcher/src/main.rs` → `W/scripts/prepare-distribution.ps1` / `installer/Installer.iss` |
 | モデル切替・画面内ベンチマーク | `W/frontend/src/pages/zenzai.tsx` / `benchmark.tsx` → `W/frontend/src-tauri/src/lib.rs` の `switch_model` / `run_ai_assist_benchmark_item` |
 | 学習モデル・量子化比較 | 目的の `training/train_*.py` / `training/export_*.py` → `benchmarks/research/` → 対応する `artifacts/results/` |
+| ライセンス表示・帰属の修正 | `licenses/third-party.json`（両OSの設定画面が読む唯一の一覧） → `W/frontend/src/pages/about.tsx` / `A/main/java/com/zeroconvert/ime/LicenseNotices.kt` → `A/../THIRD_PARTY_LICENSES.md` / `W/deployment/THIRD_PARTY_LICENSES.md`（法的通知の本文） |
 
 探索例: `rg -n 'fetch_typo_suggestion|TYPO_CORRECTION' windows/crates/server`。まず対象ディレクトリと拡張子を絞り、ワークスペース全体の再帰検索は必要になってから行う。
 
@@ -111,7 +112,6 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 
 | 対象 | 変更元・扱い |
 | --- | --- |
-| `W/server-swift/Sources/azookey-server/KeyboardTypoDictionary.swift` | 生成済み。`W/data/keyboard-typo-dictionary.tsv` と `W/scripts/generate-keyboard-typo-dictionary-swift.mjs` から再生成。NOTICEを維持 |
 | `W/target/`、各crateの `target/`、`W/build/`、`server-swift/.build/`、フロント `dist/` | ビルド出力・生成Protobuf・取得依存。`.proto`・実ソース・ビルド定義を変更して再生成。`W/build/` はビルド時の出力先で、調査時点では存在しない |
 | `W/target/azookey-build/`、配布 `build-info.json` | `app-version.json` と `scripts/sync-version.mjs` が生成。frontendの版フィールドも同スクリプトの同期対象 |
 | `Dictionary/Reverse/reverse-v2.bin` | `W/scripts/generate-reverse-dictionary.mjs` で生成 |

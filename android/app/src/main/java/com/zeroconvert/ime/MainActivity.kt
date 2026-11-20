@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import android.widget.Toast
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -333,9 +334,35 @@ fun MainScreen(
     var translationDownloadError by remember { mutableStateOf<String?>(null) }
     var showTranslationDownloadDialog by remember { mutableStateOf(false) }
     var translationDownloadJob by remember { mutableStateOf<Job?>(null) }
+    // キャッシュが無い間は辞書が使えない（学習語だけ）ため、ファイルの有無そのものを条件にする。
+    // 初回でなくても、端末にデータがあれば表示しない。
+    var englishDictionaryReady by remember { mutableStateOf(EnglishDictionaryManager.isReady(context)) }
+    var showEnglishDictionaryDialog by remember {
+        mutableStateOf(!EnglishDictionaryManager.isReady(context))
+    }
+    var englishDictionaryProgress by remember { mutableStateOf<EnglishDictionaryManager.Progress?>(null) }
+    var englishDictionaryError by remember { mutableStateOf<String?>(null) }
+    var englishDictionaryJob by remember { mutableStateOf<Job?>(null) }
     var translationTestInput by remember { mutableStateOf("会議は明日です。") }
     var translationTestResult by remember { mutableStateOf("未実行") }
     var translationTestRunning by remember { mutableStateOf(false) }
+    // First launch shows the terms once; the settings screen can reopen them afterwards.
+    var showTermsDialog by remember {
+        mutableStateOf(!imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_TERMS_ACCEPTED, false))
+    }
+    var showTermsViewer by remember { mutableStateOf(false) }
+    var termsText by remember { mutableStateOf("") }
+    var selectedLicense by remember { mutableStateOf<LicenseFullText?>(null) }
+    var licenseText by remember { mutableStateOf("") }
+    LaunchedEffect(showTermsDialog, showTermsViewer) {
+        if ((showTermsDialog || showTermsViewer) && termsText.isBlank()) {
+            termsText = runCatching { context.assets.open(UseTerms.ASSET).bufferedReader().use { it.readText() } }.getOrDefault("")
+        }
+    }
+    LaunchedEffect(selectedLicense) {
+        val asset = selectedLicense?.asset
+        licenseText = if (asset != null) LicenseNotices.readFullText(context, asset) else ""
+    }
     val uriHandler = LocalUriHandler.current
     val screenshotPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         android.Manifest.permission.READ_MEDIA_IMAGES
@@ -435,6 +462,31 @@ fun MainScreen(
                 .apply()
         } else if (translationDownloadJob?.isActive != true) {
             showTranslationDownloadDialog = true
+        }
+    }
+
+    fun startEnglishDictionaryDownload() {
+        if (englishDictionaryJob?.isActive == true) return
+        englishDictionaryError = null
+        englishDictionaryProgress = EnglishDictionaryManager.Progress(0)
+        englishDictionaryJob = coroutineScope.launch {
+            val result = EnglishDictionaryManager.download(context) { progress ->
+                coroutineScope.launch(Dispatchers.Main) { englishDictionaryProgress = progress }
+            }
+            englishDictionaryProgress = null
+            result.onSuccess { words ->
+                englishDictionaryError = null
+                englishDictionaryReady = EnglishDictionaryManager.isReady(context)
+                EnglishWordDictionary.reload(context)
+                Toast.makeText(
+                    context,
+                    if (words > 0) "英語辞書を保存しました（${words}語）" else "英語辞書は既に準備されています",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { error ->
+                englishDictionaryError = error.message ?: "ダウンロードに失敗しました"
+                englishDictionaryReady = EnglishDictionaryManager.isReady(context)
+            }
         }
     }
 
@@ -1209,7 +1261,7 @@ fun MainScreen(
         SettingsSection("タイポ補正と先読み", palette) {
             SettingsSwitchRow(
                 title = "タイポ補正",
-                description = "辞書・打鍵の補正規則とZeroCon Modelで誤入力を補正します。通常変換で補正できなかった入力は、モデルによる補正候補を提案します。補正候補はタップで反映できます。",
+                description = "打鍵の補正規則とZeroCon Modelで誤入力を補正します。通常変換で補正できなかった入力は、モデルによる補正候補を提案します。補正候補はタップで反映できます。",
                 checked = isDictionaryTypoCorrection,
                 palette = palette,
                 onCheckedChange = { checked ->
@@ -1372,6 +1424,24 @@ fun MainScreen(
                             )
                         }
                     }
+                }
+            }
+            SettingsDivider(palette)
+            SettingsRow(
+                title = "英語辞書",
+                description = if (englishDictionaryReady) {
+                    "単語補完用の辞書（約3万語）が準備されています。"
+                } else {
+                    "単語補完用の辞書が未取得です。取得すると英字モードで補完候補が出ます。"
+                },
+                palette = palette
+            ) {
+                if (!englishDictionaryReady) {
+                    SettingsSecondaryButton(
+                        text = "ダウンロード",
+                        palette = palette,
+                        onClick = { showEnglishDictionaryDialog = true }
+                    )
                 }
             }
             SettingsDivider(palette)
@@ -2234,36 +2304,42 @@ fun MainScreen(
             }
         }
 
+        // The list is shared with the Windows settings app: licenses/third-party.json.
+        val licenseContext = LocalContext.current
+        val licenseEntries = remember { LicenseNotices.entries(licenseContext) }
         SettingsSection("オープンソースライセンス", palette) {
-            LicenseRow(
-                title = "azooKey / AzooKeyKanaKanjiConverter",
-                license = "MIT License — Copyright (c) 2023-2026 Miwa (ensan-hcl)",
+            licenseEntries.forEachIndexed { index, entry ->
+                if (index > 0) SettingsDivider(palette)
+                LicenseRow(
+                    title = entry.title,
+                    license = listOf(entry.license, entry.description)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" — "),
+                    palette = palette
+                )
+            }
+        }
+        SettingsSection("利用規約", palette) {
+            SettingsRow(
+                title = "利用規約",
+                description = "個人・非商業利用に限り無償提供。商用組み込み・再配布は許諾しません。",
                 palette = palette
-            )
-            SettingsDivider(palette)
-            LicenseRow(
-                title = "Zenz / zenz-v3.2 Neural Models",
-                license = "Apache License 2.0 — Copyright (c) Miwa Keita (ensan-hcl)",
-                palette = palette
-            )
-            SettingsDivider(palette)
-            LicenseRow(
-                title = "LOUDS System Dictionary & Emoji Dictionary",
-                license = "Apache License 2.0 — Miwa (ensan-hcl) / Mozc & Unicode",
-                palette = palette
-            )
-            SettingsDivider(palette)
-            LicenseRow(
-                title = "PLaMo 3 Translate",
-                license = "PLaMo Community License — Copyright (c) Preferred Networks, Inc.",
-                palette = palette
-            )
-            SettingsDivider(palette)
-            LicenseRow(
-                title = "llama.cpp",
-                license = "MIT License — Copyright (c) 2023-2026 Georgi Gerganov and contributors",
-                palette = palette
-            )
+            ) {
+                TextButton(onClick = { showTermsViewer = true }) { Text("表示する") }
+            }
+        }
+        val fullTexts = remember { LicenseNotices.fullTexts(licenseContext) }
+        SettingsSection("ライセンス全文", palette) {
+            fullTexts.forEachIndexed { index, item ->
+                if (index > 0) SettingsDivider(palette)
+                SettingsRow(
+                    title = item.title,
+                    description = item.asset,
+                    palette = palette
+                ) {
+                    TextButton(onClick = { selectedLicense = item }) { Text("表示する") }
+                }
+            }
         }
     }
 
@@ -2374,6 +2450,38 @@ fun MainScreen(
             )
         }
 
+        if (showTermsDialog) {
+            UseTermsDialog(
+                palette = palette,
+                text = termsText,
+                onAgree = {
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_TERMS_ACCEPTED, true)
+                        .apply()
+                    showTermsDialog = false
+                }
+            )
+        }
+
+        if (showTermsViewer) {
+            UseTermsDialog(
+                palette = palette,
+                text = termsText,
+                onAgree = { showTermsViewer = false },
+                onDismiss = { showTermsViewer = false }
+            )
+        }
+
+        if (selectedLicense != null) {
+            UseTermsDialog(
+                palette = palette,
+                title = selectedLicense?.title ?: "ライセンス全文",
+                text = licenseText,
+                onAgree = { selectedLicense = null },
+                onDismiss = { selectedLicense = null }
+            )
+        }
+
         if (showTranslationDownloadDialog) {
             AlertDialog(
                 onDismissRequest = { showTranslationDownloadDialog = false },
@@ -2406,6 +2514,60 @@ fun MainScreen(
                 dismissButton = {
                     TextButton(onClick = { showTranslationDownloadDialog = false }) {
                         Text("キャンセル")
+                    }
+                }
+            )
+        }
+
+        if (showEnglishDictionaryDialog) {
+            val progress = englishDictionaryProgress
+            val error = englishDictionaryError
+            AlertDialog(
+                onDismissRequest = { showEnglishDictionaryDialog = false },
+                title = { Text("英語辞書をダウンロード") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "英字モードの単語補完に使う辞書（約3万語、約1.4MB）を初回のみダウンロードします。",
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "単語頻度データは wordfreq（CC BY-SA 4.0）から取得し、この端末内で抽出・並べ替えて保存します。配布物にデータは含まれません。",
+                            fontSize = 12.sp
+                        )
+                        TextButton(onClick = {
+                            uriHandler.openUri("https://creativecommons.org/licenses/by-sa/4.0/")
+                        }) {
+                            Text("CC BY-SA 4.0 を開く", fontSize = 12.sp)
+                        }
+                        if (progress != null) {
+                            LinearProgressIndicator(
+                                progress = { (progress.fraction * 100).roundToInt() / 100f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text("ダウンロード中 ${progress.received / 1024}KB / ${progress.total / 1024}KB", fontSize = 12.sp)
+                        }
+                        if (error != null) {
+                            Text("取得に失敗しました: $error", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showEnglishDictionaryDialog = false
+                            startEnglishDictionaryDownload()
+                        },
+                        enabled = englishDictionaryProgress == null
+                    ) {
+                        Text("同意してダウンロード")
+                    }
+                },
+                dismissButton = {
+                    // ファイルが無い間は辞書が使えないため、閉じても次回起動時に再表示される。
+                    // 設定画面の「英語辞書」行からでも再取得できる。
+                    TextButton(onClick = { showEnglishDictionaryDialog = false }) {
+                        Text("後で")
                     }
                 }
             )
@@ -2497,6 +2659,39 @@ private fun SplitKeyboardGapSetting(
             }
         }
     }
+}
+
+@Composable
+private fun UseTermsDialog(
+    palette: ZeroConPalette,
+    text: String,
+    onAgree: () -> Unit,
+    onDismiss: (() -> Unit)? = null,
+    title: String = "利用規約"
+) {
+    AlertDialog(
+        onDismissRequest = { onDismiss?.invoke() /* first launch must choose before continuing */ },
+        title = { Text(title, color = palette.textPrimary) },
+        text = {
+            LazyColumn(modifier = Modifier.height(360.dp)) {
+                item {
+                    Text(
+                        text = text.ifBlank { UseTerms.BUNDLED_FALLBACK },
+                        color = palette.textSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (onDismiss != null) {
+                TextButton(onClick = onDismiss) { Text("閉じる") }
+            } else {
+                TextButton(onClick = onAgree) { Text("同意して使う", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) }
+            }
+        }
+    )
 }
 
 @Composable

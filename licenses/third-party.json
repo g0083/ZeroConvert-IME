@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "note": "Single source for the open-source license lists shown in the Windows settings app and the Android settings screen. Legal notices and full license texts stay in android/THIRD_PARTY_LICENSES.md, windows/deployment/THIRD_PARTY_LICENSES.md and the license files bundled with each platform.",
+  "entries": [
+    {
+      "id": "azookey-converter",
+      "title": "azooKey / AzooKeyKanaKanjiConverter",
+      "credit": "Copyright (c) 2023-2026 Miwa (ensan-hcl) and contributors",
+      "license": "MIT License",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "azookey-windows",
+      "title": "azooKey-Windows",
+      "credit": "Copyright (c) 2026 fkunn1326",
+      "license": "MIT License",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "zenz",
+      "title": "ZeroCon Model Nano v4.1（上流: zenz-v3.2-xsmall）",
+      "credit": "上流モデル Copyright (c) Miwa Keita (ensan-hcl)",
+      "license": "Apache-2.0（上流）",
+      "note": "ZeroCon Model Nano の重み・学習物は独自改変物で、本製品外での利用・再配布を許諾しません。",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "dictionary",
+      "title": "Dictionary（かな漢字変換辞書データ）",
+      "credit": "azooKey Dictionary / Mozc / Unicode Emoji Data",
+      "license": "Apache-2.0 / BSD-3-Clause / Unicode-3.0",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "llama-cpp",
+      "title": "llama.cpp (GGML / GGUF 推論ランタイム)",
+      "credit": "Copyright (c) Georgi Gerganov and contributors",
+      "license": "MIT License",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "androidx-compose",
+      "title": "AndroidX / Jetpack Compose",
+      "credit": "Copyright (C) The Android Open Source Project",
+      "license": "Apache-2.0",
+      "platforms": ["android"]
+    },
+    {
+      "id": "kotlin",
+      "title": "Kotlin / kotlinx.coroutines",
+      "credit": "Copyright (C) JetBrains s.r.o.",
+      "license": "Apache-2.0",
+      "platforms": ["android"]
+    },
+    {
+      "id": "swift-runtime",
+      "title": "Swift ランタイム / Foundation / ICU / LLVM",
+      "credit": "Apple Inc. / Unicode, Inc. / The LLVM Project",
+      "license": "Apache-2.0 / Unicode-3.0",
+      "notes": {
+        "android": "Swift ランタイムと libc++ を同梱し、ICU のデータを含みます。",
+        "windows": "Swift ランタイム DLL と _FoundationICU.dll、LLVM OpenMP を同梱します。"
+      },
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "frontend-ui",
+      "title": "設定UI (Tauri / React / Radix UI ほか)",
+      "credit": "Tauri Programme / Meta / WorkOS / Tailwind Labs ほか",
+      "license": "MIT / Apache-2.0 / ISC",
+      "platforms": ["windows"]
+    },
+    {
+      "id": "rust-crates",
+      "title": "Rust クレート",
+      "credit": "tokio / tonic / serde ほか 476 クレートをバイナリに静的リンク",
+      "license": "MIT / Apache-2.0 / Unicode-3.0 / MPL-2.0",
+      "platforms": ["windows"]
+    },
+    {
+      "id": "english-wordfreq",
+      "title": "英語補完辞書（wordfreq 3.1.1、オンデマンド取得）",
+      "credit": "wordfreq by Robyn Speer (Luminoso)",
+      "license": "CC BY-SA 4.0（データ）／Apache-2.0（コード）",
+      "note": "初回起動時に取得し、端末内で ASCII 小文字の頻度上位 30,000 語に抽出します（卑語・短縮形語幹は除外）。改変物は端末内にのみ存在し、配布物には含まれません。",
+      "platforms": ["windows"]
+    },
+    {
+      "id": "plamo",
+      "title": "PLaMo 3 Translate (翻訳モデル)",
+      "credit": "Copyright (c) Preferred Networks, Inc.",
+      "license": "PLaMo Community License",
+      "note": "本パッケージには同梱せず、設定での同意後にダウンロードします。年商10億円以下の商用利用は登録後に無償です。",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "full-text",
+      "title": "ライセンス全文",
+      "credit": "アプリに同梱しています。",
+      "license": "",
+      "notes": {
+        "android": "assets/licenses/ に THIRD_PARTY_LICENSES.md、MIT/Apache-2.0/Unicode の全文と各 NOTICE を同梱。",
+        "windows": "インストール先に THIRD_PARTY_LICENSES.md / THIRD_PARTY_RUST.md / THIRD_PARTY_FRONTEND.md / LICENSE-*.txt を同梱。"
+      },
+      "platforms": ["android", "windows"]
+    }
+  ],
+  "fullTexts": [
+    {
+      "id": "apache",
+      "title": "Apache License 2.0（全文）",
+      "windowsFile": "LICENSE-Apache-2.0.txt",
+      "androidAsset": "licenses/Apache-2.0.txt"
+    },
+    {
+      "id": "swift",
+      "title": "Swift Runtime Exception（全文）",
+      "windowsFile": "LICENSE-Swift.txt",
+      "androidAsset": "licenses/NOTICE-Swift-Runtime.txt"
+    },
+    {
+      "id": "unicode",
+      "title": "Unicode License V3（全文）",
+      "windowsFile": "LICENSE-Unicode.txt",
+      "androidAsset": "licenses/Unicode-License-V3.txt"
+    },
+    {
+      "id": "third-party",
+      "title": "THIRD_PARTY_LICENSES.md（全文）",
+      "windowsFile": "THIRD_PARTY_LICENSES.md",
+      "androidAsset": "licenses/THIRD_PARTY_LICENSES.md"
+    },
+    {
+      "id": "rust",
+      "title": "Rust クレート一覧（476 クレート）",
+      "windowsFile": "THIRD_PARTY_RUST.md",
+      "androidAsset": null
+    },
+    {
+      "id": "frontend",
+      "title": "フロントエンド依存一覧（95 パッケージ）",
+      "windowsFile": "THIRD_PARTY_FRONTEND.md",
+      "androidAsset": null
+    },
+    {
+      "id": "mit",
+      "title": "MIT License（azooKey / llama.cpp）",
+      "windowsFile": "THIRD_PARTY_LICENSES.md",
+      "androidAsset": "licenses/NOTICE-MIT.txt"
+    },
+    {
+      "id": "mozc",
+      "title": "Mozc 辞書データ・補正規則（BSD-3-Clause）",
+      "windowsFile": "THIRD_PARTY_LICENSES.md",
+      "androidAsset": "licenses/NOTICE-Mozc.txt"
+    },
+    {
+      "id": "llvm",
+      "title": "LLVM libc++ / OpenMP（Apache-2.0 with LLVM Exceptions）",
+      "windowsFile": "LICENSE-Apache-2.0.txt",
+      "androidAsset": "licenses/NOTICE-LLVM.txt"
+    },
+    {
+      "id": "androidx",
+      "title": "AndroidX / Jetpack Compose（Apache-2.0）",
+      "windowsFile": null,
+      "androidAsset": "licenses/NOTICE-AndroidX-Apache.txt"
+    },
+    {
+      "id": "kotlin",
+      "title": "Kotlin / kotlinx.coroutines（Apache-2.0）",
+      "windowsFile": null,
+      "androidAsset": "licenses/NOTICE-Kotlin-Apache.txt"
+    }
+  ]
+}

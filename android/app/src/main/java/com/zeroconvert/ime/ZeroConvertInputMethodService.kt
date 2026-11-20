@@ -93,6 +93,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
     companion object {
         private const val TAG = "ZeroConvertIME"
         const val PREFS_SETTINGS = "ime_settings"
+        // Read once; afterwards the terms are reachable from the settings screen only.
+        const val KEY_TERMS_ACCEPTED = "terms_accepted"
         const val KEY_REALTIME_INLINE = "realtime_inline_conversion"
         const val KEY_AUTO_COMMIT_ENABLED = "auto_commit_enabled"
         const val KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE = "auto_commit_rewind_on_backspace"

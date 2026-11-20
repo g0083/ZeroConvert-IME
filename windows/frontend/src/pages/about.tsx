@@ -1,11 +1,33 @@
+import { useState } from "react";
 import { ShieldCheck, Zap } from "lucide-react";
+import licenses from "../../../../licenses/third-party.json";
+import useTermsText from "../../../deployment/USE-TERMS.txt?raw";
+import apacheText from "../../../deployment/LICENSE-Apache-2.0.txt?raw";
+import swiftText from "../../../deployment/LICENSE-Swift.txt?raw";
+import unicodeText from "../../../deployment/LICENSE-Unicode.txt?raw";
+import thirdPartyText from "../../../deployment/THIRD_PARTY_LICENSES.md?raw";
+import rustText from "../../../deployment/THIRD_PARTY_RUST.md?raw";
+import frontendText from "../../../deployment/THIRD_PARTY_FRONTEND.md?raw";
 import { Button } from "@/components/ui/button";
 import { SettingsRow, SettingsSection } from "@/components/settings-section";
 import { useUpdates } from "@/components/update-provider";
 import { ZeroConvertLogo } from "@/components/zeroconvert-logo";
 
+const fullTexts: Record<string, { label: string; text: string }> = {
+    apache: { label: "Apache License 2.0（全文）", text: apacheText },
+    swift: { label: "Swift Runtime Exception（全文）", text: swiftText },
+    unicode: { label: "Unicode License V3（全文）", text: unicodeText },
+    "third-party": { label: "THIRD_PARTY_LICENSES.md（全文）", text: thirdPartyText },
+    rust: { label: "Rust クレート一覧（476 クレート）", text: rustText },
+    frontend: { label: "フロントエンド依存一覧（95 パッケージ）", text: frontendText },
+    mit: { label: "MIT License（azooKey / llama.cpp）", text: thirdPartyText },
+    mozc: { label: "Mozc 辞書データ・補正規則（BSD-3-Clause）", text: thirdPartyText },
+    llvm: { label: "LLVM（Apache-2.0）", text: apacheText },
+};
+
 export const About = () => {
     const { version, result, status, error, check, start } = useUpdates();
+    const [selectedFullText, setSelectedFullText] = useState<string>("apache");
     const busy = status === "checking" || status === "starting";
     const currentVersion = version ?? result?.current_version ?? null;
     return (
@@ -84,27 +106,55 @@ export const About = () => {
                         ZeroCon IME は、以下のオープンソースソフトウェア・言語モデル・辞書データの成果物を活用し、独自の高速化・ZeroCon AI 直結推論・ストリーミング自動確定・UIリデザインを施した派生ソフトウェアです。
                     </p>
                 </div>
-                <SettingsRow label="azooKey-Windows / AzooKeyKanaKanjiConverter" description="Copyright (c) ensan-hcl / batao9">
-                    <span className="text-xs font-mono text-muted-foreground">MIT License</span>
-                </SettingsRow>
-                <SettingsRow label="Zenz / zenz-v3.2 (ZeroCon Model ベースモデル)" description="Copyright (c) Miwa Keita (ensan-hcl)">
-                    <span className="text-xs font-mono text-muted-foreground">Apache-2.0</span>
-                </SettingsRow>
-                <SettingsRow label="zenz-v3.1-xsmall（corecctor のベースモデル）" description="Miwa Keita (ensan-hcl)。独自の追加学習・Q4_K_M量子化を施した ZeroCon Model Corrector も同ライセンスで配布します。">
-                    <span className="text-xs font-mono text-muted-foreground">CC BY-SA 4.0</span>
-                </SettingsRow>
-                <SettingsRow label="Dictionary (かな漢字変換辞書データ)" description="azooKey Dictionary / Mozc / IPAdic">
-                    <span className="text-xs font-mono text-muted-foreground">Apache-2.0 / BSD-3-Clause</span>
-                </SettingsRow>
-                <SettingsRow label="llama.cpp (GGML / GGUF 推論ランタイム)" description="Georgi Gerganov et al.">
-                    <span className="text-xs font-mono text-muted-foreground">MIT License</span>
-                </SettingsRow>
-                <SettingsRow label="PLaMo 3 Translate (翻訳モデル)" description="Preferred Networks, Inc. (PFN)。PLaMo Community License（年商10億円以下は登録後無償商用可）">
-                    <span className="text-xs font-mono text-muted-foreground">PLaMo Community License</span>
-                </SettingsRow>
-                <SettingsRow label="ライセンス全文">
-                    <span className="text-xs font-mono text-muted-foreground">THIRD_PARTY_LICENSES.md</span>
-                </SettingsRow>
+                {licenses.entries
+                    .filter((entry) => entry.platforms.includes("windows"))
+                    .map((entry) => (
+                        <SettingsRow
+                            key={entry.id}
+                            label={entry.title}
+                            description={entry.notes?.windows ?? entry.note ?? entry.credit}
+                        >
+                            {entry.license ? (
+                                <span className="text-xs font-mono text-muted-foreground">{entry.license}</span>
+                            ) : null}
+                        </SettingsRow>
+                    ))}
+            </SettingsSection>
+
+            <SettingsSection title="ライセンス全文">
+                <div className="p-4 space-y-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                        同梱しているライセンス本文を表示できます。選択すると下に全文が表示されます。
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                        {licenses.fullTexts
+                            .filter((item) => item.windowsFile && fullTexts[item.id])
+                            .map((item) => (
+                                <Button
+                                    key={item.id}
+                                    variant={selectedFullText === item.id ? "secondary" : "outline"}
+                                    size="sm"
+                                    onClick={() => setSelectedFullText(item.id)}
+                                >
+                                    {fullTexts[item.id].label}
+                                </Button>
+                            ))}
+                    </div>
+                    <div className="max-h-96 overflow-y-auto rounded-md border border-border/50 bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap font-mono">
+                        {fullTexts[selectedFullText]?.text ?? ""}
+                    </div>
+                </div>
+            </SettingsSection>
+
+            <SettingsSection title="利用規約">
+                <div className="p-4 space-y-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                        ZeroCon IME は個人・非商業利用に限り無償で提供されます。商用組み込み・再配布・ZeroCon Model Nano の重み・学習データの再利用は許諾しません。インストール先の USE-TERMS.txt にも同じ文面を同梱しています。
+                    </p>
+                    <div className="max-h-72 overflow-y-auto rounded-md border border-border/50 bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                        {useTermsText}
+                    </div>
+                </div>
             </SettingsSection>
         </div>
     );

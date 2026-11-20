@@ -1,0 +1,13 @@
+LLVM libc++ for Android
+=======================
+
+Copyright (c) The LLVM Project
+Upstream: https://github.com/llvm/llvm-project
+License: Apache License 2.0 with LLVM Exceptions
+
+Bundled library: libc++_shared.so (Android NDK C++ standard library)
+
+The full Apache License 2.0 text is bundled as Apache-2.0.txt in this
+directory. The LLVM exception notice is published upstream at
+https://llvm.org/LICENSE.txt and is not reproduced here because the exception
+adds no attribution requirement beyond the Apache License 2.0.

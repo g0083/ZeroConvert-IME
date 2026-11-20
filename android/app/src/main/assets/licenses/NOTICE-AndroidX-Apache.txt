@@ -1,0 +1,25 @@
+AndroidX / Jetpack Compose
+Copyright (C) The Android Open Source Project
+
+ZeroCon Keyboard bundles the following AndroidX libraries, distributed by the
+Android Open Source Project under the Apache License, Version 2.0:
+
+  androidx.core:core-ktx
+  androidx.lifecycle:lifecycle-runtime-ktx
+  androidx.lifecycle:lifecycle-viewmodel-compose
+  androidx.lifecycle:lifecycle-viewmodel-ktx
+  androidx.activity:activity-compose
+  androidx.savedstate:savedstate-ktx
+  androidx.compose.ui:ui
+  androidx.compose.ui:ui-graphics
+  androidx.compose.ui:ui-tooling-preview
+  androidx.compose.material3:material3
+  androidx.compose.material:material-icons-extended
+  (versions pinned by compose-bom 2024.02.02 and the declarations in
+  rebuilt/build.gradle.kts)
+
+The full Apache License 2.0 text is bundled as Apache-2.0.txt in this
+directory.
+
+Upstream project: https://androidx.dev/
+License: https://www.apache.org/licenses/LICENSE-2.0

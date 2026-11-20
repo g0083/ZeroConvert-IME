@@ -1,0 +1,35 @@
+Swift runtime and Swift Foundation for Android
+==============================================
+
+Copyright (c) Apple Inc. and the Swift project authors
+Upstream: https://github.com/swiftlang/swift
+License: Apache License 2.0 with Runtime Library Exception
+
+The full Apache License 2.0 text is bundled as Apache-2.0.txt in this
+directory. The Runtime Library Exception is reproduced below.
+
+Bundled libraries (jniLibs):
+  libswiftCore.so, libswiftAndroid.so, libswiftDispatch.so,
+  libswiftObservation.so, libswiftSynchronization.so,
+  libswift_Builtin_float.so, libswift_Concurrency.so, libswift_RegexParser.so,
+  libswift_StringProcessing.so, libswift_math.so,
+  libFoundation.so, libFoundationEssentials.so,
+  libFoundationInternationalization.so, libFoundationNetworking.so,
+  lib_FoundationICU.so, libdispatch.so, libBlocksRuntime.so
+
+Additional statically linked Swift packages used by the conversion engine:
+
+  swift-algorithms   https://github.com/apple/swift-algorithms    Apache-2.0
+  swift-collections  https://github.com/apple/swift-collections   Apache-2.0
+  swift-numerics     https://github.com/apple/swift-numerics      Apache-2.0
+  swift-transformers https://github.com/huggingface/swift-transformers Apache-2.0
+  swift-tokenizers   https://github.com/ensan-hcl/swift-tokenizers Apache-2.0
+  Jinja              https://github.com/johnmai-dev/Jinja         MIT
+                     Copyright (c) 2024 John Mai
+
+## Runtime Library Exception to the Apache 2.0 License:
+
+    As an exception, if you use this Software to compile your source code and
+    portions of this Software are embedded into the binary product as a result,
+    you may redistribute such product without providing attribution as would
+    otherwise be required by Sections 4(a), 4(b) and 4(d) of the License.

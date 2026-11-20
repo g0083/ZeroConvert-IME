@@ -35,5 +35,9 @@ export default defineConfig(async () => ({
       // 3. tell vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    // The license list is shared with Android from the repository root.
+    fs: {
+      allow: [path.resolve(__dirname, "../..")],
+    },
   },
 }));

@@ -1,0 +1,13 @@
+Kotlin / kotlinx.coroutines
+Copyright (C) JetBrains s.r.o. and Kotlin Programming Language contributors
+
+ZeroCon Keyboard is written in Kotlin and bundles:
+
+  Kotlin standard library (org.jetbrains.kotlin:kotlin-stdlib)
+  kotlinx-coroutines-android (org.jetbrains.kotlinx:kotlinx-coroutines-android)
+
+Both are distributed under the Apache License, Version 2.0. The full Apache
+License 2.0 text is bundled as Apache-2.0.txt in this directory.
+
+Upstream projects: https://kotlinlang.org/ , https://github.com/Kotlin/kotlinx.coroutines
+License: https://www.apache.org/licenses/LICENSE-2.0

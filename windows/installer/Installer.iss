@@ -7,6 +7,9 @@
 #ifndef PayloadDir
   #define PayloadDir "../build"
 #endif
+#ifndef TermsFile
+  #define TermsFile "../deployment/USE-TERMS.txt"
+#endif
 #include BuildMetadataFile
 
 #define MyAppName "ZeroConvert IME"
@@ -37,6 +40,9 @@ AppUpdatesURL={#MyAppURL}
 #endif
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
+; The shipped terms are byte-identical to the repository root LICENSE file,
+; copied into the installer directory by prepare-distribution.ps1.
+LicenseFile={#TermsFile}
 DefaultDirName={autopf}\{#MyAppName}
 UsePreviousAppDir=no
 DisableDirPage=yes
@@ -84,8 +90,6 @@ Source: "{#PayloadDir}/*"; DestDir: "{app}"; Excludes: "{#MySettingsAppName},azo
 Source: "{#PayloadDir}/settings.json"; DestDir: "{userappdata}\Azookey"; Flags: onlyifdoesntexist uninsneveruninstall
 #endif
 #ifndef LocalZeroConPackage
-Source: "../data/keyboard-typo-dictionary-NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
-Source: "../data/keyboard-typo-rewrite-NOTICE.md"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
 Source: "./Azookey Startup.xml"; DestDir: "{app}"; DestName: ".azookey-startup-task.xml"; Flags: ignoreversion deleteafterinstall
 #else
 Source: "{#PayloadDir}/.azookey-startup-task.xml"; DestDir: "{app}"; Flags: ignoreversion deleteafterinstall

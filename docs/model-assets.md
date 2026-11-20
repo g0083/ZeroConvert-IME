@@ -7,7 +7,7 @@
 | `nano_v4_1_iq4_emb8` | `zerocon-nano-v4.1-iq4nl-emb8.gguf` | 19,602,048 bytes |
 | `nano_v4_1_q8` | `zerocon-nano-v4.1-q8_0.gguf` | 29,039,232 bytes |
 
-IQ4_emb8はNano v4.1の省メモリ版（内部IQ4_NL、入力埋め込み・出力Q8_0）。Q8はQ8_0高精度版。どちらもzenz-v3.2-xsmallを追加学習したApache-2.0派生モデル。SHA-256・元ファイル名・モデル仕様の正本は `windows/deployment/model-catalog.json` とする。
+IQ4_emb8はNano v4.1の省メモリ版（内部IQ4_NL、入力埋め込み・出力Q8_0）。Q8はQ8_0高精度版。どちらもzenz-v3.2-xsmall（Apache-2.0）に追加学習した独自改変モデルで、上流のApache-2.0条件は同梱表示で満たすが、重みの再利用・再配布は許諾しない。SHA-256・元ファイル名・モデル仕様の正本は `windows/deployment/model-catalog.json` とする。
 
 旧設定・旧ファイルとの互換移行にのみ対応し、旧 `zenz.gguf` 等をそのまま現行Nanoとしてフォールバック読み込みはしない。モデル未配置なら新しい配布資産を準備する。
 

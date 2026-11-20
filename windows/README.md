@@ -191,4 +191,4 @@ python3 scripts/vm.py --profile manual handoff
 - https://zenn.dev/mkpoli/scraps/6dc57fcd0335cf
 
 ## ライセンス
-本ソフトウェアは MIT / Apache-2.0 等の第三者ライセンスに加え、翻訳機能に PLaMo 3 Translate（Preferred Networks, Inc.）を PLaMo Community License の条件で内蔵しています。詳細は deployment/THIRD_PARTY_LICENSES.md を参照してください。
+本ソフトウェアは MIT / Apache-2.0 等の第三者ライセンスに加え、翻訳機能で PLaMo 3 Translate（Preferred Networks, Inc.）を利用します。PLaMo 3 Translate は同梱されず、設定画面での同意後にダウンロードされます。ライセンス条件と全文は deployment/THIRD_PARTY_LICENSES.md を参照してください。
