@@ -87,4 +87,39 @@ class CursorMoveCompositionTest {
         // The editor reports the caret the IME itself just placed.
         assertTrue(state.ownsSelection(preview.length, preview.length, 0, preview.length))
     }
+
+    @Test fun anEnglishCaretInsideTheWordKeepsTheWordAndTheCaret() {
+        val state = ComposingEditorState()
+        val editor = RecordingEditor()
+        val preview = "cat"
+        assertTrue(state.write(editor, preview, preview.length))
+        state.observeRange(100, 103)
+        val left = ComposingEditorState.moveByCodePoint(preview, 3, -1)
+        assertEquals(2, left)
+        assertTrue(state.write(editor, preview, left))
+        assertEquals("cat", editor.text)
+        assertEquals(2, state.cursor)
+        assertEquals(102, editor.cursor)
+        // The caret we placed must be recognised as ours, not an external move.
+        assertTrue(state.ownsSelection(102, 102, 100, 103))
+    }
+
+    @Test fun anEnglishInsertAndDeleteAtTheCaretEditAtTheCaret() {
+        // Models ZeroConvertInputMethodService: insert/delete inside
+        // englishComposing at englishCursorPosition rather than at the tail.
+        var buffer = "cat"
+        var cursor = ComposingEditorState.moveByCodePoint(buffer, buffer.length, -1)
+        assertEquals(2, cursor)
+        val insertAt = ComposingEditorState.snapBoundary(buffer, cursor.coerceIn(0, buffer.length))
+        buffer = buffer.substring(0, insertAt) + "a" + buffer.substring(insertAt)
+        cursor = ComposingEditorState.snapBoundary(buffer, insertAt + 1)
+        assertEquals("caat", buffer)
+        assertEquals(3, cursor)
+        val previous = ComposingEditorState.moveByCodePoint(buffer, cursor, -1)
+        assertEquals(2, previous)
+        buffer = buffer.substring(0, previous) + buffer.substring(cursor)
+        cursor = previous
+        assertEquals("cat", buffer)
+        assertEquals(2, cursor)
+    }
 }

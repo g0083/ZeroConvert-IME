@@ -730,6 +730,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         composingText.stopComposition()
         englishComposing = ""
+        englishCursorPosition = 0
         japaneseTouchBiases.clear()
         englishTouchBiases.clear()
         currentComposingSurface.value = ""
@@ -765,9 +766,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
         cancelPendingTranslation()
         val connection = currentInputConnection ?: return
         if (englishComposing.isNotEmpty()) {
-            englishComposing += text
+            val insertAt = ComposingEditorState.snapBoundary(
+                englishComposing,
+                englishCursorPosition.coerceIn(0, englishComposing.length)
+            )
+            englishComposing = englishComposing.substring(0, insertAt) + text + englishComposing.substring(insertAt)
+            englishCursorPosition = ComposingEditorState.snapBoundary(englishComposing, insertAt + text.length)
             currentComposingSurface.value = englishComposing
-            setManagedComposingText(connection, englishComposing, 1)
+            setEnglishComposingText(connection)
         } else {
             composingText.insertAtCursorPosition(text, InputStyle.DIRECT)
             currentComposingSurface.value = composingText.convertTargetBeforeCursor
@@ -1779,6 +1785,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     // English (alphabet) composing buffer for predictive completion
     var englishComposing: String = ""
+    // Caret offset inside [englishComposing], in UTF-16 code units. Kept in
+    // sync by cursor moves, inserts and deletes so they edit at the caret
+    // instead of always appending/deleting at the end.
+    var englishCursorPosition: Int = 0
 
     private val converter = KanaKanjiConverter()
     private var clipboardManager: ClipboardManager? = null
@@ -1816,6 +1826,36 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private fun setManagedComposingText(connection: android.view.inputmethod.InputConnection?, text: CharSequence, cursor: Int): Boolean {
         if (connection == null || !connection.setComposingText(text, cursor)) return false
         composingEditor.recordPreview(text.toString(), expectTailCursor = true)
+        return true
+    }
+
+    private fun setEnglishComposingText(connection: android.view.inputmethod.InputConnection?): Boolean {
+        if (connection == null) return false
+        val text = englishComposing
+        val safeCursor = ComposingEditorState.snapBoundary(text, englishCursorPosition.coerceIn(0, text.length))
+        if (safeCursor == text.length) return setManagedComposingText(connection, text, 1)
+        val written = composingEditor.write(object : ComposingEditorState.Editor {
+            override fun beginBatch() { connection.beginBatchEdit() }
+            override fun composing(text: String) = connection.setComposingText(text, 1)
+            override fun selectionEnd(): Int? {
+                val request = android.view.inputmethod.ExtractedTextRequest().apply {
+                    hintMaxChars = MAX_LEFT_CONTEXT_LEN * 2 + text.length
+                    hintMaxLines = 1
+                }
+                val extracted = connection.getExtractedText(request, 0) ?: return null
+                return ComposingEditorState.absoluteSelectionEnd(extracted.startOffset, extracted.selectionStart, extracted.selectionEnd)
+            }
+            override fun select(position: Int) = connection.setSelection(position, position)
+            override fun endBatch() { connection.endBatchEdit() }
+        }, text, safeCursor)
+        if (!written) {
+            // Without a readable selection the caret cannot be placed mid-word:
+            // keep the editor caret at the tail (write already published the
+            // text) and snap the internal caret to the same place.
+            englishCursorPosition = text.length
+            composingEditor.adoptCursor(text.length)
+            return false
+        }
         return true
     }
 
@@ -2105,6 +2145,54 @@ class ZeroConvertInputMethodService : InputMethodService(),
         return true
     }
 
+    private fun resyncEnglishCursorToEditor(
+        absoluteCaret: Int,
+        candidatesStart: Int = -1,
+        candidatesEnd: Int = -1
+    ): Boolean {
+        val preview = englishComposing
+        if (preview.isEmpty()) return false
+        val previewOffset = when {
+            candidatesStart >= 0 && candidatesEnd >= candidatesStart &&
+                candidatesEnd - candidatesStart == preview.length -> {
+                val offset = absoluteCaret - candidatesStart
+                if (offset !in 0..preview.length) return false
+                offset
+            }
+            composingEditor.composingStartHint != null -> {
+                val hint = composingEditor.composingStartHint!!
+                val offset = absoluteCaret - hint
+                if (offset !in 0..preview.length) return false
+                offset
+            }
+            else -> {
+                val range = currentInputConnection?.getExtractedText(
+                    android.view.inputmethod.ExtractedTextRequest().apply {
+                        hintMaxChars = MAX_LEFT_CONTEXT_LEN * 2 + preview.length
+                        hintMaxLines = 1
+                    }, 0
+                ) ?: return false
+                if (range.startOffset < 0 || absoluteCaret < range.startOffset) return false
+                val caretInSnippet = absoluteCaret - range.startOffset
+                val snippet = range.text?.toString()
+                if (snippet != null && !snippet.startsWith(preview)) {
+                    val searchStart = (caretInSnippet - preview.length).coerceAtLeast(0)
+                    val candidateOrigin = snippet.indexOf(preview, searchStart)
+                    if (candidateOrigin < 0 || caretInSnippet < candidateOrigin || caretInSnippet > candidateOrigin + preview.length) {
+                        return false
+                    }
+                    caretInSnippet - candidateOrigin
+                } else {
+                    if (caretInSnippet !in 0..preview.length) return false
+                    caretInSnippet
+                }
+            }
+        }
+        englishCursorPosition = ComposingEditorState.snapBoundary(preview, previewOffset)
+        composingEditor.adoptCursor(englishCursorPosition)
+        return true
+    }
+
     /** Maps a caret offset inside the preview to the reading cursor it represents. */
     private fun readingOffsetForPreviewOffset(previewOffset: Int): Int {
         val reading = composingText.convertTarget
@@ -2215,6 +2303,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
             // alive; only a move out of the range is treated as external.
             if (isTranslationMode()) exitTranslationMode(revert = false)
             if (!resyncReadingCursorToEditor(newSelStart, candidatesStart, candidatesEnd)) {
+                clearInput()
+                currentInputConnection?.finishComposingText()
+            }
+        } else if (englishComposing.isNotEmpty() && composingText.isEmpty && !committingTranslation &&
+            !ownedSelection && !selfMoveRecent && !selected
+        ) {
+            // English phase mirrors the Japanese path: a caret that still maps
+            // into the composing word only moves the internal caret; a caret
+            // that no longer maps ends the composition.
+            if (isTranslationMode()) exitTranslationMode(revert = false)
+            if (!resyncEnglishCursorToEditor(newSelStart, candidatesStart, candidatesEnd)) {
                 clearInput()
                 currentInputConnection?.finishComposingText()
             }
@@ -2716,6 +2815,30 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun toggleLastCharCase() {
         if (isConfirming) return
+        if (englishComposing.isNotEmpty() && composingText.isEmpty) {
+            val cursor = ComposingEditorState.snapBoundary(
+                englishComposing,
+                englishCursorPosition.coerceIn(0, englishComposing.length)
+            )
+            if (cursor <= 0) return
+            val index = cursor - 1
+            val ch = englishComposing[index]
+            if (!ch.isLetter()) return
+            if (!isSensitiveInput()) {
+                undoHistory.push(
+                    ImeUndoEntry.EnglishComposing(
+                        previousText = englishComposing,
+                        touchBiases = englishTouchBiases.toList()
+                    )
+                )
+            }
+            val flipped = if (ch.isUpperCase()) ch.lowercaseChar() else ch.uppercaseChar()
+            englishComposing = englishComposing.substring(0, index) + flipped + englishComposing.substring(cursor)
+            currentComposingSurface.value = englishComposing
+            setEnglishComposingText(currentInputConnection)
+            triggerEnglishSuggestions(englishComposing)
+            return
+        }
         val ic = currentInputConnection ?: return
         val last = ic.getTextBeforeCursor(1, 0)?.toString() ?: return
         if (last.isNotEmpty()) {
@@ -2739,8 +2862,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isConfirming) return
         val ic = currentInputConnection ?: return
         if (englishComposing.isNotEmpty() && oldLength > 0 && englishComposing.length >= oldLength) {
+            englishCursorPosition = englishComposing.length
             val remaining = englishComposing.dropLast(oldLength)
             englishComposing = remaining
+            englishCursorPosition = remaining.length
             currentComposingSurface.value = remaining
             if (remaining.isEmpty()) {
                 setManagedComposingText(ic, "", 1)
@@ -3123,6 +3248,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             is ImeUndoEntry.EnglishComposing -> {
                 if (!composingText.isEmpty || hasSelectionInEditor) return false
                 englishComposing = entry.previousText
+                englishCursorPosition = englishComposing.length
                 englishTouchBiases.clear()
                 englishTouchBiases.addAll(entry.touchBiases)
                 currentComposingSurface.value = englishComposing
@@ -3164,6 +3290,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                             }
                         } else if (entry.previousEnglish.isNotEmpty()) {
                             englishComposing = entry.previousEnglish
+                            englishCursorPosition = englishComposing.length
                             cachedLeftContext = entry.previousLeftContext
                             leftContextConnection = ic
                             englishTouchBiases.clear()
@@ -3414,6 +3541,18 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isTranslationMode()) return false
         if (conversionRange.active) return performAdjustConversionRange(direction)
         canRewindOnNextBackspace = false
+        if (englishComposing.isNotEmpty() && composingText.isEmpty) {
+            val target = ComposingEditorState.moveByCodePoint(
+                englishComposing,
+                englishCursorPosition.coerceIn(0, englishComposing.length),
+                direction
+            )
+            if (target == englishCursorPosition) return false
+            englishCursorPosition = target
+            selfIssuedCursorMoveAt = System.currentTimeMillis()
+            setEnglishComposingText(currentInputConnection)
+            return true
+        }
         if (!composingText.isEmpty) {
             val target = ComposingEditorState.moveByCodePoint(
                 composingText.convertTarget,
@@ -3450,7 +3589,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
-        if (!composingText.isEmpty && event.hasNoModifiers() &&
+        if ((!composingText.isEmpty || englishComposing.isNotEmpty()) && event.hasNoModifiers() &&
             (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT || keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT)) {
             managedCursorKeys.add(keyCode)
             performCursorMove(if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
@@ -3696,6 +3835,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val ic = currentInputConnection
             cachedLeftContext = EditorContext.bounded(ic?.getTextBeforeCursor(MAX_LEFT_CONTEXT_LEN * 2, 0)?.toString().orEmpty())
             englishTouchBiases.clear()
+            englishCursorPosition = 0
         }
         if (!isSensitiveInput()) {
             undoHistory.push(
@@ -3705,7 +3845,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 )
             )
         }
-        englishComposing += ch
+        val insertAt = ComposingEditorState.snapBoundary(
+            englishComposing,
+            englishCursorPosition.coerceIn(0, englishComposing.length)
+        )
         if (!isSensitiveInput()) {
             val lowered = ch.lowercaseChar()
             val biasEntry = if (touchBias != null && touchBias.typedChar.lowercaseChar() == lowered) {
@@ -3713,10 +3856,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
             } else {
                 TouchKeyBias(lowered)
             }
-            englishTouchBiases.add(biasEntry)
+            englishTouchBiases.add(insertAt.coerceIn(0, englishTouchBiases.size), biasEntry)
         }
+        englishComposing = englishComposing.substring(0, insertAt) + ch + englishComposing.substring(insertAt)
+        englishCursorPosition = ComposingEditorState.snapBoundary(englishComposing, insertAt + 1)
         currentComposingSurface.value = englishComposing
-        setManagedComposingText(currentInputConnection, englishComposing, 1)
+        setEnglishComposingText(currentInputConnection)
         triggerEnglishSuggestions(englishComposing)
     }
 
@@ -3734,10 +3879,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
         if (isConfirming) return false
         if (isTranslationMode()) {
             if (englishComposing.isNotEmpty()) {
-                englishComposing = englishComposing.dropLast(1)
+                val cursor = ComposingEditorState.snapBoundary(
+                    englishComposing,
+                    englishCursorPosition.coerceIn(0, englishComposing.length)
+                )
+                if (cursor <= 0) return false
+                val previous = ComposingEditorState.moveByCodePoint(englishComposing, cursor, -1)
+                englishComposing = englishComposing.substring(0, previous) + englishComposing.substring(cursor)
+                englishCursorPosition = previous
                 currentComposingSurface.value = englishComposing
                 if (englishComposing.isNotEmpty()) {
-                    setManagedComposingText(currentInputConnection, englishComposing, 1)
+                    setEnglishComposingText(currentInputConnection)
                 } else {
                     setManagedComposingText(currentInputConnection, "", 0)
                 }
@@ -3763,6 +3915,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
         }
         if (englishComposing.isNotEmpty()) {
+            val cursor = ComposingEditorState.snapBoundary(
+                englishComposing,
+                englishCursorPosition.coerceIn(0, englishComposing.length)
+            )
+            if (cursor <= 0) return false
             if (!isSensitiveInput()) {
                 undoHistory.push(
                     ImeUndoEntry.EnglishComposing(
@@ -3771,13 +3928,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     )
                 )
             }
-            englishComposing = englishComposing.dropLast(1)
+            val previous = ComposingEditorState.moveByCodePoint(englishComposing, cursor, -1)
+            englishComposing = englishComposing.substring(0, previous) + englishComposing.substring(cursor)
+            englishCursorPosition = previous
             if (englishTouchBiases.isNotEmpty()) {
-                englishTouchBiases.removeAt(englishTouchBiases.lastIndex)
+                englishTouchBiases.removeAt(previous.coerceIn(0, englishTouchBiases.lastIndex))
             }
             currentComposingSurface.value = englishComposing
             if (englishComposing.isNotEmpty()) {
-                setManagedComposingText(currentInputConnection, englishComposing, 1)
+                setEnglishComposingText(currentInputConnection)
                 triggerEnglishSuggestions(englishComposing)
             } else {
                 setManagedComposingText(currentInputConnection, "", 1)
@@ -3835,6 +3994,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun clearEnglishInput() {
         englishComposing = ""
+        englishCursorPosition = 0
         japaneseTouchBiases.clear()
         englishTouchBiases.clear()
         currentComposingSurface.value = ""
@@ -4062,6 +4222,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         savedOriginalReading = ""
         composingText.stopComposition()
         englishComposing = ""
+        englishCursorPosition = 0
         japaneseTouchBiases.clear()
         englishTouchBiases.clear()
         currentComposingSurface.value = ""

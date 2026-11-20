@@ -117,6 +117,55 @@ pub(super) fn committed_word(c: &Composition) -> String {
     c.raw_input.clone()
 }
 
+/// Character index of the caret inside `raw_input` (0 = start, len = end).
+/// `cursor_position` is `None` when the caret is at the end, matching the
+/// Japanese `effective_cursor_and_total` convention.
+pub(super) fn cursor_char_index(c: &Composition) -> usize {
+    let total = c.raw_input.chars().count();
+    c.cursor_position.unwrap_or(total).min(total)
+}
+
+pub(super) fn split_at_char(s: &str, char_index: usize) -> (String, String) {
+    let total = s.chars().count();
+    let index = char_index.min(total);
+    let byte_index = s
+        .char_indices()
+        .nth(index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(s.len());
+    (
+        s[..byte_index].to_owned(),
+        s[byte_index..].to_owned(),
+    )
+}
+
+pub(super) fn insert_at_char(s: &mut String, char_index: usize, text: &str) {
+    let (before, after) = split_at_char(s, char_index);
+    s.clear();
+    s.push_str(&before);
+    s.push_str(text);
+    s.push_str(&after);
+}
+
+pub(super) fn remove_char_at(s: &mut String, char_index: usize) -> bool {
+    let total = s.chars().count();
+    if char_index >= total {
+        return false;
+    }
+    let byte_start = s
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(s.len());
+    let byte_end = s
+        .char_indices()
+        .nth(char_index + 1)
+        .map(|(byte, _)| byte)
+        .unwrap_or(s.len());
+    s.replace_range(byte_start..byte_end, "");
+    true
+}
+
 pub(super) fn candidates_with_store(
     prefix: &str,
     store: &EnglishLearningStore,
@@ -200,8 +249,6 @@ impl TextServiceFactory {
     ) -> Option<(CompositionState, Vec<ClientAction>)> {
         let active = c.state != CompositionState::None;
         let composing_email_domain = active && c.raw_input.starts_with('@');
-        let finish_without_learning =
-            || (CompositionState::None, vec![ClientAction::EndComposition]);
         let finish_with_learning = |explicit: bool| {
             (
                 CompositionState::None,
@@ -265,14 +312,20 @@ impl TextServiceFactory {
                     vec![ClientAction::AppendTextDirect(ch.to_string())],
                 ))
             }
-            UserAction::Backspace if active => Some(if c.raw_input.len() <= 1 {
-                (
-                    CompositionState::None,
-                    vec![ClientAction::RemoveText, ClientAction::EndComposition],
-                )
-            } else {
-                (CompositionState::Composing, vec![ClientAction::RemoveText])
-            }),
+            UserAction::Backspace if active => {
+                let cursor = cursor_char_index(c);
+                let total = c.raw_input.chars().count();
+                if cursor == 0 {
+                    Some((c.state.clone(), Vec::new()))
+                } else if total <= 1 {
+                    Some((
+                        CompositionState::None,
+                        vec![ClientAction::RemoveText, ClientAction::EndComposition],
+                    ))
+                } else {
+                    Some((CompositionState::Composing, vec![ClientAction::RemoveText]))
+                }
+            }
             UserAction::Escape if active => Some((
                 CompositionState::None,
                 vec![
@@ -281,11 +334,23 @@ impl TextServiceFactory {
                 ],
             )),
             UserAction::Enter if active => Some(finish_with_learning(c.selection_index > 0)),
-            UserAction::Delete | UserAction::Navigation(Navigation::Left | Navigation::Right)
-                if active =>
-            {
-                Some(finish_without_learning())
+            UserAction::Delete if active => {
+                let cursor = cursor_char_index(c);
+                let total = c.raw_input.chars().count();
+                if cursor >= total {
+                    Some((c.state.clone(), Vec::new()))
+                } else {
+                    Some((CompositionState::Composing, vec![ClientAction::DeleteForwardText]))
+                }
             }
+            UserAction::Navigation(Navigation::Left) if active => Some((
+                CompositionState::Composing,
+                vec![ClientAction::MoveCursor(-1)],
+            )),
+            UserAction::Navigation(Navigation::Right) if active => Some((
+                CompositionState::Composing,
+                vec![ClientAction::MoveCursor(1)],
+            )),
             UserAction::Tab if active => {
                 let count = c.candidates.texts.len();
                 if count <= 1 {
@@ -558,16 +623,44 @@ mod tests {
                 ClientAction::SetIMEMode(InputMode::Kana),
             ]
         );
-        for direction in [Navigation::Left, Navigation::Right] {
-            assert_eq!(
-                plan(&c, UserAction::Navigation(direction)),
-                (CompositionState::None, vec![ClientAction::EndComposition])
-            );
-        }
+        assert_eq!(
+            plan(&c, UserAction::Navigation(Navigation::Left)),
+            (
+                CompositionState::Composing,
+                vec![ClientAction::MoveCursor(-1)]
+            )
+        );
+        assert_eq!(
+            plan(&c, UserAction::Navigation(Navigation::Right)),
+            (
+                CompositionState::Composing,
+                vec![ClientAction::MoveCursor(1)]
+            )
+        );
+        // At the end of the word, Delete is a no-op and keeps the composition.
         assert_eq!(
             plan(&c, UserAction::Delete),
-            (CompositionState::None, vec![ClientAction::EndComposition])
+            (CompositionState::Composing, Vec::new())
         );
+        // Backspace/Delete respect a caret inside the word.
+        c.cursor_position = Some(1);
+        assert_eq!(
+            plan(&c, UserAction::Backspace).1,
+            [ClientAction::RemoveText]
+        );
+        assert_eq!(
+            plan(&c, UserAction::Delete),
+            (
+                CompositionState::Composing,
+                vec![ClientAction::DeleteForwardText]
+            )
+        );
+        c.cursor_position = Some(0);
+        assert_eq!(
+            plan(&c, UserAction::Backspace),
+            (CompositionState::Composing, Vec::new())
+        );
+        c.cursor_position = None;
         assert_eq!(
             plan(&c, UserAction::Input('.')).1,
             vec![
@@ -732,5 +825,40 @@ mod tests {
                 ],
             ))
         );
+    }
+
+    #[test]
+    fn cursor_helpers_insert_and_delete_at_caret() {
+        assert_eq!(split_at_char("hello", 2), ("he".to_owned(), "llo".to_owned()));
+        assert_eq!(split_at_char("hello", 0), ("".to_owned(), "hello".to_owned()));
+        assert_eq!(split_at_char("hello", 5), ("hello".to_owned(), "".to_owned()));
+        assert_eq!(split_at_char("hello", 99), ("hello".to_owned(), "".to_owned()));
+
+        let mut word = "helo".to_owned();
+        insert_at_char(&mut word, 3, "l");
+        assert_eq!(word, "hello");
+
+        let mut start = "hello".to_owned();
+        insert_at_char(&mut start, 0, "x");
+        assert_eq!(start, "xhello");
+
+        let mut middle = "hello".to_owned();
+        assert!(remove_char_at(&mut middle, 1));
+        assert_eq!(middle, "hllo");
+        assert!(!remove_char_at(&mut middle, 99));
+        assert_eq!(middle, "hllo");
+
+        let mut comp = Composition {
+            state: CompositionState::Composing,
+            raw_input: "hello".into(),
+            ..Default::default()
+        };
+        assert_eq!(cursor_char_index(&comp), 5);
+        comp.cursor_position = Some(2);
+        assert_eq!(cursor_char_index(&comp), 2);
+        comp.cursor_position = Some(99);
+        assert_eq!(cursor_char_index(&comp), 5);
+        comp.cursor_position = Some(0);
+        assert_eq!(cursor_char_index(&comp), 0);
     }
 }

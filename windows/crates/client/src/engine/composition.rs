@@ -8783,7 +8783,11 @@ impl TextServiceFactory {
                                     |s, r, json| english::apply_server_snapshot(s, r, &json),
                                 );
                             }
-                            raw_input.push_str(text);
+                            // English phase: insert at the caret instead of always appending.
+                            let total = raw_input.chars().count();
+                            let cursor = cursor_position.unwrap_or(total).min(total);
+                            english::insert_at_char(&mut raw_input, cursor, text);
+                            cursor_position = Some(cursor + text.chars().count());
                             candidates =
                                 english::candidates_with_learning(&raw_input, read_learning);
                             selection_index = 0;
@@ -8791,7 +8795,11 @@ impl TextServiceFactory {
                             raw_hiragana = raw_input.clone();
                             preview = raw_input.clone();
                             suffix.clear();
-                            self.set_text(&preview, "")?;
+                            let (before, after) = english::split_at_char(
+                                &raw_input,
+                                cursor_position.unwrap_or(raw_input.chars().count()),
+                            );
+                            self.set_text(&before, &after)?;
                             self.sync_candidate_window_after_text_update(
                                 &mut ipc_service,
                                 &candidates,
@@ -8963,30 +8971,45 @@ impl TextServiceFactory {
                     ClientAction::RemoveText | ClientAction::DeleteForwardText => {
                         let is_delete_forward = matches!(action, ClientAction::DeleteForwardText);
                         if mode == InputMode::Latin {
-                            if !is_delete_forward {
-                                raw_input.pop();
-                                candidates = english::candidates_with_learning(
-                                    &raw_input,
-                                    !ipc_service.is_private_input()
-                                        && app_config.learning.mode.capability().read,
-                                );
-                                selection_index = 0;
-                                corresponding_count = raw_input.len() as i32;
-                                raw_hiragana = raw_input.clone();
-                                preview = raw_input.clone();
-                                suffix.clear();
-                                if raw_input.is_empty() {
-                                    ipc_service.clear_pending_conversion_continuation();
-                                }
-                                self.set_text(&preview, "")?;
-                                self.sync_candidate_window_after_text_update(
-                                    &mut ipc_service,
-                                    &candidates,
-                                    selection_index,
-                                    app_config,
-                                    &transition,
-                                )?;
+                            let total = raw_input.chars().count();
+                            let cursor = cursor_position.unwrap_or(total).min(total);
+                            let changed = if is_delete_forward {
+                                english::remove_char_at(&mut raw_input, cursor)
+                            } else if cursor > 0 {
+                                english::remove_char_at(&mut raw_input, cursor - 1)
+                            } else {
+                                false
+                            };
+                            if !is_delete_forward && changed {
+                                cursor_position = Some(cursor - 1);
+                            } else if !is_delete_forward {
+                                cursor_position = Some(cursor);
                             }
+                            candidates = english::candidates_with_learning(
+                                &raw_input,
+                                !ipc_service.is_private_input()
+                                    && app_config.learning.mode.capability().read,
+                            );
+                            selection_index = 0;
+                            corresponding_count = raw_input.len() as i32;
+                            raw_hiragana = raw_input.clone();
+                            preview = raw_input.clone();
+                            suffix.clear();
+                            if raw_input.is_empty() {
+                                ipc_service.clear_pending_conversion_continuation();
+                            }
+                            let (before, after) = english::split_at_char(
+                                &raw_input,
+                                cursor_position.unwrap_or(raw_input.chars().count()),
+                            );
+                            self.set_text(&before, &after)?;
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
                             persist_local_state!();
                             continue;
                         }
@@ -9152,6 +9175,38 @@ impl TextServiceFactory {
                         }
                     }
                     ClientAction::MoveCursor(offset) => {
+                        if mode == InputMode::Latin {
+                            // English phase: move the caret inside the word, mirroring
+                            // Japanese-mode MoveCursor, instead of committing the word.
+                            let total = raw_input.chars().count();
+                            let current = cursor_position.unwrap_or(total).min(total);
+                            let next = (current as isize + *offset as isize)
+                                .clamp(0, total as isize) as usize;
+                            cursor_position = Some(next);
+                            candidates = english::candidates_with_learning(
+                                &raw_input,
+                                !ipc_service.is_private_input()
+                                    && app_config.learning.mode.capability().read,
+                            );
+                            selection_index = 0;
+                            corresponding_count = raw_input.len() as i32;
+                            raw_hiragana = raw_input.clone();
+                            preview = raw_input.clone();
+                            suffix.clear();
+                            if !raw_input.is_empty() {
+                                let (before, after) = english::split_at_char(&raw_input, next);
+                                self.set_text(&before, &after)?;
+                            }
+                            self.sync_candidate_window_after_text_update(
+                                &mut ipc_service,
+                                &candidates,
+                                selection_index,
+                                app_config,
+                                &transition,
+                            )?;
+                            persist_local_state!();
+                            continue;
+                        }
                         ipc_service.clear_pending_conversion_continuation();
                         Self::clear_clause_caches(
                             &mut clause_snapshots,
@@ -9826,7 +9881,11 @@ impl TextServiceFactory {
                             ClauseState::write_back(state);
                             effect
                         };
-
+                        if mode == InputMode::Latin {
+                            // Candidate selection displays the suggestion itself; the
+                            // raw-input caret is no longer mid-word after it.
+                            cursor_position = None;
+                        }
                         if effect.applied {
                             self.sync_clause_action_ui(
                                 &preview,
