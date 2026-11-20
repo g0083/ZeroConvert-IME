@@ -212,7 +212,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let suggestion =
                         corrector::suggest_composition(context, &input, baseline, &config);
                     let auto_apply = suggestion.as_ref().is_some_and(|s| {
-                        corrector::can_auto_apply_composition(&input, baseline, &s.surface)
+                        corrector::can_auto_apply_composition_suggestion(&input, baseline, s)
                     });
                     (suggestion, auto_apply)
                 },

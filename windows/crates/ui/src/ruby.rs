@@ -552,7 +552,7 @@ __CORRECTION_DIFF_SCRIPT__
                                     '<span class="assist-action">' + (applied ? '補正済み · ' : '') +
                                     '<span class="ai-assist-tab">' + (applied ? 'Esc' : 'Tab') + '</span>' +
                                     (applied ? '戻す' : prediction || translation ? 'で確定' : 'で補正') + '</span></span>';
-                                if (prediction && assist.undoAvailable) {
+                                if ((prediction || assist.status === 'proposal') && assist.undoAvailable) {
                                     assistHtml += '<span class="assist-action">補正済み · Escで戻す</span>';
                                 }
                                 readingElement.innerHTML += assistHtml;

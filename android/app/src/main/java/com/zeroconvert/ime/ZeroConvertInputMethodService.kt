@@ -29,8 +29,10 @@ import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.*
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.zeroconvert.ime.azookey.input.ComposingText
+import com.zeroconvert.ime.azookey.input.InputPiece
 import com.zeroconvert.ime.azookey.input.InputStyle
 import com.zeroconvert.ime.assist.AssistRequestGate
+import com.zeroconvert.ime.assist.AutoTypoCorrectionStrength
 import com.zeroconvert.ime.assist.CorrectionSession
 import com.zeroconvert.ime.assist.InputPrivacy
 import com.zeroconvert.ime.assist.SharedAssistPolicy
@@ -116,7 +118,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_DYNAMIC_TOUCH_ASSIST = TouchAssistSettings.KEY_HIT_AREA // predictive hit area, default true
         const val KEY_TOUCH_TYPO_CORRECTION = TouchAssistSettings.KEY_CORRECTION // independent; inherits old setting once
         const val KEY_EXPERIMENTAL_AI_ASSIST = "experimental_ai_assist" // boolean, default true
-        const val KEY_AUTO_TYPO_CORRECTION = "auto_typo_correction" // boolean, default true
+        const val KEY_AUTO_TYPO_CORRECTION = "auto_typo_correction" // legacy boolean fallback
+        const val KEY_AUTO_TYPO_CORRECTION_STRENGTH = "auto_typo_correction_strength" // off|conservative|standard|aggressive
         const val KEY_DICTIONARY_TYPO_CORRECTION = "experimental_typo_correction"
         const val DEFAULT_DICTIONARY_TYPO_CORRECTION = true
         const val KEY_PREDICTIVE_CONVERSION = "predictive_conversion" // boolean, Android default: true, Windows default: false
@@ -213,7 +216,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isDynamicTouchAssistEnabledState = mutableStateOf(true)
     val isTouchTypoCorrectionEnabledState = mutableStateOf(true)
     val isAiAssistEnabledState = mutableStateOf(true)
-    val isAutoTypoCorrectionState = mutableStateOf(true)
+    val autoTypoCorrectionStrengthState = mutableStateOf(AutoTypoCorrectionStrength.STANDARD)
     val isDictionaryTypoCorrectionState = mutableStateOf(DEFAULT_DICTIONARY_TYPO_CORRECTION)
     val isPredictiveConversionState = mutableStateOf(true)
     val isPostCompositionPredictionState = mutableStateOf(DEFAULT_POST_COMPOSITION_PREDICTION)
@@ -818,7 +821,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             cancelPendingInference(edited = false)
             return
         }
-        if (!explicit && (!assist.autoApply || !isAutoTypoCorrectionState.value || !composingText.isAtEndIndex ||
+        if (!explicit && (!assist.autoApply || !autoTypoCorrectionStrengthState.value.isEnabled || !composingText.isAtEndIndex ||
                 hasSelectionInEditor || corrections.isApplied || assist.sourceReading != composingText.convertTargetBeforeCursor)) return
         when (SharedAssistPolicy.adoptionAction(assist, explicit, assist.autoApply, corrections.isApplied)) {
             "replaceComposition" -> {
@@ -831,11 +834,21 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 savedOriginalCandidates = candidatesList.filter { it.assist == null }
                 savedOriginalResult = lastInferredResult
                 savedOriginalInferredReading = lastInferredSurface
+                val currentBiases = if (isSensitiveInput()) emptyList() else japaneseTouchBiases.toList()
                 cancelPendingInference(edited = false)
-                if (!corrections.apply(composingText, assist.text, preview, explicit = explicit)) return
+                if (!corrections.apply(composingText, assist.text, preview, explicit = explicit, currentBiases = currentBiases)) return
                 if (!setComposingPreview(ic, assist.text + suffix)) {
                     corrections.revert(composingText)
                     return
+                }
+                japaneseTouchBiases.clear()
+                if (composingText.isAtEndIndex && !isSensitiveInput()) {
+                    val neutral = composingText.input.mapNotNull {
+                        (it.piece as? InputPiece.CharPiece)?.char?.let(::TouchKeyBias)
+                    }
+                    if (neutral.size == composingText.input.size) {
+                        japaneseTouchBiases.addAll(neutral)
+                    }
                 }
                 currentComposingSurface.value = composingText.convertTargetBeforeCursor
                 val readingOnly = CorrectionSession.isReadingOnlyCorrection(assist.text)
@@ -999,29 +1012,91 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
+    private fun syncCorrectionRevertState() {
+        corrections.reconcileWithInput(composingText)
+        aiAssistAdoptedState.value = corrections.canRevert
+    }
+
     fun revertAiAssist() {
         performRevertAiAssist()
     }
 
     private fun performRevertAiAssist(): Boolean {
-        if (!corrections.isApplied) return false
+        if (!corrections.canRevert) return false
         clearPostCompositionDisplay()
         val ic = currentInputConnection ?: return false
+        val immediate = corrections.isApplied && !corrections.isRefined
+        val revertedTarget = corrections.previewRevertedTarget(composingText) ?: run {
+            syncCorrectionRevertState()
+            return false
+        }
         cancelPendingInference(edited = false)
         // Only restore the internal snapshot after the editor accepted the undo.
-        if (!setComposingPreview(ic, savedOriginalSurface)) return false
-        corrections.revert(composingText)
+        if (!setComposingPreview(ic, revertedTarget)) return false
+        if (corrections.revert(composingText) == null) {
+            syncCorrectionRevertState()
+            return false
+        }
         currentComposingSurface.value = composingText.convertTargetBeforeCursor
-        predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
-        lastInferredSurface = savedOriginalInferredReading
-        lastInferredResult = savedOriginalResult
-        candidatesList.clear()
-        candidatesList.addAll(savedOriginalCandidates)
-        displayedConversionTicket = requestGate.capture(requestKey())
+        if (immediate) {
+            predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
+            lastInferredSurface = savedOriginalInferredReading
+            lastInferredResult = savedOriginalResult
+            candidatesList.clear()
+            candidatesList.addAll(savedOriginalCandidates)
+            displayedConversionTicket = requestGate.capture(requestKey())
+        } else {
+            japaneseTouchBiases.clear()
+            predictedCandidate.value = ""
+            lastInferredSurface = ""
+            lastInferredResult = ""
+            candidatesList.clear()
+            displayedConversionTicket = null
+        }
         inferenceHistory.clear()
         aiAssistAdoptedState.value = false
         aiAssistResultState.value = null
         pendingConversionContinuation = null
+        if (!immediate && composingText.convertTargetBeforeCursor.isNotEmpty()) {
+            triggerDebouncedConversion(composingText.convertTargetBeforeCursor, debounceMs = 0L)
+        }
+        return true
+    }
+
+    private fun performAutoRevertAiAssist(expectedSourceReading: String): Boolean {
+        if (isConfirming || isTranslationMode() || isSensitiveInput() || hasSelectionInEditor) return false
+        val ic = currentInputConnection ?: return false
+        if (!corrections.canRevert || corrections.isApplied || !composingText.isAtEndIndex) return false
+        if (expectedSourceReading != composingText.convertTargetBeforeCursor) return false
+        val biasesSnapshot = japaneseTouchBiases.toList()
+        val previewCtx = corrections.buildAutoRefinementContext(composingText, biasesSnapshot) ?: return false
+        cancelPendingInference(edited = false)
+        if (!setComposingPreview(ic, previewCtx.originInput.convertTarget)) {
+            syncCorrectionRevertState()
+            return false
+        }
+        val (revertedReading, revertedBiases) = corrections.autoRevert(composingText, biasesSnapshot) ?: run {
+            syncCorrectionRevertState()
+            return false
+        }
+        currentComposingSurface.value = revertedReading
+        japaneseTouchBiases.clear()
+        val charCount = composingText.input.count { it.piece is InputPiece.CharPiece }
+        if (revertedBiases.size == charCount) {
+            japaneseTouchBiases.addAll(revertedBiases)
+        }
+        predictedCandidate.value = ""
+        lastInferredSurface = ""
+        lastInferredResult = ""
+        candidatesList.clear()
+        displayedConversionTicket = null
+        inferenceHistory.clear()
+        aiAssistAdoptedState.value = false
+        aiAssistResultState.value = null
+        pendingConversionContinuation = null
+        if (revertedReading.isNotEmpty()) {
+            triggerDebouncedConversion(revertedReading, debounceMs = 0L, suppressCorrection = true)
+        }
         return true
     }
 
@@ -1579,7 +1654,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isDynamicTouchAssistEnabledState.value = touchAssist.hitAreaEnabled
         isTouchTypoCorrectionEnabledState.value = touchAssist.correctionEnabled
         isAiAssistEnabledState.value = prefs.getBoolean(KEY_EXPERIMENTAL_AI_ASSIST, true)
-        isAutoTypoCorrectionState.value = prefs.getBoolean(KEY_AUTO_TYPO_CORRECTION, true)
+        autoTypoCorrectionStrengthState.value = AutoTypoCorrectionStrength.readFrom(
+            prefs,
+            KEY_AUTO_TYPO_CORRECTION_STRENGTH,
+            KEY_AUTO_TYPO_CORRECTION,
+        )
         isDictionaryTypoCorrectionState.value = prefs.getBoolean(KEY_DICTIONARY_TYPO_CORRECTION, DEFAULT_DICTIONARY_TYPO_CORRECTION)
         isPredictiveConversionState.value = prefs.getBoolean(KEY_PREDICTIVE_CONVERSION, true)
         isPostCompositionPredictionState.value = prefs.getBoolean(
@@ -1636,11 +1715,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private data class PendingLearning(val reading: String, val surface: String, val english: Boolean,
                                       val selection: ConversionCommitLearning? = null,
                                       val historyRevision: Long = KanaKanjiConverter.learningHistoryRevision,
-                                      val englishExplicit: Boolean = false)
+                                      val englishExplicit: Boolean = false,
+                                      val privacyGeneration: Long)
     private val learningQueue = Channel<PendingLearning>(128)
     private val learningWorker = serviceScope.launch(Dispatchers.IO) {
         for (selection in learningQueue) {
-            if (!LearningPolicy.canWrite) continue
+            if (!mayWriteLearning(selection.privacyGeneration)) continue
             try {
                 if (selection.english) {
                     if (selection.historyRevision == KanaKanjiConverter.learningHistoryRevision) {
@@ -1656,8 +1736,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     // Conversion learning belongs to the shared engine: a queued commit
                     // is applied only when it has a live candidate identity and no
                     // history reset happened after the selection.
-                    selection.selection?.engineCandidateId?.takeIf { it.isNotEmpty() }?.let { id ->
-                        com.zeroconvert.ime.engine.WindowsEngine.commit(id, selection.historyRevision)
+                    selection.selection?.let { candidate ->
+                        com.zeroconvert.ime.engine.WindowsEngine.commit(
+                            candidate.engineCandidateId, selection.historyRevision, candidate.explicitSelection
+                        ) { mayWriteLearning(selection.privacyGeneration) }
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -1793,7 +1875,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         profile = aiProfileState.value,
         modelRevision = ZenzNative.modelRevision,
         assistEnabled = isAiAssistEnabled(),
-        autoCorrectionEnabled = isAutoTypoCorrectionState.value,
+        autoCorrectionEnabled = autoTypoCorrectionStrengthState.value.isEnabled,
         predictionModel = getPredictiveModel(),
         inputType = currentInputEditorInfo?.inputType ?: 0,
         imeOptions = currentInputEditorInfo?.imeOptions ?: 0,
@@ -1802,7 +1884,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         conversionRange = conversionRange.active,
         learningMode = LearningPolicy.mode.name,
         dictionaryCorrectionEnabled = isDictionaryTypoCorrectionState.value,
-        touchCorrectionEnabled = isTouchTypoCorrectionEnabledState.value
+        touchCorrectionEnabled = isTouchTypoCorrectionEnabledState.value,
+        autoCorrectionStrength = autoTypoCorrectionStrengthState.value.storageValue
     )
 
     private fun clearPostCompositionDisplay(clearCandidates: Boolean = true) {
@@ -1895,13 +1978,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
             conversionRange.clear()
             conversionRangeState.value = ""
             corrections.edited()
-            aiAssistAdoptedState.value = false
+            aiAssistAdoptedState.value = corrections.canRevert
         }
     }
 
     private val privateModeState = mutableStateOf(false)
     internal val isPrivateMode: Boolean get() = privateModeState.value
-    private var clipboardPrivacyGeneration = 0L
+    @Volatile private var clipboardPrivacyGeneration = 0L
     private var lastPrivateInputEndMillis = 0L
 
     private fun isSensitiveInput(): Boolean =
@@ -1923,13 +2006,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
+    private fun mayWriteLearning(generation: Long): Boolean =
+        LearningPolicy.canWrite && generation == clipboardPrivacyGeneration && !isPrivateMode
+
     private fun recordCommittedCorrections(text: String, reading: String = "") {
         if (isSensitiveInput()) return
         val accepted = corrections.committed(CorrectionSession.committedMatchTarget(text, reading))
         if (accepted.isEmpty() || !LearningPolicy.canWrite) return
+        val generation = clipboardPrivacyGeneration
+        val revision = KanaKanjiConverter.learningHistoryRevision
+        val canRecord = { mayWriteLearning(generation) && revision == KanaKanjiConverter.learningHistoryRevision }
         serviceScope.launch(Dispatchers.IO) {
-            for (entry in accepted) {
-                com.zeroconvert.ime.assist.TypoLearning.record(applicationContext, entry.reading, entry.surface)
+            ConversionCommitLearning.recordCorrections(accepted, canRecord) { typo, surface ->
+                com.zeroconvert.ime.assist.TypoLearning.record(applicationContext, typo, surface, canRecord)
             }
         }
     }
@@ -2487,7 +2576,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val resolved = touchBias ?: TouchKeyBias(kana[0])
             if (resolved.typedChar == kana[0]) {
                 japaneseTouchBiases.add(resolved)
-                while (japaneseTouchBiases.size > composingText.input.size) {
+                val charCount = composingText.input.count { it.piece is InputPiece.CharPiece }
+                while (japaneseTouchBiases.size > charCount) {
                     japaneseTouchBiases.removeAt(0)
                 }
             } else {
@@ -2538,7 +2628,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(modified.toString(), InputStyle.DIRECT)
         if (!isSensitiveInput() && composingText.isAtEndIndex &&
-            japaneseTouchBiases.isNotEmpty() && japaneseTouchBiases.size == composingText.input.size
+            japaneseTouchBiases.isNotEmpty() &&
+            japaneseTouchBiases.size == composingText.input.count { it.piece is InputPiece.CharPiece }
         ) {
             val prevBias = japaneseTouchBiases[japaneseTouchBiases.lastIndex]
             val mappedNearby = LinkedHashMap<Char, Float>()
@@ -2589,7 +2680,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(nextKana, InputStyle.DIRECT)
         if (!isSensitiveInput() && composingText.isAtEndIndex && nextKana.length == 1 &&
-            japaneseTouchBiases.isNotEmpty() && japaneseTouchBiases.size == composingText.input.size
+            japaneseTouchBiases.isNotEmpty() &&
+            japaneseTouchBiases.size == composingText.input.count { it.piece is InputPiece.CharPiece }
         ) {
             japaneseTouchBiases[japaneseTouchBiases.lastIndex] = TouchKeyBias(nextKana[0])
         } else if (!composingText.isAtEndIndex) {
@@ -2673,12 +2765,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun triggerDebouncedConversion(
         surface: String,
-        debounceMs: Long = DEFAULT_CONVERSION_DEBOUNCE_MS
+        debounceMs: Long = DEFAULT_CONVERSION_DEBOUNCE_MS,
+        suppressCorrection: Boolean = false,
     ) {
         if (isTranslationMode()) {
             scheduleTranslation()
             return
         }
+        syncCorrectionRevertState()
         if (isSensitiveInput() || composingText.isEmpty) pendingConversionContinuation = null
         cancelPendingInference(edited = false)
         val connection = currentInputConnection ?: return
@@ -2768,10 +2862,19 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     }
                     if (!sensitive && !reconversion && !rangeConversion &&
                         (isDictionaryTypoCorrectionState.value || isAiAssistEnabled()) && !hasTrailingIncompleteRomaji(surface)) {
-                        val allowCorrection = isDictionaryTypoCorrectionState.value && !corrections.isApplied && protectedPrefix.isEmpty()
+                        val allowCorrection = !suppressCorrection && isDictionaryTypoCorrectionState.value &&
+                            !corrections.isApplied && fixedPrefix.isEmpty()
                         val allowPrediction = isAiAssistEnabled()
                         val baselineReading = inlineBase?.enginePredictionReading.orEmpty()
-                        val inputMode = com.zeroconvert.ime.engine.engineInputMode(snapshot, japaneseLayoutState.value)
+                        val refinement = if (allowCorrection) {
+                            corrections.buildAutoRefinementContext(snapshot, touchBiasesSnapshot)
+                        } else {
+                            null
+                        }
+                        val inputMode = com.zeroconvert.ime.engine.engineInputMode(
+                            refinement?.originInput ?: snapshot,
+                            japaneseLayoutState.value
+                        )
                         val rawInput = if (allowCorrection && inputMode == "qwerty") {
                             com.zeroconvert.ime.engine.engineRawRomaji(snapshot)
                         } else {
@@ -2784,6 +2887,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         } else {
                             com.zeroconvert.ime.engine.engineTouchHints(snapshot, touchBiasesSnapshot)
                         }
+                        val originReading = refinement?.originReading.orEmpty()
+                        val appliedPrefix = refinement?.appliedPrefix.orEmpty()
+                        val originRaw = if (refinement != null && inputMode == "qwerty") {
+                            com.zeroconvert.ime.engine.engineRawRomaji(refinement.originInput)
+                        } else {
+                            ""
+                        }
+                        val originTouchHints = if (refinement == null) {
+                            ""
+                        } else if (inputMode == "flick") {
+                            com.zeroconvert.ime.engine.engineFlickTouchHints(refinement.originInput, refinement.originBiases)
+                        } else {
+                            com.zeroconvert.ime.engine.engineTouchHints(refinement.originInput, refinement.originBiases)
+                        }
+                        val autoStrengthSnapshot = autoTypoCorrectionStrengthState.value.storageValue
+                        val autoEnabledSnapshot = autoTypoCorrectionStrengthState.value.isEnabled
                         aiAssistJob = serviceScope.launch(Dispatchers.IO) {
                             com.zeroconvert.ime.assist.TypoLearning.ensureLoaded(applicationContext)
                             com.zeroconvert.ime.assist.AiAssistManager.streamAiAssist(
@@ -2795,28 +2914,43 @@ class ZeroConvertInputMethodService : InputMethodService(),
                                 baselineReading = baselineReading,
                                 rawInput = rawInput,
                                 touchHints = touchHints,
-                                inputMode = inputMode
+                                inputMode = inputMode,
+                                autoCorrectionStrength = autoStrengthSnapshot,
+                                originReading = originReading,
+                                originRaw = originRaw,
+                                originTouchHints = originTouchHints,
+                                appliedPrefix = appliedPrefix,
                             ) { update ->
                                 ensureActive()
                                 if (editorContextMatches(connection, context, sensitive)) {
                                     withContext(Dispatchers.Main) assistUpdate@ {
                                         if (connection !== currentInputConnection ||
                                             !requestGate.isCurrent(ticket, requestKey()) || isSensitiveInput()) return@assistUpdate
-                                        val suggestions = update.suggestions.filter { it.text != corrections.rejectedSurface }
+                                        val suggestions = update.suggestions.filterNot {
+                                            it.revertToOrigin || corrections.isRejected(surface, it.text)
+                                        }
                                         val merged = ConversionCandidateMerge.withCorrection(candidatesList,
                                             suggestions.firstOrNull { it.type == com.zeroconvert.ime.assist.AiAssistType.TYPO_CORRECTION })
                                         candidatesList.clear()
                                         candidatesList.addAll(merged)
-                                        val selected = update.selected?.takeIf { it.text != corrections.rejectedSurface }
+                                        val selected = update.selected?.takeUnless {
+                                            it.revertToOrigin || corrections.isRejected(surface, it.text)
+                                        }
                                         aiAssistResultState.value = selected
                                         displayedAssistTicket = if (suggestions.isNotEmpty()) ticket else null
                                         assistInputConnection = if (suggestions.isNotEmpty()) connection else null
-                                        val automatic = update.automaticCorrection?.takeIf { it.text != corrections.rejectedSurface }
-                                        if (automatic != null && isAutoTypoCorrectionState.value) {
-                                            aiAssistResultState.value = automatic
-                                            adoptAiAssist(explicit = false)
-                                            // If automatic application is ineligible, retain the displayed tap target.
-                                            if (requestGate.isCurrent(ticket, requestKey())) aiAssistResultState.value = selected
+                                        val automatic = update.automaticCorrection?.takeUnless {
+                                            !it.revertToOrigin && corrections.isRejected(surface, it.text)
+                                        }
+                                        if (automatic != null && autoEnabledSnapshot) {
+                                            if (automatic.revertToOrigin) {
+                                                performAutoRevertAiAssist(automatic.sourceReading)
+                                            } else {
+                                                aiAssistResultState.value = automatic
+                                                adoptAiAssist(explicit = false)
+                                                // If automatic application is ineligible, retain the displayed tap target.
+                                                if (requestGate.isCurrent(ticket, requestKey())) aiAssistResultState.value = selected
+                                            }
                                         }
                                     }
                                 }
@@ -2868,6 +3002,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
             // 3. Remove the first L hiragana characters from composingText
             composingText.prefixComplete(readingLen)
+            syncCorrectionRevertState()
             while (japaneseTouchBiases.size > composingText.input.size) {
                 japaneseTouchBiases.removeAt(0)
             }
@@ -3139,7 +3274,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun performDelete(): Boolean {
         if (isConfirming) return false
-        if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
+        if (corrections.isImmediateBackspaceUndo && !hasSelectionInEditor) {
             return performRevertAiAssist()
         }
         if (englishComposing.isNotEmpty()) {
@@ -3181,8 +3316,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
             if (deleteCount <= 0) { clearCandidateList(); return false }
             recordJapaneseComposingUndo()
             composingText.deleteBackwardFromCursorPosition(deleteCount)
+            syncCorrectionRevertState()
             if (composingText.isAtEndIndex) {
-                while (japaneseTouchBiases.size > composingText.input.size) {
+                val charCount = composingText.input.count { it.piece is InputPiece.CharPiece }
+                while (japaneseTouchBiases.size > charCount) {
                     japaneseTouchBiases.removeAt(japaneseTouchBiases.lastIndex)
                 }
             } else {
@@ -3612,6 +3749,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val deleteCount = composingText.convertTargetCursorPosition - previous
                 if (deleteCount <= 0) return false
                 composingText.deleteBackwardFromCursorPosition(deleteCount)
+                syncCorrectionRevertState()
                 currentComposingSurface.value = composingText.convertTargetBeforeCursor
                 if (composingText.isEmpty) {
                     setManagedComposingText(currentInputConnection, "", 0)
@@ -3787,10 +3925,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val surfaceAfter = composingText.convertTarget.drop(consumed)
         val selection = if (!wasEnglish) ConversionCommitLearning.capture(
             readingBefore, text, committedCandidate, trailingText,
-            sensitive = isSensitiveInput(), correctionApplied = corrections.isApplied
+            sensitive = isSensitiveInput(), correctionApplied = corrections.isApplied,
+            explicitSelection = isExplicitSelection
         ) else null
         val learnEnglish = wasEnglish && !isSensitiveInput() && LearningPolicy.canWrite
         val learningRevisionBefore = KanaKanjiConverter.learningHistoryRevision
+        val learningPrivacyBefore = clipboardPrivacyGeneration
         val shouldPredictPostComposition = !wasEnglish &&
             surfaceAfter.isEmpty() &&
             !isSensitiveInput() &&
@@ -3846,11 +3986,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         surface = englishWord,
                         english = true,
                         historyRevision = learningRevisionBefore,
-                        englishExplicit = isExplicitSelection
+                        englishExplicit = isExplicitSelection,
+                        privacyGeneration = learningPrivacyBefore
                     )
                 } else {
                     PendingLearning(checkNotNull(selection).reading, selection.surface, false, selection,
-                        learningRevisionBefore)
+                        learningRevisionBefore, privacyGeneration = learningPrivacyBefore)
                 }
                 if (learningQueue.trySend(event).isFailure) {
                     Log.w(TAG, "Selection learning queue is full or closed")
@@ -3868,7 +4009,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     japaneseTouchBiases.removeAt(0)
                 }
                 corrections.edited()
-                aiAssistAdoptedState.value = false
+                syncCorrectionRevertState()
                 val remainingSurface = composingText.convertTarget
                 val remainingReading = composingText.convertTargetBeforeCursor
                 currentComposingSurface.value = remainingReading
@@ -3898,6 +4039,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     private fun clearCandidateList() {
+        syncCorrectionRevertState()
         clearPostCompositionDisplay(clearCandidates = false)
         candidatesList.clear()
         predictedCandidate.value = ""

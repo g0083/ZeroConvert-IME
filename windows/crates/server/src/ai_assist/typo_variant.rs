@@ -165,8 +165,11 @@ pub fn user_vocabulary_path() -> Option<PathBuf> {
 
 /// 読みに対応する表記をインデックスから検索する。
 ///
-/// 組み込みインデックスを優先し、無ければユーザー追加インデックスを見る。
+/// 登録辞書、組み込みインデックス、追加語彙の順に検索する。
 pub fn lookup_surface(reading: &str) -> Option<String> {
+    if let Some(surface) = super::reading_check::user_dictionary_surface(reading) {
+        return Some(surface);
+    }
     if let Some(surface) = builtin_index().lookup(reading) {
         return Some(surface.to_string());
     }

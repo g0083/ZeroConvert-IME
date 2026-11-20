@@ -824,6 +824,31 @@ impl IPCService {
         self.send_replace_composition(&ledger, current_or_next_request_id())
     }
 
+    pub(crate) fn replace_with_reverted_prefix(
+        &mut self,
+        prefix_direct: &str,
+        trailing_raw: &str,
+    ) -> Result<Candidates> {
+        let mut operations = Vec::with_capacity(2);
+        if !prefix_direct.is_empty() {
+            operations.push(CompositionOperation::Append {
+                text: prefix_direct.to_owned(),
+                input_style: INPUT_STYLE_DIRECT,
+            });
+        }
+        if !trailing_raw.is_empty() {
+            operations.push(CompositionOperation::Append {
+                text: trailing_raw.to_owned(),
+                input_style: INPUT_STYLE_ROMAN2KANA,
+            });
+        }
+        let ledger = InputLedger {
+            operations,
+            complete: true,
+        };
+        self.send_replace_composition(&ledger, current_or_next_request_id())
+    }
+
     pub(crate) fn replace_from_snapshot(
         &mut self,
         snapshot: &InputLedgerSnapshot,
@@ -848,6 +873,7 @@ impl IPCService {
                     request_id: 0,
                     surface,
                     typo_reading: reading,
+                    explicit_selection: true,
                 };
                 let _ = tokio::time::timeout(
                     Duration::from_secs(1),
@@ -1740,6 +1766,7 @@ impl IPCService {
             request_id,
             surface: String::new(),
             typo_reading: String::new(),
+            explicit_selection: false,
         });
         request.set_timeout(LEARNING_RPC_DEADLINE);
         let response = Self::block_on_server_rpc(
@@ -1756,17 +1783,18 @@ impl IPCService {
 
     fn send_commit_learning_candidates(
         &mut self,
-        commits: &[(u64, i32, String)],
+        commits: &[(u64, i32, String, bool)],
         request_id: u64,
     ) -> anyhow::Result<u32> {
         let mut request = tonic::Request::new(shared::proto::CommitLearningCandidatesRequest {
             commits: commits
                 .iter()
-                .map(|(candidate_id, commit_kind, surface)| {
+                .map(|(candidate_id, commit_kind, surface, explicit_selection)| {
                     shared::proto::LearningCandidateCommit {
                         candidate_id: *candidate_id,
                         commit_kind: *commit_kind,
                         surface: surface.clone(),
+                        explicit_selection: *explicit_selection,
                     }
                 })
                 .collect(),
@@ -2476,7 +2504,7 @@ impl IPCService {
     #[tracing::instrument(skip(self, commits))]
     pub fn commit_learning_candidates(
         &mut self,
-        commits: &[(u64, i32, String)],
+        commits: &[(u64, i32, String, bool)],
     ) -> anyhow::Result<()> {
         if commits.is_empty() {
             return Ok(());

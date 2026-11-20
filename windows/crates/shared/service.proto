@@ -269,6 +269,7 @@ message CommitLearningCandidateRequest {
   // Explicitly accepted typo, retained by the client until commit. Empty for
   // ordinary conversion. Avoids a global "last generated candidate" race.
   string typo_reading = 5;
+  bool explicit_selection = 6;
 }
 
 message CommitLearningCandidateResponse {
@@ -280,6 +281,7 @@ message LearningCandidateCommit {
   LearningCommitKind commit_kind = 2;
   // Surface the client committed. Empty for conversion engine candidates.
   string surface = 3;
+  bool explicit_selection = 4;
 }
 
 message CommitLearningCandidatesRequest {
@@ -323,6 +325,8 @@ message LearningStatsResponse {
   string learning_mode = 5;
   uint32 typo_count = 6;
   uint32 english_count = 7;
+  uint32 post_composition_bigram_count = 8;
+  uint32 selection_override_count = 9;
 }
 
 message GetEnglishLearningRequest {
@@ -410,6 +414,10 @@ message GetAssistCandidatesRequest {
   uint32 kind = 6;
   // Issued with the immutable normal candidate, distinct from observed reading.
   string baseline_reading = 7;
+  // Unaltered input before an active automatic correction, when refining with more context.
+  string origin_reading = 8;
+  string origin_raw_input = 9;
+  string applied_prefix = 10;
 }
 message GetAssistCandidatesResponse {
   repeated Suggestion suggestions = 1;
@@ -417,6 +425,7 @@ message GetAssistCandidatesResponse {
   // Ordinal evidence strength, not a calibrated model probability.
   uint32 relevance = 3;
   string continuation = 4;
+  bool revert_to_origin = 5;
 }
 
 // Service definition for text editing operations.

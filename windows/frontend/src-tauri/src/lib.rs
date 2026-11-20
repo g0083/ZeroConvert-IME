@@ -91,6 +91,8 @@ struct ResetLearningHistoryResponse {
 #[derive(Debug, Serialize, Clone)]
 struct LearningStatsView {
     selection_count: u32,
+    post_composition_bigram_count: u32,
+    selection_override_count: u32,
     typo_count: u32,
     english_count: u32,
     history_present: bool,
@@ -102,6 +104,8 @@ impl From<shared::proto::LearningStatsResponse> for LearningStatsView {
     fn from(stats: shared::proto::LearningStatsResponse) -> Self {
         Self {
             selection_count: stats.selection_count,
+            post_composition_bigram_count: stats.post_composition_bigram_count,
+            selection_override_count: stats.selection_override_count,
             typo_count: stats.typo_count,
             english_count: stats.english_count,
             history_present: stats.history_present,
@@ -297,7 +301,9 @@ fn update_config_impl_with(
     let _cross_process_guard = ConfigWriteGuard::acquire().map_err(|error| error.to_string())?;
     let current_config = match AppConfig::read() {
         Ok(config) => config,
-        Err(error) if error.is_version_compatibility_error() => {
+        Err(error)
+            if error.is_version_compatibility_error() || error.is_user_dictionary_error() =>
+        {
             eprintln!("Refusing to update incompatible settings: {error}");
             return Err(error.to_string());
         }
@@ -306,14 +312,24 @@ fn update_config_impl_with(
             state.settings.lock().unwrap().clone()
         }
     };
-    let new_config = merge_config_update(current_config.clone(), base_config, new_config)?;
+    let mut new_config = merge_config_update(current_config.clone(), base_config, new_config)?;
+    new_config
+        .user_dictionary
+        .entries
+        .truncate(shared::MAX_USER_DICTIONARY_ENTRIES);
     let changed = current_config != new_config;
     // Appearance is consumed directly by the settings app and floating UI.
     // Saving colors must also work while the conversion server is unavailable.
     let mut server_config = current_config.clone();
     server_config.appearance = new_config.appearance.clone();
     let server_changed = server_config != new_config;
-    if changed {
+    if current_config.user_dictionary != new_config.user_dictionary {
+        AppConfig::write_user_dictionary(&new_config.user_dictionary.entries)
+            .map_err(|error| error.to_string())?;
+    }
+    let mut settings_only_change = new_config.clone();
+    settings_only_change.user_dictionary = current_config.user_dictionary.clone();
+    if settings_only_change != current_config {
         new_config.write().map_err(|error| error.to_string())?;
     }
     *state.settings.lock().unwrap() = new_config.clone();

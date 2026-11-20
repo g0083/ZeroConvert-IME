@@ -1013,6 +1013,10 @@ def patch_learning_memory(text):
     for anchor, replacement in LEARNING_MEMORY_REPLACEMENTS:
         _require(text, anchor)
         text = text.replace(anchor, replacement)
+    _require(text, LEARNING_FLUSH_MANAGER_ANCHOR)
+    _require(text, LEARNING_FLUSH_MANAGER_BODY)
+    text = text.replace(LEARNING_FLUSH_MANAGER_ANCHOR, LEARNING_FLUSH_MANAGER_ANCHOR.replace('func save() {', 'func save() -> Bool {'), 1)
+    text = text.replace(LEARNING_FLUSH_MANAGER_BODY, LEARNING_FLUSH_MANAGER_REPLACEMENT, 1)
     return text
 
 
@@ -1024,6 +1028,233 @@ def patch_lattice(text):
     return text
 
 
+DYNAMIC_DICTIONARY_BUILDER_PATH = 'Sources/KanaKanjiConverterModule/DictionaryManagement/DataStructure/DictionaryBuilder.swift'
+DYNAMIC_DICTIONARY_STATE_PATH = 'Sources/KanaKanjiConverterModule/DictionaryManagement/DicdataStoreState.swift'
+
+DYNAMIC_DICTIONARY_BUILDER_ANCHOR = """        struct Node {
+            var children: OrderedDictionary<UInt8, Node> = [:]
+        }
+
+        var root = Node()
+        func keyToChars"""
+DYNAMIC_DICTIONARY_BUILDER_LOOP = """        for e in entries {
+            guard let chars = keyToChars(e.ruby) else {
+                continue
+            }"""
+
+def patch_dynamic_dictionary_builder(text):
+    _require(text, DYNAMIC_DICTIONARY_BUILDER_ANCHOR)
+    _require(text, DYNAMIC_DICTIONARY_BUILDER_LOOP)
+    text = text.replace(DYNAMIC_DICTIONARY_BUILDER_ANCHOR, '        func keyToChars', 1)
+    return text.replace(DYNAMIC_DICTIONARY_BUILDER_LOOP, """        return buildLOUDS(keys: entries.compactMap { keyToChars($0.ruby) })
+    }
+
+    static func buildLOUDS(keys: [[UInt8]]) -> (bits: [Bool], nodes2Characters: [UInt8]) {
+        struct Node {
+            var children: OrderedDictionary<UInt8, Node> = [:]
+        }
+
+        var root = Node()
+        for chars in keys {""", 1)
+
+
+DYNAMIC_DICTIONARY_PREPARED = """/// Immutable snapshot prepared outside the conversion executor.
+public struct PreparedDynamicUserDictionary: Sendable {
+    private let trie: LOUDS?
+    private let entriesByNode: [Int: [DicdataElement]]
+    private let sortedEntries: [DicdataElement]
+    let shortcutsByReading: [String: [DicdataElement]]
+
+    public init(_ entries: [DicdataElement], shortcuts: [DicdataElement] = []) {
+        let converted = entries.map { source in
+            var element = source
+            element.ruby = source.ruby.precomposedStringWithCanonicalMapping
+            element.metadata.insert(.isFromUserDictionary)
+            return element
+        }
+        let grouped = Dictionary(grouping: converted, by: \\.ruby)
+        if grouped.isEmpty {
+            trie = nil
+            entriesByNode = [:]
+        } else {
+            let bytes = grouped.keys.sorted().map { Array($0.utf8) }
+            let built = DictionaryBuilder.buildLOUDS(keys: bytes)
+            let louds = LOUDS(bytes: DictionaryBuilder.makeLOUDSWords(bits: built.bits), nodeIndex2ID: built.nodes2Characters)
+            trie = louds
+            entriesByNode = Dictionary(uniqueKeysWithValues: grouped.compactMap { reading, entries in
+                louds.searchNodeIndex(chars: Array(reading.utf8)).map { ($0, entries) }
+            })
+        }
+        sortedEntries = converted.filter { !$0.metadata.contains(.isKeyboardTypoCorrection) }
+            .sorted { $0.ruby < $1.ruby }
+        shortcutsByReading = Dictionary(grouping: shortcuts.map { source in
+            var element = source
+            element.metadata.insert(.isFromUserDictionary)
+            return element
+        }, by: \\.ruby)
+    }
+
+    var hasEntries: Bool { trie != nil }
+
+    func exact(_ reading: String) -> [DicdataElement] {
+        guard let trie, let index = trie.searchNodeIndex(chars: Array(reading.precomposedStringWithCanonicalMapping.utf8)) else {
+            return []
+        }
+        return entriesByNode[index] ?? []
+    }
+
+    func prefix(_ reading: String) -> [DicdataElement] {
+        let key = reading.precomposedStringWithCanonicalMapping
+        var lower = 0
+        var upper = sortedEntries.count
+        while lower < upper {
+            let mid = (lower + upper) / 2
+            if sortedEntries[mid].ruby < key { lower = mid + 1 } else { upper = mid }
+        }
+        return Array(sortedEntries[lower...].prefix(64).prefix(while: { $0.ruby.hasPrefix(key) }))
+    }
+}
+"""
+
+LEARNING_FLUSH_MANAGER_ANCHOR = """    func save() {
+        guard self.config.learningType.needUpdateMemory,
+              let memoryURL = config.memoryURL else {"""
+LEARNING_FLUSH_MANAGER_BODY = """            debug(#function, "config.learningType=\\(self.config.learningType as _?)", "skip memory update")
+            return
+        }
+        do {
+            try LongTermLearningMemory.merge(tempTrie: self.temporaryMemory, directoryURL: memoryURL, maxMemoryCount: self.config.maxMemoryCount, char2UInt8: char2UInt8)
+            // マージが済んだので、temporaryMemoryを空にする
+            self.temporaryMemory = TemporalLearningMemoryTrie()
+        } catch {
+            // アップデートに失敗した場合、そのまま諦める。
+            debug("LearningManager save: Failed to save LongTermLearningMemory", error)
+        }
+        // 状態を更新する
+        self.memoryCollapsed = LongTermLearningMemory.memoryCollapsed(directoryURL: memoryURL)
+    }"""
+LEARNING_FLUSH_MANAGER_REPLACEMENT = """            return false
+        }
+        defer {
+            self.memoryCollapsed = LongTermLearningMemory.memoryCollapsed(directoryURL: memoryURL)
+        }
+        do {
+            try LongTermLearningMemory.merge(tempTrie: self.temporaryMemory, directoryURL: memoryURL, maxMemoryCount: self.config.maxMemoryCount, char2UInt8: char2UInt8)
+            self.temporaryMemory = TemporalLearningMemoryTrie()
+            return true
+        } catch {
+            debug("LearningManager save: Failed to save LongTermLearningMemory", error)
+            return false
+        }
+    }"""
+LEARNING_FLUSH_STATE_ANCHOR = """    func saveMemory() {
+        self.learningMemoryManager.save()
+        self.resetMemoryLOUDSCache()
+    }"""
+LEARNING_FLUSH_STATE_REPLACEMENT = """    @discardableResult
+    func saveMemory() -> Bool {
+        let saved = self.learningMemoryManager.save()
+        self.resetMemoryLOUDSCache()
+        return saved
+    }"""
+LEARNING_FLUSH_API_ANCHOR = """    public func commitUpdateLearningData() {
+        self.dicdataStoreState.saveMemory()
+    }"""
+LEARNING_FLUSH_API_REPLACEMENT = LEARNING_FLUSH_API_ANCHOR.replace(
+    "self.dicdataStoreState.saveMemory()", "_ = self.dicdataStoreState.saveMemory()"
+) + """
+
+    public func flushPendingLearningData() -> Bool {
+        self.dicdataStoreState.saveMemory()
+    }"""
+
+DYNAMIC_DICTIONARY_STATE_FIELDS = """    private(set) var dynamicUserDictionary: [DicdataElement] = []
+    private(set) var dynamicUserShortcuts: [DicdataElement] = []"""
+
+DYNAMIC_DICTIONARY_STATE_IMPORT = """    func importDynamicUserDictionary(_ dicdata: [DicdataElement], shortcuts: [DicdataElement] = []) {
+        self.dynamicUserDictionary = dicdata
+        self.dynamicUserDictionary.mutatingForEach {
+            $0.metadata = $0.metadata.contains(.isKeyboardTypoCorrection)
+                ? [.isFromUserDictionary, .isKeyboardTypoCorrection]
+                : .isFromUserDictionary
+        }
+        self.dynamicUserShortcuts = shortcuts
+        self.dynamicUserShortcuts.mutatingForEach {
+            $0.metadata = .isFromUserDictionary
+        }
+    }"""
+
+def patch_dynamic_dictionary_state(text):
+    _require(text, DYNAMIC_DICTIONARY_STATE_FIELDS)
+    _require(text, DYNAMIC_DICTIONARY_STATE_IMPORT)
+    text = text.replace(DYNAMIC_DICTIONARY_STATE_FIELDS,
+        '    var dynamicUserDictionary = PreparedDynamicUserDictionary([])', 1)
+    text = text.replace(DYNAMIC_DICTIONARY_STATE_IMPORT, """    func importDynamicUserDictionary(_ dicdata: [DicdataElement], shortcuts: [DicdataElement] = []) {
+        self.dynamicUserDictionary = PreparedDynamicUserDictionary(dicdata, shortcuts: shortcuts)
+    }""", 1)
+    _require(text, LEARNING_FLUSH_STATE_ANCHOR)
+    text = text.replace(LEARNING_FLUSH_STATE_ANCHOR, LEARNING_FLUSH_STATE_REPLACEMENT, 1)
+    return text + "\n" + DYNAMIC_DICTIONARY_PREPARED
+
+
+DYNAMIC_DICTIONARY_API_ANCHOR = '    public func updateUserDictionaryURL('
+DYNAMIC_DICTIONARY_API = """    public func installPreparedDynamicUserDictionary(_ dictionary: PreparedDynamicUserDictionary) {
+        self.dicdataStoreState.dynamicUserDictionary = dictionary
+        self.stopComposition()
+    }
+
+"""
+
+DYNAMIC_USER_DICTIONARY_MID_LOOKUP = (
+    "        return self.mmValue[former * self.midCount + latter]",
+    """        // User presets can use a CID as their MID. Keep the stored ID,
+        // but map IDs outside the meaning table to the generic class.
+        let left = (0..<self.midCount).contains(former) ? former : MIDData.一般.mid
+        let right = (0..<self.midCount).contains(latter) ? latter : MIDData.一般.mid
+        let index = left * self.midCount + right
+        return self.mmValue.indices.contains(index) ? self.mmValue[index] : 0""",
+)
+
+DYNAMIC_DICTIONARY_LOOKUPS = (
+    DYNAMIC_USER_DICTIONARY_MID_LOOKUP,
+    ('state.dynamicUserShortcuts.filter { $0.ruby == rubyString }',
+     'state.dynamicUserDictionary.shortcutsByReading[rubyString] ?? []'),
+    ('!state.dynamicUserDictionary.isEmpty', 'state.dynamicUserDictionary.hasEntries'),
+    ('state.dynamicUserDictionary.filter {$0.ruby == ruby}', 'state.dynamicUserDictionary.exact(String(ruby))'),
+    ("""state.dynamicUserDictionary.filter {
+            $0.ruby.hasPrefix(ruby) && !$0.metadata.contains(.isKeyboardTypoCorrection)
+        }""", 'state.dynamicUserDictionary.prefix(String(ruby))'),
+)
+
+DYNAMIC_DICTIONARY_RESULT_ANCHOR = '        if case .完全一致 = options.requestQuery {\n            self.invalidateStablePredictionCandidateCache()'
+DYNAMIC_DICTIONARY_RESULT_CANDIDATES = """        // Keep exact registrations selectable even when lattice/semantic rank
+        // cuts their paths before the normal N-best result list.
+        let registeredExactCandidates = self.dicdataStoreState.dynamicUserDictionary
+            .exact(inputData.convertTarget.toKatakana()).lazy
+            .filter { !$0.metadata.contains(.isKeyboardTypoCorrection) }
+            .prefix(max(1, min(options.N_best, 32)))
+            .map { entry in
+                Candidate(
+                    text: entry.word, value: entry.value(),
+                    composingCount: .surfaceCount(inputData.convertTarget.count),
+                    lastMid: entry.mid, data: [entry]
+                )
+            }
+        let exactRegistrations = userShortcutsCandidates + registeredExactCandidates
+
+"""
+DYNAMIC_DICTIONARY_RESULT_REPLACEMENTS = (
+    (DYNAMIC_DICTIONARY_RESULT_ANCHOR, DYNAMIC_DICTIONARY_RESULT_CANDIDATES + DYNAMIC_DICTIONARY_RESULT_ANCHOR),
+    ("self.getUniqueCandidate(wholeSentenceUniqueCandidates.chained(userShortcutsCandidates))",
+     "self.getUniqueCandidate(wholeSentenceUniqueCandidates.chained(exactRegistrations))"),
+    ("        var seenCandidate: Set<String> = fullCandidates.mapSet {$0.text}",
+     """        var seenCandidate: Set<String> = fullCandidates.mapSet {$0.text}
+        seenCandidate.formUnion(exactRegistrations.map(\\.text))"""),
+    ("        result.append(contentsOf: consume firstClauseCandidates)",
+     """        result.append(contentsOf: self.getUniqueCandidate(exactRegistrations, seenCandidates: result.mapSet { $0.text }))
+        result.append(contentsOf: consume firstClauseCandidates)"""),
+)
+
 def patch_converter_api(text):
     """Extend KanaKanjiConverter API with session-scoped prediction, cache sync, and exact lookup."""
     _require(text, EXACT_KEYBOARD_LOOKUP_ANCHOR)
@@ -1031,8 +1262,50 @@ def patch_converter_api(text):
     for anchor, replacement in CONVERTER_API_REPLACEMENTS:
         _require(text, anchor)
         text = text.replace(anchor, replacement, 1)
+    _require(text, DYNAMIC_DICTIONARY_API_ANCHOR)
+    text = text.replace(DYNAMIC_DICTIONARY_API_ANCHOR, DYNAMIC_DICTIONARY_API + DYNAMIC_DICTIONARY_API_ANCHOR, 1)
+    _require(text, LEARNING_FLUSH_API_ANCHOR)
+    text = text.replace(LEARNING_FLUSH_API_ANCHOR, LEARNING_FLUSH_API_REPLACEMENT, 1)
+    for anchor, replacement in DYNAMIC_DICTIONARY_RESULT_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
     return text
 
+
+ZENZ_EVALUATOR_USER_DICT_PROMPT_ANCHOR = r'''        var userDictionaryPrompt = ""
+        for item in candidate.data where item.metadata.contains(.isFromUserDictionary) {
+            userDictionaryPrompt += "\(item.word)(\(item.ruby.toHiragana()))"
+        }'''
+
+ZENZ_EVALUATOR_DECLARATION_ANCHOR = 'struct ZenzCandidateEvaluator {'
+
+ZENZ_USER_DICTIONARY_PROTECTION = '''public enum ZenzUserDictionaryProtection {
+    public static func isProtectedUserDictionaryElement(_ element: DicdataElement) -> Bool {
+        element.metadata.contains(.isFromUserDictionary) && !element.metadata.contains(.isKeyboardTypoCorrection)
+    }
+
+    public static func endsWithPrintableAscii(_ word: String) -> Bool {
+        word.unicodeScalars.last.map { $0.value >= 0x21 && $0.value <= 0x7E } ?? false
+    }
+
+    public static func isHiraganaLeadingBytes(_ bytes: [UInt8]) -> Bool {
+        String(decoding: bytes, as: UTF8.self).unicodeScalars.first.map { $0.value >= 0x3041 && $0.value <= 0x3096 } ?? false
+    }
+
+    public static let asciiTrailingParticleMaxLogitGap: Float = 4.5
+
+    public static func shouldAllowMismatch(
+        isUserDict: Bool,
+        precedingUserDictEndedAscii: Bool,
+        rawLogitGap: Float,
+        tokenBytes: [UInt8]
+    ) -> Bool {
+        isUserDict || (precedingUserDictEndedAscii && rawLogitGap <= Self.asciiTrailingParticleMaxLogitGap
+            && Self.isHiraganaLeadingBytes(tokenBytes))
+    }
+}
+
+'''
 
 ZENZ_EVALUATOR_SETUP_ANCHOR = r'''        let candidateTokens = context.encode(candidate.text, addBOS: false, addEOS: false)
         let addressedTokens: [llama_token]
@@ -1112,6 +1385,10 @@ ZENZ_EVALUATOR_SETUP_REPLACEMENT = r'''        let inputMask = ZenzDigitMasking.
         }
         let n_vocab = Int(context.vocabSize)
         var remainingMaskRuns = inputMask.rawDigits.count
+        var tokenProtection: [(isUserDict: Bool, precedingUserDictEndedAscii: Bool)] =
+            Array(repeating: (false, false), count: promptTokens.count)
+        tokenProtection.reserveCapacity(tokens.count)
+        var precedingUserDictEndedAscii = false
         let isLearnedToken: [(isLearned: Bool, priority: Float)] = Array(repeating: (false, 0), count: promptTokens.count) + candidate.data.flatMap { element in
             let tokenWord: String
             if hasInputDigits, remainingMaskRuns > 0 {
@@ -1121,7 +1398,14 @@ ZENZ_EVALUATOR_SETUP_REPLACEMENT = r'''        let inputMask = ZenzDigitMasking.
             } else {
                 tokenWord = element.word
             }
-            return Array(repeating: (element.metadata.contains(.isLearned), logf(self.learningPriority(data: element))), count: context.encode(tokenWord, addBOS: false).count)
+            let tokenCount = context.encode(tokenWord, addBOS: false).count
+            if tokenCount > 0 {
+                let isUserDict = ZenzUserDictionaryProtection.isProtectedUserDictionaryElement(element)
+                tokenProtection.append((isUserDict, precedingUserDictEndedAscii))
+                tokenProtection.append(contentsOf: repeatElement((isUserDict, false), count: tokenCount - 1))
+                precedingUserDictEndedAscii = isUserDict && ZenzUserDictionaryProtection.endsWithPrintableAscii(tokenWord)
+            }
+            return Array(repeating: (element.metadata.contains(.isLearned), logf(self.learningPriority(data: element))), count: tokenCount)
         }'''
 
 ZENZ_EVALUATOR_LOOP_ANCHOR = '''        var altTokens = FixedSizeHeap<AlternativeHighProbToken>(size: requestRichCandidates ? 5 : 0)
@@ -1236,6 +1520,20 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
             return maxRawLogit + logf(sumexp)
         }
 
+        @inline(__always)
+        func allowsProtectedMismatch(at index: Int, tokenID: llama_token, rawLogitGap: Float) -> Bool {
+            guard index < tokenProtection.count else { return false }
+            let protection = tokenProtection[index]
+            let tokenBytes = !protection.isUserDict && protection.precedingUserDictEndedAscii && tokenID != context.eosToken
+                ? context.tokenToPiece(token: tokenID).map(UInt8.init) : []
+            return ZenzUserDictionaryProtection.shouldAllowMismatch(
+                isUserDict: protection.isUserDict,
+                precedingUserDictEndedAscii: protection.precedingUserDictEndedAscii,
+                rawLogitGap: rawLogitGap,
+                tokenBytes: tokenBytes
+            )
+        }
+
         var altTokens = FixedSizeHeap<AlternativeHighProbToken>(size: requestRichCandidates ? 5 : 0)
         for (i, tokenID) in tokens.indexed().dropFirst(startOffset + 1) {
             let startIndex = (i - 1 - startOffset) * Int(n_vocab)
@@ -1274,7 +1572,8 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                     debug("Max Item could not be found for unknown reason")
                     return .error
                 }
-                if maxItem.token != tokenID {
+                if maxItem.token != tokenID,
+                   !allowsProtectedMismatch(at: i, tokenID: tokenID, rawLogitGap: maxRawLogit - logits[startIndex + Int(tokenID)]) {
                     if maxItem.token == context.eosToken {
                         return .wholeResult(decodeWholeResult(upTo: i))
                     } else {
@@ -1289,7 +1588,7 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                             return .fixRequired(prefixConstraint: constraint)
                         }
                     }
-                } else if !tokenHeap.isEmpty {
+                } else if maxItem.token == tokenID, !tokenHeap.isEmpty {
                     tokenHeap.removeMax()
                     let prefix = decodePrefixBytes(upTo: i)
                     for item in tokenHeap.unordered {
@@ -1333,7 +1632,8 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                     }
                 }
 
-                if maxToken != tokenID {
+                if maxToken != tokenID,
+                   !allowsProtectedMismatch(at: i, tokenID: tokenID, rawLogitGap: maxRawLogit - logits[startIndex + Int(tokenID)]) {
                     if maxToken == context.eosToken {
                         return .wholeResult(decodeWholeResult(upTo: i))
                     } else {
@@ -1347,7 +1647,7 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                             return .fixRequired(prefixConstraint: constraint)
                         }
                     }
-                } else if var heap = richHeap, !heap.isEmpty {
+                } else if maxToken == tokenID, var heap = richHeap, !heap.isEmpty {
                     heap.removeMax()
                     let prefix = decodePrefixBytes(upTo: i)
                     for item in heap.unordered {
@@ -1371,7 +1671,12 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
 
 
 def patch_zenz_evaluator(text):
-    """Mask/restore digit runs with `nam`, optimize argmax, and delay softmax past early exits."""
+    """Protect user dictionary tokens without adding dictionary text to the model prompt."""
+    _require(text, ZENZ_EVALUATOR_USER_DICT_PROMPT_ANCHOR)
+    text = text.replace(ZENZ_EVALUATOR_USER_DICT_PROMPT_ANCHOR, '        let userDictionaryPrompt = ""', 1)
+    _require(text, ZENZ_EVALUATOR_DECLARATION_ANCHOR)
+    text = text.replace(ZENZ_EVALUATOR_DECLARATION_ANCHOR,
+                        ZENZ_USER_DICTIONARY_PROTECTION + ZENZ_EVALUATOR_DECLARATION_ANCHOR, 1)
     _require(text, ZENZ_EVALUATOR_SETUP_ANCHOR)
     text = text.replace(ZENZ_EVALUATOR_SETUP_ANCHOR, ZENZ_EVALUATOR_SETUP_REPLACEMENT, 1)
     _require(text, ZENZ_EVALUATOR_LOOP_ANCHOR)
@@ -1431,6 +1736,9 @@ def patch_dicdata_store(text):
     _require(text, DICDATA_ZERO_HINT_CRLF_ANCHOR)
     text = text.replace(DICDATA_ZERO_HINT_CRLF_ANCHOR, DICDATA_ZERO_HINT_CRLF_REPLACEMENT, 1)
     for anchor, replacement in DICDATA_PREDICTION_LIMIT_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    for anchor, replacement in DYNAMIC_DICTIONARY_LOOKUPS:
         _require(text, anchor)
         text = text.replace(anchor, replacement, 1)
     return text

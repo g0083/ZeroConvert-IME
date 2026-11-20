@@ -17,7 +17,7 @@ pub fn decode_floating_consonant_typo(raw_input: &str) -> Option<String> {
     let rom_chars: Vec<char> = raw_romaji.chars().collect();
     for i in 0..rom_chars.len() {
         let orig = rom_chars[i];
-        for &adj in qwerty_adjacent_chars(orig) {
+        for &adj in qwerty_adjacent_with_dash(orig) {
             let mut cand_chars = rom_chars.clone();
             cand_chars[i] = adj;
             let cand_rom: String = cand_chars.into_iter().collect();
@@ -181,6 +181,17 @@ fn qwerty_adjacent_chars(c: char) -> &'static [char] {
         'n' => &['b', 'h', 'j', 'm'],
         'm' => &['n', 'j', 'k'],
         _ => &[],
+    }
+}
+
+/// Extends PC QWERTY adjacency with the Japanese mobile long-vowel key (`'-'`)
+/// positioned next to `'l'` and below `'p'` for floating-consonant reconstruction.
+fn qwerty_adjacent_with_dash(c: char) -> &'static [char] {
+    match c {
+        'l' => &['k', 'o', 'p', '-'],
+        'p' => &['o', 'l', '-'],
+        '-' => &['l', 'p'],
+        _ => qwerty_adjacent_chars(c),
     }
 }
 
@@ -503,10 +514,7 @@ fn is_valid_japanese_word(hira: &str) -> bool {
     if super::typo_variant::builtin_index().lookup(hira).is_some() {
         return true;
     }
-    if super::STANDARD_VOCAB
-        .iter()
-        .any(|&(r, _)| r == hira || hira.starts_with(r))
-    {
+    if super::STANDARD_VOCAB.iter().any(|&(r, _)| r == hira) {
         return true;
     }
     false
@@ -533,5 +541,21 @@ mod tests {
         assert_eq!(romaji_to_hiragana_str("lixtu"), "ぃっ");
         assert_eq!(romaji_to_hiragana_str("rixtu"), "りっ");
         assert_eq!(romaji_to_hiragana_str("xya"), "ゃ");
+    }
+
+    #[test]
+    fn floating_l_repairs_to_long_vowel_dash() {
+        assert_eq!(
+            decode_floating_consonant_typo("めlる").as_deref(),
+            Some("めーる")
+        );
+        assert_eq!(
+            decode_floating_consonant_typo("こlひー").as_deref(),
+            Some("こーひー")
+        );
+        assert_eq!(
+            decode_floating_consonant_typo("すlぱー").as_deref(),
+            Some("すーぱー")
+        );
     }
 }

@@ -84,14 +84,20 @@ object TypoLearning {
     fun lookupRule(reading: String): LearnedMatch? = if (com.zeroconvert.ime.LearningPolicy.canRead) history.lookupRule(reading) else null
 
     @Synchronized
-    fun record(context: Context, reading: String, surface: String) {
-        if (!com.zeroconvert.ime.LearningPolicy.canWrite) return
+    fun record(
+        context: Context,
+        reading: String,
+        surface: String,
+        canRecord: () -> Boolean = { com.zeroconvert.ime.LearningPolicy.canWrite }
+    ) {
+        if (!canRecord()) return
+        if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
+            com.zeroconvert.ime.engine.WindowsEngine.recordCorrection(reading, surface, canRecord)
+            return
+        }
         ensureLoaded(context)
         history.record(reading, surface)
         save(context)
-        if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
-            com.zeroconvert.ime.engine.WindowsEngine.recordCorrection(reading, surface)
-        }
     }
 
     @Synchronized
@@ -108,6 +114,7 @@ object TypoLearning {
      */
     @Synchronized
     fun forget(context: Context, reading: String, surface: String): Boolean {
+        if (!com.zeroconvert.ime.LearningPolicy.canRead) return false
         ensureLoaded(context)
         val removed = history.remove(reading, surface)
         if (removed) save(context)

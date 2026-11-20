@@ -25,6 +25,8 @@ type LearningMode = "enabled" | "read_only" | "disabled";
 type LearningScope = "conversion" | "typo" | "english";
 type LearningStats = {
     selection_count: number;
+    post_composition_bigram_count: number;
+    selection_override_count: number;
     typo_count: number;
     english_count: number;
     history_present: boolean;
@@ -32,6 +34,7 @@ type LearningStats = {
     learning_mode: string;
 };
 type ReconversionKey = "convert" | "shift_convert" | "space" | "win_slash" | "disabled";
+type AutoTypoCorrectionStrength = "off" | "conservative" | "standard" | "aggressive";
 type ClipboardConfigState = {
     trigger_key: string;
     retention_hours: number;
@@ -55,6 +58,7 @@ type GeneralConfigState = {
     jev_conversion: boolean;
     predictive_conversion: boolean;
     experimental_typo_correction: boolean;
+    auto_typo_correction: AutoTypoCorrectionStrength;
     experimental_ai_assist: boolean;
     experimental_translation: boolean;
     copy_translation_popup: boolean;
@@ -88,6 +92,7 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     jev_conversion: false,
     predictive_conversion: false,
     experimental_typo_correction: true,
+    auto_typo_correction: "standard",
     experimental_ai_assist: true,
     experimental_translation: false,
     copy_translation_popup: true,
@@ -146,6 +151,23 @@ const RECONVERSION_KEY_OPTIONS: { value: ReconversionKey; label: string }[] = [
 const normalizeReconversionKey = (value: unknown): ReconversionKey =>
     RECONVERSION_KEY_OPTIONS.some((option) => option.value === value)
         ? value as ReconversionKey : "win_slash";
+const AUTO_TYPO_CORRECTION_OPTIONS: { value: AutoTypoCorrectionStrength; label: string }[] = [
+    { value: "off", label: "オフ（提案のみ）" },
+    { value: "conservative", label: "ひかえめ（精度重視）" },
+    { value: "standard", label: "標準（推奨）" },
+    { value: "aggressive", label: "強め（積極的に補正）" },
+];
+const normalizeAutoTypoCorrectionStrength = (value: unknown): AutoTypoCorrectionStrength => {
+    if (value === false) return "off";
+    if (value === true) return "standard";
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+        if (AUTO_TYPO_CORRECTION_OPTIONS.some((option) => option.value === normalized)) {
+            return normalized as AutoTypoCorrectionStrength;
+        }
+    }
+    return "standard";
+};
 const LEARNING_MODE_OPTIONS: { value: LearningMode; label: string }[] = [
     { value: "enabled", label: "学習して履歴を使う" },
     { value: "read_only", label: "既存の履歴のみ使う" },
@@ -178,6 +200,7 @@ const normalizeGeneralConfig = (value?: Record<string, unknown>): GeneralConfigS
     if (!["direct_input", "always_half", "follow_input_mode"].includes(next.numpad_input)) {
         next.numpad_input = DEFAULT_GENERAL_CONFIG.numpad_input;
     }
+    next.auto_typo_correction = normalizeAutoTypoCorrectionStrength(value?.auto_typo_correction);
     next.live_conversion_reading_vertical_adjustment =
         clampLiveConversionReadingVerticalAdjustment(value?.live_conversion_reading_vertical_adjustment);
     return next;
@@ -578,6 +601,18 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     <SettingsRow label="タイポ補正" description="辞書・打鍵の補正規則とZeroCon Modelで誤入力を補正します。通常変換で補正できなかった入力は、モデルによる補正候補を提案します。補正候補はTabキーで反映できます。" htmlFor="dictionary-typo-correction">
                         <Switch id="dictionary-typo-correction" checked={generalValue.experimental_typo_correction} onCheckedChange={(value) => void updateGeneralConfig("experimental_typo_correction", value)} />
                     </SettingsRow>
+                    {generalValue.experimental_typo_correction && (
+                        <SettingsRow label="補正候補を自動で反映" description="確信度の高いタイポ補正や学習済みの補正を自動で読みに反映する強さを選びます。確定前なら打ち進めたあとでもEscキーで補正箇所だけ元に戻せます。" htmlFor="auto-typo-correction">
+                            <Select value={generalValue.auto_typo_correction} onValueChange={(value) => void updateGeneralConfig("auto_typo_correction", normalizeAutoTypoCorrectionStrength(value))}>
+                                <SelectTrigger id="auto-typo-correction" className="w-64"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    {AUTO_TYPO_CORRECTION_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </SettingsRow>
+                    )}
                     <SettingsRow label="文の先読み" description="変換結果と文脈をもとに、ZeroCon Modelが文の続きを提案します。Tabキーで採用・確定します。" htmlFor="ai-assist">
                         <Switch id="ai-assist" checked={generalValue.experimental_ai_assist} onCheckedChange={(value) => void updateGeneralConfig("experimental_ai_assist", value)} />
                     </SettingsRow>
@@ -603,7 +638,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                     <SettingsRow
                         label="学習データ"
                         description={learningStats
-                            ? `変換学習 ${learningStats.selection_count}件 / 補正学習 ${learningStats.typo_count}件 / 英字学習 ${learningStats.english_count}件${learningStats.history_paused ? "（学習は一時停止中）" : ""}。候補ウィンドウの右クリックからも1件ずつ削除できます。`
+                            ? `変換学習 ${learningStats.selection_override_count ?? learningStats.selection_count}件 / 文節連鎖 ${learningStats.post_composition_bigram_count ?? 0}件 / 補正学習 ${learningStats.typo_count}件 / 英字学習 ${learningStats.english_count}件${learningStats.history_paused ? "（学習は一時停止中）" : ""}。候補ウィンドウの右クリックからも1件ずつ削除できます。`
                             : "変換学習・補正学習・英字学習の履歴です。候補ウィンドウの右クリックからも1件ずつ削除できます。"}
                     >
                         <AlertDialog>
@@ -625,7 +660,7 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
                                         />
                                         <span>
                                             <span className="font-medium">変換学習</span>
-                                            <span className="block text-muted-foreground">選んだ変換結果と読みの対応（{learningStats?.selection_count ?? 0}件）</span>
+                                            <span className="block text-muted-foreground">読みと表記の学習（{learningStats?.selection_override_count ?? learningStats?.selection_count ?? 0}件）、文節連鎖（{learningStats?.post_composition_bigram_count ?? 0}件）</span>
                                         </span>
                                     </label>
                                     <label className="flex items-start gap-3 text-sm">

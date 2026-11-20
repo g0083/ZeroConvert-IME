@@ -8,9 +8,24 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal const val MAX_USER_DICTIONARY_ENTRIES = 10_000
+
+enum class UserDictionaryPos(val key: String) {
+    PROPER_NOUN("proper_noun"),
+    COMMON_NOUN("common_noun"),
+    SAHEN_NOUN("sahen_noun"),
+    SHORTCUT("shortcut"),
+    SYMBOL("symbol");
+
+    companion object {
+        fun fromKey(key: String): UserDictionaryPos = entries.firstOrNull { it.key == key } ?: PROPER_NOUN
+    }
+}
+
 data class UserDictEntry(
     val reading: String,
-    val word: String
+    val word: String,
+    val pos: UserDictionaryPos = UserDictionaryPos.PROPER_NOUN
 )
 
 /**
@@ -87,7 +102,7 @@ class KanaKanjiConverter {
                         val r = toHiragana(obj.optString("reading", "").trim())
                         val w = obj.optString("word", "").trim()
                         if (r.isNotEmpty() && w.isNotEmpty()) {
-                            userDictEntries.add(UserDictEntry(r, w))
+                            userDictEntries.add(UserDictEntry(r, w, UserDictionaryPos.fromKey(obj.optString("pos"))))
                         }
                     }
                 } catch (e: Exception) {
@@ -106,6 +121,7 @@ class KanaKanjiConverter {
                 val obj = JSONObject()
                 obj.put("reading", entry.reading)
                 obj.put("word", entry.word)
+                obj.put("pos", entry.pos.key)
                 arr.put(obj)
             }
             context.getSharedPreferences(PREFS_USER_DATA, Context.MODE_PRIVATE)
@@ -129,7 +145,7 @@ class KanaKanjiConverter {
             ensureInitialized(context)
             val normReading = toHiragana(reading.trim())
             val normWord = word.trim()
-            if (normReading.isEmpty() || normWord.isEmpty()) return false
+            if (normReading.isEmpty() || normWord.isEmpty() || userDictEntries.size >= MAX_USER_DICTIONARY_ENTRIES) return false
             if (userDictEntries.any { it.reading == normReading && it.word == normWord }) return false
             userDictEntries.add(0, UserDictEntry(normReading, normWord))
             userDictRevision++

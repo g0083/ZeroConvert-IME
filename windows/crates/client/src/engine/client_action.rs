@@ -34,6 +34,7 @@ pub enum ClientAction {
         scope: LearningCommitScope,
         kind: LearningCommitKind,
         was_temporary_latin: bool,
+        explicit_selection: bool,
     },
     CommitEnglishLearning {
         prefix: String,

@@ -1,8 +1,8 @@
 import Foundation
 import KanaKanjiConverterModule
 
-private let maxPostCompositionBigramPreviousCount = 128
-private let maxPostCompositionBigramNextCount = 4
+private let maxPostCompositionBigramPreviousCount = 256
+private let maxPostCompositionBigramNextCount = 6
 private let maxRecentPostCompositionSourceCount = 64
 private let maxPostCompositionTextPredictions = 10
 private let maxPostCompositionEmojiPredictions = 2
@@ -13,89 +13,165 @@ struct PostCompositionBigramEntry: Codable, Equatable {
     var ruby: String
     var rcid: Int
     var mid: Int
+    var count: UInt32
+    var lastUsedEpochMs: Int64
+
+    init(surface: String, ruby: String, rcid: Int, mid: Int, count: UInt32 = 1, lastUsedEpochMs: Int64 = 0) {
+        self.surface = surface
+        self.ruby = normalizedLearningRuby(ruby)
+        self.rcid = rcid
+        self.mid = mid
+        self.count = count
+        self.lastUsedEpochMs = lastUsedEpochMs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case surface, ruby, rcid, mid, count, lastUsedEpochMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            surface: try values.decode(String.self, forKey: .surface),
+            ruby: try values.decode(String.self, forKey: .ruby),
+            rcid: try values.decode(Int.self, forKey: .rcid),
+            mid: try values.decode(Int.self, forKey: .mid),
+            count: min(max(try values.decodeIfPresent(UInt32.self, forKey: .count) ?? 1, 1), 1000),
+            lastUsedEpochMs: try values.decodeIfPresent(Int64.self, forKey: .lastUsedEpochMs) ?? 0
+        )
+    }
+
+    func score(nowEpochMs: Int64) -> Double {
+        let ageDays = lastUsedEpochMs == 0
+            ? 7 : max(0, (Double(nowEpochMs) - Double(lastUsedEpochMs)) / 86_400_000)
+        return Double(count) / (1 + ageDays / 14)
+    }
+
+    var element: DicdataElement {
+        DicdataElement(
+            word: surface, ruby: ruby.isEmpty ? normalizedLearningRuby(surface) : ruby,
+            cid: rcid > 0 ? rcid : CIDData.一般名詞.cid, mid: mid, value: -1
+        )
+    }
 }
 
 struct PostCompositionBigramStore: Codable, Equatable {
     private var entriesByPrevious: [String: [PostCompositionBigramEntry]] = [:]
-    private var recentPreviousSurfaces: [String] = []
 
-    var count: Int {
-        entriesByPrevious.values.reduce(0) { $0 + $1.count }
-    }
+    var count: Int { entriesByPrevious.values.reduce(0) { $0 + $1.count } }
 
-    mutating func removeAll() {
-        entriesByPrevious.removeAll(keepingCapacity: false)
-        recentPreviousSurfaces.removeAll(keepingCapacity: false)
-    }
+    mutating func removeAll() { entriesByPrevious.removeAll() }
 
-    func entries(for previousSurface: String) -> [PostCompositionBigramEntry] {
-        guard !previousSurface.isEmpty else {
-            return []
+    func entries(for previousSurface: String, nowEpochMs: Int64 = learningEpochMilliseconds()) -> [PostCompositionBigramEntry] {
+        (entriesByPrevious[previousSurface] ?? []).sorted {
+            let lhs = $0.score(nowEpochMs: nowEpochMs)
+            let rhs = $1.score(nowEpochMs: nowEpochMs)
+            if lhs != rhs { return lhs > rhs }
+            if $0.lastUsedEpochMs != $1.lastUsedEpochMs { return $0.lastUsedEpochMs > $1.lastUsedEpochMs }
+            return $0.surface < $1.surface
         }
-        return entriesByPrevious[previousSurface] ?? []
     }
 
-    mutating func record(previousSurface: String, entry: PostCompositionBigramEntry) {
-        guard !previousSurface.isEmpty,
-              !entry.surface.isEmpty,
-              previousSurface.count <= 32,
-              entry.surface.count <= 32 else {
-            return
+    func chains(from previous: String, nowEpochMs: Int64 = learningEpochMilliseconds()) -> [[PostCompositionBigramEntry]] {
+        entries(for: previous, nowEpochMs: nowEpochMs).prefix(2).compactMap { start in
+            guard start.surface != previous, start.surface.count <= 40 else { return nil }
+            var chain = [start]
+            var visited: Set<String> = [previous, start.surface]
+            var length = start.surface.count
+            while chain.count < 4, let tail = chain.last,
+                  let next = entries(for: tail.surface, nowEpochMs: nowEpochMs).first(where: {
+                      !visited.contains($0.surface) && length + $0.surface.count <= 40
+                  }) {
+                chain.append(next)
+                visited.insert(next.surface)
+                length += next.surface.count
+            }
+            return chain.count > 1 ? chain : nil
         }
+    }
+
+    private func ageOrder(_ key: String) -> (Int64, String) {
+        (entriesByPrevious[key]?.map(\.lastUsedEpochMs).max() ?? 0, key)
+    }
+
+    private static func edgeAgeOrder(_ entry: PostCompositionBigramEntry) -> (Int64, UInt32, String) {
+        (entry.lastUsedEpochMs, entry.count, entry.surface)
+    }
+
+    @discardableResult
+    mutating func record(
+        previousSurface: String, entry: PostCompositionBigramEntry,
+        nowEpochMs: Int64 = learningEpochMilliseconds()
+    ) -> Bool {
+        guard isValidLearningKey(previousSurface), isValidLearningKey(entry.surface),
+              previousSurface.count <= 32, entry.surface.count <= 40 else { return false }
         var current = entriesByPrevious[previousSurface] ?? []
-        current.removeAll { $0.surface == entry.surface }
-        current.insert(entry, at: 0)
-        if current.count > maxPostCompositionBigramNextCount {
-            current.removeLast(current.count - maxPostCompositionBigramNextCount)
+        var updated = entry
+        if let index = current.firstIndex(where: { $0.surface == entry.surface }) {
+            updated.count = min(current.remove(at: index).count + 1, 1000)
+        }
+        updated.lastUsedEpochMs = nowEpochMs
+        current.append(updated)
+        if current.count > maxPostCompositionBigramNextCount,
+           let oldest = current.indices.min(by: { Self.edgeAgeOrder(current[$0]) < Self.edgeAgeOrder(current[$1]) }) {
+            current.remove(at: oldest)
         }
         entriesByPrevious[previousSurface] = current
-        recentPreviousSurfaces.removeAll { $0 == previousSurface }
-        recentPreviousSurfaces.append(previousSurface)
-        while entriesByPrevious.count > maxPostCompositionBigramPreviousCount,
-              let oldest = recentPreviousSurfaces.first {
-            recentPreviousSurfaces.removeFirst()
+        if entriesByPrevious.count > maxPostCompositionBigramPreviousCount,
+           let oldest = entriesByPrevious.keys.min(by: { ageOrder($0) < ageOrder($1) }) {
             entriesByPrevious.removeValue(forKey: oldest)
         }
+        return true
     }
 
     mutating func forget(surface: String) -> Bool {
-        guard !surface.isEmpty else {
-            return false
-        }
+        guard !surface.isEmpty else { return false }
         var changed = entriesByPrevious.removeValue(forKey: surface) != nil
-        if changed {
-            recentPreviousSurfaces.removeAll { $0 == surface }
-        }
-        var emptiedKeys: [String] = []
         for (previous, list) in entriesByPrevious {
             let filtered = list.filter { $0.surface != surface }
             if filtered.count != list.count {
                 changed = true
-                if filtered.isEmpty {
-                    emptiedKeys.append(previous)
-                } else {
-                    entriesByPrevious[previous] = filtered
-                }
+                entriesByPrevious[previous] = filtered.isEmpty ? nil : filtered
             }
-        }
-        for key in emptiedKeys {
-            entriesByPrevious.removeValue(forKey: key)
-            recentPreviousSurfaces.removeAll { $0 == key }
         }
         return changed
     }
 
     func previousSurfaces(preceding surface: String) -> [String] {
-        guard !surface.isEmpty else {
-            return []
+        entriesByPrevious.keys.filter {
+            entriesByPrevious[$0]?.contains { $0.surface == surface } == true
+        }.sorted { ageOrder($0) < ageOrder($1) }
+    }
+
+    private struct Snapshot: Codable {
+        var version: Int?
+        var entriesByPrevious: [String: [PostCompositionBigramEntry]]
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let snapshot = try Snapshot(from: decoder)
+        guard snapshot.version == nil || snapshot.version == 1 || snapshot.version == 2 else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unsupported bigram version"))
         }
-        var matched: [String] = []
-        for previous in recentPreviousSurfaces {
-            if entriesByPrevious[previous]?.contains(where: { $0.surface == surface }) == true {
-                matched.append(previous)
+        for (key, entries) in snapshot.entriesByPrevious where isValidLearningKey(key) && key.count <= 32 {
+            var seen: Set<String> = []
+            let valid = entries.filter { isValidLearningKey($0.surface) && $0.surface.count <= 40 }
+                .sorted { Self.edgeAgeOrder($0) > Self.edgeAgeOrder($1) }
+                .filter { seen.insert($0.surface).inserted }
+            if !valid.isEmpty {
+                entriesByPrevious[key] = Array(valid.prefix(maxPostCompositionBigramNextCount))
             }
         }
-        return matched
+        let newestKeys = entriesByPrevious.keys.sorted { ageOrder($0) > ageOrder($1) }
+        for key in newestKeys.dropFirst(maxPostCompositionBigramPreviousCount) {
+            entriesByPrevious.removeValue(forKey: key)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try Snapshot(version: 2, entriesByPrevious: entriesByPrevious).encode(to: encoder)
     }
 }
 
@@ -613,6 +689,7 @@ private func postCompositionBigramsURL() -> URL? {
 }
 
 func loadPostCompositionBigrams() {
+    guard !privateInputActive, !postCompositionBigramsDirty else { return }
     guard currentLearningType != .nothing,
           let fileURL = postCompositionBigramsURL() else {
         postCompositionBigramStore.removeAll()
@@ -631,19 +708,24 @@ func loadPostCompositionBigrams() {
     }
 }
 
-private func savePostCompositionBigrams() {
-    guard currentLearningType == .inputAndOutput,
-          let fileURL = postCompositionBigramsURL() else {
-        return
-    }
+nonisolated(unsafe) private var postCompositionBigramsDirty = false
+
+@discardableResult
+func savePostCompositionBigrams() -> Bool {
+    guard postCompositionBigramsDirty else { return true }
+    guard !privateInputActive, currentLearningType != .nothing,
+          let fileURL = postCompositionBigramsURL() else { return false }
     do {
         ensureLearningMemoryDirectoryIfNeeded()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(postCompositionBigramStore)
         try data.write(to: fileURL, options: .atomic)
+        postCompositionBigramsDirty = false
+        return true
     } catch {
         serverLog("WARN", "SavePostCompositionBigrams: failed path=\(fileURL.path) error=\(error)")
+        return false
     }
 }
 
@@ -662,12 +744,13 @@ func clearPostCompositionPredictionState() {
 }
 
 func resetPostCompositionLearningMemory() {
+    postCompositionBigramsDirty = false
     postCompositionBigramStore.removeAll()
     clearPostCompositionPredictionState()
 }
 
 func postCompositionJoinedForgetElements(for candidate: Candidate, output: String) -> [DicdataElement] {
-    guard !output.isEmpty else {
+    guard !privateInputActive, currentLearningType != .nothing, !output.isEmpty else {
         return []
     }
     let baseRuby = learningCandidateRuby(candidate)
@@ -717,29 +800,17 @@ func postCompositionJoinedForgetElements(for candidate: Candidate, output: Strin
 }
 
 func forgetPostCompositionLearning(surface: String) {
+    guard !privateInputActive, currentLearningType != .nothing else { return }
     clearActivePostCompositionState()
     recentPostCompositionSources.removeAll { $0.text == surface }
-    guard currentLearningType != .nothing else {
-        return
-    }
     if postCompositionBigramStore.forget(surface: surface) {
-        if currentLearningType == .inputAndOutput {
-            savePostCompositionBigrams()
-        } else if let fileURL = postCompositionBigramsURL() {
-            // Read-only deletion explicitly removes the chosen entry without permitting new writes.
-            do {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.sortedKeys]
-                let data = try encoder.encode(postCompositionBigramStore)
-                try data.write(to: fileURL, options: .atomic)
-            } catch {
-                serverLog("WARN", "ForgetPostCompositionBigrams: failed path=\(fileURL.path) error=\(error)")
-            }
-        }
+        postCompositionBigramsDirty = true
+        _ = savePostCompositionBigrams()
     }
 }
 
 func recordRecentPublishedPostCompositionCandidates(_ candidates: [Candidate]) {
+    guard !privateInputActive, currentLearningType != .nothing else { return }
     for candidate in candidates.prefix(24) {
         guard !candidate.text.isEmpty else {
             continue
@@ -757,56 +828,112 @@ func recordRecentPublishedPostCompositionCandidates(_ candidates: [Candidate]) {
     }
 }
 
+func postCompositionContextLookupKeys(_ context: String) -> [String] {
+    guard !context.isEmpty else { return [] }
+    let clause = String(context.split(omittingEmptySubsequences: false, whereSeparator: isPostCompositionTerminalCharacter).last ?? "")
+        .trimmingCharacters(in: .whitespaces)
+    if clause != context && !clause.isEmpty && clause.count <= maxPostCompositionContextClauseLength {
+        return [clause, context]
+    }
+    return [context]
+}
+
 private func recordContextualPostCompositionBigram(
     previousSurface: String,
     contextBeforeCommit: String,
     entry: PostCompositionBigramEntry
-) {
+) -> Bool {
     let contextualPrevious = effectivePostCompositionContextClause(
         committedText: previousSurface,
         context: contextBeforeCommit
     )
     var recorded = false
     if contextualPrevious != previousSurface {
-        postCompositionBigramStore.record(previousSurface: contextualPrevious, entry: entry)
-        recorded = true
+        recorded = postCompositionBigramStore.record(previousSurface: contextualPrevious, entry: entry)
     }
     if previousSurface.count >= 2 || contextualPrevious == previousSurface {
-        postCompositionBigramStore.record(previousSurface: previousSurface, entry: entry)
-        recorded = true
+        recorded = postCompositionBigramStore.record(previousSurface: previousSurface, entry: entry) || recorded
     }
-    if recorded {
-        savePostCompositionBigrams()
+    return recorded
+}
+
+func extractClauseChunks(from candidate: Candidate) -> [(surface: String, ruby: String, rcid: Int, mid: Int)] {
+    typealias Chunk = (surface: String, ruby: String, rcid: Int, mid: Int)
+    let punctuation: Set<Character> = Set("、。！？,.!?")
+    let endMarkers: Set<Character> = Set("はがをにへとでのもねよか、。！？")
+    let particles = ["から", "まで", "より", "だけ", "ので", "のに", "では", "には", "とは", "でも",
+                     "は", "が", "を", "に", "へ", "と", "で", "の", "も", "ね", "よ", "か"]
+    var chunks: [Chunk] = []
+    var current: Chunk?
+
+    func append(_ chunk: Chunk) {
+        let isPunctuation = chunk.surface.allSatisfy(punctuation.contains)
+        let shortTail = chunk.surface.count <= 3 &&
+            (chunk.surface.allSatisfy(isHiraganaCharacter) || isPunctuation)
+        if let prior = current, shortTail,
+           (prior.surface.last.map { !endMarkers.contains($0) } == true || isPunctuation) {
+            current = (prior.surface + chunk.surface, prior.ruby + chunk.ruby, chunk.rcid, chunk.mid)
+        } else {
+            if let current { chunks.append(current) }
+            current = chunk
+        }
     }
+
+    for element in candidate.data where isValidLearningKey(element.word) {
+        let ruby = normalizedLearningRuby(element.ruby)
+        // AzooKey also stores fused dictionary elements such as 「は天気」.
+        // Split a recognized leading particle only when its left CID and reading agree.
+        if let prior = current, prior.surface.last.map({ !endMarkers.contains($0) }) == true,
+           CIDData.isJoshi(cid: element.lcid),
+           let particle = particles.first(where: {
+               element.word.count > $0.count && element.word.hasPrefix($0) && ruby.hasPrefix(normalizedLearningRuby($0))
+           }) {
+            let particleRuby = normalizedLearningRuby(particle)
+            let completed = (prior.surface + particle, prior.ruby + particleRuby, element.lcid, prior.mid)
+            chunks.append(completed)
+            current = (String(element.word.dropFirst(particle.count)), String(ruby.dropFirst(particleRuby.count)), element.rcid, element.mid)
+        } else {
+            append((element.word, ruby, element.rcid, element.mid))
+        }
+    }
+    if let current { chunks.append(current) }
+    return chunks
 }
 
 func recordPostCompositionLearningCommit(
     _ candidate: Candidate,
-    contextBeforeCommit: String
+    contextBeforeCommit: String,
+    persist: Bool = true
 ) {
+    guard !privateInputActive, currentLearningType == .inputAndOutput else { return }
     let previous = lastCommittedPostCompositionCandidate
     lastCommittedPostCompositionCandidate = candidate
-    guard currentLearningType == .inputAndOutput,
-          let previous,
-          previous.isLearningTarget,
-          candidate.isLearningTarget,
-          !contextBeforeCommit.isEmpty,
-          contextBeforeCommit.hasSuffix(previous.text),
-          !isPostCompositionStopForBigram(previous.text),
-          !isPostCompositionStopForBigram(candidate.text) else {
-        return
+    guard candidate.isLearningTarget else { return }
+    let chunks = extractClauseChunks(from: candidate)
+    guard let first = chunks.first else { return }
+    func entry(_ chunk: (surface: String, ruby: String, rcid: Int, mid: Int)) -> PostCompositionBigramEntry {
+        PostCompositionBigramEntry(surface: chunk.surface, ruby: chunk.ruby, rcid: chunk.rcid, mid: chunk.mid)
     }
-    let entry = PostCompositionBigramEntry(
-        surface: candidate.text,
-        ruby: learningCandidateRuby(candidate),
-        rcid: candidate.data.last?.rcid ?? CIDData.一般名詞.cid,
-        mid: candidate.data.last?.mid ?? MIDData.一般.mid
-    )
-    recordContextualPostCompositionBigram(
-        previousSurface: previous.text,
-        contextBeforeCommit: contextBeforeCommit,
-        entry: entry
-    )
+    var recorded = false
+    if let previous, previous.isLearningTarget, !contextBeforeCommit.isEmpty,
+       contextBeforeCommit.hasSuffix(previous.text),
+       !isPostCompositionStopForBigram(previous.text), !isPostCompositionStopForBigram(first.surface) {
+        recorded = recordContextualPostCompositionBigram(
+            previousSurface: previous.text, contextBeforeCommit: contextBeforeCommit, entry: entry(first)
+        )
+        if let last = extractClauseChunks(from: previous).last, last.surface != previous.text,
+           !isPostCompositionStopForBigram(last.surface) {
+            recorded = postCompositionBigramStore.record(previousSurface: last.surface, entry: entry(first)) || recorded
+        }
+    }
+    for (left, right) in zip(chunks, chunks.dropFirst())
+    where !isPostCompositionStopForBigram(left.surface) && !isPostCompositionStopForBigram(right.surface) {
+        recorded = postCompositionBigramStore.record(previousSurface: left.surface, entry: entry(right)) || recorded
+    }
+    if recorded {
+        postCompositionBigramsDirty = true
+        if persist { _ = savePostCompositionBigrams() }
+    }
 }
 
 private func makePostCompositionConverterOptions(
@@ -948,7 +1075,9 @@ func generatePostCompositionPredictions(
         learningType: currentLearningType,
         memoryDirectoryURL: currentLearningMemoryDirectoryURL
     )
-    lastCommittedPostCompositionCandidate = leftSideCandidate
+    if !privateInputActive && currentLearningType != .nothing {
+        lastCommittedPostCompositionCandidate = leftSideCandidate
+    }
 
     var results: [PublishedPostCompositionPrediction] = []
     var seenTexts: Set<String> = [leftSideCandidate.text]
@@ -984,47 +1113,26 @@ func generatePostCompositionPredictions(
         results.append(item)
     }
 
-    // 1. Prioritize learned sequence bigrams for the full contextual clause first, then the committed phrase.
-    if currentLearningType != .nothing {
-        var bigramLookupKeys: [String] = [contextualLeftText]
-        if leftSideCandidate.text != contextualLeftText && leftSideCandidate.text.count >= 2 {
-            bigramLookupKeys.append(leftSideCandidate.text)
+    // Learned continuations precede engine predictions.
+    if !privateInputActive && currentLearningType != .nothing {
+        let keys = contextualLeftText == leftSideCandidate.text
+            ? [contextualLeftText] : [contextualLeftText, leftSideCandidate.text]
+        let now = learningEpochMilliseconds()
+        var directCount = 0
+        for key in keys {
+            for entry in postCompositionBigramStore.entries(for: key, nowEpochMs: now) where directCount < 4 {
+                let before = results.count
+                appendEnginePrediction(.init(text: entry.surface, value: -0.5, type: .additional(data: [entry.element])))
+                directCount += results.count - before
+            }
         }
-        for key in bigramLookupKeys {
-            for entry in postCompositionBigramStore.entries(for: key) {
-                guard results.count < maxPostCompositionTextPredictions,
-                      isUsablePostCompositionPredictionText(entry.surface),
-                      seenTexts.insert(entry.surface).inserted else {
-                    continue
-                }
-                let ruby = entry.ruby.isEmpty ? normalizedLearningRuby(entry.surface) : entry.ruby
-                let element = DicdataElement(
-                    word: entry.surface,
-                    ruby: ruby,
-                    cid: entry.rcid > 0 ? entry.rcid : CIDData.一般名詞.cid,
-                    mid: entry.mid,
-                    value: -1
-                )
-                let enginePred = PostCompositionPredictionCandidate(
-                    text: entry.surface,
-                    value: -0.5,
-                    type: .additional(data: [element])
-                )
-                let joined = enginePred.join(to: leftSideCandidate)
-                let id = allocatePostCompositionPredictionId()
-                let item = PublishedPostCompositionPrediction(
-                    id: id,
-                    text: entry.surface,
-                    reading: katakanaToHiragana(learningCandidateRuby(joined)),
-                    leftSideCandidate: leftSideCandidate,
-                    joinedCandidate: joined,
-                    enginePrediction: enginePred,
-                    isTerminal: enginePred.isTerminal || isPostCompositionTerminal(entry.surface),
-                    isEmoji: false,
-                    shouldLearn: true
-                )
-                publishedPostCompositionPredictions[id] = item
-                results.append(item)
+        var chainCount = 0
+        for key in keys {
+            for chain in postCompositionBigramStore.chains(from: key, nowEpochMs: now) where chainCount < 2 {
+                let text = chain.map(\.surface).joined()
+                let before = results.count
+                appendEnginePrediction(.init(text: text, value: -0.6, type: .additional(data: chain.map(\.element))))
+                chainCount += results.count - before
             }
         }
     }
@@ -1290,13 +1398,13 @@ public func select_post_composition_prediction(
         ))
     }
 
-    if allowLearning && item.shouldLearn && currentLearningType == .inputAndOutput {
+    if !privateInputActive && allowLearning && item.shouldLearn && currentLearningType == .inputAndOutput {
         ensureConverterLearningConfigSynced()
         if let enginePred = item.enginePrediction {
             converter.updateLearningData(item.leftSideCandidate, with: enginePred)
-            converter.commitUpdateLearningData()
+            converterLearningDirty = true
             normalNBestSupplementConverter.setCompletedData(item.joinedCandidate)
-            normalNBestSupplementConverter.invalidateLearningMemoryCache()
+            _ = flush_learning_memory()
         }
         if !item.isEmoji,
            !isPostCompositionStopForBigram(item.text),
@@ -1319,15 +1427,20 @@ public func select_post_composition_prediction(
                 rcid: item.joinedCandidate.data.last?.rcid ?? CIDData.一般名詞.cid,
                 mid: item.joinedCandidate.lastMid
             )
-            recordContextualPostCompositionBigram(
+            if recordContextualPostCompositionBigram(
                 previousSurface: item.leftSideCandidate.text,
                 contextBeforeCommit: contextBeforeSelection,
                 entry: entry
-            )
+            ) {
+                postCompositionBigramsDirty = true
+                _ = savePostCompositionBigrams()
+            }
         }
     }
 
-    lastCommittedPostCompositionCandidate = item.joinedCandidate
+    if !privateInputActive && currentLearningType != .nothing {
+        lastCommittedPostCompositionCandidate = item.joinedCandidate
+    }
     updateLastCommittedContinuationAfterPostComposition(
         item: item,
         contextBeforeSelection: contextBeforeSelection

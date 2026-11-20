@@ -429,8 +429,11 @@ int main(int argc, char **argv) {
         const size_t tab1 = line.find('\t');
         if (tab1 == std::string::npos) {
           const bool all_lower =
-              std::all_of(line.begin(), line.end(),
-                          [](char c) { return c >= 'a' && c <= 'z'; });
+              std::any_of(line.begin(), line.end(),
+                          [](char c) { return c >= 'a' && c <= 'z'; }) &&
+              std::all_of(line.begin(), line.end(), [](char c) {
+                return (c >= 'a' && c <= 'z') || c == '-';
+              });
           if (all_lower)
             raw_keys = line;
           else

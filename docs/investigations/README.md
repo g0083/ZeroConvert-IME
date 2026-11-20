@@ -20,6 +20,7 @@
 - [input-policy-sharing-plan.md](input-policy-sharing-plan.md): **実装済み** — 入力ポリシー・自動確定判定の両 OS 共有（`conversion_policy.rs` + `tests/input-policy/`）
 - [learning-deletion-plan.md](learning-deletion-plan.md): **実装済み** — 学習削除の共通化（スコープ別リセット・候補単位削除）
 - [browser-ime-parity-plan.md](browser-ime-parity-plan.md): **段階実装中** — Web 版での Windows パリティ再現計画（検証記録: [browser-ime-parity-2026-11-17.md](../../reports/web/browser-ime-parity-2026-11-17.md)）
+- [dictionary-learning-architecture-plan.md](dictionary-learning-architecture-plan.md): **実装進行中（Step 1 完了・Step 2〜5 一気通貫実装仕様）** — モデル重視変換（純粋プロンプト＋評価時ユーザー辞書保護）・文節連鎖による文再現・10,000件ユーザー辞書刷新・永続化統合の設計・検証仕様（共有エンジン軸・Windows 優先実装）
 
 ## 過去の調査・バージョン別修正ログ
 

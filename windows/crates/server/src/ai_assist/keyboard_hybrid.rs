@@ -394,32 +394,54 @@ fn is_valid_reading_str(reading: &str, observed: &str) -> bool {
             .all(|c| ('ぁ'..='ゖ').contains(&c) || "ー、。！？!?".contains(c))
 }
 
-fn validated_readings(response: &Value, input: &str) -> Vec<String> {
-    let Some(observed) = response.get("observed").and_then(Value::as_str) else {
-        return Vec::new();
-    };
-    let Some(reading) = response.get("reading").and_then(Value::as_str) else {
-        return Vec::new();
-    };
-    let Some(gain) = response.get("gain").and_then(Value::as_f64) else {
-        return Vec::new();
-    };
+/// Validated top repair reading and ranking confidence returned by `keyboard-prior`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelRepairCandidate {
+    pub reading: String,
+    pub alt_reading: Option<String>,
+    pub confidence: super::ChannelConfidence,
+}
+
+fn validated_repair_candidate(response: &Value, input: &str) -> Option<ChannelRepairCandidate> {
+    let observed = response.get("observed")?.as_str()?;
+    let reading = response.get("reading")?.as_str()?;
+    let gain = response.get("gain")?.as_f64()?;
     if normalize_reading(input) != observed
         || !gain.is_finite()
         || gain < 37.
         || !is_valid_reading_str(reading, observed)
     {
-        return Vec::new();
+        return None;
     }
-    let mut out = vec![reading.to_owned()];
-    if let Some(alt) = response
+    let alt_reading = response
         .get("alt_reading")
         .and_then(Value::as_str)
         .filter(|alt| *alt != reading && is_valid_reading_str(alt, observed))
-    {
-        out.push(alt.to_owned());
-    }
-    out
+        .map(str::to_owned);
+    let has_alt_reading = alt_reading.is_some();
+    Some(ChannelRepairCandidate {
+        reading: reading.to_owned(),
+        alt_reading,
+        confidence: super::ChannelConfidence {
+            gain_tenths: (gain.clamp(0.0, 100_000.0) * 10.0).round() as u32,
+            has_alt_reading,
+        },
+    })
+}
+
+fn candidate_readings(candidate: Option<ChannelRepairCandidate>) -> Vec<String> {
+    candidate.map_or_else(Vec::new, |c| {
+        let mut out = vec![c.reading];
+        if let Some(alt) = c.alt_reading {
+            out.push(alt);
+        }
+        out
+    })
+}
+
+#[cfg(test)]
+fn validated_readings(response: &Value, input: &str) -> Vec<String> {
+    candidate_readings(validated_repair_candidate(response, input))
 }
 
 #[cfg(test)]
@@ -445,16 +467,15 @@ pub fn repair_readings(
     repair_readings_with_hints(context, input, raw, "", "", wait_for_worker)
 }
 
-/// Like [`repair_readings`], forwarding optional per-position touch hints (`"0:o=0.85;..."`)
-/// and keyboard input mode (`""` / `"qwerty"` / `"flick"`).
-pub fn repair_readings_with_hints(
+/// Like [`repair_readings`], returning the validated top repair candidate and confidence metadata.
+pub fn repair_candidate_with_hints(
     context: &str,
     input: &str,
     raw: &str,
     touch_hints: &str,
     input_mode: &str,
     wait_for_worker: bool,
-) -> Option<Vec<String>> {
+) -> Option<Option<ChannelRepairCandidate>> {
     let norm = normalize_reading(input);
     let char_count = norm.chars().count();
     if !(2..=128).contains(&char_count)
@@ -466,7 +487,8 @@ pub fn repair_readings_with_hints(
     {
         return None;
     }
-    let valid_raw = if (4..=192).contains(&raw.len()) && raw.bytes().all(|c| c.is_ascii_lowercase())
+    let valid_raw = if (4..=192).contains(&raw.len())
+        && raw.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
     {
         raw
     } else {
@@ -522,7 +544,21 @@ pub fn repair_readings_with_hints(
     if response.get("observed")?.as_str()? != norm {
         return None;
     }
-    Some(validated_readings(&response, input))
+    Some(validated_repair_candidate(&response, input))
+}
+
+/// Like [`repair_readings`], forwarding optional per-position touch hints (`"0:o=0.85;..."`)
+/// and keyboard input mode (`""` / `"qwerty"` / `"flick"`).
+pub fn repair_readings_with_hints(
+    context: &str,
+    input: &str,
+    raw: &str,
+    touch_hints: &str,
+    input_mode: &str,
+    wait_for_worker: bool,
+) -> Option<Vec<String>> {
+    repair_candidate_with_hints(context, input, raw, touch_hints, input_mode, wait_for_worker)
+        .map(candidate_readings)
 }
 
 /// Repair reading via candidate search + main conversion model likelihood scoring.
@@ -547,22 +583,22 @@ pub fn suggest(
     if !config.enabled
         || config.engine != "embedded"
         || !(4..=64).contains(&raw.len())
-        || !raw.bytes().all(|c| c.is_ascii_lowercase())
+        || !raw.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
         || super::lookup_learned_typo(input).is_some()
         || corrector::explicit_typo_surface(input).is_some()
         || legacy_full_word_repair(input)
     {
         return None;
     }
-    let readings = repair_readings(context, input, raw, false)?;
-    let Some(reading) = readings.into_iter().next() else {
+    let Some(candidate) = repair_candidate_with_hints(context, input, raw, "", "", false)? else {
         return Some(None);
     };
     Some(Some(TypoSuggestion {
-        surface: reading.clone(),
+        surface: candidate.reading.clone(),
         token_reading: input.into(),
-        token_surface: reading,
+        token_surface: candidate.reading,
         learned: false,
+        channel_confidence: Some(candidate.confidence),
     }))
 }
 
@@ -663,6 +699,44 @@ mod tests {
         assert_eq!(
             captured.lock().unwrap().as_deref(),
             Some("namねんnamがつに")
+        );
+    }
+
+    #[test]
+    fn repair_readings_forwards_dash_in_raw_and_touch_hints() {
+        struct CaptureBackend(std::sync::Arc<std::sync::Mutex<Option<(String, String, String)>>>);
+        impl super::runtime::CompletionBackend for CaptureBackend {
+            fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+                None
+            }
+            fn keyboard_repair_with_hints(
+                &self,
+                raw: &str,
+                input: &str,
+                _context: &str,
+                touch_hints: &str,
+                _input_mode: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                *self.0.lock().unwrap() =
+                    Some((raw.to_owned(), input.to_owned(), touch_hints.to_owned()));
+                Some(None)
+            }
+        }
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let backend = CaptureBackend(std::sync::Arc::clone(&captured));
+        let result = super::runtime::with_backend(Box::new(backend), || {
+            repair_readings_with_hints("", "ーあそこん", "-asokon", "0:p=0.85,l=0.40", "qwerty", false)
+        });
+        assert!(result.is_none());
+        assert_eq!(
+            captured.lock().unwrap().as_ref(),
+            Some(&(
+                "-asokon".to_owned(),
+                "ーあそこん".to_owned(),
+                "0:p=0.85,l=0.40".to_owned()
+            ))
         );
     }
 }

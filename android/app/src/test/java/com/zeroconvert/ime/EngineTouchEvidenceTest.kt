@@ -1,6 +1,7 @@
 package com.zeroconvert.ime
 
 import com.zeroconvert.ime.azookey.input.ComposingText
+import com.zeroconvert.ime.azookey.input.InputPiece
 import com.zeroconvert.ime.azookey.input.InputStyle
 import com.zeroconvert.ime.engine.engineFlickTouchHints
 import com.zeroconvert.ime.engine.engineInputMode
@@ -117,5 +118,75 @@ class EngineTouchEvidenceTest {
         }
         assertEquals("qwerty", engineInputMode(mixed, JapaneseInputLayout.FLICK_12KEY))
         assertEquals("", engineFlickTouchHints(mixed, listOf(TouchKeyBias('り', listOf('き' to 0.8f)))))
+    }
+
+    @Test fun qwertyRawRomajiAndHintsPreserveLongVowelDashAndLBoundary() {
+        val withLongVowel = input("ーasokon")
+        assertEquals("-asokon", engineRawRomaji(withLongVowel))
+        assertEquals(
+            "0:p=0.85,l=0.42",
+            engineTouchHints(
+                withLongVowel,
+                listOf(
+                    TouchKeyBias('ー', listOf('p' to 0.85f, 'l' to 0.42f)),
+                    TouchKeyBias('a'),
+                    TouchKeyBias('s'),
+                    TouchKeyBias('o'),
+                    TouchKeyBias('k'),
+                    TouchKeyBias('o'),
+                    TouchKeyBias('n')
+                )
+            )
+        )
+
+        val lMistypedForLongVowel = input("kaldo")
+        assertEquals("kaldo", engineRawRomaji(lMistypedForLongVowel))
+        assertEquals(
+            "2:-=0.78",
+            engineTouchHints(
+                lMistypedForLongVowel,
+                listOf(
+                    TouchKeyBias('k'),
+                    TouchKeyBias('a'),
+                    TouchKeyBias('l', listOf('ー' to 0.78f)),
+                    TouchKeyBias('d'),
+                    TouchKeyBias('o')
+                )
+            )
+        )
+        val evidence = engineTouchEvidence(
+            lMistypedForLongVowel,
+            listOf(TouchKeyBias('l', listOf('ー' to 0.78f)), TouchKeyBias('d'), TouchKeyBias('o'))
+        )
+        assertEquals(1, evidence.length())
+        assertEquals(2, evidence.getJSONObject(0).getInt("inputIndex"))
+        assertEquals("-", evidence.getJSONObject(0).getJSONArray("alternatives").getJSONObject(0).getString("key"))
+    }
+
+    @Test fun rawRomajiAndHintsCrossCompositionSeparatorsAndProtectSingleN() {
+        val elements = mutableListOf(
+            ComposingText.InputElement('k', InputStyle.ROMAN2KANA),
+            ComposingText.InputElement('o', InputStyle.ROMAN2KANA),
+            ComposingText.InputElement('n', InputStyle.ROMAN2KANA),
+            ComposingText.InputElement(InputPiece.CompositionSeparator, InputStyle.FROZEN),
+            ComposingText.InputElement('a', InputStyle.ROMAN2KANA),
+            ComposingText.InputElement('t', InputStyle.ROMAN2KANA),
+            ComposingText.InputElement('o', InputStyle.ROMAN2KANA),
+        )
+        val composed = ComposingText(
+            convertTargetCursorPosition = 4,
+            input = elements,
+            convertTarget = "こんあと",
+        )
+        assertEquals("konnato", engineRawRomaji(composed))
+        val biases = listOf(
+            TouchKeyBias('k'),
+            TouchKeyBias('o'),
+            TouchKeyBias('n'),
+            TouchKeyBias('a', listOf('s' to 0.75f)),
+            TouchKeyBias('t'),
+            TouchKeyBias('o', listOf('i' to 0.65f)),
+        )
+        assertEquals("4:s=0.75;6:i=0.65", engineTouchHints(composed, biases))
     }
 }

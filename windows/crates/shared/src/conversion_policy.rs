@@ -76,6 +76,8 @@ pub const PUNCTUATION_FOR_READING: [(char, char); 10] = [
 ///
 /// Bump when a field is removed or its meaning changes; the Kotlin reader
 /// rejects versions it does not understand instead of guessing.
+pub const MAX_USER_DICTIONARY_ENTRIES: usize = 10_000;
+
 pub const INPUT_POLICY_VERSION: u32 = 1;
 
 #[inline]

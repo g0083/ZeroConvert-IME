@@ -1,5 +1,6 @@
 package com.zeroconvert.ime
 
+import com.zeroconvert.ime.assist.CorrectionSession
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -43,4 +44,22 @@ class ConversionCommitLearningTest {
         assertEquals("4242", captured?.engineCandidateId)
         assertEquals("", ConversionCommitLearning.capture("かんじ", "漢字", normal, canWrite = true)?.engineCandidateId)
     }
+    @Test fun confirmedTypoIsRecordedOnceAndPrivateInputCannotRecordIt() {
+        val accepted = CorrectionSession.Acceptance("おねがしいます", "お願いします")
+        val recorded = mutableListOf<Pair<String, String>>()
+        val record: (String, String) -> Unit = { reading, surface -> recorded.add(reading to surface) }
+        ConversionCommitLearning.recordCorrections(listOf(accepted, accepted), { true }, record)
+        assertEquals(listOf(accepted.reading to accepted.surface), recorded)
+        ConversionCommitLearning.recordCorrections(listOf(accepted), { false }, record)
+        assertEquals(1, recorded.size)
+    }
+
+    @Test fun explicitTopCandidateSelectionIsKept() {
+        val captured = ConversionCommitLearning.capture(
+            "かんじ", "漢字", normal, canWrite = true, explicitSelection = true
+        )
+        assertEquals(true, captured?.explicitSelection)
+        assertEquals(false, ConversionCommitLearning.capture("かんじ", "漢字", normal, canWrite = true)?.explicitSelection)
+    }
+
 }

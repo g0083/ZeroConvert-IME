@@ -12,12 +12,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config";
 import {
+    DICTIONARY_POS,
     MAX_ENTRIES,
     normalizeDictionaryEntries,
     validateDictionaryEntries,
     isDictionaryDirty,
     type DictionaryEntry,
+    type DictionaryPos,
 } from "@/lib/dictionary-entries.js";
+
+const PAGE_SIZE = 100;
 
 export const Dictionary = () => {
     const [entries, setEntries] = useState<DictionaryEntry[]>([]);
@@ -29,6 +33,7 @@ export const Dictionary = () => {
     const savingRef = useRef(false);
     const [validationAttempted, setValidationAttempted] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
+    const [page, setPage] = useState(0);
     const [importOpen, setImportOpen] = useState(false);
     const [importText, setImportText] = useState("");
     const [pendingFocus, setPendingFocus] = useState<{
@@ -37,7 +42,7 @@ export const Dictionary = () => {
         end?: boolean;
     } | null>(null);
     const listRef = useRef<HTMLDivElement>(null);
-    const inputRefs = useRef<Array<Partial<Record<keyof DictionaryEntry, HTMLInputElement | null>>>>([]);
+    const inputRefs = useRef<Array<Partial<Record<keyof DictionaryEntry, HTMLInputElement | HTMLSelectElement | null>>>>([]);
     const savedView = useRef<{
         element: HTMLElement | null;
         selectionStart: number | null;
@@ -45,8 +50,8 @@ export const Dictionary = () => {
         top: number;
         left: number;
     } | null>(null);
-    const validation = validateDictionaryEntries(entries);
-    const dirty = isDictionaryDirty(entries, persisted);
+    const validation = useMemo(() => validateDictionaryEntries(entries), [entries]);
+    const dirty = useMemo(() => isDictionaryDirty(entries, persisted), [entries, persisted]);
     const disabled = isLoading || loadFailed || persisted === null || isSaving;
     const filteredRows = useMemo(() => {
         const query = searchQuery.trim().toLowerCase();
@@ -56,6 +61,14 @@ export const Dictionary = () => {
             entry.reading.toLowerCase().includes(query) || entry.word.toLowerCase().includes(query)
         );
     }, [entries, searchQuery]);
+    const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    const visiblePage = Math.min(page, pageCount - 1);
+    const visibleRows = filteredRows.slice(visiblePage * PAGE_SIZE, (visiblePage + 1) * PAGE_SIZE);
+
+    const showPage = (index: number) => {
+        setPage(index);
+        if (listRef.current) listRef.current.scrollTop = 0;
+    };
 
     useEffect(() => {
         let active = true;
@@ -124,14 +137,15 @@ export const Dictionary = () => {
     const addEntry = () => {
         if (disabled || savingRef.current || entries.length >= MAX_ENTRIES) return;
         setSearchQuery("");
-        setEntries((prev) => [...prev, { reading: "", word: "" }]);
+        setEntries((prev) => [...prev, { reading: "", word: "", pos: "proper_noun" }]);
+        showPage(Math.floor(entries.length / PAGE_SIZE));
         setPendingFocus({ index: entries.length, field: "reading", end: true });
     };
 
     const copyAsTsv = async () => {
         const lines = entries
             .filter((entry) => entry.reading.trim() || entry.word.trim())
-            .map((entry) => `${entry.reading}\t${entry.word}`);
+            .map((entry) => `${entry.reading}\t${entry.word}${entry.pos === "proper_noun" ? "" : `\t${entry.pos}`}`);
         if (lines.length === 0) {
             toast("コピーできる登録語がありません");
             return;
@@ -152,11 +166,13 @@ export const Dictionary = () => {
             .map((line) => {
                 const tabParts = line.split("\t");
                 if (tabParts.length >= 2) {
-                    return { reading: tabParts[0].trim(), word: tabParts[1].trim() };
+                    const pos = tabParts[2]?.trim() ?? "proper_noun";
+                    return { reading: tabParts[0].trim(), word: tabParts[1].trim(),
+                        pos: Object.prototype.hasOwnProperty.call(DICTIONARY_POS, pos) ? pos as DictionaryPos : "proper_noun" };
                 }
                 const spaceMatch = line.match(/^(\S+)\s+(.+)$/);
                 if (spaceMatch) {
-                    return { reading: spaceMatch[1].trim(), word: spaceMatch[2].trim() };
+                    return { reading: spaceMatch[1].trim(), word: spaceMatch[2].trim(), pos: "proper_noun" as const };
                 }
                 return null;
             })
@@ -167,7 +183,12 @@ export const Dictionary = () => {
             return;
         }
         const existingKeys = new Set(entries.map((entry) => `${entry.reading}\t${entry.word}`));
-        const additions = parsed.filter((entry) => !existingKeys.has(`${entry.reading}\t${entry.word}`));
+        const additions = parsed.filter((entry) => {
+            const key = `${entry.reading}\t${entry.word}`;
+            if (existingKeys.has(key)) return false;
+            existingKeys.add(key);
+            return true;
+        });
         const available = Math.max(0, MAX_ENTRIES - entries.length);
         const accepted = additions.slice(0, available);
         if (accepted.length === 0) {
@@ -177,6 +198,7 @@ export const Dictionary = () => {
         }
         setEntries((prev) => [...prev, ...accepted]);
         setSearchQuery("");
+        showPage(Math.floor(entries.length / PAGE_SIZE));
         setImportText("");
         setImportOpen(false);
         toast(`${accepted.length}件を追加しました（「保存」で反映されます）`);
@@ -190,11 +212,13 @@ export const Dictionary = () => {
     const saveEntries = async () => {
         if (disabled || savingRef.current) return;
         setValidationAttempted(true);
-        const invalidIndex = validation.errors.findIndex((error) => error.reading || error.word);
+        const invalidIndex = validation.errors.findIndex((error) => error.reading || error.word || error.pos);
         if (invalidIndex !== -1) {
+            setSearchQuery("");
+            showPage(Math.floor(invalidIndex / PAGE_SIZE));
             setPendingFocus({
                 index: invalidIndex,
-                field: validation.errors[invalidIndex].reading ? "reading" : "word",
+                field: validation.errors[invalidIndex].reading ? "reading" : validation.errors[invalidIndex].word ? "word" : "pos",
             });
             return;
         }
@@ -236,7 +260,7 @@ export const Dictionary = () => {
                     <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                     <Input
                         value={searchQuery}
-                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onChange={(event) => { setSearchQuery(event.target.value); showPage(0); }}
                         placeholder="読み・単語を検索…"
                         aria-label="辞書を検索"
                         className="h-8 pl-8 text-xs"
@@ -285,17 +309,19 @@ export const Dictionary = () => {
                         <colgroup>
                             <col />
                             <col />
+                            <col className="w-44" />
                             <col className="w-14" />
                         </colgroup>
                         <thead className="sticky top-0 z-10 bg-background text-left text-xs text-muted-foreground">
                             <tr>
                                 <th scope="col" className="px-3 py-2 font-medium">読み</th>
                                 <th scope="col" className="px-3 py-2 font-medium">単語</th>
+                                <th scope="col" className="px-3 py-2 font-medium">品詞</th>
                                 <th scope="col" className="px-2 py-2 text-center font-medium">削除</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {filteredRows.map(({ entry, index }) => (
+                            {visibleRows.map(({ entry, index }) => (
                                 <tr key={`row-${index}`} className="border-t">
                                     {(["reading", "word"] as const).map((field) => {
                                         const error = validationAttempted ? validation.errors[index][field] : undefined;
@@ -320,6 +346,27 @@ export const Dictionary = () => {
                                             </td>
                                         );
                                     })}
+                                    <td className="px-3 py-2 align-top">
+                                        <select
+                                            ref={(element) => {
+                                                inputRefs.current[index] ??= {};
+                                                inputRefs.current[index].pos = element;
+                                            }}
+                                            className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                                            aria-label={`${index + 1} 行目の品詞`}
+                                            aria-invalid={validationAttempted && Boolean(validation.errors[index].pos)}
+                                            value={entry.pos}
+                                            disabled={disabled}
+                                            onChange={(event) => setEntryValue(index, "pos", event.target.value)}
+                                        >
+                                            {Object.entries(DICTIONARY_POS).map(([key, label]) => (
+                                                <option key={key} value={key}>{label}</option>
+                                            ))}
+                                        </select>
+                                        {validationAttempted && validation.errors[index].pos && (
+                                            <p className="mt-1 text-xs text-destructive">{validation.errors[index].pos}</p>
+                                        )}
+                                    </td>
                                     <td className="px-2 py-2 text-center align-top">
                                         <Button
                                             variant="ghost"
@@ -338,8 +385,17 @@ export const Dictionary = () => {
                 )}
             </div>
             <div className="settings-actions flex shrink-0 items-center gap-3 pt-3">
-                <span className="text-sm tabular-nums text-muted-foreground">{entries.length}/{MAX_ENTRIES}</span>
+                <span className="text-sm tabular-nums text-muted-foreground">{entries.length.toLocaleString()} / {MAX_ENTRIES.toLocaleString()}</span>
                 <span className="settings-description" role="status">{isSaving ? "保存中" : dirty ? "未保存の変更" : ""}</span>
+                {pageCount > 1 && (
+                    <nav aria-label="辞書のページ" className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" disabled={disabled || visiblePage === 0}
+                            onClick={() => showPage(visiblePage - 1)}>前へ</Button>
+                        <span className="text-xs tabular-nums">{visiblePage + 1} / {pageCount}</span>
+                        <Button variant="outline" size="sm" disabled={disabled || visiblePage + 1 >= pageCount}
+                            onClick={() => showPage(visiblePage + 1)}>次へ</Button>
+                    </nav>
+                )}
                 <div className="ml-auto flex gap-2">
                     <Button variant="secondary" onClick={addEntry} disabled={disabled || entries.length >= MAX_ENTRIES}>
                         <Plus className="h-4 w-4" />

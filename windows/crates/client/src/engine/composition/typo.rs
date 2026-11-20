@@ -31,18 +31,27 @@ pub(super) struct TypoState {
     pub prediction_continuation: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct AppliedCorrection {
     original: Composition,
     ledger: InputLedgerSnapshot,
+    pub explicit: bool,
+    pub refined: bool,
     pub source: String,
+    pub source_raw_input: String,
     pub surface: String,
+    pub converter_input: String,
+    pub applied_hiragana: String,
+    pub edited_after_apply: bool,
 }
 
 impl AppliedCorrection {
     /// Returns the pre-correction displayed surface for focused diff UI,
     /// falling back to the original baseline candidate or raw reading.
     pub(super) fn baseline_surface(&self) -> String {
+        if self.refined {
+            return self.source.clone();
+        }
         let preview = format!("{}{}", self.original.preview, self.original.suffix);
         if !preview.is_empty() {
             return preview;
@@ -50,6 +59,49 @@ impl AppliedCorrection {
         baseline_surface_from_candidates(&self.original.candidates)
             .unwrap_or_else(|| self.source.clone())
     }
+}
+
+pub(super) fn build_auto_refinement_inputs(
+    applied: &AppliedCorrection,
+    current_raw_input: &str,
+    current_hiragana: &str,
+) -> Option<(String, String, String)> {
+    if applied.explicit
+        || !applied.edited_after_apply
+        || applied.applied_hiragana.is_empty()
+        || !is_reading_only_correction(&applied.converter_input)
+    {
+        return None;
+    }
+    let trailing_hira = current_hiragana
+        .strip_prefix(&applied.applied_hiragana)
+        .filter(|t| !t.is_empty())?;
+    let origin_reading = format!("{}{}", applied.source, trailing_hira);
+    let is_raw_romaji =
+        |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_lowercase() || c == b'-');
+    let trailing_raw = current_raw_input.strip_prefix(&applied.converter_input);
+    let origin_raw_input = match trailing_raw {
+        Some(trailing) if is_raw_romaji(&applied.source_raw_input) && is_raw_romaji(trailing) => {
+            let single_trailing_n = applied.source_raw_input.ends_with('n')
+                && !applied.source_raw_input.ends_with("nn");
+            let needs_n_sep = single_trailing_n
+                && trailing
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| matches!(b, b'a' | b'i' | b'u' | b'e' | b'o' | b'y' | b'n'));
+            if needs_n_sep {
+                format!("{}n{}", applied.source_raw_input, trailing)
+            } else {
+                format!("{}{}", applied.source_raw_input, trailing)
+            }
+        }
+        _ => String::new(),
+    };
+    Some((
+        origin_reading,
+        origin_raw_input,
+        applied.applied_hiragana.clone(),
+    ))
 }
 
 /// Extracts the non-AI baseline conversion surface from `candidates`, if present.
@@ -95,7 +147,11 @@ struct Pending {
     context_key: (u64, u64, u64),
     translation_error: Option<TranslationError>,
     model: (String, String),
-    features: (bool, bool),
+    features: (
+        bool,
+        shared::assist_policy::AutoTypoCorrectionStrength,
+        bool,
+    ),
 }
 
 impl Drop for Pending {
@@ -174,7 +230,7 @@ unsafe extern "system" fn poll(_window: HWND, _message: u32, id: usize, _time: u
         pending
             .correction_result
             .as_ref()
-            .is_some_and(|r| r.auto_apply || !r.suggestions.is_empty()),
+            .is_some_and(|r| r.auto_apply || r.revert_to_origin || !r.suggestions.is_empty()),
         pending.started.elapsed(),
     ) {
         if let Some(result) = pending.prediction_result.take() {
@@ -218,13 +274,21 @@ fn first_assist_ready(
     )
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MergeOutcome {
+    None,
+    AutoApply(String),
+    AutoRevert,
+}
+
 fn merge_results(
     state: &mut Composition,
     responses: Vec<(u32, shared::proto::GetAssistCandidatesResponse)>,
-) -> Option<String> {
-    let rejected = state.typo.correction.rejected_surface.clone();
+) -> MergeOutcome {
+    let correction = state.typo.correction.clone();
     let mut choices = Vec::new();
     let mut auto_apply = false;
+    let mut revert_to_origin = false;
     for (kind, response) in responses {
         let id = if kind == 3 {
             shared::ai_candidate::TRANSLATION
@@ -233,15 +297,15 @@ fn merge_results(
         } else {
             shared::ai_candidate::PREDICTIVE
         };
+        if kind == 1 && response.revert_to_origin {
+            revert_to_origin = true;
+            continue;
+        }
         auto_apply |= kind == 1 && response.auto_apply;
         if kind == 2 {
             state.typo.prediction_continuation = response.continuation;
         }
-        append_suggestions(
-            &mut state.candidates,
-            response.suggestions,
-            rejected.as_deref(),
-        );
+        append_suggestions(&mut state.candidates, response.suggestions, &correction);
         if state.candidates.candidate_ids.contains(&id) {
             choices.push((response.relevance, id));
         }
@@ -249,6 +313,9 @@ fn merge_results(
     // Prefer correction/translation over prediction even if prediction appeared first.
     state.typo.primary_assist =
         shared::assist_policy::choose_primary(&choices, state.typo.primary_assist);
+    if revert_to_origin {
+        return MergeOutcome::AutoRevert;
+    }
     auto_apply
         .then(|| {
             state
@@ -260,6 +327,7 @@ fn merge_results(
                 .cloned()
         })
         .flatten()
+        .map_or(MergeOutcome::None, MergeOutcome::AutoApply)
 }
 
 fn editable_composition(composition: &Composition) -> bool {
@@ -315,7 +383,7 @@ pub(super) fn is_reading_only_correction(surface: &str) -> bool {
 fn append_suggestions(
     candidates: &mut Candidates,
     suggestions: Vec<shared::proto::Suggestion>,
-    rejected: Option<&str>,
+    correction: &shared::assist_policy::CorrectionState,
 ) {
     for suggestion in suggestions.into_iter().take(8) {
         if suggestion.text.is_empty()
@@ -324,7 +392,8 @@ fn append_suggestions(
             || (candidates.texts.contains(&suggestion.text)
                 && suggestion.candidate_id != shared::ai_candidate::TYPO_CORRECTION)
             || !shared::ai_candidate::is_ai_assist_candidate(suggestion.candidate_id)
-            || rejected == Some(suggestion.text.as_str())
+            || (suggestion.candidate_id == shared::ai_candidate::TYPO_CORRECTION
+                && correction.is_rejected(&candidates.hiragana, &suggestion.text))
         {
             continue;
         }
@@ -473,6 +542,10 @@ impl TextServiceFactory {
     }
 
     pub(super) fn begin_typo_assist(&self) -> Result<()> {
+        self.begin_typo_assist_inner(false)
+    }
+
+    fn begin_typo_assist_inner(&self, suppress_correction: bool) -> Result<()> {
         let config = self.input_config_snapshot()?;
         let config = config.app_config();
         let translation = config.general.experimental_translation;
@@ -484,7 +557,7 @@ impl TextServiceFactory {
         {
             return Ok(());
         }
-        let (owner, context, composition, raw_input, candidates, corrected) = {
+        let (owner, context, composition, raw_input, candidates, corrected, applied) = {
             let service = self.borrow()?;
             let state = service.borrow_composition()?;
             if !eligible(&state)
@@ -510,7 +583,8 @@ impl TextServiceFactory {
                 state.tip_composition.clone().context("No composition")?,
                 state.raw_input.clone(),
                 state.candidates.clone(),
-                state.typo.applied.is_some(),
+                suppress_correction || state.typo.correction.is_applied(),
+                state.typo.applied.clone(),
             )
         };
         if self.current_context_has_sensitive_input_scope() {
@@ -541,6 +615,9 @@ impl TextServiceFactory {
         let ipc = IMEState::ipc_service()?.context("No IPC service")?;
         let timer = unsafe { SetTimer(None, 0, 25, Some(poll)) };
         anyhow::ensure!(timer != 0, "Cannot schedule assistance completion");
+        let refinement_inputs = applied
+            .as_deref()
+            .and_then(|a| build_auto_refinement_inputs(a, &raw_input, &candidates.hiragana));
         let request = shared::proto::GetAssistCandidatesRequest {
             baseline_reading,
             reading: candidates.hiragana.clone(),
@@ -562,6 +639,9 @@ impl TextServiceFactory {
                 .unwrap_or(0),
             request_id: timer as u64,
             kind: if translation { 3 } else { 2 },
+            origin_reading: String::new(),
+            origin_raw_input: String::new(),
+            applied_prefix: String::new(),
         };
         let (task, receiver) = if translation || plan.prediction {
             let (sender, receiver) = mpsc::channel();
@@ -576,6 +656,11 @@ impl TextServiceFactory {
             let (sender, receiver) = mpsc::channel();
             let mut correction = request;
             correction.kind = 1;
+            if let Some((origin_reading, origin_raw_input, applied_prefix)) = refinement_inputs {
+                correction.origin_reading = origin_reading;
+                correction.origin_raw_input = origin_raw_input;
+                correction.applied_prefix = applied_prefix;
+            }
             (
                 Some(ipc.assist_candidates_background(correction, sender)),
                 Some(receiver),
@@ -610,6 +695,7 @@ impl TextServiceFactory {
                 ),
                 features: (
                     config.general.experimental_typo_correction,
+                    config.general.auto_typo_correction,
                     config.general.experimental_ai_assist,
                 ),
             })
@@ -629,6 +715,7 @@ impl TextServiceFactory {
             || pending.features
                 != (
                     config.general.experimental_typo_correction,
+                    config.general.auto_typo_correction,
                     config.general.experimental_ai_assist,
                 )
             || IMEState::keyboard_disabled().unwrap_or(true)
@@ -655,15 +742,24 @@ impl TextServiceFactory {
         {
             return Ok(());
         }
-        let (candidates, auto_surface) = {
+        let (candidates, outcome) = {
             let service = self.borrow()?;
             let mut state = service.borrow_mut_composition()?;
-            let auto_surface = merge_results(&mut state, responses);
-            (state.candidates.clone(), auto_surface)
+            let outcome = merge_results(&mut state, responses);
+            (state.candidates.clone(), outcome)
         };
-        if let Some(surface) = auto_surface.filter(|_| !config.general.jev_conversion) {
-            self.apply_typo_correction(&surface, false)?;
-            return self.begin_typo_assist();
+        if !config.general.jev_conversion && config.general.auto_typo_correction.is_enabled() {
+            match outcome {
+                MergeOutcome::AutoRevert => {
+                    self.auto_revert_typo_correction()?;
+                    return self.begin_typo_assist_inner(true);
+                }
+                MergeOutcome::AutoApply(surface) => {
+                    self.apply_typo_correction(&surface, false)?;
+                    return self.begin_typo_assist();
+                }
+                MergeOutcome::None => {}
+            }
         }
         if pending.translation {
             let error = translation_error_from_outcome(
@@ -761,18 +857,6 @@ impl TextServiceFactory {
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
         let ledger = ipc.input_ledger_snapshot();
         let source = original.candidates.hiragana.clone();
-        let mut correction = original.typo.correction.clone();
-        if !correction.apply(
-            &source,
-            surface,
-            explicit,
-            shared::conversion_policy::raw_input_has_pending_romaji_tail(
-                &original.raw_input,
-                &source,
-            ),
-        ) {
-            return Ok(());
-        }
         let repaired_reading = original
             .candidates
             .prediction_readings
@@ -781,6 +865,33 @@ impl TextServiceFactory {
             .cloned()
             .or_else(|| is_reading_only_correction(surface).then(|| surface.to_owned()));
         let converter_input = repaired_reading.as_deref().unwrap_or(surface).to_owned();
+        let refinement_origin = original.typo.applied.as_deref().and_then(|prev| {
+            let (origin_reading, origin_raw_input, applied_prefix) =
+                build_auto_refinement_inputs(
+                    prev,
+                    &original.raw_input,
+                    &original.candidates.hiragana,
+                )?;
+            (!converter_input.starts_with(&applied_prefix))
+                .then_some((origin_reading, origin_raw_input))
+        });
+        let pending_romaji = shared::conversion_policy::raw_input_has_pending_romaji_tail(
+            &original.raw_input,
+            &source,
+        );
+        let mut correction = original.typo.correction.clone();
+        let (applied_source, applied_source_raw, is_refined) =
+            if let Some((origin_reading, origin_raw_input)) = refinement_origin {
+                if !correction.refine(&origin_reading, surface, explicit, pending_romaji) {
+                    return Ok(());
+                }
+                (origin_reading, origin_raw_input, true)
+            } else {
+                if !correction.apply(&source, surface, explicit, pending_romaji) {
+                    return Ok(());
+                }
+                (source, original.raw_input.clone(), false)
+            };
         let mut candidates = match ipc.replace_with_direct_surface(&converter_input) {
             Ok(candidates) => candidates,
             Err(error) => {
@@ -815,6 +926,7 @@ impl TextServiceFactory {
                 )
             };
         let applied_display = format!("{preview_text}{suffix_text}");
+        let applied_hiragana = candidates.hiragana.clone();
         // Persist canonical converter input before any reentrant TSF edit.
         original.typo = TypoState {
             correction: original.typo.correction.clone(),
@@ -823,8 +935,14 @@ impl TextServiceFactory {
         let applied = Rc::new(AppliedCorrection {
             original,
             ledger,
-            source,
+            explicit,
+            refined: is_refined,
+            source: applied_source,
+            source_raw_input: applied_source_raw,
             surface: applied_display,
+            converter_input: converter_input.clone(),
+            applied_hiragana,
+            edited_after_apply: false,
         });
         {
             let service = self.borrow()?;
@@ -862,16 +980,156 @@ impl TextServiceFactory {
         )
     }
 
-    pub(super) fn undo_typo_correction(&self) -> Result<()> {
+    fn apply_reverted_prefix_to_composition(
+        &self,
+        ipc: &mut crate::engine::ipc_service::IPCService,
+        applied: &AppliedCorrection,
+        correction: shared::assist_policy::CorrectionState,
+        trailing: &str,
+    ) -> Result<()> {
+        let candidates = match ipc.replace_with_reverted_prefix(&applied.source, trailing) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Differential correction revert unavailable; retain snapshot"
+                );
+                return Ok(());
+            }
+        };
+        let (preview_text, suffix_text, selected_count, selected_index) =
+            if let Some(selected) = Self::select_candidate(&candidates, 0) {
+                (
+                    selected.text,
+                    selected.sub_text,
+                    selected.corresponding_count,
+                    selected.index,
+                )
+            } else {
+                (
+                    format!("{}{trailing}", applied.source),
+                    String::new(),
+                    0,
+                    0,
+                )
+            };
+        let next_raw_input = ipc
+            .latest_composition_sync()
+            .raw_input
+            .unwrap_or_else(|| format!("{}{trailing}", applied.source));
+        {
+            let service = self.borrow()?;
+            let mut state = service.borrow_mut_composition()?;
+            state.state = CompositionState::Composing;
+            state.preview = preview_text.clone();
+            state.suffix = suffix_text.clone();
+            state.raw_input = next_raw_input;
+            state.raw_hiragana = candidates.hiragana.clone();
+            state.corresponding_count = selected_count;
+            state.selection_index = selected_index;
+            state.candidates = candidates.clone();
+            state.live_conversion_snapshots.clear();
+            state.live_conversion_history.clear();
+            state.typo = TypoState {
+                applied: None,
+                correction,
+                ..Default::default()
+            };
+        }
+        IMEState::set_ipc_service(ipc.clone())?;
+        self.set_text(&preview_text, &suffix_text)?;
+        let config = self.input_config_snapshot()?;
+        self.sync_candidate_window_after_text_update(
+            ipc,
+            &candidates,
+            selected_index,
+            config.app_config(),
+            &CompositionState::Composing,
+        )
+    }
+
+    pub(super) fn auto_revert_typo_correction(&self) -> Result<()> {
         self.cancel_typo_assist();
-        let Some(applied) = self.borrow()?.borrow_composition()?.typo.applied.clone() else {
+        let (Some(applied), mut correction, current_raw_input, current_raw_hiragana) = ({
+            let service = self.borrow()?;
+            let state = service.borrow_composition()?;
+            (
+                state.typo.applied.clone(),
+                state.typo.correction.clone(),
+                state.raw_input.clone(),
+                state.raw_hiragana.clone(),
+            )
+        }) else {
             return Ok(());
         };
-        let mut correction = self.borrow()?.borrow_composition()?.typo.correction.clone();
+        if applied.explicit || !applied.edited_after_apply {
+            return Ok(());
+        }
+        let Some(trailing_raw) = current_raw_input
+            .strip_prefix(&applied.converter_input)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+        else {
+            return Ok(());
+        };
+        let Some(trailing_hira) = current_raw_hiragana
+            .strip_prefix(&applied.applied_hiragana)
+            .filter(|t| !t.is_empty())
+        else {
+            return Ok(());
+        };
+        let origin_reading = format!("{}{}", applied.source, trailing_hira);
+        if !correction.auto_revert(&origin_reading, &current_raw_hiragana) {
+            return Ok(());
+        }
+        let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
+        self.apply_reverted_prefix_to_composition(&mut ipc, &applied, correction, &trailing_raw)
+    }
+
+    pub(super) fn undo_typo_correction(&self) -> Result<()> {
+        self.cancel_typo_assist();
+        let (Some(applied), mut correction, current_raw_input, current_raw_hiragana) = ({
+            let service = self.borrow()?;
+            let state = service.borrow_composition()?;
+            (
+                state.typo.applied.clone(),
+                state.typo.correction.clone(),
+                state.raw_input.clone(),
+                state.raw_hiragana.clone(),
+            )
+        }) else {
+            return Ok(());
+        };
+        let trailing_raw = if applied.edited_after_apply {
+            let tail = current_raw_input
+                .strip_prefix(&applied.converter_input)
+                .or_else(|| current_raw_hiragana.strip_prefix(&applied.applied_hiragana));
+            match tail {
+                Some(t) => Some(t.to_string()),
+                None => {
+                    let service = self.borrow()?;
+                    let mut state = service.borrow_mut_composition()?;
+                    state.typo.applied = None;
+                    state.typo.correction.discard_undo();
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
         if !correction.revert() {
             return Ok(());
         }
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
+        if applied.refined || trailing_raw.as_deref().is_some_and(|t| !t.is_empty()) {
+            let trailing = trailing_raw.as_deref().unwrap_or("");
+            return self.apply_reverted_prefix_to_composition(
+                &mut ipc,
+                &applied,
+                correction,
+                trailing,
+            );
+        }
         let mut candidates = match ipc.replace_from_snapshot(&applied.ledger) {
             Ok(candidates) => candidates,
             Err(error) => {
@@ -954,11 +1212,45 @@ impl TextServiceFactory {
         if actions.is_empty() {
             return Ok(());
         }
+        let only_candidate_nav = actions.iter().all(|action| {
+            matches!(
+                action,
+                ClientAction::ShowCandidateWindow | ClientAction::SetSelection(_)
+            )
+        });
+        if only_candidate_nav {
+            return Ok(());
+        }
+        let clears_undo = actions.iter().any(|action| {
+            matches!(
+                action,
+                ClientAction::EndComposition
+                    | ClientAction::CommitWithText(_)
+                    | ClientAction::CommitTextDirect(_)
+                    | ClientAction::RestoreReconversionOriginal
+                    | ClientAction::MoveCursor(_)
+                    | ClientAction::DeleteForwardText
+                    | ClientAction::ShrinkText(_)
+                    | ClientAction::ShrinkTextRaw(_)
+                    | ClientAction::ShrinkTextDirect(_)
+                    | ClientAction::EnsureClauseNavigationReady { .. }
+                    | ClientAction::MoveClause(_)
+                    | ClientAction::AdjustBoundary(_)
+                    | ClientAction::StartJevConversion
+                    | ClientAction::SetTextWithType(_)
+                    | ClientAction::SetTemporaryLatin(_)
+                    | ClientAction::SetIMEMode(_)
+            )
+        });
         let service = self.borrow()?;
         let mut state = service.borrow_mut_composition()?;
-        let rejected = state.typo.correction.rejected_surface.clone();
         state.typo.correction.edited();
-        state.typo.applied = None;
+        if clears_undo {
+            state.typo.correction.discard_undo();
+            state.typo.applied = None;
+        } else if let Some(applied) = state.typo.applied.as_mut() {
+            Rc::make_mut(applied).edited_after_apply = true;
+        }
         state.typo.primary_assist = None;
         state.typo.prediction_continuation.clear();
         // Retain the hold through the first following edit; the ordinary stability
@@ -967,14 +1259,57 @@ impl TextServiceFactory {
             state.live_conversion_snapshots.clear();
             state.live_conversion_history.clear();
         }
-        if actions
-            .iter()
-            .any(|action| matches!(action, ClientAction::ShowCandidateWindow))
-        {
-            state.typo.correction.rejected_surface = rejected;
+        Ok(())
+    }
+
+    pub(super) fn reconcile_typo_applied(
+        &self,
+        transition: &CompositionState,
+        raw_input: &str,
+        raw_hiragana: &str,
+        suffix: &str,
+        fixed_prefix: &str,
+        clause_snapshots: &[ClauseSnapshot],
+    ) -> Result<()> {
+        let service = self.borrow()?;
+        let mut state = service.borrow_mut_composition()?;
+        let keep = state.typo.applied.as_deref().is_some_and(|applied| {
+            should_keep_applied_correction(
+                applied,
+                transition,
+                raw_input,
+                raw_hiragana,
+                suffix,
+                fixed_prefix,
+                clause_snapshots,
+            )
+        });
+        if !keep && state.typo.applied.is_some() {
+            state.typo.applied = None;
+            state.typo.correction.discard_undo();
         }
         Ok(())
     }
+}
+
+pub(super) fn should_keep_applied_correction(
+    applied: &AppliedCorrection,
+    transition: &CompositionState,
+    raw_input: &str,
+    raw_hiragana: &str,
+    suffix: &str,
+    fixed_prefix: &str,
+    clause_snapshots: &[ClauseSnapshot],
+) -> bool {
+    matches!(
+        transition,
+        CompositionState::Composing | CompositionState::Previewing
+    ) && suffix.is_empty()
+        && fixed_prefix.is_empty()
+        && clause_snapshots.is_empty()
+        && !applied.applied_hiragana.is_empty()
+        && raw_hiragana.starts_with(&applied.applied_hiragana)
+        && (applied.converter_input.is_empty() || raw_input.starts_with(&applied.converter_input))
 }
 
 #[cfg(test)]
@@ -1007,7 +1342,7 @@ mod tests {
         );
         result.auto_apply = true; // Never treat a translation as a typo replacement.
         result.suggestions[0].corresponding_count = 16;
-        assert_eq!(merge_results(&mut state, vec![(3, result)]), None);
+        assert_eq!(merge_results(&mut state, vec![(3, result)]), MergeOutcome::None);
         assert_eq!(state.candidates.texts[0], "会議は明日です");
         assert_eq!(state.raw_input, "kaigihaashitadesu");
         assert_eq!(
@@ -1171,7 +1506,7 @@ mod tests {
                 ),
             ],
         );
-        assert_eq!(automatic, None);
+        assert_eq!(automatic, MergeOutcome::None);
         assert_eq!(
             state.typo.primary_assist,
             Some(shared::ai_candidate::TYPO_CORRECTION)
@@ -1351,8 +1686,14 @@ mod tests {
         state.typo.applied = Some(Rc::new(AppliedCorrection {
             original: state.clone(),
             ledger: ipc.input_ledger_snapshot(),
+            explicit: true,
+            refined: false,
             source: "おkせり".into(),
+            source_raw_input: "okseri".into(),
             surface: "おかえり".into(),
+            converter_input: "おかえり".into(),
+            applied_hiragana: "おかえり".into(),
+            edited_after_apply: false,
         }));
         let plan = CompositionReducer::plan_actions_for_user_action(
             &state,
@@ -1409,7 +1750,10 @@ mod tests {
     }
     #[test]
     fn rejected_correction_stays_hidden_and_labels_never_enter_document() {
-        let mut candidates = Candidates::default();
+        let mut candidates = Candidates {
+            hiragana: "おkせり".into(),
+            ..Default::default()
+        };
         let suggestion = shared::proto::Suggestion {
             prediction_reading: Default::default(),
             text: "おかえり".into(),
@@ -1417,9 +1761,15 @@ mod tests {
             corresponding_count: 6,
             candidate_id: shared::ai_candidate::TYPO_CORRECTION,
         };
-        append_suggestions(&mut candidates, vec![suggestion.clone()], Some("おかえり"));
+        let mut rejected = shared::assist_policy::CorrectionState::default();
+        rejected.rejected_surface = Some("おかえり".into());
+        append_suggestions(&mut candidates, vec![suggestion.clone()], &rejected);
         assert!(candidates.texts.is_empty());
-        append_suggestions(&mut candidates, vec![suggestion], None);
+        append_suggestions(
+            &mut candidates,
+            vec![suggestion],
+            &shared::assist_policy::CorrectionState::default(),
+        );
         assert_eq!(candidates.sub_texts, vec![""]);
     }
 
@@ -1442,7 +1792,7 @@ mod tests {
                 corresponding_count: 6,
                 subtext: "補正".into(),
             }],
-            None,
+            &shared::assist_policy::CorrectionState::default(),
         );
         assert_eq!(candidates.texts, vec!["原候補", "おかえり", "通常の別候補"]);
         assert_eq!(
@@ -1518,8 +1868,14 @@ mod tests {
                 ..Default::default()
             },
             ledger: ipc.input_ledger_snapshot(),
+            explicit: true,
+            refined: false,
             source: "あしたのかいぎのおkせりです".into(),
+            source_raw_input: String::new(),
             surface: "明日の会議のおかえりです".into(),
+            converter_input: "あしたのかいぎのおkせりです".into(),
+            applied_hiragana: "あしたのかいぎのおkせりです".into(),
+            edited_after_apply: false,
         };
         let applied_candidates = Candidates {
             hiragana: "あしたのかいぎのおkせりです".into(),
@@ -1561,8 +1917,14 @@ mod tests {
                 ..Default::default()
             },
             ledger: IPCService::recovery_for_test(false).input_ledger_snapshot(),
+            explicit: true,
+            refined: false,
             source: "あやまり".into(),
+            source_raw_input: String::new(),
             surface: "正しい変換".into(),
+            converter_input: "あやまり".into(),
+            applied_hiragana: "あやまり".into(),
+            edited_after_apply: false,
         };
         assert_eq!(empty_preview_applied.baseline_surface(), "通常変換です");
     }
@@ -1618,5 +1980,276 @@ mod tests {
                 )]
             )
         );
+    }
+
+    #[test]
+    fn post_edit_differential_undo_keeps_escape_reconciles_prefix_allows_later_tab_and_blocks_boomerang()
+    {
+        let ipc = IPCService::recovery_for_test(false);
+        let mut applied = AppliedCorrection {
+            original: Composition {
+                preview: "きょおは".into(),
+                candidates: Candidates {
+                    texts: vec!["きょおは".into()],
+                    hiragana: "きょおは".into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ledger: ipc.input_ledger_snapshot(),
+            explicit: false,
+            refined: false,
+            source: "きょおは".into(),
+            source_raw_input: "kyooha".into(),
+            surface: "きょうは".into(),
+            converter_input: "きょうは".into(),
+            applied_hiragana: "きょうは".into(),
+            edited_after_apply: true,
+        };
+
+        // Reconcile keeps applied while trailing text extends the prefix, and clears on prefix/mode changes.
+        assert!(should_keep_applied_correction(
+            &applied,
+            &CompositionState::Composing,
+            "きょうはiitenki",
+            "きょうはいいてんき",
+            "",
+            "",
+            &[],
+        ));
+        assert!(!should_keep_applied_correction(
+            &applied,
+            &CompositionState::Composing,
+            "きょう",
+            "きょう",
+            "",
+            "",
+            &[],
+        ));
+        assert!(!should_keep_applied_correction(
+            &applied,
+            &CompositionState::Composing,
+            "きょうはiitenki",
+            "きょうはいいてんき",
+            "",
+            "今日は",
+            &[],
+        ));
+        assert!(!should_keep_applied_correction(
+            &applied,
+            &CompositionState::Composing,
+            "きょうはiitenki",
+            "きょうはいいてんき",
+            "です",
+            "",
+            &[],
+        ));
+
+        // build_assist_reading_json uses live reading and exposes undoAvailable alongside later proposal.
+        let candidates_with_proposal = Candidates {
+            prediction_readings: Default::default(),
+            texts: vec!["今日は良い天気".into(), "きょうはいいてんき！".into()],
+            sub_texts: vec![String::new(); 2],
+            hiragana: "きょうはいいてんき".into(),
+            corresponding_count: vec![9; 2],
+            candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+        };
+        let post_edit_json = TextServiceFactory::build_assist_reading_json(
+            &candidates_with_proposal,
+            Some("きょうはいいてんき"),
+            Some(&applied),
+            Some(shared::ai_candidate::TYPO_CORRECTION),
+            "",
+        )
+        .expect("post-edit proposal json");
+        let parsed: serde_json::Value = serde_json::from_str(&post_edit_json).unwrap();
+        assert_eq!(parsed["reading"], "きょうはいいてんき");
+        assert_eq!(parsed["assist"]["status"], "proposal");
+        assert_eq!(parsed["assist"]["undoAvailable"], true);
+
+        // When no newer proposal exists after editing, the applied pill keeps live reading.
+        let candidates_plain = Candidates {
+            texts: vec!["今日は良い天気".into()],
+            hiragana: "きょうはいいてんき".into(),
+            candidate_ids: vec![1],
+            corresponding_count: vec![9],
+            ..Default::default()
+        };
+        let applied_live_json = TextServiceFactory::build_assist_reading_json(
+            &candidates_plain,
+            Some("きょうはいいてんき"),
+            Some(&applied),
+            None,
+            "",
+        )
+        .expect("post-edit applied json");
+        let parsed_live: serde_json::Value = serde_json::from_str(&applied_live_json).unwrap();
+        assert_eq!(parsed_live["reading"], "きょうはいいてんき");
+        assert_eq!(parsed_live["assist"]["status"], "applied");
+
+        // Tab adopts a later typo proposal when is_applied() is false after edited(), while Escape undoes.
+        let mut correction = shared::assist_policy::CorrectionState::default();
+        assert!(correction.apply("きょおは", "きょうは", false, false));
+        correction.edited();
+        assert!(!correction.is_applied());
+        assert!(correction.can_revert());
+
+        applied.edited_after_apply = true;
+        let state_for_plan = Composition {
+            raw_input: "きょうはiitenki".into(),
+            state: CompositionState::Composing,
+            candidates: candidates_with_proposal,
+            typo: TypoState {
+                applied: Some(Rc::new(applied)),
+                correction: correction.clone(),
+                primary_assist: Some(shared::ai_candidate::TYPO_CORRECTION),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tab_plan = CompositionReducer::plan_actions_for_user_action(
+            &state_for_plan,
+            &UserAction::Tab,
+            &InputMode::Kana,
+            false,
+            &AppConfig::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            tab_plan,
+            (
+                CompositionState::Composing,
+                vec![ClientAction::ApplyTypoCorrection(
+                    "きょうはいいてんき！".into()
+                )]
+            )
+        );
+        let esc_plan = CompositionReducer::plan_actions_for_user_action(
+            &state_for_plan,
+            &UserAction::Escape,
+            &InputMode::Kana,
+            false,
+            &AppConfig::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            esc_plan,
+            (
+                CompositionState::Composing,
+                vec![ClientAction::UndoTypoCorrection]
+            )
+        );
+
+        // After reverting, merge_results suppresses the boomerang correction while allowing predictions.
+        assert!(correction.revert());
+        let mut after_revert = Composition {
+            candidates: Candidates {
+                texts: vec!["きょおはいいてんき".into()],
+                sub_texts: vec![String::new()],
+                hiragana: "きょおはいいてんき".into(),
+                candidate_ids: vec![1],
+                corresponding_count: vec![9],
+                ..Default::default()
+            },
+            typo: TypoState {
+                correction,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        merge_results(
+            &mut after_revert,
+            vec![
+                (
+                    1,
+                    response(
+                        shared::ai_candidate::TYPO_CORRECTION,
+                        "きょうはいいてんき",
+                        100,
+                    ),
+                ),
+                (
+                    2,
+                    response(shared::ai_candidate::PREDICTIVE, "きょおはいいてんきです", 75),
+                ),
+            ],
+        );
+        assert!(!after_revert
+            .candidates
+            .candidate_ids
+            .contains(&shared::ai_candidate::TYPO_CORRECTION));
+        assert_eq!(
+            after_revert.typo.primary_assist,
+            Some(shared::ai_candidate::PREDICTIVE)
+        );
+    }
+
+    #[test]
+    fn auto_refinement_inputs_and_merge_outcome_preserve_origin_and_suppress_explicit() {
+        let ipc = IPCService::recovery_for_test(false);
+        let base = AppliedCorrection {
+            original: Composition::default(),
+            ledger: ipc.input_ledger_snapshot(),
+            explicit: false,
+            refined: false,
+            source: "しゅてん".into(),
+            source_raw_input: "shuten".into(),
+            surface: "終点".into(),
+            converter_input: "しゅうてん".into(),
+            applied_hiragana: "しゅうてん".into(),
+            edited_after_apply: true,
+        };
+        assert_eq!(
+            build_auto_refinement_inputs(&base, "しゅうてんshimasu", "しゅうてんします"),
+            Some((
+                "しゅてんします".into(),
+                "shutenshimasu".into(),
+                "しゅうてん".into()
+            ))
+        );
+        // Single trailing 'n' inserts an extra 'n' before vowel/y/n tails so romaji stays distinct.
+        assert_eq!(
+            build_auto_refinement_inputs(&base, "しゅうてんarima", "しゅうてんありま"),
+            Some((
+                "しゅてんありま".into(),
+                "shutennarima".into(),
+                "しゅうてん".into()
+            ))
+        );
+        // Explicit corrections never auto-refine.
+        let explicit = AppliedCorrection {
+            explicit: true,
+            ..base.clone()
+        };
+        assert_eq!(
+            build_auto_refinement_inputs(&explicit, "しゅうてんshimasu", "しゅうてんします"),
+            None
+        );
+
+        let mut revert_state = Composition {
+            candidates: Candidates {
+                texts: vec!["終点童子".into()],
+                hiragana: "しゅうてんどうじ".into(),
+                candidate_ids: vec![1],
+                corresponding_count: vec![8],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let revert_outcome = merge_results(
+            &mut revert_state,
+            vec![(
+                1,
+                shared::proto::GetAssistCandidatesResponse {
+                    revert_to_origin: true,
+                    relevance: 100,
+                    ..Default::default()
+                },
+            )],
+        );
+        assert_eq!(revert_outcome, MergeOutcome::AutoRevert);
+        assert!(first_assist_ready(false, true, true, Duration::from_millis(1)));
     }
 }

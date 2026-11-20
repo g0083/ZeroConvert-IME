@@ -472,6 +472,7 @@ pub struct FutureClauseSnapshot {
 struct PendingLearningCommit {
     candidate_id: u64,
     kind: LearningCommitKind,
+    explicit_selection: bool,
     /// 確定された文字列。AI アシスト候補 (999xxx) では候補の表層、
     /// 変換エンジンの候補では空文字列。
     surface: String,
@@ -2170,10 +2171,11 @@ impl TextServiceFactory {
         prediction_continuation: &str,
     ) -> Option<String> {
         let base_reading = reading.unwrap_or(candidates.hiragana.as_str());
-        if let Some(applied) = applied.filter(|_| {
-            !candidates
-                .candidate_ids
-                .contains(&shared::ai_candidate::PREDICTIVE)
+        if let Some(applied) = applied.filter(|applied| {
+            !applied.edited_after_apply
+                && !candidates
+                    .candidate_ids
+                    .contains(&shared::ai_candidate::PREDICTIVE)
         }) {
             return Some(
                 serde_json::json!({
@@ -2187,39 +2189,53 @@ impl TextServiceFactory {
                 .to_string(),
             );
         }
-        let (idx, kind) =
-            Self::ai_assist_priority_index(&candidates.candidate_ids, primary_assist)?;
-        let text = candidates.texts.get(idx)?;
-        let status = if kind == shared::ai_candidate::TRANSLATION {
-            "translation"
-        } else if kind == shared::ai_candidate::TYPO_CORRECTION {
-            "proposal"
-        } else {
-            "prediction"
-        };
-        let source = if kind == shared::ai_candidate::TYPO_CORRECTION {
-            if typo::is_reading_only_correction(text) {
-                candidates.hiragana.clone()
-            } else {
-                typo::baseline_surface_from_candidates(candidates)
-                    .unwrap_or_else(|| candidates.hiragana.clone())
+        if let Some((idx, kind)) =
+            Self::ai_assist_priority_index(&candidates.candidate_ids, primary_assist)
+        {
+            if let Some(text) = candidates.texts.get(idx) {
+                let status = if kind == shared::ai_candidate::TRANSLATION {
+                    "translation"
+                } else if kind == shared::ai_candidate::TYPO_CORRECTION {
+                    "proposal"
+                } else {
+                    "prediction"
+                };
+                let source = if kind == shared::ai_candidate::TYPO_CORRECTION {
+                    if typo::is_reading_only_correction(text) {
+                        candidates.hiragana.clone()
+                    } else {
+                        typo::baseline_surface_from_candidates(candidates)
+                            .unwrap_or_else(|| candidates.hiragana.clone())
+                    }
+                } else {
+                    candidates.hiragana.clone()
+                };
+                return Some(
+                    serde_json::json!({
+                        "reading": base_reading,
+                        "assist": {
+                            "status": status,
+                            "source": source,
+                            "replacement": text,
+                            "continuation": prediction_continuation,
+                            "undoAvailable": applied.is_some(),
+                        }
+                    })
+                    .to_string(),
+                );
             }
-        } else {
-            candidates.hiragana.clone()
-        };
-        Some(
+        }
+        applied.map(|applied| {
             serde_json::json!({
                 "reading": base_reading,
                 "assist": {
-                    "status": status,
-                    "source": source,
-                    "replacement": text,
-                    "continuation": prediction_continuation,
-                    "undoAvailable": applied.is_some(),
+                    "status": "applied",
+                    "source": applied.baseline_surface(),
+                    "replacement": applied.surface,
                 }
             })
-            .to_string(),
-        )
+            .to_string()
+        })
     }
 
     #[inline]
@@ -2774,10 +2790,22 @@ impl TextServiceFactory {
             }
             live_conversion_snapshots.clear();
             live_conversion_history.clear();
+            if let Ok(service) = self.borrow() {
+                if let Ok(mut state) = service.borrow_mut_composition() {
+                    state.typo.applied = None;
+                    state.typo.correction.discard_undo();
+                }
+            }
             return Ok(());
         }
 
         if let Some(remaining_selected) = Self::select_candidate(&shrunk_candidates, 0) {
+            if let Ok(service) = self.borrow() {
+                if let Ok(mut state) = service.borrow_mut_composition() {
+                    state.typo.applied = None;
+                    state.typo.correction.discard_undo();
+                }
+            }
             // サーバーが確定した文字列の長さはスナップショット時の preview 长度とは限らない
             // (変換結果が変わると確定済みテキストと幅がずれる)。残りが現在の preview の
             // 接尾辞であれば、残り長から確定済み長を確定させて境界ずれを防ぐ。
@@ -4863,6 +4891,7 @@ impl TextServiceFactory {
                     commit.candidate_id,
                     commit.kind.proto_value(),
                     commit.surface,
+                    commit.explicit_selection,
                 )
             })
             .collect::<Vec<_>>();
@@ -5096,6 +5125,13 @@ impl TextServiceFactory {
         }
     }
 
+    fn has_explicit_conversion_selection(composition: &Composition) -> bool {
+        !composition.temporary_latin
+            && (composition.selection_index > 0
+                || composition.state == CompositionState::Previewing
+                || composition.reconversion_original.is_some())
+    }
+
     #[inline]
     fn commit_enter_actions(composition: &Composition) -> (CompositionState, Vec<ClientAction>) {
         let decision = shared::conversion_policy::decide_cursor_commit_action(
@@ -5111,6 +5147,7 @@ impl TextServiceFactory {
                         scope: LearningCommitScope::Composition,
                         kind: LearningCommitKind::Normal,
                         was_temporary_latin: composition.temporary_latin,
+                        explicit_selection: Self::has_explicit_conversion_selection(composition),
                     },
                 );
             }
@@ -5121,6 +5158,7 @@ impl TextServiceFactory {
                         scope: LearningCommitScope::CurrentClause,
                         kind: LearningCommitKind::Partial,
                         was_temporary_latin: composition.temporary_latin,
+                        explicit_selection: Self::has_explicit_conversion_selection(composition),
                     },
                 );
             }
@@ -5163,6 +5201,7 @@ impl TextServiceFactory {
                 scope: LearningCommitScope::Composition,
                 kind: LearningCommitKind::Normal,
                 was_temporary_latin: composition.temporary_latin,
+                explicit_selection: Self::has_explicit_conversion_selection(composition),
             });
         } else if !composition.suffix.is_empty() {
             actions.push(ClientAction::CommitWithText(composition.suffix.clone()));
@@ -5511,7 +5550,7 @@ impl TextServiceFactory {
             ));
         }
         if matches!(action, UserAction::Tab)
-            && composition.typo.applied.is_some()
+            && composition.typo.correction.is_applied()
             && !composition
                 .candidates
                 .candidate_ids
@@ -5587,7 +5626,10 @@ impl TextServiceFactory {
                 {
                     if let Some(text) = composition.candidates.texts.get(sel_idx) {
                         if typo::is_reading_only_correction(text)
-                            || composition.candidates.prediction_readings.contains_key(text)
+                            || composition
+                                .candidates
+                                .prediction_readings
+                                .contains_key(text)
                         {
                             return Some((
                                 CompositionState::Composing,
@@ -7370,6 +7412,7 @@ impl TextServiceFactory {
                             scope,
                             kind,
                             was_temporary_latin,
+                            explicit_selection,
                         } = &deferred.action
                         {
                             pending_learning_commits.extend(
@@ -7386,6 +7429,14 @@ impl TextServiceFactory {
                                     PendingLearningCommit {
                                         candidate_id,
                                         kind: *kind,
+                                        explicit_selection: *explicit_selection
+                                            && Self::select_candidate(
+                                                &composition.candidates,
+                                                composition.selection_index,
+                                            )
+                                            .is_some_and(|selected| {
+                                                selected.candidate_id == candidate_id
+                                            }),
                                         surface: String::new(),
                                     }
                                 }),
@@ -7748,14 +7799,15 @@ impl TextServiceFactory {
         ) else {
             return Ok(true);
         };
-        if mode == InputMode::Latin {
-            for action in &mut actions {
-                if let ClientAction::CommitEnglishLearning {
-                    explicit_selection, ..
-                } = action
-                {
-                    *explicit_selection = true;
-                }
+        for action in &mut actions {
+            if let ClientAction::CommitEnglishLearning {
+                explicit_selection, ..
+            }
+            | ClientAction::CommitLearning {
+                explicit_selection, ..
+            } = action
+            {
+                *explicit_selection = true;
             }
         }
         self.handle_action_with_config_snapshot(&actions, transition, config_snapshot)?;
@@ -8368,6 +8420,7 @@ impl TextServiceFactory {
                         scope,
                         kind,
                         was_temporary_latin,
+                        explicit_selection,
                     } => {
                         if learning_blocked
                             || (app_config.general.jev_conversion
@@ -8396,6 +8449,11 @@ impl TextServiceFactory {
                                 PendingLearningCommit {
                                     candidate_id,
                                     kind: *kind,
+                                    explicit_selection: *explicit_selection
+                                        && Self::select_candidate(&candidates, selection_index)
+                                            .is_some_and(|selected| {
+                                                selected.candidate_id == candidate_id
+                                            }),
                                     surface: String::new(),
                                 }
                             }),
@@ -8586,6 +8644,14 @@ impl TextServiceFactory {
                                     &mut ipc_service,
                                 )?;
                             }
+                            self.reconcile_typo_applied(
+                                &transition,
+                                &raw_input,
+                                &raw_hiragana,
+                                &suffix,
+                                &fixed_prefix,
+                                &clause_snapshots,
+                            )?;
                             self.sync_candidate_window_after_text_update(
                                 &mut ipc_service,
                                 &candidates,
@@ -8682,6 +8748,14 @@ impl TextServiceFactory {
                                     &mut ipc_service,
                                 )?;
                             }
+                            self.reconcile_typo_applied(
+                                &transition,
+                                &raw_input,
+                                &raw_hiragana,
+                                &suffix,
+                                &fixed_prefix,
+                                &clause_snapshots,
+                            )?;
                             self.sync_candidate_window_after_text_update(
                                 &mut ipc_service,
                                 &candidates,
@@ -8808,6 +8882,14 @@ impl TextServiceFactory {
                                     &mut ipc_service,
                                 )?;
                             }
+                            self.reconcile_typo_applied(
+                                &transition,
+                                &raw_input,
+                                &raw_hiragana,
+                                &suffix,
+                                &fixed_prefix,
+                                &clause_snapshots,
+                            )?;
                             self.sync_candidate_window_after_text_update(
                                 &mut ipc_service,
                                 &candidates,
@@ -8840,6 +8922,7 @@ impl TextServiceFactory {
                                 pending_learning_commits.push(PendingLearningCommit {
                                     candidate_id: shared::ai_candidate::TYPO_CORRECTION,
                                     kind: LearningCommitKind::Normal,
+                                    explicit_selection: true,
                                     surface: text.clone(),
                                 });
                             }
@@ -8982,6 +9065,14 @@ impl TextServiceFactory {
                             raw_hiragana = selected.hiragana;
 
                             render_local_text!();
+                            self.reconcile_typo_applied(
+                                &transition,
+                                &raw_input,
+                                &raw_hiragana,
+                                &suffix,
+                                &fixed_prefix,
+                                &clause_snapshots,
+                            )?;
                             self.sync_candidate_window_update(
                                 &mut ipc_service,
                                 &candidates,
@@ -9124,6 +9215,14 @@ impl TextServiceFactory {
                             raw_hiragana = selected.hiragana;
 
                             render_local_text!();
+                            self.reconcile_typo_applied(
+                                &transition,
+                                &raw_input,
+                                &raw_hiragana,
+                                &suffix,
+                                &fixed_prefix,
+                                &clause_snapshots,
+                            )?;
                             self.sync_candidate_window_update(
                                 &mut ipc_service,
                                 &candidates,
@@ -10421,6 +10520,7 @@ mod lifecycle_tests {
                     scope: LearningCommitScope::Composition,
                     kind: LearningCommitKind::Normal,
                     was_temporary_latin: false,
+                    explicit_selection: false,
                 },
                 transition: CompositionState::None,
             },

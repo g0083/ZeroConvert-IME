@@ -28,12 +28,12 @@ object WindowsEngine {
 
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "ZeroCon-shared-engine") }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    private data class BackgroundTask(val revision: Long?, val action: () -> Unit)
+    private data class BackgroundTask(val revision: Long?, val requiresWrite: Boolean = true, val action: () -> Unit)
     private val backgroundTasks = Channel<BackgroundTask>(128)
     init {
         scope.launch {
             for (task in backgroundTasks) {
-                if (!ready || (task.revision != null && (!LearningPolicy.canWrite || task.revision != KanaKanjiConverter.learningHistoryRevision))) continue
+                if (!ready || (task.revision != null && (task.revision != KanaKanjiConverter.learningHistoryRevision || (task.requiresWrite && !LearningPolicy.canWrite)))) continue
                 try { task.action() }
                 catch (failure: Exception) { android.util.Log.e("WindowsEngine", "Shared engine background operation failed", failure) }
             }
@@ -293,8 +293,8 @@ object WindowsEngine {
         val key = ConfigureKey(ai, profile, personalize, dictionaryCorrection, predictiveConversion, effectiveLearning, dictRevision, modelPath)
         if (lastSettings.isNotEmpty() && key == lastConfigureKey) return
         val users = JSONArray()
-        if (personalize) KanaKanjiConverter.getUserDictionary(application).forEach {
-            users.put(JSONObject().put("reading", it.reading).put("word", it.word))
+        if (personalize) KanaKanjiConverter.getUserDictionary(application).take(MAX_USER_DICTIONARY_ENTRIES).forEach {
+            users.put(JSONObject().put("reading", it.reading).put("word", it.word).put("pos", it.pos.key))
         }
         val settings = JSONObject().put("zenzai", JSONObject().put("enable", ai).put("backend", "cpu").put("profile", profile))
             .put("general", JSONObject()
@@ -549,7 +549,9 @@ object WindowsEngine {
 
     fun assist(op: String, context: String, input: String, baseline: String, inference: AssistInference,
                baselineReading: String = "", rawInput: String = "", touchHints: String = "",
-               inputMode: String = ""): AiAssistResult? {
+               inputMode: String = "", autoCorrectionStrength: String = "standard",
+               originReading: String = "", originRaw: String = "", originTouchHints: String = "",
+               appliedPrefix: String = ""): AiAssistResult? {
         if (!ready) return null
         val requestJson = JSONObject().put("op", op)
             .put("revision", (inference.revision shl 32) xor AssistVocabulary.revision)
@@ -559,10 +561,31 @@ object WindowsEngine {
         if (rawInput.isNotEmpty()) requestJson.put("raw", rawInput)
         if (touchHints.isNotEmpty()) requestJson.put("touchHints", touchHints)
         if (inputMode.isNotEmpty()) requestJson.put("inputMode", inputMode)
+        if (op == "correction") {
+            if (autoCorrectionStrength.isNotEmpty()) {
+                requestJson.put("autoCorrectionStrength", autoCorrectionStrength)
+            }
+            if (originReading.isNotEmpty()) requestJson.put("originReading", originReading)
+            if (originRaw.isNotEmpty()) requestJson.put("originRaw", originRaw)
+            if (originTouchHints.isNotEmpty()) requestJson.put("originTouchHints", originTouchHints)
+            if (appliedPrefix.isNotEmpty()) requestJson.put("appliedPrefix", appliedPrefix)
+        }
         val raw = assistReply(nativeAssist(requestJson.toString(),
             CompletionHost(inference))) ?: return null
         val result = JSONObject(raw)
         val correction = op == "correction"
+        if (correction && result.optBoolean("revertToOrigin", false)) {
+            return AiAssistResult(
+                type = AiAssistType.TYPO_CORRECTION,
+                text = "",
+                label = "",
+                relevance = result.optInt("relevance", 100),
+                sourceReading = input,
+                autoApply = true,
+                sourceSurface = baseline,
+                revertToOrigin = true,
+            )
+        }
         val text = result.optString("text")
         if (text.isEmpty()) return null
         return AiAssistResult(if (correction) AiAssistType.TYPO_CORRECTION else AiAssistType.PREDICTION,
@@ -576,22 +599,25 @@ object WindowsEngine {
         override fun complete(model: AssistModel, prompt: String, maxTokens: Int, timeoutMs: Int) = ModelCompletion("", "unavailable")
     }))
 
-    fun recordCorrection(reading: String, surface: String) {
+    fun recordCorrection(reading: String, surface: String, canRecord: () -> Boolean) {
+        if (!canRecord() || !LearningPolicy.canWrite) return
         backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
+            if (!canRecord()) return@BackgroundTask
             assistRequest(JSONObject().put("op", "learn").put("input", reading).put("baseline", surface))
         })
     }
 
     /** Deletes one learned typo correction from the shared store. */
     fun forgetCorrection(reading: String, surface: String) {
-        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
+        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision, requiresWrite = false) {
+            if (!LearningPolicy.canRead) return@BackgroundTask
             assistRequest(JSONObject().put("op", "forget").put("input", reading).put("baseline", surface))
         })
     }
 
     /** Deletes every learned typo correction from the shared store. */
     fun clearCorrections() {
-        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision) {
+        backgroundTasks.trySend(BackgroundTask(KanaKanjiConverter.learningHistoryRevision, requiresWrite = false) {
             assistRequest(JSONObject().put("op", "forgetAll"))
         })
     }
@@ -755,10 +781,18 @@ object WindowsEngine {
      * Queues a learning commit. [expectedRevision] is the history generation seen
      * when the selection was committed, so a reset in between drops it.
      */
-    fun commit(candidateId: String, expectedRevision: Long = KanaKanjiConverter.learningHistoryRevision) {
-        if (candidateId.isEmpty()) return
+    fun commit(
+        candidateId: String,
+        expectedRevision: Long = KanaKanjiConverter.learningHistoryRevision,
+        explicitSelection: Boolean = false,
+        canRecord: () -> Boolean = { LearningPolicy.canWrite }
+    ) {
+        if (candidateId.isEmpty() || !canRecord()) return
         backgroundTasks.trySend(BackgroundTask(expectedRevision) {
-            check(checkedSwift(JSONObject().put("op", "commit").put("candidateId", candidateId)).optBoolean("learned")) {
+            if (!canRecord()) return@BackgroundTask
+            val request = JSONObject().put("op", "commit").put("candidateId", candidateId)
+                .put("explicitSelection", explicitSelection)
+            check(checkedSwift(request).optBoolean("learned")) {
                 "Shared engine candidate is no longer available for learning"
             }
         })

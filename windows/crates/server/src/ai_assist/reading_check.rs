@@ -1,6 +1,72 @@
 //! Read-only AZR2 dictionary validation. Checks an existing reading, never generates one.
 use super::{katakana_to_hiragana, to_katakana};
-use std::sync::OnceLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{OnceLock, RwLock};
+
+#[derive(Default)]
+struct UserDictionaryVocabulary {
+    by_reading: HashMap<String, String>,
+    by_surface: HashMap<String, Vec<String>>,
+}
+
+fn user_dictionary() -> &'static RwLock<UserDictionaryVocabulary> {
+    static USER_DICTIONARY: OnceLock<RwLock<UserDictionaryVocabulary>> = OnceLock::new();
+    USER_DICTIONARY.get_or_init(RwLock::default)
+}
+
+pub(super) fn set_user_dictionary_vocabulary<'a>(
+    entries: impl IntoIterator<Item = (&'a str, &'a str)>,
+) {
+    let mut vocabulary = UserDictionaryVocabulary::default();
+    let mut seen = HashSet::new();
+    for (reading, surface) in entries {
+        let reading = to_katakana(reading.trim());
+        let surface = surface.trim();
+        let valid = |value: &str| {
+            value
+                .chars()
+                .any(|ch| !ch.is_whitespace() && !ch.is_control())
+        };
+        if !valid(&reading) || !valid(surface) || !seen.insert((reading.clone(), surface)) {
+            continue;
+        }
+        vocabulary
+            .by_reading
+            .entry(reading.clone())
+            .or_insert_with(|| surface.to_owned());
+        vocabulary
+            .by_surface
+            .entry(surface.to_owned())
+            .or_default()
+            .push(reading);
+    }
+    *user_dictionary()
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = vocabulary;
+}
+
+pub(super) fn user_dictionary_contains_reading(reading: &str) -> bool {
+    user_dictionary().read().is_ok_and(|index| {
+        !index.by_reading.is_empty() && index.by_reading.contains_key(&to_katakana(reading))
+    })
+}
+
+pub(super) fn user_dictionary_surface(reading: &str) -> Option<String> {
+    let index = user_dictionary().read().ok()?;
+    if index.by_reading.is_empty() {
+        return None;
+    }
+    index.by_reading.get(&to_katakana(reading)).cloned()
+}
+
+fn user_dictionary_readings(surface: &str) -> Option<Vec<String>> {
+    user_dictionary()
+        .read()
+        .ok()?
+        .by_surface
+        .get(surface)
+        .cloned()
+}
 
 struct ReverseDictionary {
     bytes: Vec<u8>,
@@ -157,6 +223,11 @@ fn dictionary() -> Option<&'static ReverseDictionary> {
 }
 
 pub fn has_same_reading(surface: &str, reading: &str) -> bool {
+    if user_dictionary_readings(surface)
+        .is_some_and(|readings| readings.contains(&to_katakana(reading)))
+    {
+        return true;
+    }
     if let Some(d) = dictionary() {
         return d.matches(surface, reading);
     }
@@ -167,10 +238,20 @@ pub fn has_same_reading(surface: &str, reading: &str) -> bool {
 // Direct-input correction changes the canonical input to a surface. Reconstruct
 // a bounded reading for prediction only; never use it to mutate composition.
 pub fn reading_for_surface(surface: &str) -> Option<String> {
+    if let Some(readings) = user_dictionary_readings(surface) {
+        return readings.into_iter().next();
+    }
     dictionary()?.reading_for_surface(surface)
 }
 
 pub fn min_reading_distance(surface: &str, source_reading: &str) -> Option<usize> {
+    if let Some(readings) = user_dictionary_readings(surface) {
+        let source = to_katakana(source_reading);
+        return readings
+            .iter()
+            .map(|reading| super::damerau_levenshtein_distance(&source, reading))
+            .min();
+    }
     if let Some(d) = dictionary() {
         return d.min_reading_distance(surface, source_reading);
     }

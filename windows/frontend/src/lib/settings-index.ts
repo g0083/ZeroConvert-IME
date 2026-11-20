@@ -31,6 +31,7 @@ export const settingsIndex: SettingsEntry[] = [
     { url: "/conversion", page: "変換と候補", section: "候補と読みの表示", label: "ライブ変換中の読みを表示", keywords: "読み ルビ ライブ" },
     { url: "/conversion", page: "変換と候補", section: "候補と読みの表示", label: "読み表示の高さ", keywords: "ルビ 高さ" },
     { url: "/conversion", page: "変換と候補", section: "タイポ補正と先読み", label: "タイポ補正", keywords: "ろーまじ ローマ字入力の辞書補正 ローマ字入力のタイポ補正 追加補正 タイポ 誤入力 促音 撥音 AI ZeroCon Model 文脈" },
+    { url: "/conversion", page: "変換と候補", section: "タイポ補正と先読み", label: "補正候補を自動で反映", keywords: "自動適用 自動補正 自動反映 タイポ 誤入力 auto 強さ ひかえめ 標準 強め オフ Esc" },
     { url: "/conversion", page: "変換と候補", section: "タイポ補正と先読み", label: "文の先読み", keywords: "先読み さきよみ AIアシスト 追加補正と先読み 文 続き" },
     { url: "/conversion", page: "変換と候補", section: "タイポ補正と先読み", label: "タイポ補正の推論エンジン", keywords: "タイポ補正の実行方法 追加補正の推論エンジン lm studio 内蔵 モデル" },
     { url: "/conversion", page: "変換と候補", section: "変換学習", label: "学習と履歴の使用", keywords: "学習 履歴 削除" },

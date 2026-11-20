@@ -14,12 +14,18 @@ class ModelCorrector(
         baselineReading: String = "",
         rawInput: String = "",
         touchHints: String = "",
-        inputMode: String = ""
+        inputMode: String = "",
+        autoCorrectionStrength: String = "standard",
+        originReading: String = "",
+        originRaw: String = "",
+        originTouchHints: String = "",
+        appliedPrefix: String = "",
     ): AiAssistResult? {
         if (input.hasPendingRomaji()) return null
         if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE) {
             return com.zeroconvert.ime.engine.WindowsEngine.assist(
-                "correction", context, input, baseline, inference, baselineReading, rawInput, touchHints, inputMode
+                "correction", context, input, baseline, inference, baselineReading, rawInput, touchHints, inputMode,
+                autoCorrectionStrength, originReading, originRaw, originTouchHints, appliedPrefix
             )
         }
         if (input.codePointSize() !in 2..512 || input.hasUnsafeTokens()) return null

@@ -9,7 +9,7 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "windows" / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import converter_patch
 
@@ -66,6 +66,14 @@ CONVERTER_API = '\n'.join(
     [anchor for anchor, _ in converter_patch.CONVERTER_API_REPLACEMENTS[:-1]]
     + [converter_patch.CONVERTER_API_REPLACEMENTS[-1][0]]
 )
+
+
+CONVERTER_API += "\n" + converter_patch.DYNAMIC_DICTIONARY_API_ANCHOR
+CONVERTER_API += "\n" + converter_patch.LEARNING_FLUSH_API_ANCHOR
+CONVERTER_API += "\n" + converter_patch.LEARNING_FLUSH_API_ANCHOR
+
+
+CONVERTER_API += "\n" + "\n".join(anchor for anchor, _ in converter_patch.DYNAMIC_DICTIONARY_RESULT_REPLACEMENTS)
 
 
 class ExactKeyboardLookupTests(unittest.TestCase):
@@ -196,13 +204,16 @@ LEARNING_MEMORY = '''    func forgetMemory(data: [DicdataElement]) {
 '''
 
 
+LEARNING_MEMORY += "\n".join(("", converter_patch.LEARNING_FLUSH_MANAGER_ANCHOR, converter_patch.LEARNING_FLUSH_MANAGER_BODY))
+
+
 class LearningMemoryTests(unittest.TestCase):
     def test_explicit_deletion_is_allowed_when_learning_is_read_only(self):
         # Read-only users must still be able to remove a word they taught the IME
         # before switching the mode; deletion is not a new learning write.
         patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
         self.assertIn('learningType.needUsingMemory', patched)
-        self.assertNotIn('learningType.needUpdateMemory', patched)
+        self.assertNotIn('learningType.needUpdateMemory', patched.split('func resetMemory()', 1)[0])
 
     def test_negative_max_memory_count_triggers_cache_invalidation(self):
         patched = converter_patch.patch_learning_memory(LEARNING_MEMORY)
@@ -372,11 +383,12 @@ class ZenzPromptBuilderTests(unittest.TestCase):
 class ZenzEvaluatorTests(unittest.TestCase):
     @staticmethod
     def _evaluator_fixture():
-        return (
-            converter_patch.ZENZ_EVALUATOR_SETUP_ANCHOR
-            + '\n'
-            + converter_patch.ZENZ_EVALUATOR_LOOP_ANCHOR
-        )
+        return '\n'.join([
+            converter_patch.ZENZ_EVALUATOR_DECLARATION_ANCHOR,
+            converter_patch.ZENZ_EVALUATOR_USER_DICT_PROMPT_ANCHOR,
+            converter_patch.ZENZ_EVALUATOR_SETUP_ANCHOR,
+            converter_patch.ZENZ_EVALUATOR_LOOP_ANCHOR,
+        ])
 
     def test_uses_single_pass_argmax_masks_digits_and_delays_logsumexp(self):
         patched = converter_patch.patch_zenz_evaluator(self._evaluator_fixture())
@@ -389,12 +401,34 @@ class ZenzEvaluatorTests(unittest.TestCase):
         self.assertLess(patched.rindex('return .fixRequired'), patched.rindex('let logsumexp = stabilizedLogSumExp'))
         self.assertNotIn('tokenHeap.insertIfPossible(TokenAndLogprob(token: llama_token(index - startIndex), logprob: logp))', patched)
 
-    def test_rejects_broken_anchor_or_double_patching(self):
+    def test_disables_dictionary_prompt_and_protects_tokens_before_either_early_exit(self):
         patched = converter_patch.patch_zenz_evaluator(self._evaluator_fixture())
+        self.assertEqual(patched.count('let userDictionaryPrompt = ""'), 1)
+        self.assertNotIn('userDictionaryPrompt +=', patched)
+        self.assertIn('public enum ZenzUserDictionaryProtection', patched)
+        self.assertIn('!element.metadata.contains(.isKeyboardTypoCorrection)', patched)
+        self.assertIn('asciiTrailingParticleMaxLogitGap: Float = 4.5', patched)
+        self.assertIn('tokenProtection.append((isUserDict, precedingUserDictEndedAscii))', patched)
+        self.assertIn('repeatElement((isUserDict, false), count: tokenCount - 1)', patched)
+        self.assertIn('ZenzUserDictionaryProtection.endsWithPrintableAscii(tokenWord)', patched)
+        for max_token in ('maxItem.token', 'maxToken'):
+            with self.subTest(max_token=max_token):
+                start = patched.index(f'if {max_token} != tokenID,')
+                end = patched.index(f'if {max_token} == context.eosToken', start)
+                self.assertIn(
+                    '!allowsProtectedMismatch(at: i, tokenID: tokenID, rawLogitGap: maxRawLogit - logits[startIndex + Int(tokenID)])',
+                    patched[start:end],
+                )
+
+    def test_rejects_broken_anchor_or_double_patching(self):
+        fixture = self._evaluator_fixture()
+        patched = converter_patch.patch_zenz_evaluator(fixture)
         with self.assertRaises(ValueError):
             converter_patch.patch_zenz_evaluator(patched)
         with self.assertRaises(ValueError):
             converter_patch.patch_zenz_evaluator('changed evaluator loop')
+        with self.assertRaises(ValueError):
+            converter_patch.patch_zenz_evaluator(fixture.replace('var userDictionaryPrompt', 'var changedPrompt'))
 
 
 class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
@@ -403,6 +437,7 @@ class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
             [converter_patch.DICDATA_ZERO_HINT_CRLF_ANCHOR]
             + [anchor for anchor, _ in converter_patch.DICDATA_PREDICTION_LIMIT_REPLACEMENTS]
         )
+        source += "\n" + "\n".join(anchor for anchor, _ in converter_patch.DYNAMIC_DICTIONARY_LOOKUPS)
         patched = converter_patch.patch_dicdata_store(source)
         self.assertIn('split(whereSeparator: \\.isNewline)', patched)
         self.assertNotIn('split(separator: "\\n")', patched)

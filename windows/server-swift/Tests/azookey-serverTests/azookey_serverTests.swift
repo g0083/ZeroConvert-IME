@@ -2,6 +2,7 @@ import Foundation
 import ffi
 import KanaKanjiConverterModule
 import Testing
+import Synchronization
 @testable import azookey_server
 
 @Test func gpuLayerCountKeepsLegacyDefaultAndClampsSettings() {
@@ -910,6 +911,7 @@ private func testCandidate(
         }
 
         currentLearningType = .inputAndOutput
+        config["predictiveConversion"] = false
         learningSelectionOverrides = ["カトウ": "加藤"]
         let prioritized = prioritizeLearningSelectionOverrides(candidates, ruby: "かとう") { $0 }
         #expect(prioritized.map(\.text) == ["加藤", "果糖", "今日"])
@@ -919,10 +921,8 @@ private func testCandidate(
             unrelatedCandidateAccessCount += 1
             return $0
         }
-        // The current policy also preserves learned choices for matching
-        // candidate spans when the complete requested reading is different.
-        #expect(unrelated.map(\.text) == ["加藤", "今日", "果糖"])
-        #expect(unrelatedCandidateAccessCount > 0)
+        #expect(unrelated.map(\.text) == candidates.map(\.text))
+        #expect(unrelatedCandidateAccessCount == 0)
 
         currentLearningType = .nothing
         let learningDisabled = prioritizeLearningSelectionOverrides(candidates, ruby: "かとう") { $0 }
@@ -953,10 +953,11 @@ private func testCandidate(
         let prioritized = prioritizeLearningSelectionOverrides(
             candidates,
             ruby: "かとう",
+            leftContext: "前回と違う場面で",
             candidate: { $0 },
             synthesizeElement: { $0 }
         )
-        #expect(prioritized.map(\.text) == ["加藤", "果糖"])
+        #expect(prioritized.map(\.text) == ["果糖", "加藤"])
     }
 }
 
@@ -978,8 +979,9 @@ private func testCandidate(
 
         currentLearningType = .inputAndOutput
         // 過去に「効果」を確定し、直近で「降下」を確定
-        learningSelectionOverrides.record(output: "効果", for: "コウカ")
-        learningSelectionOverrides.record(output: "降下", for: "コウカ")
+        let now = learningEpochMilliseconds()
+        learningSelectionOverrides.record(output: "効果", for: "コウカ", nowEpochMs: now - 1)
+        learningSelectionOverrides.record(output: "降下", for: "コウカ", nowEpochMs: now)
         let prioritized = prioritizeLearningSelectionOverrides(
             candidates,
             ruby: "こうか",
@@ -1014,6 +1016,8 @@ private func testCandidate(
             synthesizeElement: { $0 }
         )
         #expect(prioritized.map(\.text) == ["プロ", "プログラミング"])
+        #expect(learningCandidateRuby(prioritized[1]) == "プログラミング")
+        #expect(prioritized[1].composingCount == c1.composingCount)
 
         config["predictiveConversion"] = false
         let disabledPrioritized = prioritizeLearningSelectionOverrides(
@@ -1121,7 +1125,7 @@ private func testCandidate(
             let index = try #require(candidates.firstIndex { $0.text == candidate.text })
             let batchFirstId = try #require(cacheLearningCandidates(candidates))
             let candidateId = learningCandidateId(at: index, batchFirstId: batchFirstId)
-            #expect(commit_learning_candidate(candidateId: candidateId, commitKind: 1))
+            #expect(commit_learning_candidate_with_explicit(candidateId: candidateId, commitKind: 1, explicitSelection: true))
             clear_text()
         }
 
@@ -1212,6 +1216,10 @@ private func testCandidate(
         loadLearningSelectionOverrides()
         #expect(learningSelectionOverrides["カトウ"] == "加藤")
         #expect(learningSelectionOverrides["ハシル"] == "走る")
+        let saved = try JSONSerialization.jsonObject(with: Data(
+            contentsOf: memoryURL.appending(path: "selection-overrides.json")
+        )) as? [String: Any]
+        #expect(saved?["version"] as? Int == 2)
     }
 }
 
@@ -1289,7 +1297,8 @@ private func testCandidate(
         loadLearningSelectionOverrides()
         #expect(learningSelectionOverrides["カトウ"] == nil)
         let persisted = try Data(contentsOf: overridesURL)
-        #expect(!String(decoding: persisted, as: UTF8.self).contains("加藤"))
+        let removed = try JSONDecoder().decode(LearningSelectionStore.self, from: persisted)
+        #expect(removed.records(for: "カトウ").isEmpty)
 
         // A failed trie update would leave a pause marker and disable learning.
         #expect(!FileManager.default.fileExists(
@@ -2772,6 +2781,40 @@ private func testCandidate(
     #expect(enabled[2].isLearningTarget)
 }
 
+@Test func keyboardTypoCorrectionEntriesDoNotTriggerUserDictionaryProtection() throws {
+    let entry = try #require(makeKeyboardTypoDictionaryEntries().first)
+    var importedTypo = entry
+    importedTypo.metadata = [.isFromUserDictionary, .isKeyboardTypoCorrection]
+    var userEntry = entry
+    userEntry.metadata = .isFromUserDictionary
+
+    let typoIsProtected = ZenzUserDictionaryProtection.isProtectedUserDictionaryElement(importedTypo)
+    let userEntryIsProtected = ZenzUserDictionaryProtection.isProtectedUserDictionaryElement(userEntry)
+    #expect(!typoIsProtected)
+    #expect(userEntryIsProtected)
+    #expect(ZenzUserDictionaryProtection.endsWithPrintableAscii("ZeroConvert"))
+    #expect(ZenzUserDictionaryProtection.endsWithPrintableAscii("(^o^)"))
+    #expect(!ZenzUserDictionaryProtection.endsWithPrintableAscii("ZeroConvert "))
+    #expect(!ZenzUserDictionaryProtection.endsWithPrintableAscii("碧海乃"))
+
+    let particle = Array("を".utf8)
+    #expect(!ZenzUserDictionaryProtection.shouldAllowMismatch(
+        isUserDict: typoIsProtected, precedingUserDictEndedAscii: false, rawLogitGap: 0, tokenBytes: particle
+    ))
+    #expect(ZenzUserDictionaryProtection.shouldAllowMismatch(
+        isUserDict: userEntryIsProtected, precedingUserDictEndedAscii: false, rawLogitGap: 20, tokenBytes: []
+    ))
+    #expect(ZenzUserDictionaryProtection.shouldAllowMismatch(
+        isUserDict: false, precedingUserDictEndedAscii: true, rawLogitGap: 4.5, tokenBytes: particle
+    ))
+    #expect(!ZenzUserDictionaryProtection.shouldAllowMismatch(
+        isUserDict: false, precedingUserDictEndedAscii: true, rawLogitGap: 4.51, tokenBytes: particle
+    ))
+    #expect(!ZenzUserDictionaryProtection.shouldAllowMismatch(
+        isUserDict: false, precedingUserDictEndedAscii: true, rawLogitGap: 0, tokenBytes: Array("eを".utf8)
+    ))
+}
+
 @Test func keyboardTypoRewriteCandidatesExposeRuleAndOriginalSurfaceRange() async throws {
     let memoryURL = FileManager.default.temporaryDirectory
         .appending(path: "azookey-typo-provenance-test-\(UUID().uuidString)")
@@ -4050,6 +4093,49 @@ private func testCandidate(
     #expect(restoredTruncated == Array("100".utf8) + Array("円".utf8).dropLast())
 }
 
+@MainActor @Test func userDictionaryEvaluatorProtectsCoinedAndAsciiWordsWithoutPromptInjection() throws {
+    let packageRoot = packageRootURL()
+    let modelURL = packageRoot
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+    try #require(FileManager.default.fileExists(atPath: modelURL.path(percentEncoded: false)))
+
+    let dictionaryURL = packageRoot.appending(path: "azooKey_dictionary_storage/Dictionary")
+    let emojiURL = packageRoot.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
+    let testConverter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+    let cases = [
+        (reading: "あおみの", ruby: "アオミノ", word: "碧海乃", expected: "碧海乃"),
+        (reading: "ぜろこんをつかう", ruby: "ゼロコン", word: "ZeroConvert", expected: "ZeroConvertを使う"),
+        (reading: "かおもじ", ruby: "カオモジ", word: "(^o^)", expected: "(^o^)"),
+        (reading: "めあど", ruby: "メアド", word: "test@example.com", expected: "test@example.com"),
+    ]
+    testConverter.importDynamicUserDictionary(cases.map { entry in
+        DicdataElement(word: entry.word, ruby: entry.ruby, cid: CIDData.固有名詞.cid, mid: MIDData.一般.mid, value: -5)
+    })
+    let options = optionsForZenzaiConversion(from: makeConvertRequestOptions(
+        context: "",
+        zenzaiEnabled: true,
+        runtimeDirectoryURL: packageRoot,
+        emojiDictionaryURL: emojiURL,
+        zenzaiWeightURL: modelURL,
+        profile: "",
+        learningType: .nothing,
+        experimentalKeyboardTypoCorrection: false
+    ))
+    for entry in cases {
+        testConverter.stopComposition()
+        var composing = ComposingText()
+        composing.insertAtCursorPosition(entry.reading, inputStyle: .direct)
+        let results = testConverter.requestCandidates(composing, options: options).mainResults
+        #expect(results.contains { candidate in
+            candidate.text == entry.expected && candidate.data.contains {
+                $0.word == entry.word && ZenzUserDictionaryProtection.isProtectedUserDictionaryElement($0)
+            }
+        }, "reading=\(entry.reading) expected=\(entry.expected) candidates=\(results.map(\.text))")
+    }
+}
+
 @Test func zenzDigitMaskingConvertsNumericInputsAndContextWithRealNanoV41() async throws {
     let packageRoot = URL(filePath: #filePath)
         .deletingLastPathComponent()
@@ -4144,3 +4230,396 @@ private func testCandidate(
     }
 }
 
+
+@MainActor private func withDictionaryLearningState<T>(_ body: (URL, URL) throws -> T) throws -> T {
+    let dictionaryURL = packageRootURL().appending(path: "azooKey_dictionary_storage/Dictionary")
+    let directory = FileManager.default.temporaryDirectory.appending(path: "azookey-learning-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let oldConverter = converter
+    let oldSupplement = normalNBestSupplementConverter
+    let oldType = currentLearningType
+    let oldDirectory = currentLearningMemoryDirectoryURL
+    let oldCache = learningCandidateCache
+    let oldSelections = learningSelectionOverrides
+    let oldBigramStore = postCompositionBigramStore
+    let oldLastCommit = lastCommittedPostCompositionCandidate
+    let oldConfig = config
+    let oldContinuation = lastCommittedContinuation
+    let oldPrivate = privateInputActive
+    defer {
+        set_private_input(oldPrivate)
+        converter = oldConverter
+        normalNBestSupplementConverter = oldSupplement
+        currentLearningType = oldType
+        currentLearningMemoryDirectoryURL = oldDirectory
+        learningCandidateCache = oldCache
+        learningSelectionOverrides = oldSelections
+        postCompositionBigramStore = oldBigramStore
+        clearPostCompositionPredictionState()
+        lastCommittedPostCompositionCandidate = oldLastCommit
+        lastCommittedContinuation = oldContinuation
+        config = oldConfig
+        try? FileManager.default.removeItem(at: directory)
+    }
+    set_private_input(false)
+    converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+    normalNBestSupplementConverter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+    currentLearningType = .inputAndOutput
+    currentLearningMemoryDirectoryURL = directory
+    learningCandidateCache = LearningCandidateCache()
+    learningSelectionOverrides = LearningSelectionStore()
+    postCompositionBigramStore = PostCompositionBigramStore()
+    clearPostCompositionPredictionState()
+    config["enable"] = false
+    config["context"] = ""
+    config["predictiveConversion"] = true
+    config["postCompositionPrediction"] = true
+    return try body(directory, dictionaryURL)
+}
+
+@MainActor @Test func implicitCommitDoesNotHijackModelTopInOppositeContext() throws {
+    try withDictionaryLearningState { _, _ in
+        let bridge = testCandidate(word: "橋", ruby: "ハシ", composingCount: .inputCount(2))
+        let chopsticks = testCandidate(word: "箸", ruby: "ハシ", composingCount: .inputCount(2))
+        let id = try #require(cacheLearningCandidates([bridge]))
+        #expect(commit_learning_candidate_with_explicit(candidateId: id, commitKind: 0, explicitSelection: false))
+        let saved = try #require(learningSelectionOverrides.records(for: "はし").first)
+        #expect(saved.explicitCount == 0)
+        #expect(saved.implicitCount == 1)
+        let results = prioritizeLearningSelectionOverrides(
+            [chopsticks], ruby: "はし", leftContext: "ご飯を食べるのに",
+            candidate: { $0 }, synthesizeElement: { $0 }
+        )
+        #expect(results.map(\.text) == ["箸"])
+    }
+}
+
+@MainActor @Test func explicitSelectionWithMatchingLeftContextPromotesToTop() throws {
+    try withDictionaryLearningState { _, _ in
+        let bridge = testCandidate(word: "橋", ruby: "ハシ", composingCount: .inputCount(2))
+        var alternative = testCandidate(word: "箸", ruby: "ハシ", composingCount: .inputCount(2))
+        alternative.data[0].metadata.insert(.isFromUserDictionary)
+        let learned = try #require(cacheLearningCandidates([bridge]))
+        config["context"] = "川に架かる"
+        #expect(commit_learning_candidate_with_explicit(candidateId: learned, commitKind: 0, explicitSelection: true))
+        func ranked(_ context: String) -> [String] {
+            prioritizeLearningSelectionOverrides([alternative, bridge], ruby: "はし", leftContext: context) { $0 }.map(\.text)
+        }
+        #expect(ranked("大きな川に架かる") == ["橋", "箸"])
+        #expect(ranked("ご飯を食べるのに") == ["箸", "橋"])
+        #expect(ranked("") == ["箸", "橋"])
+    }
+}
+
+@MainActor @Test func partialReadingDoesNotSpliceClauseHeadIntoModelTop() throws {
+    try withDictionaryLearningState { _, _ in
+        let whole = testCandidate(word: "箸を取る", ruby: "ハシヲトル", composingCount: .inputCount(5))
+        let modelHead = testCandidate(word: "箸", ruby: "ハシ", composingCount: .inputCount(2))
+        let learned = testCandidate(word: "橋", ruby: "ハシ", composingCount: .inputCount(2))
+        learningSelectionOverrides.record(output: "橋", for: "はし", leftContext: "川に架かる")
+        let ranked = prioritizeLearningSelectionOverrides(
+            [whole, modelHead, learned], ruby: "はしをとる", leftContext: "川に架かる"
+        ) { $0 }
+        #expect(ranked.map(\.text) == ["箸を取る", "箸", "橋"])
+    }
+}
+
+@MainActor @Test func multiClauseSingleCommitRecordsChainBigramsAndReproducesSentence() throws {
+    try withDictionaryLearningState { _, _ in
+        let text = "今日は天気がいいから散歩に行こう"
+        let reading = "きょうはてんきがいいからさんぽにいこう"
+        var input = ComposingText()
+        input.insertAtCursorPosition(reading, inputStyle: .direct)
+        let candidates = converter.requestCandidates(input, options: testLearningConvertRequestOptions(
+            memoryURL: try #require(currentLearningMemoryDirectoryURL)
+        )).mainResults
+        let sentence = try #require(candidates.first { $0.text == text }, "candidates=\(candidates.map(\.text))")
+        let chunks = extractClauseChunks(from: sentence).map(\.surface)
+        #expect(chunks == ["今日は", "天気が", "いいから", "散歩に", "行こう"],
+                "elements=\(sentence.data)")
+        let id = try #require(cacheLearningCandidates([sentence]))
+        #expect(commit_learning_candidate(candidateId: id, commitKind: 0))
+        #expect(postCompositionBigramStore.count == 4)
+        let start = testCandidate(word: "今日は", ruby: "キョウハ", composingCount: .inputCount(4))
+        let startID = try #require(cacheLearningCandidates([start]))
+        #expect(commit_learning_candidate(candidateId: startID, commitKind: 0))
+        let predictions = generatePostCompositionPredictions(leftSideCandidate: start, context: "今日は")
+        #expect(predictions.first?.text == "天気が")
+        #expect(predictions.contains { $0.text == "天気がいいから散歩に行こう" && $0.joinedCandidate.text == text })
+        print("Sentence-chain regression:", chunks, predictions.prefix(2).map(\.text))
+    }
+}
+
+@Test func postCompositionChainAvoidsCyclesAndStopsAtMaxDepth() throws {
+    var store = PostCompositionBigramStore()
+    func edge(_ previous: String, _ next: String, _ time: Int64 = 100) {
+        store.record(previousSurface: previous, entry: .init(surface: next, ruby: next, rcid: 1285, mid: 1285), nowEpochMs: time)
+    }
+    for (left, right) in zip(["a", "b", "c", "d", "e"], ["b", "c", "d", "e", "f"]) { edge(left, right) }
+    edge("b", "a", 101)
+    let chain = try #require(store.chains(from: "a", nowEpochMs: 102).first)
+    #expect(chain.map(\.surface) == ["b", "c", "d", "e"])
+    let long = String(repeating: "あ", count: 22)
+    edge("start", long)
+    edge(long, String(repeating: "い", count: 19))
+    #expect(store.chains(from: "start", nowEpochMs: 102).isEmpty)
+    let legacy = Data(#"{"entriesByPrevious":{"前":[{"surface":"次","ruby":"つぎ","rcid":1285,"mid":1285}]},"recentPreviousSurfaces":["前"]}"#.utf8)
+    var restored = try JSONDecoder().decode(PostCompositionBigramStore.self, from: legacy)
+    #expect(restored.entries(for: "前").first?.count == 1)
+    #expect(restored.entries(for: "前").first?.lastUsedEpochMs == 0)
+    let forgot = restored.forget(surface: "次")
+    #expect(forgot)
+    #expect(restored.count == 0)
+}
+
+@Test func learningSelectionStoreMigratesV1JsonToV2Safely() throws {
+    func reload(_ store: LearningSelectionStore) throws -> LearningSelectionStore {
+        try JSONDecoder().decode(LearningSelectionStore.self, from: JSONEncoder().encode(store))
+    }
+    let v1 = Data(#"{"はし":["橋","箸"]}"#.utf8)
+    var store = try JSONDecoder().decode(LearningSelectionStore.self, from: v1)
+    #expect(store.outputs(for: "ハシ") == ["橋", "箸"])
+    #expect(store.records(for: "ハシ").first?.explicitCount == 1)
+    #expect(store.records(for: "ハシ").first?.implicitCount == 0)
+    let v0 = Data(#"{"はし":"橋"}"#.utf8)
+    #expect(try JSONDecoder().decode(LearningSelectionStore.self, from: v0).outputs(for: "ハシ") == ["橋"])
+    for context in ["B", "A", "C", "D"] {
+        store.record(output: "橋", for: "ハシ", leftContext: context)
+    }
+    store = try reload(store)
+    store.record(output: "橋", for: "ハシ", leftContext: "E")
+    let newest = try #require(store.records(for: "ハシ").first)
+    #expect(newest.recentContexts == ["E", "D", "C", "A"])
+    #expect(newest.contextCounts["B"] == nil)
+    for index in 0..<7 {
+        store.record(output: "表記\(index)", for: "よみ", nowEpochMs: Int64(index))
+    }
+    #expect(store.outputs(for: "ヨミ") == (1..<7).reversed().map { "表記\($0)" })
+}
+
+@MainActor @Test func learningModeReadOnlyAndDisabledRespectPersistenceAndReadContracts() throws {
+    try withDictionaryLearningState { directory, _ in
+        let model = testCandidate(word: "果糖", ruby: "カトウ", composingCount: .inputCount(3))
+        let chosen = testCandidate(word: "加藤", ruby: "カトウ", composingCount: .inputCount(3))
+        let id = try #require(cacheLearningCandidates([chosen]))
+        #expect(commit_learning_candidate_with_explicit(candidateId: id, commitKind: 0, explicitSelection: true))
+        let overrides = directory.appending(path: "selection-overrides.json")
+        let saved = try Data(contentsOf: overrides)
+
+        currentLearningType = .onlyOutput
+        let readOnlyID = try #require(cacheLearningCandidates([chosen], allowReadOnlyDeletion: true))
+        #expect(commit_learning_candidate_with_explicit(candidateId: readOnlyID, commitKind: 0, explicitSelection: true))
+        #expect(try Data(contentsOf: overrides) == saved)
+        #expect(prioritizeLearningSelectionOverrides([model, chosen], ruby: "かとう") { $0 }.first?.text == "加藤")
+
+        currentLearningType = .nothing
+        #expect(!forget_learning_candidate(candidateId: readOnlyID))
+        #expect(prioritizeLearningSelectionOverrides([model, chosen], ruby: "かとう") { $0 }.first?.text == "果糖")
+        #expect(try Data(contentsOf: overrides) == saved)
+        currentLearningType = .onlyOutput
+        #expect(forget_learning_candidate(candidateId: readOnlyID))
+        loadLearningSelectionOverrides()
+        #expect(learningSelectionOverrides.isEmpty)
+        #expect(reset_learning_memory())
+
+        currentLearningType = .nothing
+        #expect(reset_learning_memory())
+        #expect(!FileManager.default.fileExists(atPath: overrides.path))
+    }
+}
+
+private func largeDictionaryFixture() -> [UserDictionaryEntry] {
+    let positions: [UserDictionaryPos] = [.properNoun, .commonNoun, .sahenNoun, .symbol, .shortcut]
+    let kana = Array("あいうえおかきくけこ")
+    return (0...10_000).map { index in
+        let reading = "じしょ" + String(String(index).map { kana[$0.wholeNumberValue!] })
+        return UserDictionaryEntry(reading: reading, word: "登録語\(index)", pos: positions[index % positions.count])
+    }
+}
+
+@Test func userDictionaryPosPresetsMapToExpectedCidsAndStableScoresAt10000Entries() {
+    let snapshot = UserDictionarySnapshot(entries: largeDictionaryFixture(), experimentalTypoCorrection: true)
+    #expect(snapshot.entries.count == 10_000)
+    #expect(snapshot.shortcuts.count == 2000)
+    #expect(Array(snapshot.entries.prefix(5)).map(\.lcid) == [1288, 1285, 1283, 5, 1288])
+    #expect(snapshot.entries.allSatisfy {
+        $0.lcid == $0.rcid && $0.rcid == $0.mid &&
+        $0.value() >= -6.5 && $0.metadata.contains(.isFromUserDictionary) &&
+        !$0.metadata.contains(.isKeyboardTypoCorrection)
+    })
+    #expect(abs(snapshot.entries[9998].value() - (-5.9998)) < 0.0001)
+    #expect(abs(snapshot.entries[9999].value() - (-1.09999)) < 0.0001)
+}
+
+@MainActor @Test func userDictionary10000EntryLoadCompletesWithinBudget() throws {
+    let start = ContinuousClock.now
+    let snapshot = UserDictionarySnapshot(entries: largeDictionaryFixture(), experimentalTypoCorrection: true)
+    let elapsed = start.duration(to: .now)
+    #expect(snapshot.entries.count == 10_000)
+    #expect(elapsed < .seconds(5), "LOUDS build took \(elapsed)")
+    let packageRoot = packageRootURL()
+    let testConverter = KanaKanjiConverter(dictionaryURL: packageRoot.appending(path: "azooKey_dictionary_storage/Dictionary"), preloadDictionary: false)
+    testConverter.installPreparedDynamicUserDictionary(snapshot.conversion)
+    let options = testLearningConvertRequestOptions(memoryURL: packageRoot)
+    for index in [0, 1, 2, 3, 9998, 9999] {
+        let word = snapshot.entries[index]
+        var input = ComposingText()
+        input.insertAtCursorPosition(word.ruby, inputStyle: .direct)
+        let candidates = testConverter.requestCandidates(input, options: options).mainResults
+        #expect(candidates.contains { $0.text == word.word && (index != 9999 || !$0.isLearningTarget) },
+                "\(index) \(word.ruby): \(candidates.map { ($0.text, $0.isLearningTarget) })")
+        testConverter.stopComposition()
+    }
+    print("10,000-entry LOUDS build:", elapsed, "6 public conversion lookups")
+}
+
+@Test func userDictionaryDebouncedReloadCoalescesRapidConfigUpdates() async throws {
+    let reloader = UserDictionaryReloader(delay: .milliseconds(30))
+    let builds = Mutex<[Int]>([])
+    for index in 0..<5 {
+        reloader.schedule {
+            builds.withLock { $0.append(index) }
+            return UserDictionarySnapshot(entries: [.init(reading: "よみ", word: "更新\(index)")], experimentalTypoCorrection: false)
+        }
+    }
+    var published: UserDictionarySnapshot?
+    for _ in 0..<100 where published == nil {
+        try await Task.sleep(for: .milliseconds(10))
+        published = reloader.takePending()
+    }
+    #expect(published?.entries.map(\.word) == ["更新4"])
+    #expect(builds.withLock { $0 } == [4])
+    #expect(reloader.takePending() == nil)
+}
+
+@Test func loadUserDictionaryEntriesFallsBackToLegacyWhenDedicatedFileIsAbsent() throws {
+    let dir = FileManager.default.temporaryDirectory
+        .appending(path: "azookey-user-dict-load-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let dictionaryURL = dir.appending(path: "user-dictionary.json")
+    let legacy = [UserDictionaryEntry(reading: "ぜろ", word: "Zero", pos: .properNoun)]
+    #expect(loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacy) == legacy)
+
+    let v1Json = #"{"version":1,"entries":[{"reading":"めあど","word":"a@example.com","pos":"shortcut"}]}"#
+    try v1Json.write(to: dictionaryURL, atomically: true, encoding: .utf8)
+    #expect(loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacy) == [
+        UserDictionaryEntry(reading: "めあど", word: "a@example.com", pos: .shortcut)
+    ])
+
+    try #"{"version":2,"entries":[]}"#.write(to: dictionaryURL, atomically: true, encoding: .utf8)
+    #expect(loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacy) == nil)
+
+    try "{not json".write(to: dictionaryURL, atomically: true, encoding: .utf8)
+    #expect(loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacy) == nil)
+}
+
+@Test func userDictionaryReloaderInvalidatePendingDiscardsInFlightBuild() async throws {
+    let reloader = UserDictionaryReloader(delay: .milliseconds(25))
+    let built = Mutex(false)
+    reloader.schedule {
+        built.withLock { $0 = true }
+        return UserDictionarySnapshot(
+            entries: [.init(reading: "ふるい", word: "旧辞書")],
+            experimentalTypoCorrection: false
+        )
+    }
+    reloader.invalidatePending()
+    try await Task.sleep(for: .milliseconds(70))
+    #expect(!built.withLock { $0 })
+    #expect(reloader.takePending() == nil)
+}
+
+@MainActor @Test func flushLearningMemoryPersistsDirtyStoresOnly() throws {
+    try withDictionaryLearningState { directory, _ in
+        let selection = directory.appending(path: "selection-overrides.json")
+        let bigrams = directory.appending(path: postCompositionBigramsFilename)
+        #expect(flush_learning_memory())
+        #expect(!FileManager.default.fileExists(atPath: selection.path))
+        #expect(!FileManager.default.fileExists(atPath: bigrams.path))
+        learningSelectionOverrides.record(output: "橋", for: "はし")
+        learningSelectionOverridesDirty = true
+        set_private_input(true)
+        #expect(!flush_learning_memory())
+        #expect(!FileManager.default.fileExists(atPath: selection.path))
+        set_private_input(false)
+        #expect(flush_learning_memory())
+        let saved = try JSONDecoder().decode(LearningSelectionStore.self, from: Data(contentsOf: selection))
+        #expect(saved.outputs(for: "ハシ") == ["橋"])
+        #expect(!FileManager.default.fileExists(atPath: bigrams.path))
+        try Data("sentinel".utf8).write(to: selection)
+        #expect(flush_learning_memory())
+        #expect(try Data(contentsOf: selection) == Data("sentinel".utf8))
+    }
+}
+
+@MainActor @Test func resetConversionScopeClearsLearningMemorySelectionsAndBigrams() throws {
+    try withDictionaryLearningState { directory, _ in
+        let first = testCandidate(word: "今日は", ruby: "キョウハ", composingCount: .inputCount(4))
+        let second = testCandidate(word: "天気が", ruby: "テンキガ", composingCount: .inputCount(4))
+        let one = try #require(cacheLearningCandidates([first]))
+        #expect(commit_learning_candidate(candidateId: one, commitKind: 0))
+        config["context"] = "今日は"
+        let two = try #require(cacheLearningCandidates([second]))
+        #expect(commit_learning_candidate(candidateId: two, commitKind: 0))
+        #expect(postCompositionBigramStore.count == 1)
+        #expect(learningSelectionOverrides.outputCount == 2)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).count > 2)
+        currentLearningType = .nothing
+        #expect(reset_learning_memory())
+        #expect(learningSelectionOverrides.isEmpty)
+        #expect(postCompositionBigramStore.count == 0)
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
+    }
+}
+
+@MainActor @Test func modelFirstAndPreparedUserDictionaryRegressionsWithRealNanoV41() throws {
+    let packageRoot = packageRootURL()
+    let model = packageRoot.deletingLastPathComponent().deletingLastPathComponent()
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+    try #require(FileManager.default.fileExists(atPath: model.path))
+    let emoji = packageRoot.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
+    try withDictionaryLearningState { directory, _ in
+        func convert(_ reading: String, context: String = "") -> [Candidate] {
+            var input = ComposingText()
+            input.insertAtCursorPosition(reading, inputStyle: .direct)
+            let options = optionsForZenzaiConversion(from: makeConvertRequestOptions(
+                context: context, zenzaiEnabled: true, runtimeDirectoryURL: directory, emojiDictionaryURL: emoji,
+                zenzaiWeightURL: model, profile: "", learningType: .nothing, experimentalKeyboardTypoCorrection: false
+            ))
+            return converter.requestCandidates(input, options: options).mainResults
+        }
+        let cases = [
+            (UserDictionaryEntry(reading: "あおみの", word: "碧海乃"), "あおみの", "碧海乃"),
+            (UserDictionaryEntry(reading: "ぜろこん", word: "ZeroConvert"), "ぜろこんをつかう", "ZeroConvertを使う"),
+            (UserDictionaryEntry(reading: "らすと", word: "Rust"), "らすとでかく", "Rustで書く"),
+            (UserDictionaryEntry(reading: "めあど", word: "test@example.com", pos: .shortcut), "めあど", "test@example.com"),
+            (UserDictionaryEntry(reading: "かおもじ", word: "(^o^)", pos: .symbol), "かおもじ", "(^o^)"),
+        ]
+        let dictionary = UserDictionarySnapshot(entries: cases.map { $0.0 }, experimentalTypoCorrection: false)
+        converter.installPreparedDynamicUserDictionary(dictionary.conversion)
+        for (entry, reading, expected) in cases {
+            print("Prepared dictionary model probe: \(expected)")
+            let options = convert(reading)
+            #expect(options.contains { $0.text == expected && $0.data.contains { $0.word == entry.word } },
+                    "\(expected): \(options.map(\.text))")
+            #expect(convert(reading).contains { $0.text == expected })
+        }
+        let context = "ご飯を食べるのに"
+        let options = convert("はし", context: context)
+        let baseline = try #require(options.first?.text)
+        #expect(baseline != "橋")
+        #expect(options.contains { $0.text == "橋" })
+        learningSelectionOverrides.record(output: "橋", for: "はし", explicit: true)
+        let explicit = prioritizeLearningSelectionOverrides(options, ruby: "はし", leftContext: context) { $0 }
+        #expect(explicit.first?.text == baseline)
+        learningSelectionOverrides = LearningSelectionStore()
+        learningSelectionOverrides.record(output: "橋", for: "はし", explicit: false)
+        let implicit = prioritizeLearningSelectionOverrides(
+            options, ruby: "はし", leftContext: context, candidate: { $0 }, synthesizeElement: { $0 }
+        )
+        #expect(implicit.first?.text == baseline)
+        print("Model-first context probe:", baseline, explicit.first?.text ?? "", implicit.first?.text ?? "")
+    }
+}

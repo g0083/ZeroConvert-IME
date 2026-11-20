@@ -7,6 +7,59 @@ pub const PREDICTIVE: u64 = 999902;
 pub const TRANSLATION: u64 = 999904;
 pub const FIRST_PRESENTATION_WAIT_MS: u64 = 200;
 
+/// Strength preset controlling automatic typo-correction thresholds (Plan C / B / A).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoTypoCorrectionStrength {
+    Off,
+    Conservative,
+    #[default]
+    Standard,
+    Aggressive,
+}
+
+impl AutoTypoCorrectionStrength {
+    pub fn is_enabled(self) -> bool {
+        self != Self::Off
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Conservative => "conservative",
+            Self::Standard => "standard",
+            Self::Aggressive => "aggressive",
+        }
+    }
+
+    pub fn from_str_lossy(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "off" | "disabled" | "none" | "false" => Self::Off,
+            "conservative" | "low" | "cautious" | "plan_c" => Self::Conservative,
+            "aggressive" | "high" | "strong" | "plan_a" => Self::Aggressive,
+            _ => Self::Standard,
+        }
+    }
+
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::Conservative => 1,
+            Self::Standard => 2,
+            Self::Aggressive => 3,
+        }
+    }
+
+    pub const fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Off,
+            1 => Self::Conservative,
+            3 => Self::Aggressive,
+            _ => Self::Standard,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub struct AssistRequestPlan {
     pub correction: bool,
@@ -122,6 +175,7 @@ pub struct Acceptance {
 pub struct CorrectionState {
     accepted: Vec<Acceptance>,
     protected: Vec<String>,
+    pub rejected_reading: Option<String>,
     pub rejected_surface: Option<String>,
     pub hold_auto_commit: bool,
     undo: Option<CorrectionUndo>,
@@ -130,40 +184,58 @@ pub struct CorrectionState {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CorrectionUndo {
+    #[serde(default)]
+    reading: String,
     surface: String,
     accepted: Vec<Acceptance>,
     protected: Vec<String>,
     hold_auto_commit: bool,
+    #[serde(default)]
+    edited_after_apply: bool,
 }
 
 impl CorrectionState {
     pub fn is_applied(&self) -> bool {
+        self.undo
+            .as_ref()
+            .is_some_and(|undo| !undo.edited_after_apply)
+    }
+
+    pub fn can_revert(&self) -> bool {
         self.undo.is_some()
     }
 
-    /// The caller installs this mutated copy only after the editor accepted
-    /// the replacement. Failed editor transactions retain the previous state.
-    pub fn apply(
-        &mut self,
+    fn can_install(
+        &self,
         reading: &str,
         surface: &str,
         explicit: bool,
         pending_romaji: bool,
     ) -> bool {
-        if reading.is_empty()
-            || reading.chars().count() > 512
-            || surface.trim().is_empty()
-            || surface.chars().count() > 512
-            || self.is_applied()
-            || (!explicit && pending_romaji)
-        {
-            return false;
-        }
+        !reading.is_empty()
+            && reading.chars().count() <= 512
+            && !surface.trim().is_empty()
+            && surface.chars().count() <= 512
+            && !self.is_applied()
+            && (explicit || !pending_romaji)
+    }
+
+    fn install_correction(
+        &mut self,
+        reading: &str,
+        surface: &str,
+        explicit: bool,
+        undo_accepted: Vec<Acceptance>,
+        undo_protected: Vec<String>,
+        undo_hold_auto_commit: bool,
+    ) {
         self.undo = Some(CorrectionUndo {
+            reading: reading.into(),
             surface: surface.into(),
-            accepted: self.accepted.clone(),
-            protected: self.protected.clone(),
-            hold_auto_commit: self.hold_auto_commit,
+            accepted: undo_accepted,
+            protected: undo_protected,
+            hold_auto_commit: undo_hold_auto_commit,
+            edited_after_apply: false,
         });
         if explicit {
             self.accepted.push(Acceptance {
@@ -179,7 +251,68 @@ impl CorrectionState {
             self.protected.remove(0);
         }
         self.hold_auto_commit = true;
+        self.rejected_reading = None;
         self.rejected_surface = None;
+    }
+
+    /// The caller installs this mutated copy only after the editor accepted
+    /// the replacement. Failed editor transactions retain the previous state.
+    pub fn apply(
+        &mut self,
+        reading: &str,
+        surface: &str,
+        explicit: bool,
+        pending_romaji: bool,
+    ) -> bool {
+        if !self.can_install(reading, surface, explicit, pending_romaji) {
+            return false;
+        }
+        let undo_accepted = self.accepted.clone();
+        let undo_protected = self.protected.clone();
+        let undo_hold = self.hold_auto_commit;
+        self.install_correction(reading, surface, explicit, undo_accepted, undo_protected, undo_hold);
+        true
+    }
+
+    /// Replaces the currently active automatic correction with a context-refined
+    /// one while retaining the pre-initial-apply baseline for undo/reversion.
+    pub fn refine(
+        &mut self,
+        origin_reading: &str,
+        surface: &str,
+        explicit: bool,
+        pending_romaji: bool,
+    ) -> bool {
+        if !self.can_install(origin_reading, surface, explicit, pending_romaji) {
+            return false;
+        }
+        let Some(prev_undo) = self.undo.take() else {
+            return self.apply(origin_reading, surface, explicit, pending_romaji);
+        };
+        self.accepted = prev_undo.accepted.clone();
+        self.protected = prev_undo.protected.clone();
+        self.install_correction(
+            origin_reading,
+            surface,
+            explicit,
+            prev_undo.accepted,
+            prev_undo.protected,
+            prev_undo.hold_auto_commit,
+        );
+        true
+    }
+
+    /// Silently reverts an automatic correction after growing context shows the
+    /// unaltered input is valid, dropping undo and releasing auto-commit hold.
+    pub fn auto_revert(&mut self, origin_reading: &str, reverted_surface: &str) -> bool {
+        let Some(undo) = self.undo.take() else {
+            return false;
+        };
+        self.accepted = undo.accepted;
+        self.protected = undo.protected;
+        self.hold_auto_commit = false;
+        self.rejected_reading = (!origin_reading.is_empty()).then(|| origin_reading.into());
+        self.rejected_surface = (!reverted_surface.is_empty()).then(|| reverted_surface.into());
         true
     }
 
@@ -190,6 +323,7 @@ impl CorrectionState {
         self.accepted = undo.accepted;
         self.protected = undo.protected;
         self.hold_auto_commit = undo.hold_auto_commit;
+        self.rejected_reading = (!undo.reading.is_empty()).then_some(undo.reading);
         self.rejected_surface = Some(undo.surface);
         true
     }
@@ -198,8 +332,38 @@ impl CorrectionState {
         if !self.is_applied() {
             self.hold_auto_commit = false;
         }
-        self.undo = None;
+        if let Some(undo) = self.undo.as_mut() {
+            undo.edited_after_apply = true;
+        }
+        self.rejected_reading = None;
         self.rejected_surface = None;
+    }
+
+    pub fn discard_undo(&mut self) {
+        self.undo = None;
+    }
+
+    /// Suppresses exact matches and boomerang re-corrections of a differentially reverted prefix.
+    pub fn is_rejected(&self, input: &str, candidate: &str) -> bool {
+        let Some(rejected_surface) = self.rejected_surface.as_deref() else {
+            return false;
+        };
+        if candidate == rejected_surface {
+            return true;
+        }
+        if let Some(orig) = self.rejected_reading.as_deref() {
+            if !orig.is_empty() && !rejected_surface.is_empty() {
+                if let (Some(in_tail), Some(cand_tail)) = (
+                    input.strip_prefix(orig),
+                    candidate.strip_prefix(rejected_surface),
+                ) {
+                    if !in_tail.is_empty() && in_tail == cand_tail {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     pub fn acceptances_for_commit(&self, displayed: &str) -> Vec<Acceptance> {
@@ -298,11 +462,23 @@ pub fn dispatch(value: &str) -> Result<serde_json::Value, String> {
             request["explicit"].as_bool().unwrap_or(false),
             request["pendingRomaji"].as_bool().unwrap_or(false)
         )),
+        "refine" => json!(state.refine(
+            reading,
+            surface,
+            request["explicit"].as_bool().unwrap_or(false),
+            request["pendingRomaji"].as_bool().unwrap_or(false)
+        )),
         "revert" => json!(state.revert()),
+        "autoRevert" => json!(state.auto_revert(reading, surface)),
         "edited" => {
             state.edited();
             Value::Null
         }
+        "discardUndo" => {
+            state.discard_undo();
+            Value::Null
+        }
+        "isRejected" => json!(state.is_rejected(reading, surface)),
         "acceptances" => json!(state.acceptances_for_commit(surface)),
         "committed" => json!(state.committed(surface)),
         "fixedPrefix" => json!(state.fixed_prefix(reading)),
@@ -450,5 +626,149 @@ mod tests {
             assist_reading("しました", "しました", false),
             Some("しました")
         );
+    }
+
+    #[test]
+    fn strength_lossy_and_u8_roundtrip_and_persistent_diff_undo() {
+        for (raw, expected) in [
+            ("off", AutoTypoCorrectionStrength::Off),
+            ("disabled", AutoTypoCorrectionStrength::Off),
+            ("none", AutoTypoCorrectionStrength::Off),
+            ("false", AutoTypoCorrectionStrength::Off),
+            ("conservative", AutoTypoCorrectionStrength::Conservative),
+            ("plan-c", AutoTypoCorrectionStrength::Conservative),
+            ("low", AutoTypoCorrectionStrength::Conservative),
+            ("standard", AutoTypoCorrectionStrength::Standard),
+            ("aggressive", AutoTypoCorrectionStrength::Aggressive),
+            ("plan_a", AutoTypoCorrectionStrength::Aggressive),
+            ("strong", AutoTypoCorrectionStrength::Aggressive),
+            ("unknown", AutoTypoCorrectionStrength::Standard),
+        ] {
+            assert_eq!(AutoTypoCorrectionStrength::from_str_lossy(raw), expected);
+        }
+        for preset in [
+            AutoTypoCorrectionStrength::Off,
+            AutoTypoCorrectionStrength::Conservative,
+            AutoTypoCorrectionStrength::Standard,
+            AutoTypoCorrectionStrength::Aggressive,
+        ] {
+            assert_eq!(AutoTypoCorrectionStrength::from_u8(preset.to_u8()), preset);
+            assert_eq!(preset.is_enabled(), preset != AutoTypoCorrectionStrength::Off);
+        }
+
+        let mut state = CorrectionState::default();
+        assert!(state.apply("きょおは", "きょうは", false, false));
+        assert!(state.is_applied());
+        assert!(state.can_revert());
+
+        // First edit keeps can_revert and hold_auto_commit, drops is_applied.
+        state.edited();
+        assert!(!state.is_applied());
+        assert!(state.can_revert());
+        assert!(state.hold_auto_commit);
+
+        // Second edit drops hold_auto_commit, still allows explicit differential revert.
+        state.edited();
+        assert!(!state.hold_auto_commit);
+        assert!(state.can_revert());
+
+        // Revert records both reading and surface to block boomerang re-corrections.
+        assert!(state.revert());
+        assert!(!state.can_revert());
+        assert!(state.is_rejected("きょおは", "きょうは"));
+        assert!(state.is_rejected("きょおはいいてんき", "きょうはいいてんき"));
+        assert!(!state.is_rejected("きょおはいいてんき", "きょうは良いてんき"));
+
+        // A second apply after edited replaces undo while keeping accepted/protected.
+        assert!(state.apply("がこう", "学校", true, false));
+        state.edited();
+        assert!(state.apply("いぃ", "いい", true, false));
+        assert_eq!(state.acceptances_for_commit("学校がいい").len(), 2);
+        state.discard_undo();
+        assert!(!state.can_revert());
+        assert_eq!(state.acceptances_for_commit("学校がいい").len(), 2);
+    }
+
+    #[test]
+    fn refine_preserves_pre_initial_baseline_and_auto_revert_clears_undo_and_blocks_boomerang() {
+        let mut state = CorrectionState::default();
+        assert!(state.apply("きょおは", "きょうは", false, false));
+        state.edited();
+        assert!(state.refine("きょおはし", "きょおはし？", false, false));
+        assert!(state.is_applied());
+        assert!(state.can_revert());
+        assert_eq!(state.fixed_prefix("きょおはし？"), "きょおはし？");
+
+        state.edited();
+        assert!(!state.is_applied());
+        // Second refinement replaces superseded protected prefix and preserves true origin acceptance on explicit.
+        assert!(state.refine("しゅてんします", "しゅってんします", true, false));
+        assert_eq!(state.fixed_prefix("しゅってんします"), "しゅってんします");
+        assert!(state.acceptances_for_commit("今日出展します").is_empty());
+        assert_eq!(
+            state.acceptances_for_commit("しゅってんします"),
+            vec![Acceptance {
+                reading: "しゅてんします".into(),
+                surface: "しゅってんします".into(),
+            }]
+        );
+        // After revert, neither intermediate auto-applied acceptance nor protected entry leaks.
+        assert!(state.revert());
+        assert!(!state.can_revert());
+        assert!(state.acceptances_for_commit("しゅってんします").is_empty());
+        assert_eq!(state.fixed_prefix("きょうは"), "");
+
+        // auto_revert clears can_revert and hold_auto_commit, blocks boomerang, and clears on next edit.
+        assert!(state.apply("しゅてん", "しゅうてん", false, false));
+        state.edited();
+        assert!(state.auto_revert("しゅてんどうじ", "しゅうてんどうじ"));
+        assert!(!state.can_revert());
+        assert!(!state.hold_auto_commit);
+        assert!(state.is_rejected("しゅてんどうじ", "しゅうてんどうじ"));
+        state.edited();
+        assert!(!state.is_rejected("しゅてんどうじ", "しゅうてんどうじ"));
+
+        // Verify JNI dispatch exposes refine and autoRevert.
+        let applied = dispatch(
+            &serde_json::json!({
+                "op": "apply",
+                "state": {},
+                "reading": "しゅてん",
+                "surface": "しゅうてん",
+                "explicit": false,
+                "pendingRomaji": false,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let edited = dispatch(
+            &serde_json::json!({"op": "edited", "state": applied["state"]}).to_string(),
+        )
+        .unwrap();
+        let refined = dispatch(
+            &serde_json::json!({
+                "op": "refine",
+                "state": edited["state"],
+                "reading": "しゅてんし",
+                "surface": "しゅってんし",
+                "explicit": false,
+                "pendingRomaji": false,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(refined["result"], true);
+        let reverted = dispatch(
+            &serde_json::json!({
+                "op": "autoRevert",
+                "state": refined["state"],
+                "reading": "しゅてんどうじ",
+                "surface": "しゅうてんどうじ",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(reverted["result"], true);
+        assert!(reverted["state"]["undo"].is_null());
     }
 }

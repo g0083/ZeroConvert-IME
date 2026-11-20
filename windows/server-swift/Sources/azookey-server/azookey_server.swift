@@ -1,5 +1,6 @@
 import KanaKanjiConverterModule
 import Foundation
+import Dispatch
 import ffi
 
 private func executableDirectoryURL() -> URL? {
@@ -29,7 +30,7 @@ nonisolated(unsafe) var composingTextSnapshots: [ComposingText] = []
 nonisolated(unsafe) var currentInputStyle: InputStyle = .roman2kana
 nonisolated(unsafe) var customRomajiTableEnabled = false
 nonisolated(unsafe) var currentLearningType: LearningType = .inputAndOutput
-nonisolated(unsafe) private var privateInputActive = false
+nonisolated(unsafe) private(set) var privateInputActive = false
 nonisolated(unsafe) var currentLearningMemoryDirectoryURL: URL?
 nonisolated(unsafe) var learningCandidateCache = LearningCandidateCache()
 nonisolated(unsafe) var learningSelectionOverrides = LearningSelectionStore()
@@ -43,7 +44,7 @@ nonisolated(unsafe) var config: [String : Any] = [
     "experimentalTypoCorrection": defaultKeyboardTypoCorrection,
 ]
 let defaultKeyboardTypoCorrection = true
-let maxUserDictionaryEntryCount = 50
+let maxUserDictionaryEntryCount = 10_000
 let minInputCountForZenzaiCandidates = 4
 let minHiraganaCountForZenzaiCandidates = 2
 let zenzaiWarmupRomanInput = "nihongo"
@@ -58,7 +59,8 @@ let cursorPrefixExactClauseSupplementCandidateThreshold = 5
 let maxLearningCandidateCacheBatchCount = 64
 let maxLearningCandidateCacheSlotCount = 8_192
 let maxLearningSelectionOverrideCount = 4_096
-let maxOutputsPerRuby = 5
+let maxOutputsPerRuby = 6
+private let maxContextsPerRecord = 4
 let learningSelectionOverridesFilename = "selection-overrides.json"
 let backgroundWarmupPreloadsDictionary = false
 let maxReconversionSurfaceCount = 128
@@ -67,7 +69,7 @@ let maxReconversionReadingCount = 4
 
 nonisolated(unsafe) var currentRequestId: UInt64 = 0
 
-struct ReconversionDictionaryEntry: Equatable {
+struct ReconversionDictionaryEntry: Equatable, Sendable {
     let reading: String
     let score: Float
 }
@@ -104,8 +106,16 @@ struct ReconversionDictionary {
         recordCount = count
     }
 
+    mutating func replacePreparedUserEntries(_ entries: [String: [ReconversionDictionaryEntry]]) {
+        userEntries = entries
+    }
+
     mutating func replaceUserEntries(_ dictionaryEntries: [DicdataElement]) {
-        userEntries = Dictionary(grouping: dictionaryEntries, by: \.word).mapValues { entries in
+        replacePreparedUserEntries(Self.makeUserEntries(dictionaryEntries))
+    }
+
+    static func makeUserEntries(_ dictionaryEntries: [DicdataElement]) -> [String: [ReconversionDictionaryEntry]] {
+        Dictionary(grouping: dictionaryEntries, by: \.word).mapValues { entries in
             Dictionary(
                 entries.map {
                     ($0.ruby, ReconversionDictionaryEntry(reading: $0.ruby, score: -4))
@@ -748,6 +758,10 @@ private func rebuildConverter() {
     converterDicdataStore = dicdataStore
     converter = KanaKanjiConverter(dicdataStore: dicdataStore)
     normalNBestSupplementConverter = KanaKanjiConverter(dicdataStore: dicdataStore)
+    if let installedUserDictionary {
+        converter.installPreparedDynamicUserDictionary(installedUserDictionary.conversion)
+        normalNBestSupplementConverter.installPreparedDynamicUserDictionary(installedUserDictionary.conversion)
+    }
     clearLastCommittedContinuation()
     clearPostCompositionPredictionState()
 }
@@ -920,6 +934,7 @@ struct LearningCandidateCache {
     private struct Batch {
         let firstId: UInt64
         let candidates: [Candidate]
+        let originalRanks: [Int]?
         var consumedOffsets: Set<Int> = []
         var isProtected = false
     }
@@ -945,7 +960,7 @@ struct LearningCandidateCache {
         self.batches = Array(repeating: nil, count: maxBatchCount)
     }
 
-    mutating func appendBatch(_ candidates: [Candidate]) -> UInt64? {
+    mutating func appendBatch(_ candidates: [Candidate], originalRanks: [Int]? = nil) -> UInt64? {
         guard !candidates.isEmpty, !idSpaceExhausted else {
             return nil
         }
@@ -978,7 +993,8 @@ struct LearningCandidateCache {
         let insertionIndex = physicalIndex(forLogicalIndex: batchCount)
         batches[insertionIndex] = Batch(
             firstId: firstId,
-            candidates: retainedCandidates
+            candidates: retainedCandidates,
+            originalRanks: originalRanks?.count == candidates.count ? originalRanks : nil
         )
         batchCount += 1
         slotCount += retainedCandidates.count
@@ -1037,6 +1053,10 @@ struct LearningCandidateCache {
     }
 
     mutating func consume(_ candidateId: UInt64) -> Candidate? {
+        consumeWithOriginalRank(candidateId)?.candidate
+    }
+
+    mutating func consumeWithOriginalRank(_ candidateId: UInt64) -> (candidate: Candidate, originalRank: Int)? {
         guard candidateId > 0 else {
             return nil
         }
@@ -1048,7 +1068,8 @@ struct LearningCandidateCache {
             return nil
         }
 
-        return batches[location.batchIndex]!.candidates[location.candidateIndex]
+        let batch = batches[location.batchIndex]!
+        return (batch.candidates[location.candidateIndex], batch.originalRanks?[location.candidateIndex] ?? location.candidateIndex)
     }
 
     mutating func removeAll() {
@@ -1141,10 +1162,11 @@ private func clearLearningCandidateCache() {
     learningCandidateCache.removeAll()
 }
 
-func cacheLearningCandidates(_ candidates: [Candidate]) -> UInt64? {
+func cacheLearningCandidates(_ candidates: [Candidate], allowReadOnlyDeletion: Bool = false) -> UInt64? {
     guard !privateInputActive else { return nil }
     recordRecentPublishedPostCompositionCandidates(candidates)
-    guard currentLearningType == .inputAndOutput else {
+    guard currentLearningType == .inputAndOutput
+          || (allowReadOnlyDeletion && currentLearningType == .onlyOutput) else {
         return nil
     }
 
@@ -1190,7 +1212,7 @@ func discardPinnedLearningCandidatesBeforeCompositionEdit() {
 }
 
 func normalizedLearningRuby(_ ruby: String) -> String {
-    ruby.unicodeScalars.reduce(into: "") { normalized, scalar in
+    ruby.precomposedStringWithCanonicalMapping.unicodeScalars.reduce(into: "") { normalized, scalar in
         let value = scalar.value
         let normalizedValue = switch value {
         case 0x3041...0x3096, 0x309D...0x309F:
@@ -1217,14 +1239,63 @@ private func learningSelectionOverridesURL() -> URL? {
     )
 }
 
-struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral {
-    private(set) var entries: [String: [String]] = [:]
-    // Maintain recency order in memory while preserving the flat `[String: [String]]` JSON schema.
-    private var recentRubies: [String] = []
+func learningEpochMilliseconds() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1000)
+}
 
-    var count: Int { entries.count }
-    var keys: Dictionary<String, [String]>.Keys { entries.keys }
-    var isEmpty: Bool { entries.isEmpty }
+func isValidLearningKey(_ value: String) -> Bool {
+    value.unicodeScalars.contains {
+        !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0)
+    }
+}
+
+struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral {
+    struct Record: Codable, Sendable {
+        var output: String
+        var explicitCount = 0
+        var implicitCount = 0
+        var lastUsedEpochMs: Int64
+        var contextCounts: [String: Int] = [:]
+        var recentContexts: [String] = []
+
+        private enum CodingKeys: String, CodingKey {
+            case output, explicitCount, implicitCount, lastUsedEpochMs, contextCounts, recentContexts
+        }
+
+        init(output: String, lastUsedEpochMs: Int64) {
+            self.output = output
+            self.lastUsedEpochMs = lastUsedEpochMs
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            output = try values.decode(String.self, forKey: .output)
+            explicitCount = min(max(try values.decode(Int.self, forKey: .explicitCount), 0), 1000)
+            implicitCount = min(max(try values.decode(Int.self, forKey: .implicitCount), 0), 1000)
+            lastUsedEpochMs = try values.decode(Int64.self, forKey: .lastUsedEpochMs)
+            let counts = try values.decode([String: Int].self, forKey: .contextCounts)
+            let ordered = try values.decodeIfPresent([String].self, forKey: .recentContexts) ?? []
+            var seen: Set<String> = []
+            recentContexts = Array((ordered + counts.keys.sorted()).filter {
+                isValidLearningKey($0) && (counts[$0] ?? 0) > 0 && seen.insert($0).inserted
+            }.prefix(maxContextsPerRecord))
+            contextCounts = Dictionary(uniqueKeysWithValues: recentContexts.map {
+                ($0, min(counts[$0] ?? 0, 1000))
+            })
+        }
+
+        func matchingContextCount(_ context: String) -> Int {
+            contextCounts.lazy.filter { context.hasSuffix($0.key) }.map(\.value).max() ?? 0
+        }
+    }
+
+    private var entriesByRuby: [String: [Record]] = [:]
+    // Maintained on mutation so prefix completion can stop after a few matches.
+    private var recentRubies: [String] = []
+    var count: Int { entriesByRuby.count }
+    var outputCount: Int { entriesByRuby.values.reduce(0) { $0 + $1.count } }
+    var keys: Dictionary<String, [Record]>.Keys { entriesByRuby.keys }
+    var isEmpty: Bool { entriesByRuby.isEmpty }
 
     init() {}
 
@@ -1235,7 +1306,7 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
     }
 
     subscript(ruby: String) -> String? {
-        get { entries[ruby]?.first }
+        get { records(for: ruby).first?.output }
         set {
             if let newValue {
                 record(output: newValue, for: ruby)
@@ -1245,108 +1316,145 @@ struct LearningSelectionStore: Codable, Sendable, ExpressibleByDictionaryLiteral
         }
     }
 
-    mutating func record(output: String, for ruby: String) {
-        var list = entries[ruby] ?? []
-        list.removeAll { $0 == output }
-        list.insert(output, at: 0)
-        if list.count > maxOutputsPerRuby {
-            list = Array(list.prefix(maxOutputsPerRuby))
+    mutating func record(
+        output: String, for ruby: String, leftContext: String = "", explicit: Bool = true,
+        nowEpochMs: Int64 = learningEpochMilliseconds()
+    ) {
+        let ruby = normalizedLearningRuby(ruby)
+        guard isValidLearningKey(ruby), isValidLearningKey(output) else { return }
+        var records = entriesByRuby[ruby] ?? []
+        var record = Record(output: output, lastUsedEpochMs: nowEpochMs)
+        if let index = records.firstIndex(where: { $0.output == output }) {
+            record = records.remove(at: index)
         }
-        entries[ruby] = list
+        record.lastUsedEpochMs = nowEpochMs
+        if explicit {
+            record.explicitCount = min(record.explicitCount + 1, 1000)
+        } else {
+            record.implicitCount = min(record.implicitCount + 1, 1000)
+        }
+        // Implicit commits must not turn an unrelated explicit choice into a contextual override.
+        let context = String(leftContext.suffix(12))
+        if explicit && isValidLearningKey(context) {
+            record.contextCounts[context] = min((record.contextCounts[context] ?? 0) + 1, 1000)
+            record.recentContexts.removeAll { $0 == context }
+            record.recentContexts.insert(context, at: 0)
+            if record.recentContexts.count > maxContextsPerRecord {
+                record.contextCounts.removeValue(forKey: record.recentContexts.removeLast())
+            }
+        }
+        records.insert(record, at: 0)
+        entriesByRuby[ruby] = Array(records.prefix(maxOutputsPerRuby))
         recentRubies.removeAll { $0 == ruby }
         recentRubies.insert(ruby, at: 0)
+        if entriesByRuby.count > maxLearningSelectionOverrideCount,
+           let oldest = entriesByRuby.keys.min(by: { ageOrder($0) < ageOrder($1) }) {
+            removeValue(forKey: oldest)
+        }
     }
 
-    func outputs(for ruby: String) -> [String] {
-        entries[ruby] ?? []
+    private func ageOrder(_ ruby: String) -> (Int64, String) {
+        (entriesByRuby[ruby]?.map(\.lastUsedEpochMs).max() ?? 0, ruby)
     }
+
+    func records(for ruby: String) -> [Record] { entriesByRuby[normalizedLearningRuby(ruby)] ?? [] }
+    func outputs(for ruby: String) -> [String] { records(for: ruby).map(\.output) }
 
     mutating func removeAll(keepingCapacity: Bool = false) {
-        entries.removeAll(keepingCapacity: keepingCapacity)
+        entriesByRuby.removeAll(keepingCapacity: keepingCapacity)
         recentRubies.removeAll(keepingCapacity: keepingCapacity)
     }
 
     @discardableResult
     mutating func removeValue(forKey key: String) -> [String]? {
-        recentRubies.removeAll { $0 == key }
-        return entries.removeValue(forKey: key)
+        let ruby = normalizedLearningRuby(key)
+        recentRubies.removeAll { $0 == ruby }
+        return entriesByRuby.removeValue(forKey: ruby)?.map(\.output)
     }
 
-    /// Drops one learned output while keeping the other outputs of the same reading,
-    /// so deleting a single candidate does not erase its siblings.
     @discardableResult
     mutating func remove(output: String, for ruby: String) -> Bool {
-        guard var list = entries[ruby] else {
-            return false
-        }
-        let originalCount = list.count
-        list.removeAll { $0 == output }
-        guard list.count != originalCount else {
-            return false
-        }
-        if list.isEmpty {
-            entries.removeValue(forKey: ruby)
-            recentRubies.removeAll { $0 == ruby }
+        let ruby = normalizedLearningRuby(ruby)
+        guard var records = entriesByRuby[ruby],
+              let index = records.firstIndex(where: { $0.output == output }) else { return false }
+        records.remove(at: index)
+        if records.isEmpty {
+            removeValue(forKey: ruby)
         } else {
-            entries[ruby] = list
+            entriesByRuby[ruby] = records
         }
         return true
     }
 
     func prefixMatches(
-        for prefixRuby: String,
-        maxCount: Int = 3,
-        expandedPrefixRubies: [String] = []
+        for prefixRuby: String, maxCount: Int = 3, expandedPrefixRubies: [String] = []
     ) -> [(ruby: String, output: String)] {
-        let normalizedExpansions = expandedPrefixRubies.compactMap { raw -> String? in
-            let normalized = normalizedLearningRuby(raw)
-            return normalized.count >= 2 ? normalized : nil
-        }
-        guard prefixRuby.count >= 2 || !normalizedExpansions.isEmpty else {
-            return []
-        }
-
+        let prefixes = expandedPrefixRubies.map(normalizedLearningRuby).filter { $0.count >= 2 }
+        let activePrefixes = prefixes.isEmpty ? [prefixRuby].filter { $0.count >= 2 } : prefixes
+        guard !activePrefixes.isEmpty, maxCount > 0 else { return [] }
         var results: [(ruby: String, output: String)] = []
-        let orderedRubies = recentRubies.count == entries.count ? recentRubies : entries.keys.sorted()
-        for ruby in orderedRubies {
-            guard ruby != prefixRuby, let outputs = entries[ruby] else {
-                continue
-            }
-            let matches = normalizedExpansions.isEmpty
-                ? ruby.hasPrefix(prefixRuby)
-                : normalizedExpansions.contains(where: { ruby.hasPrefix($0) })
-            guard matches else {
-                continue
-            }
-            for output in outputs {
-                results.append((ruby: ruby, output: output))
-                if results.count >= maxCount {
-                    return results
-                }
+        for ruby in recentRubies where ruby != prefixRuby && activePrefixes.contains(where: ruby.hasPrefix) {
+            for record in entriesByRuby[ruby] ?? [] {
+                results.append((ruby, record.output))
+                if results.count == maxCount { return results }
             }
         }
         return results
     }
 
+    private struct Snapshot: Codable {
+        let version: Int
+        let entriesByRuby: [String: [Record]]
+    }
+
+    private struct LegacySnapshot: Decodable {
+        let version: Int
+        let entriesByRuby: [String: [String]]
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let newFormat = try? container.decode([String: [String]].self) {
-            self.entries = newFormat
-        } else if let oldFormat = try? container.decode([String: String].self) {
-            self.entries = oldFormat.mapValues { [$0] }
+        if let snapshot = try? container.decode(Snapshot.self), snapshot.version == 2 {
+            for (ruby, records) in snapshot.entriesByRuby.sorted(by: { $0.key < $1.key }) {
+                let key = normalizedLearningRuby(ruby)
+                guard isValidLearningKey(key) else { continue }
+                var seen: Set<String> = []
+                entriesByRuby[key] = Array(((entriesByRuby[key] ?? []) + records)
+                    .filter { isValidLearningKey($0.output) }
+                    .sorted { ($0.lastUsedEpochMs, $0.explicitCount) > ($1.lastUsedEpochMs, $1.explicitCount) }
+                    .filter { seen.insert($0.output).inserted }.prefix(maxOutputsPerRuby))
+            }
+            entriesByRuby = entriesByRuby.filter { !$0.value.isEmpty }
+            recentRubies = entriesByRuby.keys.sorted { ageOrder($0) > ageOrder($1) }
+            for ruby in recentRubies.dropFirst(maxLearningSelectionOverrideCount) {
+                entriesByRuby.removeValue(forKey: ruby)
+            }
+            recentRubies = Array(recentRubies.prefix(maxLearningSelectionOverrideCount))
         } else {
-            self.entries = [:]
+            let legacy = if let flat = try? container.decode([String: [String]].self) {
+                flat
+            } else if let snapshot = try? container.decode(LegacySnapshot.self), snapshot.version == 1 {
+                snapshot.entriesByRuby
+            } else {
+                try container.decode([String: String].self).mapValues { [$0] }
+            }
+            let now = learningEpochMilliseconds()
+            for (ruby, outputs) in legacy.sorted(by: { $0.key < $1.key }).prefix(maxLearningSelectionOverrideCount) {
+                for (index, output) in outputs.prefix(maxOutputsPerRuby).enumerated().reversed() {
+                    record(output: output, for: ruby, nowEpochMs: now - Int64(index) * 1000)
+                }
+            }
         }
-        self.recentRubies = self.entries.keys.sorted()
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(entries)
+        try container.encode(Snapshot(version: 2, entriesByRuby: entriesByRuby))
     }
 }
 
 func loadLearningSelectionOverrides() {
+    guard !privateInputActive, !learningSelectionOverridesDirty else { return }
     guard currentLearningType != .nothing,
           let overridesURL = learningSelectionOverridesURL() else {
         learningSelectionOverrides.removeAll(keepingCapacity: false)
@@ -1370,10 +1478,13 @@ func loadLearningSelectionOverrides() {
     }
 }
 
-private func saveLearningSelectionOverrides() {
-    guard let overridesURL = learningSelectionOverridesURL() else {
-        return
-    }
+nonisolated(unsafe) var learningSelectionOverridesDirty = false
+
+@discardableResult
+private func saveLearningSelectionOverrides() -> Bool {
+    guard learningSelectionOverridesDirty else { return true }
+    guard !privateInputActive, currentLearningType != .nothing,
+          let overridesURL = learningSelectionOverridesURL() else { return false }
 
     do {
         ensureLearningMemoryDirectoryIfNeeded()
@@ -1381,39 +1492,25 @@ private func saveLearningSelectionOverrides() {
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(learningSelectionOverrides)
         try data.write(to: overridesURL, options: .atomic)
+        learningSelectionOverridesDirty = false
+        return true
     } catch {
-        serverLog(
-            "WARN",
-            "Failed to save learning selection overrides at \(overridesURL.path): \(error)"
-        )
+        serverLog("WARN", "Failed to save learning selection overrides at \(overridesURL.path): \(error)")
+        return false
     }
 }
 
-private func updateLearningSelectionOverride(_ candidate: Candidate) -> Bool {
-    guard candidate.isLearningTarget else {
+private func updateLearningSelectionOverride(
+    _ candidate: Candidate, context: String, explicit: Bool
+) -> Bool {
+    guard !privateInputActive, currentLearningType == .inputAndOutput, candidate.isLearningTarget else {
         return false
     }
-
     let ruby = learningCandidateRuby(candidate)
     let output = learningCandidateOutput(candidate)
-    guard !ruby.isEmpty, !output.isEmpty else {
-        return false
-    }
-
-    if learningSelectionOverrides.outputs(for: ruby).isEmpty,
-       learningSelectionOverrides.count >= maxLearningSelectionOverrideCount,
-       let evictedRuby = learningSelectionOverrides.keys.first {
-        _ = learningSelectionOverrides.removeValue(forKey: evictedRuby)
-    }
-    learningSelectionOverrides.record(output: output, for: ruby)
+    guard isValidLearningKey(ruby), isValidLearningKey(output) else { return false }
+    learningSelectionOverrides.record(output: output, for: ruby, leftContext: context, explicit: explicit)
     return true
-}
-
-private func recordLearningSelectionOverride(_ candidate: Candidate) {
-    guard updateLearningSelectionOverride(candidate) else {
-        return
-    }
-    saveLearningSelectionOverrides()
 }
 
 func synthesizeLearnedCandidate(
@@ -1438,120 +1535,122 @@ func synthesizeLearnedCandidate(
     )
 }
 
+nonisolated(unsafe) var currentUserDictionaryEntries: [DicdataElement] = []
+
 func prioritizeLearningSelectionOverrides<Element>(
     _ elements: [Element],
     ruby: String,
     expandedPrefixRubies: [String] = [],
+    leftContext: String = "",
+    nowEpochMs: Int64 = learningEpochMilliseconds(),
     candidate: (Element) -> Candidate,
     synthesizeElement: ((Candidate) -> Element)? = nil
 ) -> [Element] {
-    guard !privateInputActive, currentLearningType != .nothing else {
-        return elements
-    }
+    let mayReadLearning = !privateInputActive && currentLearningType != .nothing
     let normalizedRuby = normalizedLearningRuby(ruby)
-    let preferredOutputs = learningSelectionOverrides.outputs(for: normalizedRuby)
-    let predictiveEnabled = isPredictiveConversionEnabled()
-
-    func insertLearnedPrefixPredictions(into results: inout [Element]) {
-        guard predictiveEnabled,
-              let synthesizeElement,
-              normalizedRuby.count >= 2 || !expandedPrefixRubies.isEmpty else {
-            return
-        }
-        let prefixMatches = learningSelectionOverrides.prefixMatches(
-            for: normalizedRuby,
-            maxCount: 2,
-            expandedPrefixRubies: expandedPrefixRubies
-        )
-        guard !prefixMatches.isEmpty else {
-            return
-        }
-        // Keep at least Top 1 and all full-span exact conversions ahead of learned predictions,
-        // while promoting learned prefix matches above unlearned predictions and sub-clauses.
-        let splitIndex = results.indices.dropFirst().first { index in
-            candidate(results[index]).rubyCount != normalizedRuby.count
-        } ?? results.endIndex
-        let refComposingCount = (
-            elements.first(where: { candidate($0).rubyCount == normalizedRuby.count })
-                ?? elements.first
-        ).map { candidate($0).composingCount } ?? .inputCount(ruby.count)
-
-        var exactOutputs = Set(results[..<splitIndex].map { learningCandidateOutput(candidate($0)) })
-        var insertionIndex = splitIndex
-        for match in prefixMatches {
-            guard exactOutputs.insert(match.output).inserted else { continue }
-            if let existingIndex = results[insertionIndex...].firstIndex(where: {
-                learningCandidateOutput(candidate($0)) == match.output
-            }) {
-                let promoted = results.remove(at: existingIndex)
-                results.insert(promoted, at: insertionIndex)
-                insertionIndex += 1
-            } else {
-                let synth = synthesizeLearnedCandidate(
-                    word: match.output,
-                    ruby: match.ruby,
-                    composingCount: refComposingCount
-                )
-                results.insert(synthesizeElement(synth), at: insertionIndex)
-                insertionIndex += 1
-            }
-        }
-    }
-
-    if !preferredOutputs.isEmpty {
-        var prioritized: [Element] = []
-        var remaining = elements
-        var seenOutputs = Set<String>()
-
-        for preferredOutput in preferredOutputs {
-            if let matchedIndex = remaining.firstIndex(where: {
-                let c = candidate($0)
-                return learningCandidateRuby(c) == normalizedRuby && learningCandidateOutput(c) == preferredOutput
-            }) {
-                let matched = remaining.remove(at: matchedIndex)
-                prioritized.append(matched)
-                seenOutputs.insert(preferredOutput)
-            } else if let synthesizeElement, seenOutputs.insert(preferredOutput).inserted {
-                let refComposingCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
-                let synth = synthesizeLearnedCandidate(
-                    word: preferredOutput,
-                    ruby: normalizedRuby,
-                    composingCount: refComposingCount
-                )
-                prioritized.append(synthesizeElement(synth))
-            }
-        }
-
-        prioritized.append(contentsOf: remaining)
-        insertLearnedPrefixPredictions(into: &prioritized)
-        return prioritized
-    }
-
+    let exactRecords = mayReadLearning ? learningSelectionOverrides.records(for: normalizedRuby) : []
     var results = elements
-    if elements.count > 1 {
-        var firstIndices: [String: Int] = [:]
-        for (index, elem) in elements.enumerated() {
-            let c = candidate(elem)
-            let elemRuby = learningCandidateRuby(c)
-            if firstIndices[elemRuby] == nil {
-                firstIndices[elemRuby] = index
+    if !exactRecords.isEmpty {
+        let refCount = elements.first.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
+        let modelTopIsUserDict = elements.first.map {
+            candidate($0).data.contains {
+                $0.metadata.contains(.isFromUserDictionary) && !$0.metadata.contains(.isKeyboardTypoCorrection)
+            }
+        } ?? false
+        let ordered = exactRecords.map { ($0, $0.matchingContextCount(leftContext)) }.sorted {
+            if $0.1 != $1.1 { return $0.1 > $1.1 }
+            if $0.0.lastUsedEpochMs != $1.0.lastUsedEpochMs { return $0.0.lastUsedEpochMs > $1.0.lastUsedEpochMs }
+            if $0.1 == 0 && $0.0.explicitCount != $1.0.explicitCount {
+                return $0.0.explicitCount > $1.0.explicitCount
+            }
+            return $0.0.output < $1.0.output
+        }
+        var promoted = 0
+        var secondary: [LearningSelectionStore.Record] = []
+        func place(_ record: LearningSelectionStore.Record, at index: Int) -> Bool {
+            if let match = results.firstIndex(where: {
+                let item = candidate($0)
+                return learningCandidateRuby(item) == normalizedRuby && learningCandidateOutput(item) == record.output
+            }) {
+                guard match >= index else { return false }
+                let element = results.remove(at: match)
+                results.insert(element, at: index)
+                return true
+            }
+            guard record.explicitCount > 0, let synthesizeElement else { return false }
+            results.insert(synthesizeElement(synthesizeLearnedCandidate(
+                word: record.output, ruby: normalizedRuby, composingCount: refCount
+            )), at: index)
+            return true
+        }
+
+        for (record, contextCount) in ordered {
+            let age = Double(nowEpochMs) - Double(record.lastUsedEpochMs)
+            let recentOverride = leftContext.isEmpty
+                ? (age <= 86_400_000 || (record.explicitCount >= 2 && age <= 14 * 86_400_000))
+                : (record.explicitCount >= 3 && age <= 30 * 60_000)
+            if record.explicitCount > 0 && (contextCount > 0 || (recentOverride && !modelTopIsUserDict)) {
+                if place(record, at: promoted) { promoted += 1 }
+            } else if !leftContext.isEmpty || recentOverride || record.explicitCount == 0 {
+                secondary.append(record)
             }
         }
-        for (elemRuby, firstIdx) in firstIndices {
-            guard elemRuby != normalizedRuby,
-                  let preferred = learningSelectionOverrides.outputs(for: elemRuby).first else {
-                continue
-            }
-            if let targetIdx = results.firstIndex(where: {
-                let c = candidate($0)
-                return learningCandidateRuby(c) == elemRuby && learningCandidateOutput(c) == preferred
-            }), targetIdx != firstIdx {
-                results.swapAt(firstIdx, targetIdx)
-            }
+        var insertionIndex = min(max(promoted, 1), results.count)
+        for record in secondary {
+            if record.explicitCount == 0 && insertionIndex == 0 { continue }
+            if place(record, at: insertionIndex) { insertionIndex += 1 }
         }
     }
 
-    insertLearnedPrefixPredictions(into: &results)
+    guard isPredictiveConversionEnabled(), let synthesizeElement,
+          normalizedRuby.count >= 2 || !expandedPrefixRubies.isEmpty else { return results }
+    // All exact full-span candidates stay ahead of completions, even if there are interleaved subclauses.
+    var insertionIndex = results.lastIndex {
+        learningCandidateRuby(candidate($0)) == normalizedRuby
+    }.map { $0 + 1 } ?? min(1, results.count)
+    let ref = results.first { learningCandidateRuby(candidate($0)) == normalizedRuby } ?? results.first
+    let refCount = ref.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
+    var seenOutputs = Set(results[..<insertionIndex].map { learningCandidateOutput(candidate($0)) })
+
+    func insert(_ output: String, _ ruby: String, data: DicdataElement? = nil) -> Bool {
+        guard seenOutputs.insert(output).inserted else { return false }
+        if let match = results[insertionIndex...].firstIndex(where: {
+            learningCandidateOutput(candidate($0)) == output
+        }) {
+            let element = results.remove(at: match)
+            results.insert(element, at: insertionIndex)
+        } else {
+            var completion = synthesizeLearnedCandidate(word: output, ruby: ruby, composingCount: refCount)
+            if let data { completion.data = [data] }
+            results.insert(synthesizeElement(completion), at: insertionIndex)
+        }
+        insertionIndex += 1
+        return true
+    }
+
+    if mayReadLearning {
+        for match in learningSelectionOverrides.prefixMatches(
+            for: normalizedRuby, maxCount: 2, expandedPrefixRubies: expandedPrefixRubies
+        ) {
+            _ = insert(match.output, match.ruby)
+        }
+    }
+    guard normalizedRuby.count >= 2 else { return results }
+    if mayReadLearning {
+        for key in postCompositionContextLookupKeys(leftContext) {
+            for entry in postCompositionBigramStore.entries(for: key)
+            where entry.ruby != normalizedRuby && entry.ruby.hasPrefix(normalizedRuby) {
+                if insert(entry.surface, entry.ruby) { return results }
+            }
+        }
+    }
+    guard !currentUserDictionaryEntries.isEmpty else { return results }
+    let dictionaryMatches = installedUserDictionary?.prefixes[normalizedRuby] ?? []
+    if let entry = dictionaryMatches.first(where: {
+        $0.ruby != normalizedRuby && $0.ruby.hasPrefix(normalizedRuby) && !seenOutputs.contains($0.word)
+    }) {
+        _ = insert(entry.word, entry.ruby, data: entry)
+    }
     return results
 }
 
@@ -1634,6 +1733,7 @@ private struct GeneralSettings: Decodable {
 
 private struct LearningSettings: Decodable {
     let mode: String?
+    let strength: String?
 }
 
 private struct ZenzaiSettings: Decodable {
@@ -1644,14 +1744,182 @@ private struct ZenzaiSettings: Decodable {
     let model: String?
 }
 
-private struct UserDictionarySettings: Decodable {
+private struct UserDictionarySettings: Decodable, Sendable {
     let entries: [UserDictionaryEntry]?
 }
 
-private struct UserDictionaryEntry: Decodable {
+enum UserDictionaryPos: String, Decodable, Sendable {
+    case properNoun = "proper_noun"
+    case commonNoun = "common_noun"
+    case sahenNoun = "sahen_noun"
+    case shortcut
+    case symbol
+
+    var cid: Int {
+        switch self {
+        case .properNoun, .shortcut: 1288
+        case .commonNoun: 1285
+        case .sahenNoun: 1283
+        case .symbol: 5
+        }
+    }
+
+    func score(rank: Int) -> PValue {
+        self == .shortcut ? -1 - min(Float(rank) * 0.00001, 0.2) : -5 - min(Float(rank) * 0.0001, 1.5)
+    }
+}
+
+struct UserDictionaryEntry: Decodable, Equatable, Sendable {
     let reading: String
     let word: String
+    var pos: UserDictionaryPos? = nil
 }
+
+private struct UserDictionaryFile: Decodable {
+    let version: Int
+    let entries: [UserDictionaryEntry]
+}
+
+func loadUserDictionaryEntries(
+    dictionaryURL: URL,
+    legacyEntries: [UserDictionaryEntry]
+) -> [UserDictionaryEntry]? {
+    guard FileManager.default.fileExists(atPath: dictionaryURL.path) else {
+        return legacyEntries
+    }
+    do {
+        let file = try JSONDecoder().decode(UserDictionaryFile.self, from: Data(contentsOf: dictionaryURL))
+        guard file.version == 1 else {
+            serverLog("WARN", "LoadConfig: unsupported user dictionary version")
+            return nil
+        }
+        return file.entries
+    } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+        return legacyEntries
+    } catch {
+        serverLog("WARN", "LoadConfig: failed to read user dictionary: \(error)")
+        return nil
+    }
+}
+
+struct UserDictionarySnapshot: Sendable {
+    let entries: [DicdataElement]
+    let shortcuts: [DicdataElement]
+    let conversion: PreparedDynamicUserDictionary
+    let reverseEntries: [String: [ReconversionDictionaryEntry]]
+    let prefixes: [String: [DicdataElement]]
+
+    init(entries source: [UserDictionaryEntry], experimentalTypoCorrection: Bool) {
+        var registered: [DicdataElement] = []
+        var normal: [DicdataElement] = []
+        var shortcuts: [DicdataElement] = []
+        var seen: [String: Set<String>] = [:]
+        var prefixes: [String: [DicdataElement]] = [:]
+
+        for entry in source {
+            if registered.count == maxUserDictionaryEntryCount { break }
+            let ruby = normalizedLearningRuby(entry.reading.trimmingCharacters(in: .whitespacesAndNewlines))
+                .precomposedStringWithCanonicalMapping
+            let word = entry.word.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isValidLearningKey(ruby), isValidLearningKey(word),
+                  seen[ruby, default: []].insert(word).inserted else { continue }
+            let pos = entry.pos ?? .properNoun
+            let data = DicdataElement(word: word, ruby: ruby, cid: pos.cid, mid: pos.cid,
+                                      value: pos.score(rank: registered.count), metadata: .isFromUserDictionary)
+            registered.append(data)
+            if pos == .shortcut {
+                shortcuts.append(data)
+            } else {
+                normal.append(data)
+                var prefix = ""
+                // The conversion reading limit bounds useful prefix keys.
+                for character in ruby.prefix(maxConversionContinuationReadingCount) {
+                    prefix.append(character)
+                    guard prefix.count >= 2, prefix != ruby else { continue }
+                    // Full conversion and learned completions already occupy earlier slots.
+                    if prefixes[prefix, default: []].count < 64 {
+                        prefixes[prefix, default: []].append(data)
+                    }
+                }
+            }
+        }
+        self.entries = registered
+        self.shortcuts = shortcuts
+        self.prefixes = prefixes
+        self.reverseEntries = ReconversionDictionary.makeUserEntries(registered)
+        self.conversion = PreparedDynamicUserDictionary(
+            makeConversionDictionaryEntries(userEntries: normal, experimentalTypoCorrectionEnabled: experimentalTypoCorrection),
+            shortcuts: shortcuts
+        )
+    }
+}
+
+// Building the immutable LOUDS snapshot never touches a live converter. The
+// serialized host adopts only the newest completed generation.
+final class UserDictionaryReloader: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "azookey.user-dictionary", qos: .utility)
+    private let lock = NSLock()
+    private var generation = 0
+    private var pending: UserDictionarySnapshot?
+    private var work: DispatchWorkItem?
+    private let delay: DispatchTimeInterval
+
+    init(delay: DispatchTimeInterval = .milliseconds(300)) {
+        self.delay = delay
+    }
+
+    func schedule(_ build: @escaping @Sendable () -> UserDictionarySnapshot?) {
+        lock.lock()
+        generation += 1
+        let ticket = generation
+        pending = nil
+        work?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, let snapshot = build() else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            if ticket == self.generation { self.pending = snapshot }
+        }
+        work = item
+        lock.unlock()
+        queue.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    func invalidatePending() {
+        lock.lock()
+        generation += 1
+        pending = nil
+        work?.cancel()
+        work = nil
+        lock.unlock()
+    }
+
+    func takePending() -> UserDictionarySnapshot? {
+        guard lock.try() else { return nil }
+        defer { lock.unlock() }
+        let snapshot = pending
+        pending = nil
+        return snapshot
+    }
+}
+
+private let userDictionaryReloader = UserDictionaryReloader()
+nonisolated(unsafe) private var installedUserDictionary: UserDictionarySnapshot?
+
+private func installUserDictionarySnapshot(_ snapshot: UserDictionarySnapshot) {
+    installedUserDictionary = snapshot
+    currentUserDictionaryEntries = snapshot.entries
+    reconversionDictionary.replacePreparedUserEntries(snapshot.reverseEntries)
+    converter.installPreparedDynamicUserDictionary(snapshot.conversion)
+    normalNBestSupplementConverter.installPreparedDynamicUserDictionary(snapshot.conversion)
+    invalidateAutomaticConversionContinuationCache()
+}
+
+func adoptPendingUserDictionary() {
+    guard let snapshot = userDictionaryReloader.takePending() else { return }
+    installUserDictionarySnapshot(snapshot)
+}
+
 
 private struct RomajiTableSettings: Decodable {
     let rows: [RomajiTableRow]?
@@ -1660,10 +1928,6 @@ private struct RomajiTableSettings: Decodable {
 enum RomajiInputStyleSelection: Equatable {
     case roman2kana
     case custom
-}
-
-private func normalizeReading(_ reading: String) -> String {
-    reading.applyingTransform(.hiraganaToKatakana, reverse: false) ?? reading
 }
 
 func resolveRomajiInputStyleSelection(
@@ -2802,15 +3066,20 @@ func extendsKanaReading(_ candidate: Candidate, normalizedReading: String) -> Bo
     return learningCandidateRuby(candidate).hasPrefix(normalizedReading)
 }
 
-func promoteKanaReadingCompletion(in candidates: inout [Candidate], normalizedReading: String) {
+func promoteKanaReadingCompletion(
+    in candidates: inout [Candidate], normalizedReading: String, afterFullSpan: Bool = false
+) {
+    let insertionIndex = afterFullSpan
+        ? (candidates.lastIndex { learningCandidateRuby($0) == normalizedReading }.map { $0 + 1 } ?? 1)
+        : 1
     guard normalizedReading.count >= 2,
           let first = candidates.first,
           !extendsKanaReading(first, normalizedReading: normalizedReading),
           let index = candidates.dropFirst().firstIndex(where: {
               extendsKanaReading($0, normalizedReading: normalizedReading)
-          }), index > 1 else { return }
+          }), index > insertionIndex else { return }
     let completion = candidates.remove(at: index)
-    candidates.insert(completion, at: 1)
+    candidates.insert(completion, at: insertionIndex)
 }
 
 func cursorPrefixBoundaryFirstClauseResults(
@@ -2882,8 +3151,15 @@ private func requestNormalNBestSupplementCandidates(
     return converted
 }
 
+private func _flushLearningForConfigReload() -> Bool {
+    if flush_learning_memory() { return true }
+    serverLog("WARN", "LoadConfig deferred because pending learning could not be saved")
+    return false
+}
+
 @_silgen_name("LoadConfig")
 public func load_config() {
+    if !privateInputActive, !_flushLearningForConfigReload() { return }
     let loadedSettingsPath = settingsPath()
     var loadedSettings: AppSettings?
     var settingsLoadError: Error?
@@ -2909,19 +3185,6 @@ public func load_config() {
     let previousUsedCustomRomajiTable = customRomajiTableEnabled
     let previousLearningType = currentLearningType
     let previousLearningMemoryDirectoryURL = currentLearningMemoryDirectoryURL
-    var dynamicUserDictionary: [DicdataElement] = []
-    defer {
-        let conversionDictionary = makeConversionDictionaryEntries(
-            userEntries: dynamicUserDictionary,
-            experimentalTypoCorrectionEnabled:
-                (config["experimentalTypoCorrection"] as? Bool) ?? defaultKeyboardTypoCorrection
-        )
-        converter.importDynamicUserDictionary(conversionDictionary)
-        normalNBestSupplementConverter.importDynamicUserDictionary(conversionDictionary)
-        reconversionDictionary.replaceUserEntries(dynamicUserDictionary)
-        invalidateAutomaticConversionContinuationCache()
-    }
-
     config["enable"] = false
     config["profile"] = ""
     config["backend"] = "cpu"
@@ -2932,6 +3195,7 @@ public func load_config() {
     config["postCompositionPrediction"] = nil
     setRoman2KanaInputStyle()
     currentLearningType = .inputAndOutput
+    config["learningStrength"] = "model_first"
     currentLearningMemoryDirectoryURL = learningMemoryDirectoryURL(settingsPath: loadedSettingsPath)
 
     if let settings = loadedSettings {
@@ -2960,48 +3224,12 @@ public func load_config() {
 
         applyRomajiInputStyle(rows: settings.romaji_table?.rows)
         currentLearningType = learningType(for: settings.learning?.mode)
+        config["learningStrength"] = settings.learning?.strength ?? "model_first"
         config["experimentalTypoCorrection"] =
             settings.general?.experimental_typo_correction ?? defaultKeyboardTypoCorrection
         config["predictiveConversion"] =
             settings.general?.predictive_conversion ?? defaultPredictiveConversionEnabled
 
-        let sourceEntries = settings.user_dictionary?.entries ?? []
-        var seen: Set<String> = []
-        var priorityRank = 0
-        for entry in sourceEntries {
-            if dynamicUserDictionary.count >= maxUserDictionaryEntryCount {
-                break
-            }
-
-            let reading = entry.reading.trimmingCharacters(in: .whitespacesAndNewlines)
-            let word = entry.word.trimmingCharacters(in: .whitespacesAndNewlines)
-            if reading.isEmpty || word.isEmpty {
-                continue
-            }
-
-            let normalizedReading = normalizeReading(reading)
-            let key = normalizedReading + "\u{0}" + word
-            if seen.contains(key) {
-                continue
-            }
-            seen.insert(key)
-
-            let priorityAdjustedValue = PValue(-5 - Float(priorityRank) * 0.01)
-            dynamicUserDictionary.append(
-                DicdataElement(
-                    word: word,
-                    ruby: normalizedReading,
-                    cid: CIDData.固有名詞.cid,
-                    mid: MIDData.一般.mid,
-                    value: priorityAdjustedValue
-                )
-            )
-            priorityRank += 1
-        }
-
-        if sourceEntries.count > maxUserDictionaryEntryCount {
-            serverLog("WARN", "User dictionary entries are truncated to \(maxUserDictionaryEntryCount).")
-        }
     } else if let settingsLoadError {
         serverLog("ERROR", "Failed to read settings: \(settingsLoadError)")
     } else {
@@ -3044,9 +3272,32 @@ public func load_config() {
         clearLearningCandidateCache()
         clearPostCompositionPredictionState()
     }
-    ensureLearningMemoryDirectoryIfNeeded()
-    loadLearningSelectionOverrides()
-    loadPostCompositionBigrams()
+    let legacyEntries = loadedSettings?.user_dictionary?.entries ?? []
+    let dictionaryURL = loadedSettingsPath.deletingLastPathComponent().appendingPathComponent("user-dictionary.json")
+    let dictionaryTypoCorrection = currentExperimentalTypoCorrection
+    if installedUserDictionary == nil {
+        userDictionaryReloader.invalidatePending()
+        if let entries = loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacyEntries) {
+            installUserDictionarySnapshot(
+                UserDictionarySnapshot(entries: entries, experimentalTypoCorrection: dictionaryTypoCorrection)
+            )
+        }
+    } else {
+        userDictionaryReloader.schedule {
+            guard let entries = loadUserDictionaryEntries(dictionaryURL: dictionaryURL, legacyEntries: legacyEntries) else {
+                return nil
+            }
+            return UserDictionarySnapshot(entries: entries, experimentalTypoCorrection: dictionaryTypoCorrection)
+        }
+    }
+    invalidateAutomaticConversionContinuationCache()
+    if privateInputActive {
+        learningConfigNeedsLoad = true
+    } else {
+        ensureLearningMemoryDirectoryIfNeeded()
+        loadLearningSelectionOverrides()
+        loadPostCompositionBigrams()
+    }
 
     serverLog(
         "INFO",
@@ -3197,6 +3448,7 @@ public func has_active_composition() -> Bool {
 public func infer_reconversion_readings(
     surface: UnsafePointer<CChar>
 ) -> UnsafeMutablePointer<CChar>? {
+    adoptPendingUserDictionary()
     let surfaceString = String(cString: surface)
     let readings = reconversionDictionary.inferReadings(for: surfaceString)
     guard !readings.isEmpty else {
@@ -3550,119 +3802,104 @@ private func recordCommittedLearningContinuation(
 }
 
 @_silgen_name("CommitLearningCandidate")
-public func commit_learning_candidate(
-    candidateId: UInt64,
-    commitKind: Int32
+public func commit_learning_candidate(candidateId: UInt64, commitKind: Int32) -> Bool {
+    commit_learning_candidate_with_explicit(candidateId: candidateId, commitKind: commitKind, explicitSelection: false)
+}
+
+@_silgen_name("CommitLearningCandidateWithExplicit")
+public func commit_learning_candidate_with_explicit(
+    candidateId: UInt64, commitKind: Int32, explicitSelection: Bool
 ) -> Bool {
-    guard currentLearningType == .inputAndOutput else {
-        serverLog(
-            "DEBUG",
-            "CommitLearningCandidate: skipped learningType=\(currentLearningType) candidateId=\(candidateId) commitKind=\(commitKind)"
-        )
-        return true
+    withUnsafePointer(to: candidateId) { ids in
+        withUnsafePointer(to: commitKind) { kinds in
+            withUnsafePointer(to: explicitSelection) { flags in
+                commit_learning_candidates_with_explicit(
+                    candidateIds: ids, commitKinds: kinds, explicitSelections: flags, count: 1
+                ) == 1
+            }
+        }
     }
-
-    guard let candidate = consumeLearningCandidate(candidateId) else {
-        serverLog(
-            "WARN",
-            "CommitLearningCandidate: candidate not found candidateId=\(candidateId) commitKind=\(commitKind)"
-        )
-        return false
-    }
-
-    let contextBeforeCommit = (config["context"] as? String) ?? ""
-    ensureConverterLearningConfigSynced()
-    converter.setCompletedData(candidate)
-    converter.updateLearningData(candidate)
-    converter.commitUpdateLearningData()
-    // Keep the N-best/prediction converter aligned without triggering a second disk merge.
-    normalNBestSupplementConverter.setCompletedData(candidate)
-    normalNBestSupplementConverter.invalidateLearningMemoryCache()
-    recordLearningSelectionOverride(candidate)
-    recordCommittedLearningContinuation(candidate, contextBeforeCommit: contextBeforeCommit)
-    recordPostCompositionLearningCommit(candidate, contextBeforeCommit: contextBeforeCommit)
-    serverLog(
-        "DEBUG",
-        "CommitLearningCandidate: completed candidateId=\(candidateId) commitKind=\(commitKind)"
-    )
-    return true
 }
 
 @_silgen_name("CommitLearningCandidates")
 public func commit_learning_candidates(
-    candidateIds: UnsafePointer<UInt64>?,
-    commitKinds: UnsafePointer<Int32>?,
-    count: Int32
+    candidateIds: UnsafePointer<UInt64>?, commitKinds: UnsafePointer<Int32>?, count: Int32
 ) -> Int32 {
-    guard count >= 0, let candidateIds, let commitKinds else {
-        serverLog("WARN", "CommitLearningCandidates: invalid batch count=\(count)")
-        return 0
-    }
-    guard count > 0 else {
-        return 0
-    }
-    guard currentLearningType == .inputAndOutput else {
-        serverLog(
-            "DEBUG",
-            "CommitLearningCandidates: skipped learningType=\(currentLearningType) count=\(count)"
-        )
-        return count
-    }
+    commit_learning_candidates_with_explicit(
+        candidateIds: candidateIds, commitKinds: commitKinds, explicitSelections: nil, count: count
+    )
+}
 
-    var candidates: [(candidate: Candidate, candidateId: UInt64, commitKind: Int32)] = []
+@_silgen_name("CommitLearningCandidatesWithExplicit")
+public func commit_learning_candidates_with_explicit(
+    candidateIds: UnsafePointer<UInt64>?, commitKinds: UnsafePointer<Int32>?,
+    explicitSelections: UnsafePointer<Bool>?, count: Int32
+) -> Int32 {
+    guard count > 0, let candidateIds, let commitKinds else { return 0 }
+    guard !privateInputActive, currentLearningType == .inputAndOutput else { return count }
+
+    var candidates: [(candidate: Candidate, explicit: Bool)] = []
     candidates.reserveCapacity(Int(count))
     for index in 0..<Int(count) {
-        let candidateId = candidateIds[index]
-        let commitKind = commitKinds[index]
-        guard let candidate = consumeLearningCandidate(candidateId) else {
-            serverLog(
-                "WARN",
-                "CommitLearningCandidates: candidate not found candidateId=\(candidateId) commitKind=\(commitKind)"
-            )
+        let id = candidateIds[index]
+        guard let match = learningCandidateCache.consumeWithOriginalRank(id) else {
+            serverLog("WARN", "CommitLearningCandidates: candidate not found candidateId=\(id) commitKind=\(commitKinds[index])")
             continue
         }
-        candidates.append((candidate, candidateId, commitKind))
+        candidates.append((match.candidate, (explicitSelections?[index] ?? false) || match.originalRank > 0))
     }
-    guard !candidates.isEmpty else {
-        return 0
-    }
+    guard !candidates.isEmpty else { return 0 }
 
-    var trackedContext = (config["context"] as? String) ?? ""
+    var context = (config["context"] as? String) ?? ""
     ensureConverterLearningConfigSynced()
-    var selectionOverrideChanged = false
     for entry in candidates {
         converter.setCompletedData(entry.candidate)
-        converter.updateLearningData(entry.candidate)
         normalNBestSupplementConverter.setCompletedData(entry.candidate)
-        selectionOverrideChanged =
-            updateLearningSelectionOverride(entry.candidate) || selectionOverrideChanged
-        recordCommittedLearningContinuation(entry.candidate, contextBeforeCommit: trackedContext)
-        recordPostCompositionLearningCommit(entry.candidate, contextBeforeCommit: trackedContext)
-        trackedContext += entry.candidate.text
+        if entry.candidate.isLearningTarget {
+            converter.updateLearningData(entry.candidate)
+            converterLearningDirty = true
+            if updateLearningSelectionOverride(entry.candidate, context: context, explicit: entry.explicit) {
+                learningSelectionOverridesDirty = true
+            }
+        }
+        recordCommittedLearningContinuation(entry.candidate, contextBeforeCommit: context)
+        recordPostCompositionLearningCommit(entry.candidate, contextBeforeCommit: context, persist: false)
+        context += entry.candidate.text
     }
-    converter.commitUpdateLearningData()
-    normalNBestSupplementConverter.invalidateLearningMemoryCache()
-    if selectionOverrideChanged {
-        saveLearningSelectionOverrides()
-    }
-    serverLog(
-        "DEBUG",
-        "CommitLearningCandidates: completed requestedCount=\(count) committedCount=\(candidates.count)"
-    )
+    _ = flush_learning_memory()
     return Int32(candidates.count)
+}
+
+nonisolated(unsafe) var converterLearningDirty = false
+
+@_silgen_name("FlushLearningMemory")
+public func flush_learning_memory() -> Bool {
+    guard !privateInputActive else { return false }
+    if converterLearningDirty, currentLearningType == .inputAndOutput,
+       converter.flushPendingLearningData() {
+        normalNBestSupplementConverter.invalidateLearningMemoryCache()
+        converterLearningDirty = false
+    }
+    let selectionsSaved = saveLearningSelectionOverrides()
+    let bigramsSaved = savePostCompositionBigrams()
+    return !converterLearningDirty && selectionsSaved && bigramsSaved
 }
 
 @_silgen_name("ResetLearningMemory")
 public func reset_learning_memory() -> Bool {
-    let resetDirectory = resetLearningMemoryDirectory()
+    guard !privateInputActive, resetLearningMemoryDirectory() else { return false }
+    converterLearningDirty = false
+    learningSelectionOverridesDirty = false
+    converter.syncLearningConfig(learningType: currentLearningType, memoryDirectoryURL: currentLearningMemoryDirectoryURL)
+    normalNBestSupplementConverter.syncLearningConfig(learningType: currentLearningType, memoryDirectoryURL: currentLearningMemoryDirectoryURL)
     converter.resetMemory()
     normalNBestSupplementConverter.resetMemory()
     clearLearningCandidateCache()
     clearLastCommittedContinuation()
     learningSelectionOverrides.removeAll(keepingCapacity: false)
     resetPostCompositionLearningMemory()
-    serverLog("INFO", "ResetLearningMemory: completed resetDirectory=\(resetDirectory)")
-    return resetDirectory
+    serverLog("INFO", "ResetLearningMemory: completed")
+    return true
 }
 
 /// Deletes one candidate's conversion learning.
@@ -3673,6 +3910,7 @@ public func reset_learning_memory() -> Bool {
 /// was absent from both stores.
 @_silgen_name("ForgetLearningCandidate")
 public func forget_learning_candidate(candidateId: UInt64) -> Bool {
+    guard !privateInputActive else { return false }
     // Validate before consuming. Consuming marks the id used for both commit and
     // pin, so a refusal must not happen after it: a candidate that is skipped
     // because of its flags or the current learning mode has to stay selectable.
@@ -3722,7 +3960,8 @@ public func forget_learning_candidate(candidateId: UInt64) -> Bool {
     let removedOverride = !ruby.isEmpty &&
         learningSelectionOverrides.remove(output: output, for: ruby)
     if removedOverride {
-        saveLearningSelectionOverrides()
+        learningSelectionOverridesDirty = true
+        _ = saveLearningSelectionOverrides()
     }
     serverLog(
         "INFO",
@@ -3739,6 +3978,7 @@ public func forget_learning_candidate(candidateId: UInt64) -> Bool {
 /// returns before any store is written.
 @_silgen_name("ValidateLearningCandidateDeletion")
 public func validate_learning_candidate_deletion(candidateId: UInt64) -> Bool {
+    guard !privateInputActive else { return false }
     guard let candidate = learningCandidate(candidateId) else {
         serverLog("DEBUG", "ValidateLearningCandidateDeletion: unknown candidateId=\(candidateId)")
         return false
@@ -3763,6 +4003,7 @@ public func validate_learning_candidate_deletion(candidateId: UInt64) -> Bool {
 /// Per-store learning counts so a host can confirm a reset instead of trusting a bool.
 @_silgen_name("GetLearningStats")
 public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
+    guard !privateInputActive else { return nil }
     let memoryURL = currentLearningMemoryDirectoryURL
     // A `.pause` marker means the long-term trie failed its atomic update and the
     // engine fell back to the `.2` copy; learning stays off until it is cleared.
@@ -3777,7 +4018,8 @@ public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
             : (currentLearningType == .onlyOutput ? "read_only" : "enabled"),
         "candidateCacheSlots": learningCandidateCache.slotCount,
         "candidateCacheBatches": learningCandidateCache.batchCount,
-        "postCompositionBigramCount": postCompositionBigramStore.count,
+        "postCompositionBigramCount": currentLearningType == .nothing ? 0 : postCompositionBigramStore.count,
+        "selectionOverrideCount": currentLearningType == .nothing ? 0 : learningSelectionOverrides.outputCount,
     ]
     guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
           let json = String(data: data, encoding: .utf8) else {
@@ -3903,6 +4145,7 @@ func get_composed_text_impl(
     isCursorAtEndOverride: Bool? = nil,
     onReadingCompletion: ((Int) -> Void)? = nil
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    adoptPendingUserDictionary()
     let targetComposingText = sourceComposingText ?? composingText
     let isCursorAtEnd = isCursorAtEndOverride ?? targetComposingText.isAtEndIndex
     let functionStart = performanceNow()
@@ -4239,6 +4482,7 @@ func get_composed_text_impl(
         weightedMainResults,
         ruby: previewHiragana,
         expandedPrefixRubies: expandedPrefixRubies,
+        leftContext: contextString,
         candidate: { $0 },
         synthesizeElement: { $0 }
     )
@@ -4256,13 +4500,12 @@ func get_composed_text_impl(
             mainResults.insert(exactCandidate, at: 0)
         }
     }
-    // Android's compact candidate strip reserves the second position for the
-    // highest-ranked completion after dictionary and learning priorities are applied.
+    // Keep the highest-ranked Android completion ahead of partial clauses.
     let kanaCompletionReading = (onReadingCompletion != nil && japanesePredictionEnabled &&
         isCursorAtEnd && suffixAfterCursor.isEmpty && !hasTrailingRoman)
         ? normalizedLearningRuby(previewHiragana) : nil
     if let kanaCompletionReading {
-        promoteKanaReadingCompletion(in: &mainResults, normalizedReading: kanaCompletionReading)
+        promoteKanaReadingCompletion(in: &mainResults, normalizedReading: kanaCompletionReading, afterFullSpan: true)
     }
     if let normalNBestConverted {
         serverLog(
@@ -4284,7 +4527,7 @@ func get_composed_text_impl(
     var resolutionCache: [String: CandidateDisplayResolution] = [:]
     var result: [FFICandidate] = []
     result.reserveCapacity(mainResults.count)
-    let learningCandidateBatchFirstId = cacheLearningCandidates(mainResults)
+    let learningCandidateBatchFirstId = cacheLearningCandidates(mainResults, allowReadOnlyDeletion: true)
     let pendingCompletionTexts: Set<String> = onReadingCompletion == nil
         ? [] : Set(pendingRomanCompletions.map(\.text))
     let normalizedNasalReading = previewHiragana.last == "n"
@@ -4393,6 +4636,7 @@ public func get_composed_text_for_cursor_prefix(
     requiredInputCount: Int32,
     lengthPtr: UnsafeMutablePointer<CInt>
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    adoptPendingUserDictionary()
     let functionStart = performanceNow()
     let performanceEnabled = serverLogCallbacks.isPerformanceLogEnabled()
     let hiragana = composingText.convertTarget
@@ -4640,6 +4884,7 @@ public func get_composed_text_for_cursor_prefix(
     let rawCursorPrefixPrioritized = prioritizeLearningSelectionOverrides(
         rawCursorPrefixResults,
         ruby: previewPrefixHiragana,
+        leftContext: contextString,
         candidate: { $0.candidate },
         synthesizeElement: { synth in
             CursorPrefixCandidateResult(
@@ -4668,7 +4913,7 @@ public func get_composed_text_for_cursor_prefix(
     var result: [FFICandidate] = []
     result.reserveCapacity(cursorPrefixResults.count)
     let learningCandidateBatchFirstId = cacheLearningCandidates(
-        cursorPrefixResults.map(\.candidate)
+        cursorPrefixResults.map(\.candidate), allowReadOnlyDeletion: true
     )
     let ffiHiragana = previewPrefixHiragana + suffixAfterCursor
 
@@ -4759,9 +5004,18 @@ public func shrink_text(
     return _strdup(composingText.convertTarget)!
 }
 
+nonisolated(unsafe) private var learningConfigNeedsLoad = false
+
 @_silgen_name("SetPrivateInput")
 public func set_private_input(_ enabled: Bool) {
+    let wasPrivate = privateInputActive
     privateInputActive = enabled
+    if wasPrivate && !enabled && learningConfigNeedsLoad {
+        learningConfigNeedsLoad = false
+        ensureLearningMemoryDirectoryIfNeeded()
+        loadLearningSelectionOverrides()
+        loadPostCompositionBigrams()
+    }
     if enabled {
         config["context"] = ""
         clearLearningCandidateCache()

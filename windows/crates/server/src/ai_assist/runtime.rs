@@ -103,7 +103,19 @@ pub(super) fn keyboard_repair_override_with_hints(
     })
 }
 
+static READ_LEARNING_ALLOWED: OnceLock<fn() -> bool> = OnceLock::new();
+
+pub fn configure_read_learning_resolver(resolver: fn() -> bool) {
+    let _ = READ_LEARNING_ALLOWED.set(resolver);
+}
+
 pub(super) fn read_learning() -> bool {
+    if READ_LEARNING_ALLOWED
+        .get()
+        .is_some_and(|allowed| !allowed())
+    {
+        return false;
+    }
     BACKEND.with(|slot| {
         slot.borrow()
             .as_ref()

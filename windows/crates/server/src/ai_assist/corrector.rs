@@ -1,6 +1,7 @@
 //! Corrector inference and the evidence needed for reversible automatic correction.
 //! This module runs on the assistance worker, never on a composition mutation.
 use super::*;
+use shared::assist_policy::AutoTypoCorrectionStrength;
 use std::collections::VecDeque;
 
 const MAX_INPUT: usize = 128;
@@ -59,6 +60,38 @@ fn known_reading(input: &str) -> bool {
     let hira = katakana_to_hiragana(input);
     STANDARD_VOCAB.iter().any(|(reading, _)| *reading == hira)
         || super::typo_variant::lookup_surface(&hira).is_some()
+}
+
+fn has_pending_romaji_tail(input: &str) -> bool {
+    input
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphabetic() && !"aeiou".contains(c.to_ascii_lowercase()))
+}
+
+fn has_floating_ascii(input: &str) -> bool {
+    input
+        .chars()
+        .any(|c| c.is_ascii_alphabetic() || ('ａ'..='ｚ').contains(&c) || ('Ａ'..='Ｚ').contains(&c))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoRefinementContext<'a> {
+    pub origin_reading: &'a str,
+    pub origin_raw: &'a str,
+    pub origin_touch_hints: &'a str,
+    pub applied_prefix: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorrectionOutcome {
+    None,
+    RevertToOrigin,
+    Suggestion {
+        suggestion: TypoSuggestion,
+        auto_apply: bool,
+        channel_backed: bool,
+    },
 }
 
 fn trailing_phrase<'a>(input: &'a str, baseline: &'a str) -> Option<(&'a str, &'a str)> {
@@ -171,6 +204,36 @@ pub fn can_auto_apply_composition(input: &str, baseline: &str, surface: &str) ->
         surface
             .strip_prefix(prefix)
             .is_some_and(|s| can_auto_apply(target, s))
+    })
+}
+
+pub fn can_auto_apply_composition_suggestion(
+    input: &str,
+    baseline: &str,
+    suggestion: &TypoSuggestion,
+) -> bool {
+    can_auto_apply_composition_suggestion_with_strength(
+        input,
+        baseline,
+        suggestion,
+        AutoTypoCorrectionStrength::Standard,
+    )
+}
+
+pub fn can_auto_apply_composition_suggestion_with_strength(
+    input: &str,
+    baseline: &str,
+    suggestion: &TypoSuggestion,
+    strength: AutoTypoCorrectionStrength,
+) -> bool {
+    if !strength.is_enabled() {
+        return false;
+    }
+    trailing_phrase(input, baseline).is_some_and(|(prefix, target)| {
+        suggestion
+            .surface
+            .strip_prefix(prefix)
+            .is_some_and(|s| can_auto_apply_inner(target, s, suggestion.channel_confidence, strength))
     })
 }
 
@@ -367,22 +430,22 @@ fn suggest_with_channel_and_hints(
     if !config.enabled || !(2..=MAX_INPUT).contains(&input.chars().count()) {
         return None;
     }
+    if super::reading_check::user_dictionary_contains_reading(input) {
+        return None;
+    }
     if let Some(matched) = lookup_learned_typo(input).filter(|m| m.reading == input) {
         return Some(TypoSuggestion {
             surface: matched.surface.clone(),
             token_reading: input.into(),
             token_surface: matched.surface,
             learned: true,
+            channel_confidence: None,
         });
     }
     if known_reading(input) {
         return None;
     }
-    if input
-        .chars()
-        .last()
-        .is_some_and(|c| c.is_ascii_alphabetic() && !"aeiou".contains(c.to_ascii_lowercase()))
-    {
+    if has_pending_romaji_tail(input) {
         return None;
     }
     if let Some(surface) = explicit_typo_surface(input) {
@@ -391,6 +454,7 @@ fn suggest_with_channel_and_hints(
             token_reading: input.into(),
             token_surface: surface.into(),
             learned: false,
+            channel_confidence: None,
         });
     }
     // Mixed kana/Latin input is repaired by deterministic one-key reconstruction
@@ -401,6 +465,7 @@ fn suggest_with_channel_and_hints(
             token_reading: input.into(),
             token_surface: reading,
             learned: false,
+            channel_confidence: None,
         });
     }
     if allow_channel_repair
@@ -416,7 +481,7 @@ fn suggest_with_channel_and_hints(
         } else {
             input.to_owned()
         };
-        if let Some(readings) = super::keyboard_hybrid::repair_readings_with_hints(
+        if let Some(candidate_opt) = super::keyboard_hybrid::repair_candidate_with_hints(
             &context,
             &repair_input,
             raw,
@@ -424,23 +489,349 @@ fn suggest_with_channel_and_hints(
             input_mode,
             wait_for_worker,
         ) {
-            let reading = readings.into_iter().next()?;
-            return (katakana_to_hiragana(&reading) != katakana_to_hiragana(input)).then_some(
-                TypoSuggestion {
-                    surface: reading.clone(),
+            let candidate = candidate_opt?;
+            return (katakana_to_hiragana(&candidate.reading) != katakana_to_hiragana(input))
+                .then_some(TypoSuggestion {
+                    surface: candidate.reading.clone(),
                     token_reading: input.into(),
-                    token_surface: reading,
+                    token_surface: candidate.reading,
                     learned: false,
-                },
-            );
+                    channel_confidence: Some(candidate.confidence),
+                });
         }
     }
     heuristic_typo_suggestion(&context, input, config)
 }
 
+/// Evaluates whether an active automatic reading-only correction should be
+/// refined, silently reverted to unaltered `origin_reading`, confirmed (`None`),
+/// or extended with a trailing 2nd typo as subsequent keystrokes add context.
+#[allow(clippy::too_many_arguments)]
+pub fn suggest_auto_refinement(
+    context: &str,
+    current_reading: &str,
+    baseline: &str,
+    current_raw: &str,
+    current_touch_hints: &str,
+    input_mode: &str,
+    refinement: &AutoRefinementContext<'_>,
+    strength: AutoTypoCorrectionStrength,
+    config: &AiAssistConfig,
+) -> CorrectionOutcome {
+    if !config.enabled {
+        return CorrectionOutcome::None;
+    }
+    let eval_current_trailing = |allow_channel: bool| -> CorrectionOutcome {
+        let Some(suggestion) = suggest_composition_with_channel(
+            context,
+            current_reading,
+            baseline,
+            current_raw,
+            current_touch_hints,
+            input_mode,
+            config,
+            allow_channel,
+        )
+        .filter(|s| s.surface != current_reading && s.surface != baseline) else {
+            return CorrectionOutcome::None;
+        };
+        let channel_backed = suggestion.channel_confidence.is_some();
+        let auto_apply = can_auto_apply_composition_suggestion_with_strength(
+            current_reading,
+            baseline,
+            &suggestion,
+            strength,
+        );
+        CorrectionOutcome::Suggestion {
+            suggestion,
+            auto_apply,
+            channel_backed,
+        }
+    };
+    let Some(trailing) = current_reading
+        .strip_prefix(refinement.applied_prefix)
+        .filter(|t| !t.is_empty())
+    else {
+        return eval_current_trailing(true);
+    };
+    let origin = refinement.origin_reading.trim();
+    let Some(origin_prefix) = origin
+        .strip_suffix(trailing)
+        .filter(|p| !p.is_empty() && *p != refinement.applied_prefix)
+    else {
+        return eval_current_trailing(true);
+    };
+    if has_pending_romaji_tail(current_reading) || has_pending_romaji_tail(origin) {
+        return CorrectionOutcome::None;
+    }
+    if !(2..=MAX_INPUT).contains(&origin.chars().count())
+        || !(2..=MAX_INPUT).contains(&current_reading.chars().count())
+    {
+        return eval_current_trailing(true);
+    }
+
+    let context_norm = context.replace(' ', "\u{3000}");
+    let curr_hira = katakana_to_hiragana(current_reading);
+    let orig_prefix_hira = katakana_to_hiragana(origin_prefix);
+
+    // 1. Learned typos & clean dictionaries on unaltered origin.
+    if let Some(matched) = lookup_learned_typo(origin).filter(|m| m.reading == origin) {
+        let matched_hira = katakana_to_hiragana(&matched.surface);
+        if matched_hira == curr_hira
+            || matched.surface == baseline
+            || matched_hira.starts_with(&orig_prefix_hira)
+        {
+            return eval_current_trailing(false);
+        }
+        if !super::reading_check::has_same_reading(&matched.surface, current_reading) {
+            let suggestion = TypoSuggestion {
+                surface: matched.surface.clone(),
+                token_reading: origin.into(),
+                token_surface: matched.surface,
+                learned: true,
+                channel_confidence: None,
+            };
+            let auto_apply = can_auto_apply_composition_suggestion_with_strength(
+                origin,
+                baseline,
+                &suggestion,
+                strength,
+            );
+            return CorrectionOutcome::Suggestion {
+                suggestion,
+                auto_apply,
+                channel_backed: false,
+            };
+        }
+        return CorrectionOutcome::None;
+    }
+    if super::reading_check::user_dictionary_contains_reading(origin) || known_reading(origin) {
+        return if strength.is_enabled() {
+            CorrectionOutcome::RevertToOrigin
+        } else {
+            CorrectionOutcome::None
+        };
+    }
+
+    // 2. Deterministic explicit table / floating-consonant repair on unaltered origin.
+    let deterministic_candidate = explicit_typo_surface(origin)
+        .map(|s| (s.to_owned(), true))
+        .or_else(|| romaji_decoder::decode_floating_consonant_typo(origin).map(|s| (s, false)));
+    if let Some((cand, is_explicit_table)) = deterministic_candidate {
+        let cand_hira = katakana_to_hiragana(&cand);
+        if cand_hira == curr_hira || cand == baseline || cand_hira.starts_with(&orig_prefix_hira)
+        {
+            return eval_current_trailing(true);
+        }
+        if !super::reading_check::has_same_reading(&cand, current_reading)
+            && (is_explicit_table || supported_reading_change(origin, &cand))
+        {
+            let suggestion = TypoSuggestion {
+                surface: cand.clone(),
+                token_reading: origin.into(),
+                token_surface: cand,
+                learned: false,
+                channel_confidence: None,
+            };
+            let auto_apply = can_auto_apply_composition_suggestion_with_strength(
+                origin,
+                baseline,
+                &suggestion,
+                strength,
+            );
+            return CorrectionOutcome::Suggestion {
+                suggestion,
+                auto_apply,
+                channel_backed: false,
+            };
+        }
+        return CorrectionOutcome::None;
+    }
+
+    // 3. Single native channel evaluation on unaltered origin + raw/touch evidence.
+    if config.engine == "embedded"
+        && config.corrector_port >= 1024
+        && runtime::allow_native_worker()
+    {
+        let wait_for_worker = runtime::wait_for_native_worker();
+        match super::keyboard_hybrid::repair_candidate_with_hints(
+            &context_norm,
+            origin,
+            refinement.origin_raw,
+            refinement.origin_touch_hints,
+            input_mode,
+            wait_for_worker,
+        ) {
+            None => return CorrectionOutcome::None,
+            Some(None) => {
+                if strength.is_enabled()
+                    && !has_floating_ascii(origin)
+                    && origin.chars().count() <= 24
+                    && trailing.chars().count() >= 2
+                    && explicit_typo_surface(origin).is_none()
+                {
+                    return CorrectionOutcome::RevertToOrigin;
+                }
+                return CorrectionOutcome::None;
+            }
+            Some(Some(candidate)) => {
+                let cand_hira = katakana_to_hiragana(&candidate.reading);
+                if cand_hira == curr_hira {
+                    let trailing_hint = has_floating_ascii(trailing)
+                        || candidate.alt_reading.as_deref().is_some_and(|alt| {
+                            katakana_to_hiragana(alt).starts_with(&orig_prefix_hira)
+                        });
+                    return eval_current_trailing(trailing_hint);
+                }
+                if let Some(trailing_cand) = cand_hira.strip_prefix(&orig_prefix_hira) {
+                    let trailing_res = eval_current_trailing(true);
+                    if trailing_res != CorrectionOutcome::None {
+                        return trailing_res;
+                    }
+                    let recombined = format!("{}{trailing_cand}", refinement.applied_prefix);
+                    if !trailing_cand.is_empty()
+                        && recombined != curr_hira
+                        && recombined != baseline
+                        && !super::reading_check::has_same_reading(&recombined, current_reading)
+                        && supported_reading_change(current_reading, &recombined)
+                    {
+                        let suggestion = TypoSuggestion {
+                            surface: recombined.clone(),
+                            token_reading: current_reading.into(),
+                            token_surface: recombined,
+                            learned: false,
+                            channel_confidence: Some(candidate.confidence),
+                        };
+                        return CorrectionOutcome::Suggestion {
+                            suggestion,
+                            auto_apply: false,
+                            channel_backed: true,
+                        };
+                    }
+                    return CorrectionOutcome::None;
+                }
+                if candidate.reading != baseline
+                    && !super::reading_check::has_same_reading(&candidate.reading, current_reading)
+                    && supported_reading_change(origin, &candidate.reading)
+                {
+                    let suggestion = TypoSuggestion {
+                        surface: candidate.reading.clone(),
+                        token_reading: origin.into(),
+                        token_surface: candidate.reading,
+                        learned: false,
+                        channel_confidence: Some(candidate.confidence),
+                    };
+                    let auto_apply = can_auto_apply_channel_repair_with_strength(
+                        origin,
+                        &suggestion.surface,
+                        candidate.confidence,
+                        strength,
+                    );
+                    return CorrectionOutcome::Suggestion {
+                        suggestion,
+                        auto_apply,
+                        channel_backed: true,
+                    };
+                }
+                return CorrectionOutcome::None;
+            }
+        }
+    }
+
+    eval_current_trailing(false)
+}
+
+/// Plan C / B / A auto-apply policy for native channel repairs:
+/// - `Conservative` (Plan C): non-tail `>= 70.0`, tail `>= 95.0`, floating ASCII `>= 55.0`, `alt_reading` `>= 100.0`
+/// - `Standard` (Plan B): non-tail `>= 65.0`, tail `>= 90.0`, floating ASCII `>= 55.0`, `alt_reading` `>= 95.0`
+/// - `Aggressive` (Plan A): non-tail `>= 55.0`, tail `>= 80.0`, floating ASCII `>= 55.0`, no `alt_reading` gate
+pub fn can_auto_apply_channel_repair(
+    input: &str,
+    reading: &str,
+    confidence: super::ChannelConfidence,
+) -> bool {
+    can_auto_apply_channel_repair_with_strength(
+        input,
+        reading,
+        confidence,
+        AutoTypoCorrectionStrength::Standard,
+    )
+}
+
+pub fn can_auto_apply_channel_repair_with_strength(
+    input: &str,
+    reading: &str,
+    confidence: super::ChannelConfidence,
+    strength: AutoTypoCorrectionStrength,
+) -> bool {
+    if !strength.is_enabled() {
+        return false;
+    }
+    if super::reading_check::user_dictionary_contains_reading(input) || known_reading(input) {
+        return false;
+    }
+    if has_pending_romaji_tail(input) {
+        return false;
+    }
+    let orig_hira = katakana_to_hiragana(input.trim());
+    let cand_hira = katakana_to_hiragana(reading.trim());
+    if orig_hira.is_empty()
+        || cand_hira.is_empty()
+        || orig_hira == cand_hira
+        || !supported_reading_change(input, reading)
+    {
+        return false;
+    }
+    let has_floating_ascii = has_floating_ascii(input);
+    let touches_tail = orig_hira.chars().last() != cand_hira.chars().last();
+    let (non_tail_min, tail_min, alt_min) = match strength {
+        AutoTypoCorrectionStrength::Off => return false,
+        AutoTypoCorrectionStrength::Conservative => (700, 950, Some(1000)),
+        AutoTypoCorrectionStrength::Standard => (650, 900, Some(950)),
+        AutoTypoCorrectionStrength::Aggressive => (550, 800, None),
+    };
+    let gain_tenths = confidence.gain_tenths;
+    let passes_base = if has_floating_ascii {
+        gain_tenths >= 550
+    } else if !touches_tail {
+        gain_tenths >= non_tail_min
+    } else {
+        gain_tenths >= tail_min
+    };
+    let passes_disambiguation =
+        !confidence.has_alt_reading || has_floating_ascii || alt_min.is_none_or(|min| gain_tenths >= min);
+    passes_base && passes_disambiguation
+}
+
+fn can_auto_apply_inner(
+    input: &str,
+    surface: &str,
+    channel_confidence: Option<super::ChannelConfidence>,
+    strength: AutoTypoCorrectionStrength,
+) -> bool {
+    if !strength.is_enabled() {
+        return false;
+    }
+    can_auto_apply(input, surface)
+        || channel_confidence
+            .is_some_and(|c| can_auto_apply_channel_repair_with_strength(input, surface, c, strength))
+}
+
+pub fn can_auto_apply_suggestion(input: &str, suggestion: &TypoSuggestion) -> bool {
+    can_auto_apply_inner(
+        input,
+        &suggestion.surface,
+        suggestion.channel_confidence,
+        AutoTypoCorrectionStrength::Standard,
+    )
+}
+
 /// Automatic correction requires independent, narrow evidence. Model probability
 /// or repeated identical generations alone cannot certify the user's intention.
 pub fn can_auto_apply(input: &str, surface: &str) -> bool {
+    if super::reading_check::user_dictionary_contains_reading(input) {
+        return false;
+    }
     if let Some(m) = lookup_learned_typo(input) {
         if m.reading == input && m.surface == surface && m.count >= 3 {
             return true;
@@ -849,6 +1240,644 @@ mod tests {
                 String::new(),
                 "flick".to_owned()
             )
+        );
+    }
+
+    #[test]
+    fn plan_b_channel_auto_apply_balances_tail_ambiguity_and_floating_ascii() {
+        let _dict_guard = super::super::USER_DICTIONARY_TEST_LOCK.lock().unwrap();
+        let conf = |gain_tenths, has_alt_reading| super::super::ChannelConfidence {
+            gain_tenths,
+            has_alt_reading,
+        };
+        // Non-tail kana: >= 65.0 without alt_reading; >= 95.0 with alt_reading.
+        assert!(!can_auto_apply_channel_repair(
+            "おせわになております",
+            "おせわになっております",
+            conf(649, false)
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "おせわになております",
+            "おせわになっております",
+            conf(650, false)
+        ));
+        assert!(!can_auto_apply_channel_repair(
+            "おせわになております",
+            "おせわになっております",
+            conf(949, true)
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "おせわになております",
+            "おせわになっております",
+            conf(950, true)
+        ));
+
+        // Tail-editing kana: >= 90.0 without alt_reading; >= 95.0 with alt_reading.
+        assert!(!can_auto_apply_channel_repair(
+            "ふるいしゃしんをいちま",
+            "ふるいしゃしんをいちまい",
+            conf(899, false)
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "ふるいしゃしんをいちま",
+            "ふるいしゃしんをいちまい",
+            conf(900, false)
+        ));
+        assert!(!can_auto_apply_channel_repair(
+            "ふるいしゃしんをいちま",
+            "ふるいしゃしんをいちまい",
+            conf(949, true)
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "ふるいしゃしんをいちま",
+            "ふるいしゃしんをいちまい",
+            conf(950, true)
+        ));
+
+        // Floating ASCII: >= 55.0 even with an alternative reading.
+        assert!(!can_auto_apply_channel_repair(
+            "pもってる",
+            "おもってる",
+            conf(549, true)
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "pもってる",
+            "おもってる",
+            conf(550, true)
+        ));
+        assert!(can_auto_apply_channel_repair(
+            "かlど",
+            "かーど",
+            conf(550, true)
+        ));
+
+        // Pending romaji tail and user dictionary readings remain blocked.
+        assert!(!can_auto_apply_channel_repair(
+            "さっかl",
+            "さっかー",
+            conf(1500, false)
+        ));
+        super::super::set_user_dictionary_vocabulary([("おせわになております", "登録語")]);
+        let blocked_by_user_dict = can_auto_apply_channel_repair(
+            "おせわになております",
+            "おせわになっております",
+            conf(1500, false),
+        );
+        super::super::set_user_dictionary_vocabulary(std::iter::empty());
+        assert!(!blocked_by_user_dict);
+    }
+
+    #[test]
+    fn auto_apply_strength_presets_match_plan_a_b_c_and_off() {
+        let _dict_guard = super::super::USER_DICTIONARY_TEST_LOCK.lock().unwrap();
+        let conf = |gain_tenths, has_alt_reading| super::super::ChannelConfidence {
+            gain_tenths,
+            has_alt_reading,
+        };
+        let non_tail = ("おせわになております", "おせわになっております");
+        let tail = ("ふるいしゃしんをいちま", "ふるいしゃしんをいちまい");
+
+        // Off blocks both channel repairs and dictionary/floating-consonant auto-apply.
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(1500, false),
+            AutoTypoCorrectionStrength::Off,
+        ));
+        let off_floating = TypoSuggestion {
+            surface: "おかえり".into(),
+            token_reading: "おkせり".into(),
+            token_surface: "おかえり".into(),
+            learned: false,
+            channel_confidence: Some(conf(1500, false)),
+        };
+        assert!(!can_auto_apply_composition_suggestion_with_strength(
+            "おkせり",
+            "おkせり",
+            &off_floating,
+            AutoTypoCorrectionStrength::Off,
+        ));
+
+        // Non-tail boundaries: Aggressive 550, Standard 650, Conservative 700.
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(549, false),
+            AutoTypoCorrectionStrength::Aggressive,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(550, false),
+            AutoTypoCorrectionStrength::Aggressive,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(600, false),
+            AutoTypoCorrectionStrength::Aggressive,
+        ));
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(600, false),
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(650, false),
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(650, false),
+            AutoTypoCorrectionStrength::Conservative,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(700, false),
+            AutoTypoCorrectionStrength::Conservative,
+        ));
+
+        // Tail boundaries: Aggressive 800, Standard 900, Conservative 950.
+        assert!(can_auto_apply_channel_repair_with_strength(
+            tail.0,
+            tail.1,
+            conf(800, false),
+            AutoTypoCorrectionStrength::Aggressive,
+        ));
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            tail.0,
+            tail.1,
+            conf(850, false),
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            tail.0,
+            tail.1,
+            conf(900, false),
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            tail.0,
+            tail.1,
+            conf(900, false),
+            AutoTypoCorrectionStrength::Conservative,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            tail.0,
+            tail.1,
+            conf(950, false),
+            AutoTypoCorrectionStrength::Conservative,
+        ));
+
+        // Contested (has_alt_reading = true): Aggressive ignores gate, Standard >= 950, Conservative >= 1000.
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(750, true),
+            AutoTypoCorrectionStrength::Aggressive,
+        ));
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(750, true),
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(950, true),
+            AutoTypoCorrectionStrength::Standard,
+        ));
+        assert!(!can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(950, true),
+            AutoTypoCorrectionStrength::Conservative,
+        ));
+        assert!(can_auto_apply_channel_repair_with_strength(
+            non_tail.0,
+            non_tail.1,
+            conf(1000, true),
+            AutoTypoCorrectionStrength::Conservative,
+        ));
+    }
+
+    #[test]
+    fn auto_refinement_refines_reverts_confirms_and_detects_trailing_typos() {
+        use std::sync::{Arc, Mutex};
+        let _dict_guard = super::super::USER_DICTIONARY_TEST_LOCK.lock().unwrap();
+        struct SeqBackend {
+            calls: Arc<Mutex<Vec<(String, String)>>>,
+            replies: Arc<Mutex<Vec<Option<Value>>>>,
+        }
+        impl runtime::CompletionBackend for SeqBackend {
+            fn allow_native_worker(&self) -> bool {
+                true
+            }
+            fn wait_for_native_worker(&self) -> bool {
+                true
+            }
+            fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+                None
+            }
+            fn keyboard_repair_with_hints(
+                &self,
+                raw: &str,
+                input: &str,
+                _context: &str,
+                _touch_hints: &str,
+                _input_mode: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((input.to_owned(), raw.to_owned()));
+                self.replies.lock().unwrap().remove(0).map(Some)
+            }
+        }
+        let config = AiAssistConfig {
+            enabled: true,
+            corrector_port: 12000,
+            ..AiAssistConfig::default()
+        };
+
+        // 1. Refinement auto-apply & hysteresis.
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let replies = Arc::new(Mutex::new(vec![
+            Some(json!({"observed": "しゅてんします", "reading": "しゅってんします", "gain": 82.0})),
+            Some(json!({"observed": "しゅてんします", "reading": "しゅってんします", "alt_reading": "しゅうてんします", "gain": 82.0})),
+        ]));
+        runtime::with_backend(
+            Box::new(SeqBackend {
+                calls: calls.clone(),
+                replies,
+            }),
+            || {
+                let ctx = AutoRefinementContext {
+                    origin_reading: "しゅてんします",
+                    origin_raw: "shutenshimasu",
+                    origin_touch_hints: "",
+                    applied_prefix: "しゅうてん",
+                };
+                match suggest_auto_refinement(
+                    "",
+                    "しゅうてんします",
+                    "終点します",
+                    "",
+                    "",
+                    "qwerty",
+                    &ctx,
+                    AutoTypoCorrectionStrength::Standard,
+                    &config,
+                ) {
+                    CorrectionOutcome::Suggestion {
+                        suggestion,
+                        auto_apply,
+                        channel_backed,
+                    } => {
+                        assert_eq!(suggestion.surface, "しゅってんします");
+                        assert!(auto_apply);
+                        assert!(channel_backed);
+                    }
+                    other => panic!("expected refinement auto-apply, got {other:?}"),
+                }
+                match suggest_auto_refinement(
+                    "",
+                    "しゅうてんします",
+                    "終点します",
+                    "",
+                    "",
+                    "qwerty",
+                    &ctx,
+                    AutoTypoCorrectionStrength::Standard,
+                    &config,
+                ) {
+                    CorrectionOutcome::Suggestion {
+                        suggestion,
+                        auto_apply,
+                        ..
+                    } => {
+                        assert_eq!(suggestion.surface, "しゅってんします");
+                        assert!(!auto_apply);
+                    }
+                    other => panic!("expected manual refinement proposal, got {other:?}"),
+                }
+            },
+        );
+        assert_eq!(calls.lock().unwrap()[0].1, "shutenshimasu");
+
+        // 2. 0ms dict/user-dict auto-revert with zero worker calls.
+        super::super::set_user_dictionary_vocabulary([("しゅてんどうじ", "酒呑童子")]);
+        let dict_calls = Arc::new(Mutex::new(Vec::new()));
+        runtime::with_backend(
+            Box::new(SeqBackend {
+                calls: dict_calls.clone(),
+                replies: Arc::new(Mutex::new(Vec::new())),
+            }),
+            || {
+                let ctx = AutoRefinementContext {
+                    origin_reading: "しゅてんどうじ",
+                    origin_raw: "shutendouji",
+                    origin_touch_hints: "",
+                    applied_prefix: "しゅうてん",
+                };
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "しゅうてんどうじ",
+                        "終点童子",
+                        "",
+                        "",
+                        "qwerty",
+                        &ctx,
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::RevertToOrigin
+                );
+            },
+        );
+        super::super::set_user_dictionary_vocabulary(std::iter::empty());
+        assert!(dict_calls.lock().unwrap().is_empty());
+
+        // 3. Model-clean auto-revert vs safety gates (timeout, trailing<2, origin>24, floating ASCII, Off).
+        let revert_calls = Arc::new(Mutex::new(Vec::new()));
+        let revert_replies = Arc::new(Mutex::new(vec![
+            Some(json!({"observed": "しゅてんどうじ"})),
+            None,
+            Some(json!({"observed": "しゅてんだ"})),
+            Some(json!({"observed": "きょおあいうえおかきくけこさしすせそたちつてとなにぬ"})),
+            Some(json!({"observed": "しゅてんaあ"})),
+            Some(json!({"observed": "しゅてんどうじ"})),
+        ]));
+        runtime::with_backend(
+            Box::new(SeqBackend {
+                calls: revert_calls.clone(),
+                replies: revert_replies,
+            }),
+            || {
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "しゅうてんどうじ",
+                        "しゅうてんどうじ",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "しゅてんどうじ",
+                            origin_raw: "shutendouji",
+                            origin_touch_hints: "",
+                            applied_prefix: "しゅうてん",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::RevertToOrigin
+                );
+                // Timeout returns None, never RevertToOrigin.
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "しゅうてんどうじ",
+                        "しゅうてんどうじ",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "しゅてんどうじ",
+                            origin_raw: "shutendouji",
+                            origin_touch_hints: "",
+                            applied_prefix: "しゅうてん",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+                // trailing.chars().count() < 2 must not revert on model clean.
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "しゅうてんだ",
+                        "しゅうてんだ",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "しゅてんだ",
+                            origin_raw: "shutenda",
+                            origin_touch_hints: "",
+                            applied_prefix: "しゅうてん",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+                // origin.chars().count() > 24 must not revert on model clean.
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "きょうあいうえおかきくけこさしすせそたちつてとなにぬ",
+                        "今日あいうえおかきくけこさしすせそたちつてとなにぬ",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "きょおあいうえおかきくけこさしすせそたちつてとなにぬ",
+                            origin_raw: "",
+                            origin_touch_hints: "",
+                            applied_prefix: "きょう",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+                // Pending romaji tail never sends worker or reverts.
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "きょうはp",
+                        "きょうはp",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "きょおはp",
+                            origin_raw: "",
+                            origin_touch_hints: "",
+                            applied_prefix: "きょうは",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+                // Floating Latin inside origin also blocks model-clean auto-revert.
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "しゅうてんaあ",
+                        "しゅうてんaあ",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "しゅてんaあ",
+                            origin_raw: "",
+                            origin_touch_hints: "",
+                            applied_prefix: "しゅうてん",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+                // Off strength never reverts.
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "しゅうてんどうじ",
+                        "しゅうてんどうじ",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "しゅてんどうじ",
+                            origin_raw: "shutendouji",
+                            origin_touch_hints: "",
+                            applied_prefix: "しゅうてん",
+                        },
+                        AutoTypoCorrectionStrength::Off,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+            },
+        );
+
+        // 4. Confirmed correction takes exactly 1 worker call and returns None.
+        let confirm_calls = Arc::new(Mutex::new(Vec::new()));
+        let confirm_replies = Arc::new(Mutex::new(vec![Some(json!({
+            "observed": "きょおはいいてんき",
+            "reading": "きょうはいいてんき",
+            "gain": 80.0
+        }))]));
+        runtime::with_backend(
+            Box::new(SeqBackend {
+                calls: confirm_calls.clone(),
+                replies: confirm_replies,
+            }),
+            || {
+                assert_eq!(
+                    suggest_auto_refinement(
+                        "",
+                        "きょうはいいてんき",
+                        "今日は良い天気",
+                        "",
+                        "",
+                        "qwerty",
+                        &AutoRefinementContext {
+                            origin_reading: "きょおはいいてんき",
+                            origin_raw: "kyoohaiitenki",
+                            origin_touch_hints: "",
+                            applied_prefix: "きょうは",
+                        },
+                        AutoTypoCorrectionStrength::Standard,
+                        &config,
+                    ),
+                    CorrectionOutcome::None
+                );
+            },
+        );
+        assert_eq!(confirm_calls.lock().unwrap().len(), 1);
+
+        // 5a. Trailing 2nd typo when candidate starts with origin_prefix preserves applied_prefix.
+        let trail_replies_a = Arc::new(Mutex::new(vec![
+            Some(json!({"observed": "きょおはあしだ", "reading": "きょおはあした", "gain": 85.0})),
+            Some(json!({"observed": "きょうはあしだ", "reading": "きょうはあした", "gain": 92.0})),
+        ]));
+        runtime::with_backend(
+            Box::new(SeqBackend {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                replies: trail_replies_a,
+            }),
+            || {
+                match suggest_auto_refinement(
+                    "",
+                    "きょうはあしだ",
+                    "今日はあしだ",
+                    "",
+                    "",
+                    "qwerty",
+                    &AutoRefinementContext {
+                        origin_reading: "きょおはあしだ",
+                        origin_raw: "kyoohaashida",
+                        origin_touch_hints: "",
+                        applied_prefix: "きょうは",
+                    },
+                    AutoTypoCorrectionStrength::Standard,
+                    &config,
+                ) {
+                    CorrectionOutcome::Suggestion {
+                        suggestion,
+                        auto_apply,
+                        ..
+                    } => {
+                        assert_eq!(suggestion.surface, "きょうはあした");
+                        assert!(auto_apply);
+                    }
+                    other => panic!("expected 2nd typo suggestion, got {other:?}"),
+                }
+            },
+        );
+
+        // 5b. Trailing 2nd typo detected via alt_reading on confirmed prefix.
+        let trail_replies_b = Arc::new(Mutex::new(vec![
+            Some(json!({"observed": "きょおはあしだ", "reading": "きょうはあしだ", "alt_reading": "きょおはあした", "gain": 88.0})),
+            Some(json!({"observed": "きょうはあしだ", "reading": "きょうはあした", "gain": 92.0})),
+        ]));
+        runtime::with_backend(
+            Box::new(SeqBackend {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                replies: trail_replies_b,
+            }),
+            || {
+                match suggest_auto_refinement(
+                    "",
+                    "きょうはあしだ",
+                    "今日はあしだ",
+                    "",
+                    "",
+                    "qwerty",
+                    &AutoRefinementContext {
+                        origin_reading: "きょおはあしだ",
+                        origin_raw: "kyoohaashida",
+                        origin_touch_hints: "",
+                        applied_prefix: "きょうは",
+                    },
+                    AutoTypoCorrectionStrength::Standard,
+                    &config,
+                ) {
+                    CorrectionOutcome::Suggestion {
+                        suggestion,
+                        auto_apply,
+                        ..
+                    } => {
+                        assert_eq!(suggestion.surface, "きょうはあした");
+                        assert!(auto_apply);
+                    }
+                    other => panic!("expected 2nd typo via alt_reading, got {other:?}"),
+                }
+            },
         );
     }
 }

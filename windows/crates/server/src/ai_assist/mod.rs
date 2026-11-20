@@ -1091,6 +1091,15 @@ const WORD_BOUNDARY_CHARS: &[char] = &[
     'を', 'に', 'は', 'が', 'で', 'と', 'へ', 'も', 'の', 'ね', 'よ', 'な', 'か', 'ば', 'や', 'ら',
 ];
 
+/// Confidence metadata reported by the native keyboard-channel ranker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelConfidence {
+    /// Scaled `gain * 10.0` (rounded), preserving `Eq` on [`TypoSuggestion`].
+    pub gain_tenths: u32,
+    /// True when a competitive secondary reading (`alt_reading`) was also emitted.
+    pub has_alt_reading: bool,
+}
+
 /// 💡 もしかして 候補。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypoSuggestion {
@@ -1102,6 +1111,8 @@ pub struct TypoSuggestion {
     pub token_surface: String,
     /// 学習済みデータから得られた候補か。
     pub learned: bool,
+    /// ネイティブチャネル推定の確信度（該当経路のみ）。
+    pub channel_confidence: Option<ChannelConfidence>,
 }
 
 /// 生成直後の「もしかして」誤字補正候補 (確定通知の突合用)。
@@ -1173,6 +1184,10 @@ fn heuristic_typo_suggestion(
     let hiragana_owned = katakana_to_hiragana(raw_trimmed);
     let hiragana = hiragana_owned.as_str();
 
+    if reading_check::user_dictionary_contains_reading(hiragana) {
+        return None;
+    }
+
     // 0.5. ローマ字子音浮き・混入タイポ (例: 「おｋせり」->「おかえり」, 「おｔかれ」->「おつかれ」)
     if let Some(decoded_hira) = romaji_decoder::decode_floating_consonant_typo(hiragana) {
         return Some(TypoSuggestion {
@@ -1180,6 +1195,7 @@ fn heuristic_typo_suggestion(
             token_reading: raw_trimmed.to_string(),
             token_surface: decoded_hira,
             learned: false,
+            channel_confidence: None,
         });
     }
 
@@ -1191,6 +1207,7 @@ fn heuristic_typo_suggestion(
             token_reading: matched.reading,
             token_surface: matched.surface,
             learned: true,
+            channel_confidence: None,
         });
     }
 
@@ -1207,6 +1224,7 @@ fn heuristic_typo_suggestion(
                 token_reading: typo_hira,
                 token_surface: fix.to_string(),
                 learned: false,
+                channel_confidence: None,
             });
         }
     }
@@ -1244,6 +1262,7 @@ fn heuristic_typo_suggestion(
             token_reading: hiragana.chars().take(typo_len).collect(),
             token_surface: fix.to_string(),
             learned: false,
+            channel_confidence: None,
         });
     }
 
@@ -1259,6 +1278,7 @@ fn heuristic_typo_suggestion(
             token_reading: hiragana.to_string(),
             token_surface: rule_fix,
             learned: false,
+            channel_confidence: None,
         });
     }
 
@@ -1281,6 +1301,7 @@ fn heuristic_typo_suggestion(
                     token_reading: hiragana.to_string(),
                     token_surface: v_reading.to_string(),
                     learned: false,
+                    channel_confidence: None,
                 });
             } else if best_vocab_match.is_none() {
                 best_vocab_match = Some((false, v_reading));
@@ -1293,6 +1314,7 @@ fn heuristic_typo_suggestion(
             token_reading: hiragana.to_string(),
             token_surface: reading.to_string(),
             learned: false,
+            channel_confidence: None,
         });
     }
 
@@ -1383,6 +1405,7 @@ fn heuristic_typo_suggestion(
             token_reading: prefix,
             token_surface: v_reading,
             learned: false,
+            channel_confidence: None,
         });
     }
 
@@ -1393,16 +1416,25 @@ fn heuristic_typo_suggestion(
             token_reading: correction.token_reading,
             token_surface: correction.variant_reading,
             learned: false,
+            channel_confidence: None,
         });
     }
 
     None
 }
 
+#[cfg(test)]
+pub(crate) static USER_DICTIONARY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn set_user_dictionary_vocabulary<'a>(entries: impl IntoIterator<Item = (&'a str, &'a str)>) {
+    reading_check::set_user_dictionary_vocabulary(entries);
+}
+
 fn is_known_clean_reading(hiragana: &str) -> bool {
-    STANDARD_VOCAB
-        .iter()
-        .any(|&(reading, _)| reading == hiragana)
+    reading_check::user_dictionary_contains_reading(hiragana)
+        || STANDARD_VOCAB
+            .iter()
+            .any(|&(reading, _)| reading == hiragana)
         || typo_variant::lookup_surface(hiragana).is_some()
 }
 
@@ -1625,6 +1657,7 @@ fn correction_for_embedded_typo(hiragana: &str) -> Option<TypoSuggestion> {
                 token_reading: typo,
                 token_surface: fix.to_string(),
                 learned: false,
+                channel_confidence: None,
             });
         }
     }
@@ -1668,6 +1701,27 @@ mod tests {
             prediction_port: 1,
             ..AiAssistConfig::default()
         }
+    }
+
+    #[test]
+    fn ai_assist_respects_synced_user_dictionary_readings_without_typo_false_positive() {
+        let _guard = super::USER_DICTIONARY_TEST_LOCK.lock().unwrap();
+        // A normal dictionary reading can look exactly like a keyboard typo.
+        let reading = "きんにちわ";
+        let surface = "碧海乃";
+        super::set_user_dictionary_vocabulary([(reading, surface), ("アオミノ", surface)]);
+        assert!(super::is_known_clean_reading("キンニチワ"));
+        assert_eq!(
+            super::reading_check::reading_for_surface(surface).as_deref(),
+            Some("キンニチワ")
+        );
+        assert_eq!(
+            super::reading_check::min_reading_distance(surface, "あおみの"),
+            Some(0)
+        );
+        assert_eq!(fetch_moshikashite_candidate("", reading, &config()), None);
+        super::set_user_dictionary_vocabulary([]);
+        assert!(!super::is_known_clean_reading("キンニチワ"));
     }
 
     #[test]

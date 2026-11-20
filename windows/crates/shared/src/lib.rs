@@ -400,6 +400,15 @@ impl error::Error for ConfigError {
 }
 
 impl ConfigError {
+    pub fn is_user_dictionary_error(&self) -> bool {
+        match self {
+            Self::Read { path, .. } | Self::Parse { path, .. } => path
+                .file_name()
+                .is_some_and(|name| name == USER_DICTIONARY_FILENAME),
+            _ => false,
+        }
+    }
+
     pub fn is_version_compatibility_error(&self) -> bool {
         matches!(
             self,
@@ -690,6 +699,9 @@ pub struct GeneralConfig {
     /// Controls normal-conversion correction and the model fallback together.
     #[serde(default = "default_keyboard_typo_correction_enabled")]
     pub experimental_typo_correction: bool,
+    /// Strength preset for automatic typo correction before commit.
+    #[serde(default, deserialize_with = "deserialize_auto_typo_correction")]
+    pub auto_typo_correction: assist_policy::AutoTypoCorrectionStrength,
     #[serde(default)]
     pub predictive_conversion: bool,
     /// Sentence prediction. Keep the persisted legacy key for existing settings.
@@ -742,6 +754,7 @@ impl Default for GeneralConfig {
             live_conversion_reading_vertical_adjustment:
                 LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT,
             experimental_typo_correction: true,
+            auto_typo_correction: assist_policy::AutoTypoCorrectionStrength::Standard,
             predictive_conversion: false,
             experimental_ai_assist: true,
             experimental_translation: false,
@@ -962,6 +975,97 @@ mod tests {
         config_path
     }
 
+    #[test]
+    fn learning_config_strength_defaults_to_model_first_for_legacy_json() {
+        use super::LearningStrength;
+        let legacy: LearningConfig = serde_json::from_str(r#"{"mode":"read_only"}"#).unwrap();
+        assert_eq!(legacy.mode, LearningMode::ReadOnly);
+        assert_eq!(legacy.strength, LearningStrength::ModelFirst);
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap()["strength"],
+            "model_first"
+        );
+    }
+
+    #[test]
+    fn user_dictionary_pos_defaults_to_proper_noun_for_legacy_json() {
+        use super::{UserDictionaryEntry, UserDictionaryPos};
+        let legacy: UserDictionaryEntry =
+            serde_json::from_str(r#"{"reading":"ぜろ","word":"Zero"}"#).unwrap();
+        assert_eq!(legacy.pos, UserDictionaryPos::ProperNoun);
+        assert_eq!(serde_json::to_value(legacy).unwrap()["pos"], "proper_noun");
+    }
+
+    #[test]
+    fn user_dictionary_migrates_from_settings_json_to_user_dictionary_json() {
+        use super::USER_DICTIONARY_FILENAME;
+        let temp = tempfile::tempdir().unwrap();
+        let _env = AppDataGuard::set(temp.path());
+        let config = AppConfig::default();
+        let mut legacy = serde_json::to_value(config).unwrap();
+        legacy["user_dictionary"]["entries"] =
+            serde_json::json!([{"reading":"ぜろ","word":"Zero"}]);
+        let settings_path = AppConfig::settings_path().unwrap();
+        let root = settings_path.parent().unwrap();
+        write_settings_fixture(root, &legacy.to_string());
+
+        let migrated = AppConfig::read().unwrap();
+        assert_eq!(migrated.user_dictionary.entries.len(), 1);
+        assert_eq!(migrated.user_dictionary.entries[0].word, "Zero");
+        assert!(root.join(USER_DICTIONARY_FILENAME).is_file());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&settings_path).unwrap())
+                .unwrap(),
+            legacy
+        );
+        // An explicitly empty file wins over a populated stale settings object.
+        AppConfig::write_user_dictionary(&[]).unwrap();
+        assert!(AppConfig::read()
+            .unwrap()
+            .user_dictionary
+            .entries
+            .is_empty());
+        migrated.write().unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
+        assert_eq!(saved["user_dictionary"]["entries"], serde_json::json!([]));
+        assert!(AppConfig::read()
+            .unwrap()
+            .user_dictionary
+            .entries
+            .is_empty());
+    }
+
+    #[test]
+    fn user_dictionary_accepts_up_to_10000_entries_and_clamps_beyond() {
+        use super::{UserDictionaryEntry, UserDictionaryPos, MAX_USER_DICTIONARY_ENTRIES};
+        assert_eq!(MAX_USER_DICTIONARY_ENTRIES, 10_000);
+        let temp = tempfile::tempdir().unwrap();
+        let _env = AppDataGuard::set(temp.path());
+        let entries: Vec<_> = (0..=MAX_USER_DICTIONARY_ENTRIES)
+            .map(|index| UserDictionaryEntry {
+                reading: format!("じしょ{index}"),
+                word: format!("登録{index}"),
+                pos: UserDictionaryPos::CommonNoun,
+            })
+            .collect();
+        AppConfig::write_user_dictionary(&entries).unwrap();
+        let hydrated = AppConfig::read().unwrap();
+        assert_eq!(
+            hydrated.user_dictionary.entries,
+            entries[..MAX_USER_DICTIONARY_ENTRIES]
+        );
+        hydrated.write().unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(AppConfig::settings_path().unwrap()).unwrap())
+                .unwrap();
+        let baseline = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(
+            settings, baseline,
+            "dictionary entries belong only in the dedicated file"
+        );
+    }
+
     fn env_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
@@ -1084,6 +1188,56 @@ mod tests {
         let enabled: GeneralConfig =
             serde_json::from_str(r#"{"experimental_typo_correction":true}"#).unwrap();
         assert!(enabled.experimental_typo_correction);
+    }
+
+    #[test]
+    fn auto_typo_correction_defaults_to_standard_and_migrates_legacy_bool() {
+        use crate::assist_policy::AutoTypoCorrectionStrength;
+
+        let default_config = GeneralConfig::default();
+        assert_eq!(
+            default_config.auto_typo_correction,
+            AutoTypoCorrectionStrength::Standard
+        );
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            deserialized.auto_typo_correction,
+            AutoTypoCorrectionStrength::Standard
+        );
+
+        let legacy_disabled: GeneralConfig =
+            serde_json::from_str(r#"{"auto_typo_correction":false}"#).unwrap();
+        assert_eq!(
+            legacy_disabled.auto_typo_correction,
+            AutoTypoCorrectionStrength::Off
+        );
+
+        let legacy_enabled: GeneralConfig =
+            serde_json::from_str(r#"{"auto_typo_correction":true}"#).unwrap();
+        assert_eq!(
+            legacy_enabled.auto_typo_correction,
+            AutoTypoCorrectionStrength::Standard
+        );
+
+        for (raw, expected) in [
+            (r#"{"auto_typo_correction":"off"}"#, AutoTypoCorrectionStrength::Off),
+            (
+                r#"{"auto_typo_correction":"conservative"}"#,
+                AutoTypoCorrectionStrength::Conservative,
+            ),
+            (
+                r#"{"auto_typo_correction":"standard"}"#,
+                AutoTypoCorrectionStrength::Standard,
+            ),
+            (
+                r#"{"auto_typo_correction":"aggressive"}"#,
+                AutoTypoCorrectionStrength::Aggressive,
+            ),
+        ] {
+            let parsed: GeneralConfig = serde_json::from_str(raw).unwrap();
+            assert_eq!(parsed.auto_typo_correction, expected);
+        }
     }
 
     #[test]
@@ -1700,10 +1854,26 @@ pub struct CharacterWidthConfig {
     pub groups: CharacterWidthGroups,
 }
 
+pub use conversion_policy::MAX_USER_DICTIONARY_ENTRIES;
+pub const USER_DICTIONARY_FILENAME: &str = "user-dictionary.json";
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserDictionaryPos {
+    #[default]
+    ProperNoun,
+    CommonNoun,
+    SahenNoun,
+    Shortcut,
+    Symbol,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct UserDictionaryEntry {
     pub reading: String,
     pub word: String,
+    #[serde(default)]
+    pub pos: UserDictionaryPos,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
@@ -1712,16 +1882,28 @@ pub struct UserDictionaryConfig {
     pub entries: Vec<UserDictionaryEntry>,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LearningStrength {
+    #[default]
+    ModelFirst,
+    Balanced,
+    Strong,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct LearningConfig {
     #[serde(default)]
     pub mode: LearningMode,
+    #[serde(default)]
+    pub strength: LearningStrength,
 }
 
 impl Default for LearningConfig {
     fn default() -> Self {
         Self {
             mode: LearningMode::Enabled,
+            strength: LearningStrength::ModelFirst,
         }
     }
 }
@@ -1753,6 +1935,26 @@ fn default_punctuation_commit_target_enabled() -> bool {
 
 fn default_keyboard_typo_correction_enabled() -> bool {
     true
+}
+
+fn deserialize_auto_typo_correction<'de, D>(
+    deserializer: D,
+) -> Result<assist_policy::AutoTypoCorrectionStrength, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Bool(bool),
+        Str(String),
+    }
+
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::Bool(false)) => Ok(assist_policy::AutoTypoCorrectionStrength::Off),
+        Some(Value::Bool(true)) | None => Ok(assist_policy::AutoTypoCorrectionStrength::Standard),
+        Some(Value::Str(s)) => Ok(assist_policy::AutoTypoCorrectionStrength::from_str_lossy(&s)),
+    }
 }
 
 fn default_ai_assist_enabled() -> bool {
@@ -1864,6 +2066,78 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct UserDictionaryFile {
+    version: u32,
+    entries: Vec<UserDictionaryEntry>,
+}
+
+fn read_dictionary_file(root: &Path) -> Result<Option<Vec<UserDictionaryEntry>>, ConfigError> {
+    let path = root.join(USER_DICTIONARY_FILENAME);
+    let data = match fs::read(&path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(ConfigError::Read { path, source }),
+    };
+    let mut file: UserDictionaryFile =
+        serde_json::from_slice(&data).map_err(|source| ConfigError::Parse {
+            path: path.clone(),
+            source,
+        })?;
+    if file.version != 1 {
+        return Err(ConfigError::Read {
+            path,
+            source: io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported user dictionary version",
+            ),
+        });
+    }
+    file.entries.truncate(MAX_USER_DICTIONARY_ENTRIES);
+    Ok(Some(file.entries))
+}
+
+fn write_dictionary_file(root: &Path, entries: &[UserDictionaryEntry]) -> Result<(), ConfigError> {
+    let path = root.join(USER_DICTIONARY_FILENAME);
+    let temp = temporary_config_path(root);
+    let file = UserDictionaryFile {
+        version: 1,
+        entries: entries
+            .iter()
+            .take(MAX_USER_DICTIONARY_ENTRIES)
+            .cloned()
+            .collect(),
+    };
+    let data = serde_json::to_vec(&file).map_err(|source| ConfigError::Serialize { source })?;
+    write_temp_config(&temp, &data)?;
+    replace_config_file(&temp, &path).map_err(|source| {
+        let _ = fs::remove_file(&temp);
+        ConfigError::Persist {
+            from: temp,
+            to: path,
+            source,
+        }
+    })
+}
+
+fn resolve_user_dictionary(
+    root: &Path,
+    mut legacy: Vec<UserDictionaryEntry>,
+) -> Result<Vec<UserDictionaryEntry>, ConfigError> {
+    if let Some(entries) = read_dictionary_file(root)? {
+        return Ok(entries);
+    }
+    if !legacy.is_empty() {
+        let _guard = ConfigWriteGuard::acquire()?;
+        if let Some(entries) = read_dictionary_file(root)? {
+            return Ok(entries);
+        }
+        legacy.truncate(MAX_USER_DICTIONARY_ENTRIES);
+        write_dictionary_file(root, &legacy)?;
+    }
+    Ok(legacy)
+}
+
 impl AppConfig {
     pub fn settings_path() -> Result<PathBuf, ConfigError> {
         Ok(get_config_root()?.join(SETTINGS_FILENAME))
@@ -1876,7 +2150,19 @@ impl AppConfig {
         let config_path = config_root.join(SETTINGS_FILENAME);
         ensure_existing_config_is_writable(&config_path)?;
         let temp_path = temporary_config_path(&config_root);
-        let config_str = serde_json::to_string_pretty(self)
+        if !config_root.join(USER_DICTIONARY_FILENAME).exists() {
+            // The caller may hold an earlier settings-only snapshot. Read the
+            // legacy entries from disk under the same lock before clearing them.
+            let legacy = Self::read_settings()
+                .ok()
+                .map(|config| config.user_dictionary.entries)
+                .filter(|entries| !entries.is_empty())
+                .unwrap_or_else(|| self.user_dictionary.entries.clone());
+            resolve_user_dictionary(&config_root, legacy)?;
+        }
+        let mut settings = self.clone();
+        settings.user_dictionary.entries.clear();
+        let config_str = serde_json::to_string_pretty(&settings)
             .map_err(|source| ConfigError::Serialize { source })?;
         compare_config_version(&config_path, &config_str)?;
 
@@ -1894,6 +2180,25 @@ impl AppConfig {
     }
 
     pub fn read() -> Result<Self, ConfigError> {
+        let root = get_config_root()?;
+        let mut config = Self::read_settings()?;
+        config.user_dictionary.entries =
+            resolve_user_dictionary(&root, std::mem::take(&mut config.user_dictionary.entries))?;
+        Ok(config)
+    }
+
+    pub fn write_user_dictionary(entries: &[UserDictionaryEntry]) -> Result<(), ConfigError> {
+        let _guard = ConfigWriteGuard::acquire()?;
+        let root = get_config_root()?;
+        ensure_config_dir(&root)?;
+        ensure_existing_config_is_writable(&root.join(SETTINGS_FILENAME))?;
+        // An unsupported or corrupt existing file must not be silently replaced.
+        read_dictionary_file(&root)?;
+        write_dictionary_file(&root, entries)
+    }
+
+    /// Read settings without opening or migrating user dictionary storage.
+    pub fn read_settings() -> Result<Self, ConfigError> {
         let config_path = get_config_root()?.join(SETTINGS_FILENAME);
         if !config_path.exists() {
             return Ok(AppConfig::default());
@@ -1948,6 +2253,11 @@ impl AppConfig {
             }
         };
 
+        let mut config = config;
+        config.user_dictionary.entries = resolve_user_dictionary(
+            config_root,
+            std::mem::take(&mut config.user_dictionary.entries),
+        )?;
         let rewrite_error = rewrite_config(&config).err();
         Ok(AppConfigLoadResult {
             config,
@@ -2011,7 +2321,7 @@ impl AppConfigCache {
             .as_ref()
             .is_some_and(|(path, prev, _)| path == &config_path && prev == &stamp);
         if !unchanged {
-            let config = AppConfig::read()?;
+            let config = AppConfig::read_settings()?;
             let updated_stamp = ConfigFileStamp::for_path(&config_path).unwrap_or(stamp);
             self.cached = Some((config_path, updated_stamp, config));
         }

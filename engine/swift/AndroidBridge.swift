@@ -85,7 +85,10 @@ private let embeddedPerformance = EmbeddedPerformance()
         guard let id = request["candidateId"] as? String, let candidateId = UInt64(id) else {
             return ["error": "invalid candidate identity"]
         }
-        return ["learned": commit_learning_candidate(candidateId: candidateId, commitKind: 0)]
+        return ["learned": commit_learning_candidate_with_explicit(
+            candidateId: candidateId, commitKind: 0,
+            explicitSelection: (request["explicitSelection"] as? Bool) ?? false
+        )]
     }
     if op == "forget" {
         guard let id = request["candidateId"] as? String, let candidateId = UInt64(id) else {
@@ -103,6 +106,7 @@ private let embeddedPerformance = EmbeddedPerformance()
     }
     if op == "clear" { clear_text(); return [:] }
     if op == "close" {
+        _ = flush_learning_memory()
         clear_text()
         converter = KanaKanjiConverter(dictionaryURL: converterDictionaryURL, preloadDictionary: false)
         normalNBestSupplementConverter = KanaKanjiConverter(dictionaryURL: converterDictionaryURL, preloadDictionary: false)

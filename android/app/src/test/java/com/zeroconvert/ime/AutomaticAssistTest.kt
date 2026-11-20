@@ -218,4 +218,27 @@ class AutomaticAssistTest {
         assertNull(ReconversionPlan.create("未知", restore = { null }) { error("must not convert") })
         assertNull(ReconversionPlan.create("改\n行", restore = { error("must not restore") }) { error("must not convert") })
     }
+
+    @Test fun revertToOriginTriggersAutomaticCallbackWithoutPollutingSelectedOrSuggestions() {
+        val state = AssistPresentation(RustAssistPolicy)
+        val revertSignal = AiAssistResult(
+            type = AiAssistType.TYPO_CORRECTION,
+            text = "",
+            label = "",
+            relevance = 100,
+            sourceReading = "しゅうてんどうじ",
+            autoApply = true,
+            sourceSurface = "終点童子",
+            revertToOrigin = true,
+        )
+        val first = state.complete(AiAssistType.TYPO_CORRECTION, revertSignal, elapsedMs = 5)
+        assertEquals(revertSignal, first.automaticCorrection)
+        assertNull(first.selected)
+        assertTrue(first.suggestions.isEmpty())
+
+        val afterPred = state.complete(AiAssistType.PREDICTION, prediction(), elapsedMs = 20)
+        assertNull(afterPred.automaticCorrection)
+        assertEquals(prediction(), afterPred.selected)
+        assertEquals(listOf(prediction()), afterPred.suggestions)
+    }
 }

@@ -250,6 +250,8 @@ def check_converter():
         dicdata_store = package.read(prefix + converter_patch.DICDATA_STORE_PATH).decode('utf-8')
         zenz_input_generator = package.read(prefix + converter_patch.ZENZ_INPUT_GENERATOR_PATH).decode('utf-8')
         zenz = package.read(prefix + converter_patch.ZENZ_PATH).decode('utf-8')
+        dictionary_builder = package.read(prefix + converter_patch.DYNAMIC_DICTIONARY_BUILDER_PATH).decode('utf-8')
+        dictionary_state = package.read(prefix + converter_patch.DYNAMIC_DICTIONARY_STATE_PATH).decode('utf-8')
     converter_patch.patch_modulemap(modulemap)
     converter_patch.patch_zenz_context(context)
     converter_patch.patch_zenz_prompt_builder(prompt_builder)
@@ -260,6 +262,8 @@ def check_converter():
     converter_patch.patch_dicdata_store(dicdata_store)
     converter_patch.patch_zenz_input_generator(zenz_input_generator)
     converter_patch.patch_zenz(zenz)
+    converter_patch.patch_dynamic_dictionary_builder(dictionary_builder)
+    converter_patch.patch_dynamic_dictionary_state(dictionary_state)
     print(json.dumps({'converter': CONVERTER, 'anchors': 'ok'}))
 
 
@@ -328,6 +332,12 @@ def prepare_converter(converter_root):
         converter_patch.patch_zenz_input_generator(zenz_input_generator.read_text(encoding='utf-8')),
         encoding='utf-8',
     )
+    for relative, patch in (
+        (converter_patch.DYNAMIC_DICTIONARY_BUILDER_PATH, converter_patch.patch_dynamic_dictionary_builder),
+        (converter_patch.DYNAMIC_DICTIONARY_STATE_PATH, converter_patch.patch_dynamic_dictionary_state),
+    ):
+        source = converter / relative
+        source.write_text(patch(source.read_text(encoding='utf-8')), encoding='utf-8')
     zenz = converter / converter_patch.ZENZ_PATH
     zenz.write_text(
         converter_patch.patch_zenz(zenz.read_text(encoding='utf-8')),

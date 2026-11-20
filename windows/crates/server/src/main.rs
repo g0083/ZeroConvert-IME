@@ -41,6 +41,8 @@ static ASSIST_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::co
 static JEV_CONVERSION_ENABLED: AtomicBool = AtomicBool::new(false);
 static AI_ASSIST_ENABLED: AtomicBool = AtomicBool::new(false);
 static TYPO_CORRECTION_ENABLED: AtomicBool = AtomicBool::new(false);
+static AUTO_TYPO_CORRECTION_STRENGTH: AtomicU8 =
+    AtomicU8::new(shared::assist_policy::AutoTypoCorrectionStrength::Standard.to_u8());
 static TRANSLATION_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRANSLATION_TARGET: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 static TRANSLATION_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -83,6 +85,13 @@ static CONVERSION_CONTINUATION: std::sync::RwLock<Option<ConversionContinuation>
     std::sync::RwLock::new(None);
 
 fn reload_ai_assist_from_settings(config: &AppConfig) {
+    ai_assist::set_user_dictionary_vocabulary(
+        config
+            .user_dictionary
+            .entries
+            .iter()
+            .map(|entry| (entry.reading.as_str(), entry.word.as_str())),
+    );
     SERVER_LEARNING_MODE.store(
         learning_mode_to_code(config.learning.mode),
         Ordering::Relaxed,
@@ -97,15 +106,18 @@ fn reload_ai_assist_from_settings(config: &AppConfig) {
     AI_ASSIST_ENABLED.store(enabled, Ordering::Relaxed);
     let correction_enabled = config.general.experimental_typo_correction;
     TYPO_CORRECTION_ENABLED.store(correction_enabled, Ordering::Relaxed);
+    let auto_correction = config.general.auto_typo_correction;
+    AUTO_TYPO_CORRECTION_STRENGTH.store(auto_correction.to_u8(), Ordering::Relaxed);
     let is_lm_studio = config.general.experimental_ai_engine == "lm_studio";
     AI_ENGINE_IS_LM_STUDIO.store(is_lm_studio, Ordering::Relaxed);
     if correction_enabled && !is_lm_studio {
         ai_assist::keyboard_hybrid::prewarm();
     }
     eprintln!(
-        "[AI Assist] config loaded: prediction={}, correction={}, corrector_engine={}",
+        "[AI Assist] config loaded: prediction={}, correction={}, auto_correction={}, corrector_engine={}",
         enabled,
         correction_enabled,
+        auto_correction.as_str(),
         if is_lm_studio {
             "lm_studio"
         } else {
@@ -181,9 +193,30 @@ fn append_ai_assist_candidates(
     config: &AiAssistConfig,
     final_suggestions: &mut Vec<Suggestion>,
     kind: u32,
-) -> (u32, String) {
+) -> (u32, String, bool) {
+    let (relevance, continuation, auto_apply, _) = append_ai_assist_candidates_with_refinement(
+        context,
+        hiragana_text,
+        composing_raw,
+        config,
+        final_suggestions,
+        kind,
+        None,
+    );
+    (relevance, continuation, auto_apply)
+}
+
+fn append_ai_assist_candidates_with_refinement(
+    context: &str,
+    hiragana_text: &str,
+    composing_raw: &str,
+    config: &AiAssistConfig,
+    final_suggestions: &mut Vec<Suggestion>,
+    kind: u32,
+    refinement: Option<ai_assist::corrector::AutoRefinementContext<'_>>,
+) -> (u32, String, bool, bool) {
     if !config.enabled || hiragana_text.is_empty() {
-        return (0, String::new());
+        return (0, String::new(), false, false);
     }
     let first_surface = final_suggestions
         .first()
@@ -194,41 +227,19 @@ fn append_ai_assist_candidates(
         .first()
         .map(|s| s.corresponding_count)
         .unwrap_or(0);
-
-    // 1. Generate correction against the immutable normal-conversion snapshot.
-    //    Evidence is evaluated independently from the unchanged-surface prediction.
-    // The canonical reading preserves mixed kana/Latin. Never correct a second,
-    // all-Latin raw key sequence as though it were an independent Japanese input.
-    let hybrid = (kind != 2)
-        .then(|| ai_assist::keyboard_hybrid::suggest(context, hiragana_text, composing_raw, config))
-        .flatten();
-    let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
-    let allow_channel_repair = hybrid.is_none();
-    let targets = [hiragana_text];
-    let mut found_typo = hybrid.flatten();
-    for target in targets
-        .into_iter()
-        .filter(|_| kind != 2 && !hybrid_proposal)
-    {
-        let suggestion = if allow_channel_repair {
-            ai_assist::corrector::suggest_composition(context, target, &first_surface, config)
-        } else {
-            ai_assist::corrector::suggest_composition_heuristic(
-                context,
-                target,
-                &first_surface,
-                config,
-            )
-        };
-        if let Some(suggestion) = suggestion {
-            found_typo = Some(suggestion);
-            break;
-        }
-    }
+    let strength = shared::assist_policy::AutoTypoCorrectionStrength::from_u8(
+        AUTO_TYPO_CORRECTION_STRENGTH.load(Ordering::Relaxed),
+    );
     let mut relevance = 0;
     let mut continuation = String::new();
-    if let Some(suggestion) = found_typo {
-        if !suggestion.surface.is_empty() && suggestion.surface != first_surface {
+    let mut auto_apply = false;
+    let mut revert_to_origin = false;
+
+    let mut push_typo_suggestion =
+        |suggestion: ai_assist::TypoSuggestion, can_auto: bool, channel_backed: bool| {
+            if suggestion.surface.is_empty() || suggestion.surface == first_surface {
+                return;
+            }
             let subtext = if suggestion.learned {
                 "💡 学習済み".to_string()
             } else {
@@ -244,30 +255,95 @@ fn append_ai_assist_candidates(
             });
             // 確定通知 (candidate_id 999901) と突き合わせるため候補を記憶する。
             ai_assist::remember_typo_candidate(&suggestion);
-            relevance = if hybrid_proposal {
+            auto_apply = can_auto;
+            relevance = if can_auto {
+                100
+            } else if channel_backed {
                 // Strong bounded keyboard evidence should be offered ahead of
                 // speculative continuation, while remaining below automatic 100.
                 80
-            } else if !hybrid_proposal
-                && ai_assist::corrector::can_auto_apply_composition(
-                    hiragana_text,
-                    &first_surface,
-                    &suggestion.surface,
-                )
-            {
-                100
             } else if suggestion.learned {
                 70
             } else {
                 30
             };
+        };
+
+    // 1. Generate correction against the immutable normal-conversion snapshot.
+    //    Evidence is evaluated independently from the unchanged-surface prediction.
+    // The canonical reading preserves mixed kana/Latin. Never correct a second,
+    // all-Latin raw key sequence as though it were an independent Japanese input.
+    if kind != 2 {
+        if let Some(refinement) = refinement {
+            match ai_assist::corrector::suggest_auto_refinement(
+                context,
+                hiragana_text,
+                &first_surface,
+                composing_raw,
+                "",
+                "",
+                &refinement,
+                strength,
+                config,
+            ) {
+                ai_assist::corrector::CorrectionOutcome::None => {}
+                ai_assist::corrector::CorrectionOutcome::RevertToOrigin => {
+                    revert_to_origin = true;
+                    relevance = 100;
+                }
+                ai_assist::corrector::CorrectionOutcome::Suggestion {
+                    suggestion,
+                    auto_apply: can_auto,
+                    channel_backed,
+                } => {
+                    push_typo_suggestion(suggestion, can_auto, channel_backed);
+                }
+            }
+        } else {
+            let hybrid = ai_assist::keyboard_hybrid::suggest(
+                context,
+                hiragana_text,
+                composing_raw,
+                config,
+            );
+            let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
+            let allow_channel_repair = hybrid.is_none();
+            let found_typo = hybrid.flatten().or_else(|| {
+                if allow_channel_repair {
+                    ai_assist::corrector::suggest_composition(
+                        context,
+                        hiragana_text,
+                        &first_surface,
+                        config,
+                    )
+                } else {
+                    ai_assist::corrector::suggest_composition_heuristic(
+                        context,
+                        hiragana_text,
+                        &first_surface,
+                        config,
+                    )
+                }
+            });
+            if let Some(suggestion) = found_typo {
+                let can_auto =
+                    ai_assist::corrector::can_auto_apply_composition_suggestion_with_strength(
+                        hiragana_text,
+                        &first_surface,
+                        &suggestion,
+                        strength,
+                    );
+                push_typo_suggestion(suggestion, can_auto, hybrid_proposal);
+            }
         }
     }
 
-    append_local_macros(hiragana_text, whole_composition_count, final_suggestions);
+    if !revert_to_origin {
+        append_local_macros(hiragana_text, whole_composition_count, final_suggestions);
+    }
 
     // Generate against the unchanged visible baseline, even if a correction exists.
-    if kind != 1 {
+    if kind != 1 && !revert_to_origin {
         if let Some(prediction) =
             ai_assist::prediction::suggest(context, hiragana_text, &first_surface, config)
         {
@@ -285,7 +361,7 @@ fn append_ai_assist_candidates(
             }
         }
     }
-    (relevance, continuation)
+    (relevance, continuation, auto_apply, revert_to_origin)
 }
 // Do not queue obsolete cloud work or hold the composition mutation lock.
 static JEV_REQUEST_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -704,16 +780,22 @@ unsafe extern "C" {
     fn GetComposedTextForCursorRange(lengthPtr: *mut c_int) -> *mut *mut FFICandidate;
     fn FreeCString(ptr: *mut c_char);
     fn FreeCandidateList(ptr: *mut *mut FFICandidate, length: c_int);
-    fn CommitLearningCandidate(candidateId: u64, commitKind: c_int) -> bool;
-    fn CommitLearningCandidates(
+    fn CommitLearningCandidateWithExplicit(
+        candidateId: u64,
+        commitKind: c_int,
+        explicit: bool,
+    ) -> bool;
+    fn CommitLearningCandidatesWithExplicit(
         candidateIds: *const u64,
         commitKinds: *const c_int,
+        explicit: *const bool,
         count: c_int,
     ) -> c_int;
     fn ResetLearningMemory() -> bool;
     fn ForgetLearningCandidate(candidateId: u64) -> bool;
     fn GetLearningStats() -> *mut c_char;
     fn LoadConfig();
+    fn FlushLearningMemory() -> bool;
     fn SetRequestId(request_id: u64);
     fn SetServerLogCallbacks(
         log_enabled: extern "C" fn() -> bool,
@@ -1012,7 +1094,18 @@ fn configure_server_logging(config: &AppConfig) -> Option<LogPaths> {
 }
 
 fn reload_server_logging_from_settings() -> Option<LogPaths> {
-    let config = AppConfig::read().unwrap_or_default();
+    let config = AppConfig::read()
+        .or_else(|error| {
+            if error.is_user_dictionary_error() {
+                eprintln!("Failed to refresh user dictionary: {error}");
+                let mut settings = AppConfig::read_settings()?;
+                settings.user_dictionary.entries.clear();
+                Ok(settings)
+            } else {
+                Err(error)
+            }
+        })
+        .unwrap_or_default();
     reload_ai_assist_from_settings(&config);
     configure_server_logging(&config)
 }
@@ -1654,8 +1747,8 @@ fn clear_text() {
     }
 }
 
-fn swift_commit_learning_candidate(candidate_id: u64, commit_kind: i32) -> bool {
-    unsafe { CommitLearningCandidate(candidate_id, commit_kind as c_int) }
+fn swift_commit_learning_candidate(candidate_id: u64, commit_kind: i32, explicit: bool) -> bool {
+    unsafe { CommitLearningCandidateWithExplicit(candidate_id, commit_kind as c_int, explicit) }
 }
 
 fn swift_commit_learning_candidates(commits: &[shared::proto::LearningCandidateCommit]) -> usize {
@@ -1670,8 +1763,18 @@ fn swift_commit_learning_candidates(commits: &[shared::proto::LearningCandidateC
         .iter()
         .map(|commit| commit.commit_kind as c_int)
         .collect::<Vec<_>>();
-    let committed =
-        unsafe { CommitLearningCandidates(candidate_ids.as_ptr(), commit_kinds.as_ptr(), count) };
+    let explicit: Vec<_> = commits
+        .iter()
+        .map(|commit| commit.explicit_selection)
+        .collect();
+    let committed = unsafe {
+        CommitLearningCandidatesWithExplicit(
+            candidate_ids.as_ptr(),
+            commit_kinds.as_ptr(),
+            explicit.as_ptr(),
+            count,
+        )
+    };
     usize::try_from(committed).unwrap_or_default()
 }
 
@@ -1695,18 +1798,41 @@ fn swift_get_learning_stats() -> Option<shared::proto::LearningStatsResponse> {
         .into_owned();
     unsafe { FreeCString(pointer) };
     let value: serde_json::Value = serde_json::from_str(&json).ok()?;
-    Some(shared::proto::LearningStatsResponse {
+    let can_read = !PRIVATE_INPUT.load(Ordering::Relaxed) && server_learning_capability().read;
+    let typo_count = can_read
+        .then(ai_assist::learning::learned_typo_count)
+        .unwrap_or(0) as u32;
+    let english_count = can_read
+        .then(ai_assist::english_learning::learned_english_count)
+        .unwrap_or(0) as u32;
+    Some(learning_stats_response(&value, typo_count, english_count))
+}
+
+fn learning_stats_response(
+    value: &serde_json::Value,
+    typo_count: u32,
+    english_count: u32,
+) -> shared::proto::LearningStatsResponse {
+    let count = |key: &str| {
+        value[key]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0)
+    };
+    shared::proto::LearningStatsResponse {
         server_session_id: server_session_id(),
-        selection_count: value["selectionCount"].as_u64().unwrap_or(0) as u32,
+        selection_count: count("selectionCount"),
         history_present: value["historyPresent"].as_bool().unwrap_or(false),
         history_paused: value["historyPaused"].as_bool().unwrap_or(false),
         learning_mode: value["learningMode"]
             .as_str()
             .unwrap_or_default()
             .to_string(),
-        typo_count: ai_assist::learning::learned_typo_count() as u32,
-        english_count: ai_assist::english_learning::learned_english_count() as u32,
-    })
+        typo_count,
+        english_count,
+        post_composition_bigram_count: count("postCompositionBigramCount"),
+        selection_override_count: count("selectionOverrideCount"),
+    }
 }
 
 /// AI アシスト候補の確定通知を処理する。
@@ -1715,6 +1841,9 @@ fn swift_get_learning_stats() -> Option<shared::proto::LearningStatsResponse> {
 /// 記録した誤字読みと正解表記の組を自己学習ストアへ記録する。変換エンジン
 /// の学習キャッシュには存在しない id なので、エンジンへは転送しない。
 fn handle_ai_assist_learning_commit(candidate_id: u64, surface: &str) -> bool {
+    if PRIVATE_INPUT.load(Ordering::Relaxed) || !server_learning_capability().record {
+        return false;
+    }
     if candidate_id == shared::ai_candidate::PREDICTIVE {
         // Predictions are not dictionary candidates and have no learning store.
         return false;
@@ -2324,6 +2453,9 @@ impl AzookeyService for MyAzookeyService {
             || request.raw_input.chars().count() > 512
             || request.baseline.chars().count() > 512
             || request.baseline_reading.chars().count() > 512
+            || request.origin_reading.chars().count() > 512
+            || request.origin_raw_input.chars().count() > 512
+            || request.applied_prefix.chars().count() > 512
             || request.input_count <= 0
         {
             return Ok(Response::new(
@@ -2381,31 +2513,38 @@ impl AzookeyService for MyAzookeyService {
                 corresponding_count: request.input_count,
                 candidate_id: 0,
             }];
-            let (relevance, continuation) = append_ai_assist_candidates(
-                &context,
-                &assist_reading,
-                &request.raw_input,
-                &config,
-                &mut suggestions,
-                assist_kind,
-            );
+            let refinement = (assist_kind != 2
+                && !request.origin_reading.is_empty()
+                && !request.applied_prefix.is_empty())
+            .then(|| ai_assist::corrector::AutoRefinementContext {
+                origin_reading: &request.origin_reading,
+                origin_raw: &request.origin_raw_input,
+                origin_touch_hints: "",
+                applied_prefix: &request.applied_prefix,
+            });
+            let (relevance, continuation, can_auto, revert_to_origin) =
+                append_ai_assist_candidates_with_refinement(
+                    &context,
+                    &assist_reading,
+                    &request.raw_input,
+                    &config,
+                    &mut suggestions,
+                    assist_kind,
+                    refinement,
+                );
             suggestions.remove(0);
-            let auto_apply = relevance == 100
+            let auto_apply = !revert_to_origin
+                && can_auto
+                && relevance == 100
                 && suggestions
                     .iter()
-                    .find(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION)
-                    .is_some_and(|s| {
-                        ai_assist::corrector::can_auto_apply_composition(
-                            &request.reading,
-                            &request.baseline,
-                            &s.text,
-                        )
-                    });
+                    .any(|s| s.candidate_id == shared::ai_candidate::TYPO_CORRECTION);
             shared::proto::GetAssistCandidatesResponse {
                 suggestions,
                 auto_apply,
                 relevance,
                 continuation,
+                revert_to_origin,
             }
         })
         .await
@@ -3652,12 +3791,15 @@ impl AzookeyService for MyAzookeyService {
         {
             // Feedback is stateless. It must not claim/clear a newer composition
             // when the client flushes a previous explicit acceptance after commit.
+            PipeClient::authorize_connection(&request)?;
             let feedback = request.into_inner();
             if feedback.typo_reading.chars().count() <= 128
                 && feedback.surface.chars().count() <= 384
             {
                 tokio::task::spawn_blocking(move || {
-                    ai_assist::record_learned_typo(&feedback.typo_reading, &feedback.surface)
+                    !PRIVATE_INPUT.load(Ordering::Relaxed)
+                        && server_learning_capability().record
+                        && ai_assist::record_learned_typo(&feedback.typo_reading, &feedback.surface)
                 })
                 .await
                 .map_err(|_| Status::internal("typo feedback failed"))?;
@@ -3707,10 +3849,11 @@ impl AzookeyService for MyAzookeyService {
             ));
         }
 
+        let explicit_selection = request.explicit_selection;
         let committed = run_ffi(move || {
             set_request_id(request_id);
             let commit_start = Instant::now();
-            let committed = swift_commit_learning_candidate(candidate_id, commit_kind);
+            let committed = swift_commit_learning_candidate(candidate_id, commit_kind, explicit_selection);
             if !committed {
                 log_event(
                     ServerLogLevel::Warn,
@@ -3820,6 +3963,11 @@ impl AzookeyService for MyAzookeyService {
     ) -> Result<Response<shared::proto::ResetLearningMemoryResponse>, Status> {
         PipeClient::authorize_management(&request)?;
         let _mutation_guard = self.mutation_lock.lock().await;
+        if PRIVATE_INPUT.load(Ordering::Relaxed) {
+            return Err(Status::failed_precondition(
+                "learning is unavailable in private input",
+            ));
+        }
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
@@ -3917,6 +4065,14 @@ impl AzookeyService for MyAzookeyService {
     ) -> Result<Response<shared::proto::ForgetLearningCandidateResponse>, Status> {
         PipeClient::authorize_connection(&request)?;
         let _mutation_guard = self.mutation_lock.lock().await;
+        if PRIVATE_INPUT.load(Ordering::Relaxed) || !server_learning_capability().forget {
+            return Ok(Response::new(
+                shared::proto::ForgetLearningCandidateResponse {
+                    server_session_id: server_session_id(),
+                    forgot: false,
+                },
+            ));
+        }
         let request = request.into_inner();
         let _request_guard = ServerRequestGuard::begin(false);
         let request_id = request_id_or_next(request.request_id);
@@ -4040,12 +4196,7 @@ impl AzookeyService for MyAzookeyService {
         .await?
         .unwrap_or_else(|| shared::proto::LearningStatsResponse {
             server_session_id: server_session_id(),
-            selection_count: 0,
-            history_present: false,
-            history_paused: false,
-            learning_mode: String::new(),
-            typo_count: ai_assist::learning::learned_typo_count() as u32,
-            english_count: ai_assist::english_learning::learned_english_count() as u32,
+            ..Default::default()
         });
         Ok(Response::new(stats))
     }
@@ -4058,7 +4209,7 @@ impl AzookeyService for MyAzookeyService {
         let _request_guard = ServerRequestGuard::begin(false);
         let request = request.into_inner();
         let current_session = server_session_id();
-        if !server_learning_capability().read {
+        if PRIVATE_INPUT.load(Ordering::Relaxed) || !server_learning_capability().read {
             let empty_json = serde_json::to_string(
                 &shared::english_learning::EnglishLearningSnapshot::default(),
             )
@@ -4112,11 +4263,15 @@ impl AzookeyService for MyAzookeyService {
             return Err(Status::invalid_argument("invalid english learning record"));
         }
         let current_session = server_session_id();
-        if !server_learning_capability().record {
+        if PRIVATE_INPUT.load(Ordering::Relaxed) || !server_learning_capability().record {
             let revision =
-                tokio::task::spawn_blocking(ai_assist::english_learning::current_revision)
-                    .await
-                    .map_err(|_| Status::internal("english learning revision failed"))?;
+                if !PRIVATE_INPUT.load(Ordering::Relaxed) && server_learning_capability().read {
+                    tokio::task::spawn_blocking(ai_assist::english_learning::current_revision)
+                        .await
+                        .map_err(|_| Status::internal("english learning revision failed"))?
+                } else {
+                    0
+                };
             return Ok(Response::new(
                 shared::proto::RecordEnglishLearningResponse {
                     server_session_id: current_session,
@@ -4167,16 +4322,30 @@ impl AzookeyService for MyAzookeyService {
     }
 }
 
+fn flush_swift_learning_memory() {
+    if !PRIVATE_INPUT.load(Ordering::Relaxed) && !unsafe { FlushLearningMemory() } {
+        log_event(
+            ServerLogLevel::Warn,
+            "Could not flush all conversion learning stores",
+        );
+    }
+}
+
 struct MainFfiShutdownGuard;
 
 impl Drop for MainFfiShutdownGuard {
     fn drop(&mut self) {
+        // The executor drains this task before its Shutdown message.
+        enqueue_ffi(flush_swift_learning_memory);
         shutdown_main_ffi();
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     ai_assist::runtime::configure_settings_resolver(|| AppConfig::settings_path().ok());
+    ai_assist::runtime::configure_read_learning_resolver(|| {
+        !PRIVATE_INPUT.load(Ordering::Relaxed) && server_learning_capability().read
+    });
     // Child loader failures must exit instead of opening an invisible modal
     // entry-point dialog. Workers inherit this process error mode.
     unsafe {
@@ -4260,6 +4429,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_server() -> std::io::Result<()> {
     let service = MyAzookeyService::default();
+
+    let learning_service = service.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let Ok(_guard) = learning_service.mutation_lock.try_lock() else {
+                continue;
+            };
+            if !HAS_ACTIVE_COMPOSITION.load(Ordering::Relaxed)
+                && run_ffi(flush_swift_learning_memory).await.is_err()
+            {
+                break;
+            }
+        }
+    });
 
     tokio::task::spawn_blocking(|| {
         let _ = ai_assist::english_learning::load_english_learning_store();
@@ -4418,6 +4602,7 @@ mod path_tests {
                     input_count: 8,
                     request_id: 1,
                     kind: 0,
+                    ..Default::default()
                 },
             )),
         )
@@ -4550,6 +4735,63 @@ mod path_tests {
             listener.accept().is_err(),
             "a rejected tail must not issue a model request"
         );
+    }
+
+    #[test]
+    fn auto_typo_correction_strength_controls_relevance_and_auto_apply() {
+        use shared::assist_policy::AutoTypoCorrectionStrength;
+        use std::sync::atomic::Ordering;
+        let _guard = super::ai_assist::prediction::tests::MODEL_TEST_LOCK
+            .lock()
+            .unwrap();
+        let config = super::AiAssistConfig {
+            enabled: true,
+            corrector_port: 1,
+            ..Default::default()
+        };
+        let prev_typo = super::TYPO_CORRECTION_ENABLED.load(Ordering::Relaxed);
+        let prev_auto = super::AUTO_TYPO_CORRECTION_STRENGTH.load(Ordering::Relaxed);
+        super::TYPO_CORRECTION_ENABLED.store(true, Ordering::Relaxed);
+
+        let run_case = |strength: AutoTypoCorrectionStrength| -> (u32, bool, Vec<u64>) {
+            super::AUTO_TYPO_CORRECTION_STRENGTH.store(strength.to_u8(), Ordering::Relaxed);
+            let mut suggestions = vec![shared::proto::Suggestion {
+                prediction_reading: Default::default(),
+                text: "おkせり".to_string(),
+                subtext: String::new(),
+                corresponding_count: 6,
+                candidate_id: 0,
+            }];
+            let (relevance, _continuation, auto_apply) = super::append_ai_assist_candidates(
+                "",
+                "おkせり",
+                "okseri",
+                &config,
+                &mut suggestions,
+                1,
+            );
+            let ids = suggestions.iter().map(|s| s.candidate_id).collect();
+            (relevance, auto_apply, ids)
+        };
+
+        for strength in [
+            AutoTypoCorrectionStrength::Conservative,
+            AutoTypoCorrectionStrength::Standard,
+            AutoTypoCorrectionStrength::Aggressive,
+        ] {
+            let (rel, auto_on, ids) = run_case(strength);
+            assert_eq!(rel, 100);
+            assert!(auto_on);
+            assert!(ids.contains(&shared::ai_candidate::TYPO_CORRECTION));
+        }
+
+        let (rel_off, auto_off, ids_off) = run_case(AutoTypoCorrectionStrength::Off);
+        assert_eq!(rel_off, 30);
+        assert!(!auto_off);
+        assert!(ids_off.contains(&shared::ai_candidate::TYPO_CORRECTION));
+
+        super::TYPO_CORRECTION_ENABLED.store(prev_typo, Ordering::Relaxed);
+        super::AUTO_TYPO_CORRECTION_STRENGTH.store(prev_auto, Ordering::Relaxed);
     }
 
     #[tokio::test]
@@ -5236,5 +5478,43 @@ mod english_learning_rpc_tests {
 
         super::SERVER_LEARNING_MODE.store(0, Ordering::Relaxed);
         let _ = super::ai_assist::english_learning::clear_english_learning();
+    }
+    #[test]
+    fn learning_stats_response_preserves_legacy_tags_and_maps_new_fields() {
+        use prost::Message;
+        let stats = super::learning_stats_response(
+            &serde_json::json!({
+                "selectionCount": 13, "historyPresent": true, "historyPaused": true,
+                "learningMode": "enabled", "postCompositionBigramCount": 5, "selectionOverrideCount": 17,
+            }),
+            11,
+            12,
+        );
+        assert_eq!(
+            (
+                stats.selection_count,
+                stats.post_composition_bigram_count,
+                stats.selection_override_count
+            ),
+            (13, 5, 17)
+        );
+        let wire = stats.encode_to_vec();
+        assert!(wire.ends_with(&[
+            0x10, 13, 0x18, 1, 0x20, 1, 0x2a, 7, b'e', b'n', b'a', b'b', b'l', b'e', b'd', 0x30,
+            11, 0x38, 12, 0x40, 5, 0x48, 17,
+        ]));
+        let old = shared::proto::LearningStatsResponse::decode(&[0x10, 13, 0x30, 11, 0x38, 12][..])
+            .unwrap();
+        assert_eq!(
+            (old.selection_count, old.typo_count, old.english_count),
+            (13, 11, 12)
+        );
+        assert_eq!(
+            (
+                old.post_composition_bigram_count,
+                old.selection_override_count
+            ),
+            (0, 0)
+        );
     }
 }

@@ -251,6 +251,7 @@ fn pending_recovery_callbacks_replay_keys_once_and_preserve_shift_chords() {
                     scope: LearningCommitScope::Composition,
                     kind: LearningCommitKind::Normal,
                     was_temporary_latin: false,
+                    explicit_selection: false,
                 },
                 ClientAction::EndComposition,
             ]

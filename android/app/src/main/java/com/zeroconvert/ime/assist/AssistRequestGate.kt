@@ -18,7 +18,8 @@ class AssistRequestGate {
         val conversionRange: Boolean = false,
         val learningMode: String = "READ_WRITE",
         val dictionaryCorrectionEnabled: Boolean = true,
-        val touchCorrectionEnabled: Boolean = true
+        val touchCorrectionEnabled: Boolean = true,
+        val autoCorrectionStrength: String = "standard"
     )
     data class Ticket(val generation: Long, val key: Key)
     private var generation = 0L

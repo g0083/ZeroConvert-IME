@@ -73,9 +73,10 @@ Androidの「補正候補を自動で反映」は `auto_typo_correction` に対�
 - **Native打鍵補正ワーカー（`keyboard-prior.exe`）**: `ai_assist/keyboard_hybrid.rs` が `{app}\keyboard-prior.exe`（旧配置 `llama_cpu\keyboard-prior.exe` はインストーラーで削除）を起動・管理し、`Dictionary/Reverse/reverse-v2.bin`（AZR2）と現在選択中の変換モデルで補正読み候補を探索・採点する。Vulkanの初回推論はバックグラウンド起動時に済ませ、入力中の採点は350msまで待ち（超過応答は破棄）、通信切断や30秒応答なし時はワーカーを再起動する。
 - **実設定・学習データの保存先**:
   - 実設定: `%APPDATA%\Azookey\settings.json`。`windows/deployment/settings.json` は配布時の初期コピー元であり、既存設定があれば上書きしない。
+  - ユーザー辞書は `%APPDATA%\Azookey\user-dictionary.json` に最大10,000件を保存する。旧 `settings.json` の登録語は初回読込時に移行する。設定画面で固有名詞、一般名詞、サ変名詞、定型文、記号を選べる。
   - 補正学習: `%APPDATA%\Azookey\ai-assist-learning.json`（最大500件）、追加補正語彙は `ai-assist-vocabulary.json`。
   - 英字学習: `%APPDATA%\Azookey\english-learning.json`（Androidはアプリデータ配下 `Azookey/english-learning.json`）。
-  - 変換学習・確定後予測: `%APPDATA%\Azookey\LearningMemory\`（`selection-overrides.json`、`post-composition-bigrams.json` 等）。
+  - 変換学習・確定後予測: `%APPDATA%\Azookey\LearningMemory\`（`selection-overrides.json`、`post-composition-bigrams.json` 等）。選択履歴は左文脈と明示選択を記録し、1回の確定に含まれる文節間の遷移を確定後予測に利用する。
   - 先読みの確定履歴キャッシュ: Rustプロセス内に最大300件保持する。
 - **学習の削除**: 共有エンジンに集約されている。`ForgetLearningCandidate` は候補IDだけで1件を消し、`GetLearningStats` はスコープ別件数を返し、`ResetLearningMemory` は `scopes`（`conversion` / `typo` / `english`）で選択削除する。
 - **Named Pipe**: `shared/src/lib.rs` のPipe名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`。古い固定名やセッション番号をハードコードしない。

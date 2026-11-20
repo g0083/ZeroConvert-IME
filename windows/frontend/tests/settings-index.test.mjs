@@ -37,6 +37,8 @@ test("search matches keywords and section names", () => {
     assert.ok(searchSettings("AIアシスト").some((entry) => entry.label === "文の先読み"));
     assert.ok(searchSettings("ローマ字入力の辞書補正").some((entry) => entry.label === "タイポ補正"));
     assert.ok(searchSettings("追加補正").some((entry) => entry.label === "タイポ補正"));
+    assert.ok(searchSettings("自動適用").some((entry) => entry.label === "補正候補を自動で反映"));
+    assert.ok(searchSettings("ひかえめ").some((entry) => entry.label === "補正候補を自動で反映"));
     assert.ok(searchSettings("タイポ補正の実行方法").some((entry) => entry.label === "タイポ補正の推論エンジン"));
     assert.ok(searchSettings("予測変換").some((entry) => entry.label === "予測変換（単語・フレーズ）"));
     assert.ok(searchSettings("先読みモデル").some((entry) => entry.label === "利用モデル"));

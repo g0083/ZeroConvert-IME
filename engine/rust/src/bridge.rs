@@ -123,6 +123,26 @@ struct Request {
     touch_hints: String,
     #[serde(default, rename = "inputMode")]
     input_mode: String,
+    #[serde(default, rename = "autoCorrectionStrength")]
+    auto_correction_strength: String,
+    #[serde(default, rename = "originReading")]
+    origin_reading: String,
+    #[serde(default, rename = "originRaw")]
+    origin_raw: String,
+    #[serde(default, rename = "originTouchHints")]
+    origin_touch_hints: String,
+    #[serde(default, rename = "appliedPrefix")]
+    applied_prefix: String,
+}
+
+fn correction_suggestion_json(suggestion: &ai_assist::TypoSuggestion, automatic: bool) -> Value {
+    json!({
+        "text": suggestion.surface,
+        "tokenReading": suggestion.token_reading,
+        "tokenSurface": suggestion.token_surface,
+        "autoApply": automatic,
+        "relevance": if automatic { 100 } else if suggestion.learned { 70 } else { 30 }
+    })
 }
 
 pub fn dispatch(value: &str) -> Result<Value, String> {
@@ -144,20 +164,14 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
     }
     if envelope["op"] == "setVocabulary" {
         let entries = envelope["entries"].as_array().ok_or("missing vocabulary")?;
-        if entries.len() > 50 {
+        if entries.len() > crate::conversion_policy::MAX_USER_DICTIONARY_ENTRIES {
             return Err("too many vocabulary entries".into());
         }
-        let mut vocabulary = ai_assist::typo_variant::VocabularyIndex::default();
-        for entry in entries {
-            if let (Some(reading), Some(surface)) =
-                (entry["reading"].as_str(), entry["word"].as_str())
-            {
-                vocabulary.insert(reading, surface);
-            }
-        }
-        *ai_assist::typo_variant::user_index()
-            .write()
-            .map_err(|_| "vocabulary lock poisoned")? = vocabulary;
+        ai_assist::set_user_dictionary_vocabulary(
+            entries
+                .iter()
+                .filter_map(|entry| Some((entry["reading"].as_str()?, entry["word"].as_str()?))),
+        );
         return Ok(Value::Null);
     }
     if envelope["op"] == "inputPolicy" {
@@ -269,6 +283,10 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         || request.baseline_reading.chars().count() > 512
         || request.raw.chars().count() > 256
         || request.touch_hints.chars().count() > 2048
+        || request.origin_reading.chars().count() > 512
+        || request.origin_raw.chars().count() > 256
+        || request.origin_touch_hints.chars().count() > 2048
+        || request.applied_prefix.chars().count() > 512
     {
         return Err("request exceeds engine limits".into());
     }
@@ -289,23 +307,70 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
     ) else {
         return Ok(Value::Null);
     };
-    match request.op.as_str() {
-        "correction" => Ok(ai_assist::corrector::suggest_composition_with_input_hints(
-            &request.context,
-            assist_reading,
-            &request.baseline,
-            &request.raw,
-            &request.touch_hints,
-            &request.input_mode,
-            &config,
+    let strength = if request.auto_correction_strength.trim().is_empty() {
+        crate::assist_policy::AutoTypoCorrectionStrength::Standard
+    } else {
+        crate::assist_policy::AutoTypoCorrectionStrength::from_str_lossy(
+            &request.auto_correction_strength,
         )
+    };
+    match request.op.as_str() {
+        "correction" => {
+            if !request.origin_reading.is_empty() && !request.applied_prefix.is_empty() {
+                let refinement = ai_assist::corrector::AutoRefinementContext {
+                    origin_reading: &request.origin_reading,
+                    origin_raw: &request.origin_raw,
+                    origin_touch_hints: &request.origin_touch_hints,
+                    applied_prefix: &request.applied_prefix,
+                };
+                return Ok(match ai_assist::corrector::suggest_auto_refinement(
+                    &request.context,
+                    assist_reading,
+                    &request.baseline,
+                    &request.raw,
+                    &request.touch_hints,
+                    &request.input_mode,
+                    &refinement,
+                    strength,
+                    &config,
+                ) {
+                    ai_assist::corrector::CorrectionOutcome::RevertToOrigin => {
+                        json!({"revertToOrigin": true, "autoApply": true, "relevance": 100})
+                    }
+                    ai_assist::corrector::CorrectionOutcome::Suggestion {
+                        suggestion,
+                        auto_apply,
+                        ..
+                    } if suggestion.surface != request.baseline
+                        && suggestion.surface != request.input =>
+                    {
+                        correction_suggestion_json(&suggestion, auto_apply)
+                    }
+                    _ => Value::Null,
+                });
+            }
+            Ok(ai_assist::corrector::suggest_composition_with_input_hints(
+                &request.context,
+                assist_reading,
+                &request.baseline,
+                &request.raw,
+                &request.touch_hints,
+                &request.input_mode,
+                &config,
+            )
             .filter(|s| s.surface != request.baseline && s.surface != request.input)
             .map(|suggestion| {
-                let automatic = ai_assist::corrector::can_auto_apply_composition(&request.input, &request.baseline, &suggestion.surface);
-                json!({"text": suggestion.surface, "tokenReading": suggestion.token_reading,
-                    "tokenSurface": suggestion.token_surface, "autoApply": automatic,
-                    "relevance": if automatic { 100 } else if suggestion.learned { 70 } else { 30 }})
-            }).unwrap_or(Value::Null)),
+                let automatic =
+                    ai_assist::corrector::can_auto_apply_composition_suggestion_with_strength(
+                        &request.input,
+                        &request.baseline,
+                        &suggestion,
+                        strength,
+                    );
+                correction_suggestion_json(&suggestion, automatic)
+            })
+            .unwrap_or(Value::Null))
+        }
         "prediction" => Ok(ai_assist::prediction::suggest(&request.context, assist_reading, &request.baseline, &config)
             .map(|s| json!({"text": format!("{}{}", request.baseline, s.continuation),
                 "continuation": s.continuation, "relevance": s.relevance})).unwrap_or(Value::Null)),
@@ -400,6 +465,30 @@ pub unsafe extern "C" fn zerocon_assist_policy(request: *const c_char) -> *mut c
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn set_vocabulary_accepts_10000_entries_and_rejects_10001_without_mutation() {
+        let _guard = ai_assist::USER_DICTIONARY_TEST_LOCK.lock().unwrap();
+        let mut entries: Vec<_> = (0..10_000)
+            .map(|index| json!({"reading": format!("てすとじしょ{index}"), "word": format!("語{index}")}))
+            .collect();
+        assert_eq!(
+            dispatch(&json!({"op":"setVocabulary","entries":entries}).to_string()),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            ai_assist::find_indexed_surface("てすとじしょ9999").as_deref(),
+            Some("語9999")
+        );
+        entries.push(json!({"reading":"てすとじしょ10000","word":"語10000"}));
+        assert!(dispatch(&json!({"op":"setVocabulary","entries":entries}).to_string()).is_err());
+        assert_eq!(
+            ai_assist::find_indexed_surface("てすとじしょ9999").as_deref(),
+            Some("語9999")
+        );
+        assert!(ai_assist::find_indexed_surface("てすとじしょ10000").is_none());
+        dispatch(r#"{"op":"setVocabulary","entries":[]}"#).unwrap();
+    }
 
     struct Fixture(Arc<Mutex<Vec<Value>>>, u64);
     impl runtime::CompletionBackend for Fixture {
@@ -989,5 +1078,321 @@ mod tests {
         assert_eq!(repair_req["touch"], "1:き=0.82");
         assert_eq!(repair_req["input"], "あきがとう");
         assert_eq!(reply["text"], "ありがとう");
+    }
+
+    #[test]
+    fn correction_forwards_qwerty_dash_raw_and_touch_hints() {
+        #[derive(Default)]
+        struct Capture {
+            seen: Vec<Value>,
+        }
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let state = &mut *(ctx as *mut Capture);
+            let req = CStr::from_ptr(payload).to_str().unwrap();
+            let parsed: Value = serde_json::from_str(req).unwrap();
+            let is_repair = parsed.get("keyboard_repair").is_some();
+            state.seen.push(parsed);
+            if is_repair {
+                CString::new(r#"{"observed":"ーあそこん","reading":"ぱそこん","gain":84.0}"#)
+                    .unwrap()
+                    .into_raw()
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let mut capture = Capture::default();
+        let req = CString::new(
+            json!({
+                "op": "correction",
+                "context": "",
+                "input": "ーあそこん",
+                "baseline": "ーアソコン",
+                "raw": "-asokon",
+                "touchHints": "0:p=0.85,l=0.35",
+                "inputMode": "qwerty"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reply_ptr = unsafe {
+            zerocon_assist_request(
+                req.as_ptr(),
+                mock_complete,
+                mock_release,
+                (&mut capture as *mut Capture).cast(),
+            )
+        };
+        let reply: Value = unsafe {
+            let text = CStr::from_ptr(reply_ptr).to_str().unwrap().to_owned();
+            zerocon_engine_free(reply_ptr);
+            serde_json::from_str(&text).unwrap()
+        };
+        let repair_req = capture
+            .seen
+            .iter()
+            .find(|v| v.get("keyboard_repair").is_some())
+            .expect("expected keyboard_repair payload");
+        assert_eq!(repair_req["mode"], "qwerty");
+        assert_eq!(repair_req["raw"], "-asokon");
+        assert_eq!(repair_req["touch"], "0:p=0.85,l=0.35");
+        assert_eq!(repair_req["input"], "ーあそこん");
+        assert_eq!(reply["text"], "ぱそこん");
+    }
+
+    #[test]
+    fn correction_sets_auto_apply_from_plan_b_channel_confidence() {
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            _payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let reply = &*(ctx as *const CString);
+            CString::new(reply.as_bytes()).unwrap().into_raw()
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let call = |input: &str, baseline: &str, reply_json: &str| -> Value {
+            let mock_reply = CString::new(reply_json).unwrap();
+            let req = CString::new(
+                json!({
+                    "op": "correction",
+                    "context": "",
+                    "input": input,
+                    "baseline": baseline,
+                    "inputMode": "qwerty"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let ptr = unsafe {
+                zerocon_assist_request(
+                    req.as_ptr(),
+                    mock_complete,
+                    mock_release,
+                    (&mock_reply as *const CString).cast_mut().cast(),
+                )
+            };
+            unsafe {
+                let text = CStr::from_ptr(ptr).to_str().unwrap().to_owned();
+                zerocon_engine_free(ptr);
+                serde_json::from_str(&text).unwrap()
+            }
+        };
+
+        // Non-tail clear repair (gain 72.0, no alt_reading) auto-applies under Plan B.
+        let clear = call(
+            "おせわになております",
+            "お世話になております",
+            r#"{"observed":"おせわになております","reading":"おせわになっております","gain":72.0}"#,
+        );
+        assert_eq!(clear["autoApply"], true);
+        assert_eq!(clear["relevance"], 100);
+
+        // Contested non-tail repair (has alt_reading with gain 72.0 < 95.0) stays manual proposal.
+        let contested = call(
+            "おせわになております",
+            "お世話になております",
+            r#"{"observed":"おせわになております","reading":"おせわになっております","alt_reading":"おせわにないております","gain":72.0}"#,
+        );
+        assert_eq!(contested["autoApply"], false);
+        assert_eq!(contested["relevance"], 30);
+
+        // Tail edit with gain 72.0 < 90.0 stays manual proposal.
+        let tail = call(
+            "おねがいすます",
+            "お願いすます",
+            r#"{"observed":"おねがいすます","reading":"おねがいします","gain":72.0}"#,
+        );
+        // Wait: "おねがいすます" vs "おねがいします" does NOT touch the very last char ('す' == 'す')!
+        assert_eq!(tail["autoApply"], true);
+
+        let real_tail = call(
+            "おねがいしまし",
+            "お願いしまし",
+            r#"{"observed":"おねがいしまし","reading":"おねがいします","gain":72.0}"#,
+        );
+        assert_eq!(real_tail["autoApply"], false);
+        assert_eq!(real_tail["relevance"], 30);
+    }
+
+    #[test]
+    fn correction_respects_auto_correction_strength_parameter() {
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            _payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let reply = &*(ctx as *const CString);
+            CString::new(reply.as_bytes()).unwrap().into_raw()
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let call_with_strength = |strength: &str, reply_json: &str| -> Value {
+            let mock_reply = CString::new(reply_json).unwrap();
+            let req = CString::new(
+                json!({
+                    "op": "correction",
+                    "context": "",
+                    "input": "おせわになております",
+                    "baseline": "お世話になております",
+                    "inputMode": "qwerty",
+                    "autoCorrectionStrength": strength,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let ptr = unsafe {
+                zerocon_assist_request(
+                    req.as_ptr(),
+                    mock_complete,
+                    mock_release,
+                    (&mock_reply as *const CString).cast_mut().cast(),
+                )
+            };
+            unsafe {
+                let text = CStr::from_ptr(ptr).to_str().unwrap().to_owned();
+                zerocon_engine_free(ptr);
+                serde_json::from_str(&text).unwrap()
+            }
+        };
+
+        // gain 67.0 without alt_reading: conservative (>=70.0) stays manual; standard (>=65.0) and aggressive (>=55.0) auto-apply.
+        let reply_67 =
+            r#"{"observed":"おせわになております","reading":"おせわになっております","gain":67.0}"#;
+        assert_eq!(call_with_strength("off", reply_67)["autoApply"], false);
+        assert_eq!(
+            call_with_strength("conservative", reply_67)["autoApply"],
+            false
+        );
+        assert_eq!(call_with_strength("standard", reply_67)["autoApply"], true);
+        assert_eq!(
+            call_with_strength("aggressive", reply_67)["autoApply"],
+            true
+        );
+
+        // Contested gain 72.0: only aggressive auto-applies; off/conservative/standard stay manual.
+        let reply_alt_72 = r#"{"observed":"おせわになております","reading":"おせわになっております","alt_reading":"おせわにないております","gain":72.0}"#;
+        assert_eq!(call_with_strength("off", reply_alt_72)["autoApply"], false);
+        assert_eq!(
+            call_with_strength("conservative", reply_alt_72)["autoApply"],
+            false
+        );
+        assert_eq!(
+            call_with_strength("standard", reply_alt_72)["autoApply"],
+            false
+        );
+        assert_eq!(
+            call_with_strength("aggressive", reply_alt_72)["autoApply"],
+            true
+        );
+    }
+
+    #[test]
+    fn correction_auto_refinement_and_revert_via_bridge_json() {
+        let replies: Vec<Value> = vec![
+            json!({"observed": "しゅてんします", "reading": "しゅってんします", "gain": 82.0}),
+            json!({"observed": "しゅてんどうじ"}),
+            json!({"observed": "きょおはあしだ", "reading": "きょおはあした", "gain": 85.0}),
+            json!({"observed": "きょうはあしだ", "reading": "きょうはあした", "gain": 92.0}),
+        ];
+        struct QueueHost {
+            replies: Vec<Value>,
+            index: std::cell::Cell<usize>,
+        }
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            _payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let host = &*(ctx as *const QueueHost);
+            let i = host.index.get();
+            host.index.set(i + 1);
+            let val = host.replies.get(i).cloned().unwrap_or(Value::Null);
+            CString::new(val.to_string()).unwrap().into_raw()
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let host = QueueHost {
+            replies,
+            index: std::cell::Cell::new(0),
+        };
+        let call = |payload: Value| -> Value {
+            let req = CString::new(payload.to_string()).unwrap();
+            let ptr = unsafe {
+                zerocon_assist_request(
+                    req.as_ptr(),
+                    mock_complete,
+                    mock_release,
+                    (&host as *const QueueHost).cast_mut().cast(),
+                )
+            };
+            unsafe {
+                let text = CStr::from_ptr(ptr).to_str().unwrap().to_owned();
+                zerocon_engine_free(ptr);
+                serde_json::from_str(&text).unwrap()
+            }
+        };
+
+        // 1. Refinement auto-apply.
+        let refined = call(json!({
+            "op": "correction",
+            "input": "しゅうてんします",
+            "baseline": "終点します",
+            "originReading": "しゅてんします",
+            "originRaw": "shutenshimasu",
+            "appliedPrefix": "しゅうてん",
+            "inputMode": "qwerty",
+        }));
+        assert_eq!(refined["text"], "しゅってんします");
+        assert_eq!(refined["autoApply"], true);
+
+        // 2. Clean observed auto-revert.
+        let reverted = call(json!({
+            "op": "correction",
+            "input": "しゅうてんどうじ",
+            "baseline": "終点童子",
+            "originReading": "しゅてんどうじ",
+            "originRaw": "shutendouji",
+            "appliedPrefix": "しゅうてん",
+            "inputMode": "qwerty",
+        }));
+        assert_eq!(reverted["revertToOrigin"], true);
+        assert_eq!(reverted["autoApply"], true);
+
+        // 3. Trailing 2nd typo preserves appliedPrefix.
+        let second_typo = call(json!({
+            "op": "correction",
+            "input": "きょうはあしだ",
+            "baseline": "今日はあしだ",
+            "originReading": "きょおはあしだ",
+            "originRaw": "kyoohaashida",
+            "appliedPrefix": "きょうは",
+            "inputMode": "qwerty",
+        }));
+        assert_eq!(second_typo["text"], "きょうはあした");
+        assert_eq!(second_typo["autoApply"], true);
+        assert_eq!(host.index.get(), 4);
     }
 }

@@ -12,18 +12,19 @@ class AssistPresentation(private val policy: AssistPolicyTransport = SharedAssis
     private var selected: AiAssistResult? = null
 
     fun complete(type: AiAssistType, result: AiAssistResult?, elapsedMs: Long = 0): AssistUpdate {
+        val visible = result?.takeUnless { it.revertToOrigin }
         if (type == AiAssistType.PREDICTION) {
             predictionDone = true
-            prediction = result
+            prediction = visible
         } else {
             correctionDone = true
-            correction = result
+            correction = visible
         }
         return update(elapsedMs, result?.takeIf { type == AiAssistType.TYPO_CORRECTION && it.autoApply })
     }
 
     fun update(elapsedMs: Long, automatic: AiAssistResult? = null): AssistUpdate {
-        if (correction == null && prediction == null) return AssistUpdate(selected)
+        if (correction == null && prediction == null && automatic == null) return AssistUpdate(selected)
         val ready = SharedAssistPolicy.ready(predictionDone, correctionDone, automatic != null, elapsedMs, policy)
         if (ready) selected = SharedAssistPolicy.choose(correction, prediction, selected, policy)
         return AssistUpdate(selected, automatic, if (ready) listOfNotNull(correction, prediction) else emptyList())

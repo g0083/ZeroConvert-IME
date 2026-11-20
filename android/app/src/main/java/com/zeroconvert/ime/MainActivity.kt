@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.zeroconvert.ime.assist.AutoTypoCorrectionStrength
 import com.zeroconvert.ime.benchmark.BenchmarkKind
 import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
@@ -287,9 +288,16 @@ fun MainScreen(
     }
     var learningMode by remember { mutableStateOf(LearningMode.from(imePrefs.getString(LearningPolicy.KEY, null))) }
     var learningMenuExpanded by remember { mutableStateOf(false) }
-    var isAutoTypoCorrection by remember {
-        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, true))
+    var autoTypoCorrectionStrength by remember {
+        mutableStateOf(
+            AutoTypoCorrectionStrength.readFrom(
+                imePrefs,
+                ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION_STRENGTH,
+                ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION,
+            )
+        )
     }
+    var autoTypoMenuExpanded by remember { mutableStateOf(false) }
 
     var aiProfile by remember {
         mutableStateOf(imePrefs.getString(ZeroConvertInputMethodService.KEY_AI_PROFILE, "") ?: "")
@@ -1227,18 +1235,55 @@ fun MainScreen(
             )
             if (isDictionaryTypoCorrection) {
                 SettingsDivider(palette)
-                SettingsSwitchRow(
-                    title = "補正候補を自動で反映",
-                    description = "通常変換の後に生成した候補のうち、採用・確定の実績や一意な打鍵修正で裏付けられた補正を自動で反映します。確定前ならBackspaceで元に戻せます。",
-                    checked = isAutoTypoCorrection,
-                    palette = palette,
-                    onCheckedChange = { enabled ->
-                        isAutoTypoCorrection = enabled
-                        imePrefs.edit()
-                            .putBoolean(ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION, enabled)
-                            .apply()
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "補正候補を自動で反映",
+                        color = palette.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "確信度の高いタイポ補正や学習済みの補正を自動で読みに反映する強さを選びます。直後ならBackspace、打ち進めたあとも確定前なら「戻す」ボタンで補正箇所だけ元に戻せます。",
+                        color = palette.textMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    Box {
+                        SettingsSecondaryButton(
+                            text = autoTypoCorrectionStrength.label,
+                            palette = palette,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { autoTypoMenuExpanded = true }
+                        )
+                        DropdownMenu(
+                            expanded = autoTypoMenuExpanded,
+                            onDismissRequest = { autoTypoMenuExpanded = false }
+                        ) {
+                            AutoTypoCorrectionStrength.entries.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = { Text(preset.label) },
+                                    onClick = {
+                                        autoTypoCorrectionStrength = preset
+                                        autoTypoMenuExpanded = false
+                                        imePrefs.edit()
+                                            .putString(
+                                                ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION_STRENGTH,
+                                                preset.storageValue
+                                            )
+                                            .putBoolean(
+                                                ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION,
+                                                preset.isEnabled
+                                            )
+                                            .apply()
+                                    }
+                                )
+                            }
+                        }
                     }
-                )
+                }
             }
         }
 

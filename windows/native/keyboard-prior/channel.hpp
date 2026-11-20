@@ -142,8 +142,9 @@ inline std::string kana_to_romaji(const std::u32string &text,
       {U"ぴ", "pi"},    {U"ぷ", "pu"},    {U"ぺ", "pe"},    {U"ぽ", "po"},
       {U"ぁ", "la"},    {U"ぃ", "li"},    {U"ぅ", "lu"},    {U"ぇ", "le"},
       {U"ぉ", "lo"},    {U"ゃ", "lya"},   {U"ゅ", "lyu"},   {U"ょ", "lyo"},
-      {U"っ", "ltu"},   {U"ー", "-"},     {U"？", "?"},     {U"！", "!"},
-      {U"、", ","},     {U"。", "."}};
+      {U"ゎ", "lwa"},   {U"ゕ", "lka"},   {U"ゖ", "lke"},   {U"っ", "ltu"},
+      {U"ー", "-"},     {U"？", "?"},     {U"！", "!"},     {U"、", ","},
+      {U"。", "."}};
   static const std::map<std::u32string, std::string> table_kunrei = []() {
     auto m = table_hepburn;
     m[U"し"] = "si";
@@ -491,7 +492,9 @@ inline std::vector<TouchHint> parse_touch_hints(const std::string &spec) {
         comma = entry.size();
       const auto item = entry.substr(apos, comma - apos);
       apos = comma + 1;
-      if (item.size() < 3 || item[1] != '=' || item[0] < 'a' || item[0] > 'z')
+      const bool valid_key =
+          (item[0] >= 'a' && item[0] <= 'z') || item[0] == '-';
+      if (item.size() < 3 || item[1] != '=' || !valid_key)
         continue;
       char *endp = nullptr;
       const double w = std::strtod(item.c_str() + 2, &endp);
@@ -1244,8 +1247,37 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
 
     for (size_t i = 0; i < r.size(); ++i) {
       const char ch = r[i];
-      if (!active_rom[i] || ch < 'a' || ch > 'z')
+      if (!active_rom[i] || ((ch < 'a' || ch > 'z') && ch != '-'))
         continue;
+
+      if (ch == '-') {
+        const double hint_l = r_has_hints ? lookup_touch_hint(i, 'l') : 0.0;
+        const double hint_p = r_has_hints ? lookup_touch_hint(i, 'p') : 0.0;
+        {
+          auto v = r;
+          v[i] = 'l';
+          const double cost =
+              (hint_l > 0.0) ? std::max(0.60, 1.45 - 0.4 * hint_l) : 1.45;
+          add(roman_decode(v), cost);
+        }
+        {
+          auto v = r;
+          v[i] = 'p';
+          const double cost =
+              (hint_p > 0.0) ? std::max(0.60, 1.50 - 0.4 * hint_p) : 1.50;
+          add(roman_decode(v), cost);
+        }
+        if (r_has_hints) {
+          for (const auto &h : touch_hints) {
+            if (h.index == i && h.key != '-' && h.key != 'l' && h.key != 'p') {
+              auto v = r;
+              v[i] = h.key;
+              add(roman_decode(v), std::max(0.70, 1.75 - 0.4 * h.weight));
+            }
+          }
+        }
+        continue;
+      }
 
       // 1. Distance-proportional QWERTY adjacent substitution + TouchHint bonus
       for (const auto &sub : qwerty_subs[size_t(ch - 'a')]) {
@@ -1259,12 +1291,29 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
         v[i] = sub.first;
         add(roman_decode(v), cost);
       }
+      if (ch == 'l' || ch == 'p') {
+        const double base_dash =
+            (ch == 'l') ? (is_raw_ascii[i] ? 1.15 : 1.50)
+                        : (is_raw_ascii[i] ? 1.35 : 1.65);
+        const double hint_dash = r_has_hints ? lookup_touch_hint(i, '-') : 0.0;
+        const double cost =
+            (hint_dash > 0.0) ? std::max(0.60, base_dash - 0.4 * hint_dash)
+                              : base_dash;
+        auto v = r;
+        v[i] = '-';
+        add(roman_decode(v), cost);
+      }
       if (r_has_hints) {
         for (const auto &h : touch_hints) {
-          if (h.index == i && h.key != ch && qwerty_sub_cost(ch, h.key) <= 0.0) {
+          if (h.index == i && h.key != ch && h.key != '-' &&
+              qwerty_sub_cost(ch, h.key) <= 0.0) {
             auto v = r;
             v[i] = h.key;
             add(roman_decode(v), std::max(0.75, 1.8 - 0.4 * h.weight));
+          } else if (h.index == i && h.key == '-' && ch != 'l' && ch != 'p') {
+            auto v = r;
+            v[i] = '-';
+            add(roman_decode(v), std::max(0.70, 1.75 - 0.4 * h.weight));
           }
         }
       }

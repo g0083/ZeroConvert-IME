@@ -25,7 +25,8 @@ data class AiAssistResult(
     val sourceReading: String = "",
     val continuation: String = "",
     val autoApply: Boolean = false,
-    val sourceSurface: String = ""
+    val sourceSurface: String = "",
+    val revertToOrigin: Boolean = false,
 )
 
 object AiAssistManager {
@@ -70,6 +71,11 @@ object AiAssistManager {
         rawInput: String = "",
         touchHints: String = "",
         inputMode: String = "",
+        autoCorrectionStrength: String = "standard",
+        originReading: String = "",
+        originRaw: String = "",
+        originTouchHints: String = "",
+        appliedPrefix: String = "",
         onUpdate: suspend (AssistUpdate) -> Unit
     ) = coroutineScope {
         val plan = SharedAssistPolicy.requestPlan(allowCorrection, allowPrediction, false,
@@ -95,7 +101,8 @@ object AiAssistManager {
                     null
                 } else {
                     ModelCorrector(inference).suggest(
-                        context, reading, baseline, baselineReading, rawInput, touchHints, inputMode
+                        context, reading, baseline, baselineReading, rawInput, touchHints, inputMode,
+                        autoCorrectionStrength, originReading, originRaw, originTouchHints, appliedPrefix
                     )
                 }
             } finally {

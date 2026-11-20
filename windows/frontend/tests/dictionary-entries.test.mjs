@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+    DICTIONARY_POS,
     MAX_ENTRIES,
     normalizeDictionaryEntries,
     validateDictionaryEntries,
     isDictionaryDirty,
 } from "../src/lib/dictionary-entries.js";
 
-const entry = (reading = "よみ", word = "単語") => ({ reading, word });
+const entry = (reading = "よみ", word = "単語", pos = "proper_noun") => ({ reading, word, pos });
 
 test("validation trims both fields and identifies the first offending field", () => {
     const draft = [entry(" よみ ", " 単語 "), entry(" \t", "語"), entry("ことば", "　")];
@@ -32,12 +33,13 @@ test("duplicates are checked after trimming, but different words and tuple bound
     assert.deepEqual(errors.slice(2), [{}, {}, {}]);
 });
 
-test("50 entries and an empty dictionary are valid; the first excess row has an inline error", () => {
+test("10,000 entries and an empty dictionary are valid; the first excess row has an inline error", () => {
+    assert.equal(MAX_ENTRIES, 10_000);
     const draft = Array.from({ length: MAX_ENTRIES }, (_, index) => entry(`よみ${index}`));
     assert.ok(validateDictionaryEntries(draft).errors.every((error) => !error.reading && !error.word));
     const { errors } = validateDictionaryEntries([...draft, entry("追加")]);
     assert.equal(errors.findIndex((error) => error.reading || error.word), MAX_ENTRIES);
-    assert.match(errors[MAX_ENTRIES].reading, /50/);
+    assert.match(errors[MAX_ENTRIES].reading, /10000/);
     assert.deepEqual(validateDictionaryEntries([]), { entries: [], errors: [] });
 });
 
@@ -68,4 +70,15 @@ test("load normalization accepts missing dictionaries and filters malformed rows
     assert.deepEqual(normalizeDictionaryEntries(undefined), []);
     assert.deepEqual(normalizeDictionaryEntries({ entries: [] }), []);
     assert.deepEqual(normalizeDictionaryEntries([null, {}, { reading: 1, word: "x" }, entry(" よみ ")]), [entry(" よみ ")]);
+});
+
+
+test("legacy entries default to proper noun and all five POS presets round-trip", () => {
+    assert.deepEqual(normalizeDictionaryEntries([{ reading: "よみ", word: "単語" }]), [entry()]);
+    const presets = ["proper_noun", "common_noun", "sahen_noun", "shortcut", "symbol"];
+    assert.deepEqual(Object.keys(DICTIONARY_POS), presets);
+    const draft = presets.map((pos, index) => entry(`よみ${index}`, "別", pos));
+    assert.deepEqual(validateDictionaryEntries(draft), { entries: draft, errors: presets.map(() => ({})) });
+    assert.ok(validateDictionaryEntries([entry("よみ", "単語", "unknown")]).errors[0].pos);
+    assert.equal(isDictionaryDirty([entry("よみ", "単語", "symbol")], [entry()]), true);
 });

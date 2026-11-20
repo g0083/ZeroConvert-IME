@@ -796,6 +796,7 @@ fn learning_action(scope: LearningCommitScope, kind: LearningCommitKind) -> Clie
         scope,
         kind,
         was_temporary_latin: false,
+        explicit_selection: false,
     }
 }
 
@@ -2011,6 +2012,30 @@ fn deferred_clause_navigation_ready_sync_preserves_candidate_window_show_request
 }
 
 #[test]
+fn learning_enters_with_explicit_selection_only_for_an_active_choice() {
+    let mut composition = Composition {
+        state: CompositionState::Composing,
+        preview: "箸".into(),
+        ..Composition::default()
+    };
+    let explicit = |composition: &Composition| {
+        let (_, actions) = TextServiceFactory::commit_enter_actions(composition);
+        match &actions[0] {
+            ClientAction::CommitLearning {
+                explicit_selection, ..
+            } => *explicit_selection,
+            action => panic!("expected learning action, got {action:?}"),
+        }
+    };
+    assert!(!explicit(&composition));
+    composition.state = CompositionState::Previewing;
+    assert!(explicit(&composition));
+    composition.state = CompositionState::Composing;
+    composition.selection_index = 1;
+    assert!(explicit(&composition));
+}
+
+#[test]
 fn enter_keeps_following_clause_uncommitted_when_clause_navigation_is_active() {
     let composition = Composition {
         state: CompositionState::Composing,
@@ -2041,6 +2066,7 @@ fn enter_keeps_following_clause_uncommitted_when_clause_navigation_is_active() {
                 scope: LearningCommitScope::CurrentClause,
                 kind: LearningCommitKind::Partial,
                 was_temporary_latin: false,
+                explicit_selection: false,
             },
             ClientAction::ShrinkText(String::new()),
         ]
@@ -2073,6 +2099,7 @@ fn enter_learning_preserves_temporary_latin_state() {
         actions.first(),
         Some(ClientAction::CommitLearning {
             was_temporary_latin: true,
+            explicit_selection: false,
             ..
         })
     ));
@@ -4163,6 +4190,7 @@ fn test_live_server_okseri() {
             input_count: 6,
             request_id: 1,
             kind: 1,
+            ..Default::default()
         },
         sender,
     );
@@ -4556,6 +4584,7 @@ fn passthrough_packet_commits_whole_composition_including_suffix_in_kana_mode() 
                         scope: LearningCommitScope::Composition,
                         kind: LearningCommitKind::Normal,
                         was_temporary_latin: true,
+                        explicit_selection: false,
                     },
                     ClientAction::EndComposition,
                 ],

@@ -25,18 +25,54 @@ internal fun engineInputMode(input: ComposingText, layout: JapaneseInputLayout):
     return "qwerty"
 }
 
-/** Extract aligned lowercase ASCII romaji when the whole buffer uses continuous QWERTY romaji input. */
-internal fun engineRawRomaji(input: ComposingText): String {
-    if (!input.isAtEndIndex || input.input.size !in 2..192) return ""
-    val out = StringBuilder(input.input.size)
-    for (element in input.input) {
-        if (element.inputStyle != InputStyle.ROMAN2KANA) return ""
-        val ch = (element.piece as? InputPiece.CharPiece)?.char?.lowercaseChar() ?: return ""
-        if (ch !in 'a'..'z') return ""
-        out.append(ch)
+private fun normalizeQwertyHintChar(c: Char): Char? {
+    val lowered = c.lowercaseChar()
+    return when {
+        lowered in 'a'..'z' -> lowered
+        lowered == 'ー' || lowered == '-' -> '-'
+        else -> null
     }
-    return out.toString()
 }
+
+private data class RawRomajiMapping(
+    val raw: String,
+    val charEntries: List<Pair<Char, Int>>,
+)
+
+private fun buildRawRomajiMapping(input: ComposingText): RawRomajiMapping? {
+    if (!input.isAtEndIndex || input.input.isEmpty()) return null
+    val out = StringBuilder(input.input.size)
+    val charEntries = ArrayList<Pair<Char, Int>>(input.input.size)
+    var pendingSeparatorAfterSingleN = false
+    for (element in input.input) {
+        when (val piece = element.piece) {
+            is InputPiece.CompositionSeparator -> {
+                val len = out.length
+                if (len >= 1 && (out[len - 1] == 'n' || out[len - 1] == 'N')) {
+                    pendingSeparatorAfterSingleN = len < 2 || (out[len - 2] != 'n' && out[len - 2] != 'N')
+                }
+            }
+            is InputPiece.CharPiece -> {
+                if (element.inputStyle != InputStyle.ROMAN2KANA) return null
+                val normalized = normalizeQwertyHintChar(piece.char) ?: return null
+                if (pendingSeparatorAfterSingleN) {
+                    if (normalized in "aiueoyn") {
+                        out.append('n')
+                    }
+                    pendingSeparatorAfterSingleN = false
+                }
+                val rawIndex = out.length
+                out.append(normalized)
+                charEntries.add(normalized to rawIndex)
+            }
+        }
+    }
+    if (out.length !in 2..192) return null
+    return RawRomajiMapping(out.toString(), charEntries)
+}
+
+/** Extract aligned lowercase ASCII romaji (and `-` for `ー`) for continuous QWERTY input. */
+internal fun engineRawRomaji(input: ComposingText): String = buildRawRomajiMapping(input)?.raw.orEmpty()
 
 private fun isFlickHintAltChar(ch: Char): Boolean =
     (ch in 'ぁ'..'ゖ') || ch == 'ー' || ch == '（' || ch == '）' || ch == '〜'
@@ -46,18 +82,20 @@ private fun isFlickHintAltChar(ch: Char): Boolean =
  * Returns empty when the composing buffer is not pure continuous `DIRECT` kana input at end index.
  */
 internal fun engineFlickTouchHints(input: ComposingText, biases: List<TouchKeyBias>): String {
-    if (!input.isAtEndIndex || input.input.size !in 2..128 || biases.isEmpty()) return ""
-    val offset = input.input.size - biases.size
-    if (offset < 0) return ""
+    if (!input.isAtEndIndex || biases.isEmpty()) return ""
+    val directChars = ArrayList<Char>(input.input.size)
     for (element in input.input) {
         if (element.inputStyle != InputStyle.DIRECT) return ""
-        if (element.piece !is InputPiece.CharPiece) return ""
+        val ch = (element.piece as? InputPiece.CharPiece)?.char ?: return ""
+        directChars.add(ch)
     }
+    if (directChars.size !in 2..128) return ""
+    val offset = directChars.size - biases.size
+    if (offset < 0) return ""
     val parts = ArrayList<String>(biases.size)
     for ((index, bias) in biases.withIndex()) {
         val rawIndex = offset + index
-        val typed = (input.input[rawIndex].piece as? InputPiece.CharPiece)?.char ?: return ""
-        if (typed != bias.typedChar) return ""
+        if (directChars[rawIndex] != bias.typedChar) return ""
         val alts = bias.nearbyChars.mapNotNull { (alt, weight) ->
             if (isFlickHintAltChar(alt) && weight.isFinite() && weight in 0.2f..1.0f) {
                 "$alt=${String.format(Locale.ROOT, "%.2f", weight)}"
@@ -77,17 +115,18 @@ internal fun engineFlickTouchHints(input: ComposingText, biases: List<TouchKeyBi
  * Returns empty when the composing buffer cannot be aligned cleanly to QWERTY romaji indices.
  */
 internal fun engineTouchHints(input: ComposingText, biases: List<TouchKeyBias>): String {
-    val raw = engineRawRomaji(input)
-    if (raw.isEmpty() || biases.isEmpty()) return ""
-    val offset = raw.length - biases.size
+    if (biases.isEmpty()) return ""
+    val mapping = buildRawRomajiMapping(input) ?: return ""
+    val offset = mapping.charEntries.size - biases.size
     if (offset < 0) return ""
     val parts = ArrayList<String>(biases.size)
     for ((index, bias) in biases.withIndex()) {
-        val rawIndex = offset + index
-        if (raw[rawIndex] != bias.typedChar.lowercaseChar()) return ""
+        val (expected, rawIndex) = mapping.charEntries[offset + index]
+        val biasChar = normalizeQwertyHintChar(bias.typedChar) ?: return ""
+        if (expected != biasChar) return ""
         val alts = bias.nearbyChars.mapNotNull { (key, weight) ->
-            val alt = key.lowercaseChar()
-            if (alt in 'a'..'z' && weight.isFinite() && weight in 0.2f..1f) {
+            val alt = normalizeQwertyHintChar(key)
+            if (alt != null && alt != expected && weight.isFinite() && weight in 0.2f..1f) {
                 "$alt=${String.format(Locale.ROOT, "%.2f", weight)}"
             } else {
                 null
@@ -109,11 +148,14 @@ internal fun engineTouchEvidence(input: ComposingText, biases: List<TouchKeyBias
     for ((index, bias) in biases.withIndex()) {
         val element = input.input[offset + index]
         val typed = (element.piece as? InputPiece.CharPiece)?.char ?: return JSONArray()
-        if (typed.lowercaseChar() != bias.typedChar.lowercaseChar()) return JSONArray()
+        val typedNorm = normalizeQwertyHintChar(typed)
+        val biasNorm = normalizeQwertyHintChar(bias.typedChar)
+        if (typedNorm == null || typedNorm != biasNorm) return JSONArray()
         val alternatives = JSONArray()
         bias.nearbyChars.take(4).forEach { (key, weight) ->
-            if (key.lowercaseChar() in 'a'..'z' && weight.isFinite() && weight in 0.2f..1f) {
-                alternatives.put(JSONObject().put("key", key.lowercaseChar().toString()).put("weight", weight))
+            val alt = normalizeQwertyHintChar(key)
+            if (alt != null && alt != typedNorm && weight.isFinite() && weight in 0.2f..1f) {
+                alternatives.put(JSONObject().put("key", alt.toString()).put("weight", weight))
             }
         }
         if (alternatives.length() > 0) result.put(JSONObject().put("inputIndex", offset + index)
