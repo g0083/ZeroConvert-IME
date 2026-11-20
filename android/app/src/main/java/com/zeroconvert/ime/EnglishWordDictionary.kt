@@ -4,8 +4,6 @@ import android.content.Context
 import android.util.Log
 import com.zeroconvert.ime.assist.TouchBiasTypoResolver
 import com.zeroconvert.ime.engine.WindowsEngine
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.util.Locale
 
 internal interface EnglishLearningBackend {
@@ -19,7 +17,6 @@ internal interface EnglishLearningBackend {
 
 object EnglishWordDictionary {
     private const val TAG = "EnglishWordDictionary"
-    private const val ASSET = "english_words.txt"
     const val ENGLISH_CANDIDATE_ID_PREFIX = "en:"
 
     private object WindowsEngineBackend : EnglishLearningBackend {
@@ -53,6 +50,9 @@ object EnglishWordDictionary {
 
     private val words = mutableListOf<String>()
     private val wordSet = HashSet<String>()
+    /** 辞書順のインデックス。前方一致範囲を二分探索で絞るために使う。 */
+    @Volatile
+    private var sortedIndex: IntArray? = null
 
     /**
      * Common email domains suggested in English mode when typing `@`.
@@ -135,35 +135,88 @@ object EnglishWordDictionary {
             }
         }
         loaded = true
+        sortedIndex = null
         cachedNextWeights = null
     }
 
     @Synchronized
     fun ensureLoaded(context: Context) {
-        if (loaded) return
-        try {
-            context.assets.open(ASSET).use { stream ->
-                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { r ->
-                    var line = r.readLine()
-                    while (line != null) {
+        // 読み込めて入っている間はContextに触らない（JVM単体テストのため）。
+        if (loaded && words.isNotEmpty()) return
+        val file = EnglishDictionaryManager.cacheFile(context)
+        if (loaded) {
+            // サービスはダウンロードより前に起動していることがある。その間は空のまま
+            // ロード済みになるので、ファイルが現れたら空→実の遷移で読み直す。
+            if (!file.isFile) return
+            loaded = false
+        }
+        if (file.isFile) {
+            try {
+                file.useLines(Charsets.UTF_8) { lines ->
+                    for (line in lines) {
+                        if (line.startsWith("#")) continue
                         val w = line.trim()
-                        if (w.isNotEmpty() && w.all { it.isLetter() }) {
+                        if (w.length >= 2 && w.all { it in 'a'..'z' } && wordSet.add(w)) {
                             words.add(w)
-                            wordSet.add(w.lowercase(Locale.ROOT))
                         }
-                        line = r.readLine()
                     }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load ${file.path}", e)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load $ASSET", e)
         }
         loaded = true
+        sortedIndex = null
         cachedNextWeights = null
         if (backend.isReady() && LearningPolicy.canRead) {
             updateCachedPromotedWords(backend.promotedWords(true))
         }
         Log.i(TAG, "Loaded ${words.size} english words")
+    }
+
+    /** 辞書順インデックスを必要になった時点で作る。 */
+    private fun prefixIndex(): IntArray {
+        sortedIndex?.let { return it }
+        synchronized(this) {
+            sortedIndex?.let { return it }
+            val built = (0 until words.size).sortedBy { words[it] }.toIntArray()
+            sortedIndex = built
+            return built
+        }
+    }
+
+    /**
+     * 頻度順（キャッシュの行順）で上位 [limit] 件の前方一致候補を返す。
+     * 単語列はアルファベット順ではないため、インデックスを二分探索して一致範囲を求め、
+     * その中から順位の小さいものを選ぶ。
+     */
+    private fun prefixMatches(p: String, limit: Int): List<String> {
+        if (limit <= 0) return emptyList()
+        val index = prefixIndex()
+        var low = 0
+        var high = index.size
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            if (words[index[mid]] < p) low = mid + 1 else high = mid
+        }
+        val hits = ArrayList<Int>(limit * 2)
+        var position = low
+        while (position < index.size) {
+            val word = words[index[position]]
+            if (!word.startsWith(p)) break
+            if (word.length > p.length) hits.add(index[position])
+            position++
+        }
+        hits.sort()
+        while (hits.size > limit) hits.removeAt(hits.size - 1)
+        return hits.map { words[it] }
+    }
+
+    /** ダウンロード完了直後に呼び、再起動なしで次回の補完から使えるようにする。 */
+    @Synchronized
+    fun reload(context: Context) {
+        loaded = false
+        ensureLoaded(context)
     }
 
     fun isDictionaryWord(word: String): Boolean {
@@ -261,24 +314,19 @@ object EnglishWordDictionary {
             }
         } else {
             // frequency-ranked prefix matches
-            synchronized(this) {
-                for (w in words) {
-                    if (result.size >= limit) break
-                    val wl = w.lowercase(Locale.ROOT)
-                    if (wl.startsWith(p) && wl != p) {
-                        val cand = adjustCase(w, prefix, capitalize, allCaps)
-                        if (cand != prefix && result.none { it.text == cand }) {
-                            result.add(
-                                Candidate(
-                                    text = cand,
-                                    reading = prefix,
-                                    cost = 1000f - result.size.toFloat(),
-                                    isAI = false,
-                                    engineCandidateId = ""
-                                )
-                            )
-                        }
-                    }
+            for (w in prefixMatches(p, limit)) {
+                if (result.size >= limit) break
+                val cand = adjustCase(w, prefix, capitalize, allCaps)
+                if (cand != prefix && result.none { it.text == cand }) {
+                    result.add(
+                        Candidate(
+                            text = cand,
+                            reading = prefix,
+                            cost = 1000f - result.size.toFloat(),
+                            isAI = false,
+                            engineCandidateId = ""
+                        )
+                    )
                 }
             }
         }
@@ -308,7 +356,7 @@ object EnglishWordDictionary {
      */
     fun nextCharWeights(prefix: String): Map<Char, Float> {
         val isEmailDomain = prefix.startsWith("@")
-        if ((!loaded && !isEmailDomain) || prefix.isBlank()) return emptyMap()
+        if ((words.isEmpty() && !isEmailDomain) || prefix.isBlank()) return emptyMap()
         val key = prefix.lowercase(Locale.ROOT)
         val includeLearned = LearningPolicy.canRead
         val promoted = if (includeLearned) cachedPromotedWords else emptyList()

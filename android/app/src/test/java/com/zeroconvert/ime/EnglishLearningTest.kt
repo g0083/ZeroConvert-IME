@@ -108,6 +108,31 @@ class EnglishLearningTest {
     }
 
     @Test
+    fun ensureLoadedPicksUpDictionaryDownloadedAfterServiceStart() {
+        val filesDir = java.nio.file.Files.createTempDirectory("english-dictionary-test").toFile()
+        val localContext: Context = object : ContextWrapper(null) {
+            override fun getFilesDir(): java.io.File = filesDir
+        }
+        EnglishWordDictionary.seedWordsForTest(emptyList())
+        // ファイルが無い間は静的候補が無い（入力原文のフォールバックだけ）。
+        val before = EnglishWordDictionary.suggest(localContext, "hel", limit = 8)
+        assertEquals(1, before.size)
+        assertEquals("hel", before[0].text)
+        assertFalse(EnglishWordDictionary.isDictionaryWord("hello"))
+        // ダウンロードが後に現れたら、再起動なしで次回の補完から使える。
+        val directory = java.io.File(filesDir, "english").apply { mkdirs() }
+        java.io.File(directory, "english-words.txt").writeText(
+            "# zerocon-english-dictionary v1\nhelp\nheld\nhello\n",
+            Charsets.UTF_8
+        )
+        val after = EnglishWordDictionary.suggest(localContext, "hel", limit = 8)
+        assertTrue(after.any { it.text == "help" })
+        assertTrue(after.any { it.text == "hello" })
+        assertTrue(EnglishWordDictionary.isDictionaryWord("hello"))
+        filesDir.deleteRecursively()
+    }
+
+    @Test
     fun isDictionaryWordChecksSeededDictionaryAndInputShape() {
         assertTrue(EnglishWordDictionary.isDictionaryWord("Hello"))
         assertTrue(EnglishWordDictionary.isDictionaryWord("  world  "))

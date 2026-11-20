@@ -1,10 +1,47 @@
 use super::*;
 use shared::english_learning::{EnglishLearningSnapshot, EnglishLearningStore};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const WORDS: &[(&str, usize)] = include!("english_words.rs");
 const LIMIT: usize = 8;
+
+/// 英単語辞書は同梱せず、初回起動時に取得して端末内で抽出・並べ替えたキャッシュを読む。
+/// 未取得の間は静的な補完候補がない（学習済み語と入力原文だけを返す）。
+static CATALOG: OnceLock<Option<shared::english_dictionary::Catalog>> = OnceLock::new();
+
+fn catalog() -> Option<&'static shared::english_dictionary::Catalog> {
+    if let Some(catalog) = CATALOG.get() {
+        return catalog.as_ref();
+    }
+    #[cfg(test)]
+    {
+        // テストは実ファイルの有無に依存させない。
+        return CATALOG
+            .get_or_init(|| {
+                Some(shared::english_dictionary::Catalog::from_ranked_words(
+                    ["hello", "help", "held", "here", "health", "heart"]
+                        .iter()
+                        .map(|word| (*word).to_owned())
+                        .collect(),
+                ))
+            })
+            .as_ref();
+    }
+    #[cfg(not(test))]
+    {
+        let path = shared::english_dictionary::cache_path(
+            &shared::english_dictionary::windows_dictionary_root(),
+        );
+        // 未取得の間だけファイルを確認する。ダウンロード完了後にアプリを再起動しなくても
+        // 次の補完から使えるようにするため、読めた時点で確定させる。
+        if path.is_file() {
+            if let Some(catalog) = shared::english_dictionary::load(&path) {
+                return CATALOG.get_or_init(|| Some(catalog)).as_ref();
+            }
+        }
+        None
+    }
+}
 
 #[derive(Default)]
 struct ClientEnglishLearningCache {
@@ -31,9 +68,7 @@ pub(super) fn is_dictionary_word(word: &str) -> bool {
         return false;
     }
     let lower = word.to_ascii_lowercase();
-    WORDS
-        .binary_search_by(|(entry, _)| (*entry).cmp(lower.as_str()))
-        .is_ok()
+    catalog().is_some_and(|catalog| catalog.contains(&lower))
 }
 
 pub(super) fn cache_sync_cursor() -> (u64, u64) {
@@ -191,20 +226,9 @@ pub(super) fn candidates_with_store(
         }
     } else if (2..=64).contains(&prefix.len()) && prefix.bytes().all(|b| b.is_ascii_alphabetic()) {
         let lower = prefix.to_ascii_lowercase();
-        let start = WORDS.partition_point(|(w, _)| *w < lower.as_str());
-        let mut best = Vec::with_capacity(LIMIT + 8 + 1);
-        for &(word, rank) in WORDS[start..]
-            .iter()
-            .take_while(|(w, _)| w.starts_with(&lower))
-        {
-            if word == lower {
-                continue;
-            }
-            let i = best.partition_point(|&(_, r)| r < rank);
-            best.insert(i, (word, rank));
-            best.truncate(LIMIT + 8);
-        }
-        let static_words: Vec<&str> = best.into_iter().map(|(w, _)| w).collect();
+        let static_words: Vec<&str> = catalog()
+            .map(|catalog| catalog.prefix_best(&lower, LIMIT + 8))
+            .unwrap_or_default();
         for suggestion in store.merge_with_dictionary(prefix, &static_words, LIMIT, read_learning) {
             texts.push(suggestion.text);
             candidate_ids.push(if suggestion.learned {
@@ -459,7 +483,9 @@ mod tests {
         assert_eq!(candidates("x").texts, ["x"]);
         assert_eq!(candidates("123").texts, ["123"]);
         assert!(candidates("").is_empty_composition());
-        assert!(WORDS.windows(2).all(|w| w[0].0 < w[1].0));
+        let catalog = catalog().expect("test catalog");
+        assert!(catalog.contains("hello"));
+        assert_eq!(catalog.prefix_best("hel", 2), vec!["hello", "help"]);
     }
 
     #[test]

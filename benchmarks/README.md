@@ -41,6 +41,13 @@ raw読み指標、共通の入力途中保護、物理キー証拠を要求す�
 
 `windows-rpc/` は稼働中のWindows IMEサーバーへ専用クライアントで接続する確認用ツール。`cargo run --manifest-path benchmarks/windows-rpc/Cargo.toml -- <新しい結果JSONパス>` で実行する。compositionと文脈をテスト用に操作するため、入力を確定してから使う。確定学習は行わない。TSF・画面上のTab採用を代替するものではない。今回の改善結果・適用状態・制約は [2026-10-27の改善記録](../reports/typo-assist/typo-improvement-20261027.md) を参照。
 
+追加辞書の比較では、各辞書を適用したあとに次のコマンドを実行する。追加辞書側は出力名を `additional.json` に変える。集計では第1候補、上位5候補、打鍵ごとのRPC応答時間を比較する。増量試験で同音語を確認する場合は、選出スクリプトの `cases --previous` で同音語30件を加える。自動確定は別途Windowsの入力欄で確認する。 [追加辞書の生成と切り替え](../docs/investigations/additional-dictionary-plan.md)
+
+```powershell
+cargo run --locked --manifest-path benchmarks/windows-rpc/Cargo.toml -- artifacts/results/baseline.json --dictionary-cases benchmarks/windows-rpc/dictionary-cases.tsv
+python scripts/run.py benchmarks/windows-rpc/compare_dictionary.py artifacts/results/baseline.json artifacts/results/additional.json artifacts/results/dictionary-comparison.json
+```
+
 同じ追加学習データ・条件で約18.5MB版と約64.3MB版を比較した結果は [タイポ補正モデル大型化の比較](../reports/typo-assist/corrector-size-comparison-20261027.md) を参照。開発評価300問の再測定、補助35問、誤提案とCPU遅延を記録し、実IMEへの適用とは区別している。
 
 語句の多様化・読み補正分離を両サイズで比較する手順は [8条件の実験記録](../reports/typo-assist/corrector-ablation-20261027.md) を参照。`benchmark_corrector_pipeline.py --reading-stage` は実験用に「かなの修正→固定の通常変換」を仲介し、両段の時間を計上する。`analyze_corrector_ablation.py` は16結果ファイルのモデル・実行器の同一性を確認し、条件間の正答増減を集計する。製品の補正方式を切り替える設定ではない。

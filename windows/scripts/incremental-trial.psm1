@@ -21,7 +21,8 @@ function Get-TrialInputGroups {
             'windows/frontend/src-tauri/build.rs','windows/frontend/src-tauri/Cargo.toml',
             'windows/frontend/src-tauri/tauri.conf.json','windows/frontend/src-tauri/capabilities','windows/frontend/src-tauri/icons')
         swift = @('windows/server-swift/Sources','windows/server-swift/Package.swift','windows/server-swift/Package.resolved')
-        dictionary = @('windows/server-swift/azooKey_dictionary_storage/Dictionary','windows/scripts/generate-reverse-dictionary.mjs')
+        dictionary = @('windows/server-swift/azooKey_dictionary_storage/Dictionary','windows/scripts/generate-reverse-dictionary.mjs',
+            'scripts/prepare_dictionary.py','data/dictionary')
         emoji = @('windows/server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary')
         deployment = @('windows/deployment')
         models = @('artifacts/models/zerocon/zerocon-nano-v4.1-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf')
@@ -29,16 +30,40 @@ function Get-TrialInputGroups {
     }
 }
 
-function Get-TrialInputSnapshot([string]$Root, $Previous = $null) {
+function Read-AdditionalTrialDictionary([string]$Directory, [string]$BaseRoot) {
+    $directoryPath = (Resolve-Path -LiteralPath $Directory).ProviderPath
+    $manifestPath = Get-ArtifactPath $directoryPath 'additional-dictionary.json'
+    $dictionaryPath = Get-ArtifactPath $directoryPath 'Dictionary'
+    $manifest = Get-Content -LiteralPath $manifestPath -Encoding UTF8 -Raw | ConvertFrom-Json
+    if ($manifest.schemaVersion -ne 1 -or $manifest.kind -ne 'additional-trial-dictionary') {
+        throw 'Invalid additional trial dictionary manifest.'
+    }
+    $baseRevision = & git -C $BaseRoot rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $baseRevision -cne $manifest.baseRevision) {
+        throw 'Additional dictionary was generated for a different standard dictionary revision.'
+    }
+    foreach ($mandatory in @('louds/charID.chid','mm.binary','Reverse/reverse-v2.bin')) {
+        if ($mandatory -cnotin @($manifest.files.path)) { throw "Additional dictionary is missing $mandatory." }
+    }
+    Test-ArtifactEntries $dictionaryPath $manifest.files
+    if (@(Get-ArtifactEntries $dictionaryPath -NamesOnly).Count -ne @($manifest.files).Count) {
+        throw 'Unexpected files in additional trial dictionary.'
+    }
+    $manifest.files
+}
+
+function Get-TrialInputSnapshot([string]$Root, $Previous = $null, [string]$AdditionalDictionaryDirectory, [switch]$DictionaryOnly, [switch]$BaseDictionary) {
     $groups = Get-TrialInputGroups
     $result = [ordered]@{}
     foreach ($group in $groups.Keys) {
+        if ($DictionaryOnly -and $group -ne 'dictionary') { continue }
         $prior = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
         if ($Previous -and $Previous.PSObject.Properties[$group]) {
             foreach ($entry in $Previous.$group.files) { $prior[$entry.path] = $entry }
         }
         $files = New-Object 'Collections.Generic.List[object]'
         foreach ($relative in $groups[$group]) {
+            if ($relative -eq 'data/dictionary' -and ($BaseDictionary -or $AdditionalDictionaryDirectory)) { continue }
             $inputPath = Join-Path $Root $relative
             if (-not (Test-Path -LiteralPath $inputPath)) { continue }
             $items = if (Test-Path -LiteralPath $inputPath -PathType Container) {
@@ -53,6 +78,13 @@ function Get-TrialInputSnapshot([string]$Root, $Previous = $null) {
                     $prior[$name].bytes -eq $item.Length -and $prior[$name].ticks -eq $ticks
                 $hash = if ($cached) { $prior[$name].sha256 } else { Get-ArtifactHash $item.FullName }
                 $files.Add([pscustomobject]@{ path=$name; bytes=$item.Length; ticks=$ticks; sha256=$hash })
+            }
+        }
+        if ($group -eq 'dictionary' -and $AdditionalDictionaryDirectory) {
+            foreach ($entry in (Read-AdditionalTrialDictionary $AdditionalDictionaryDirectory (Join-Path $Root 'windows/server-swift/azooKey_dictionary_storage'))) {
+                $files.Add([pscustomobject]@{
+                    path='additional-dictionary/'+$entry.path; bytes=$entry.bytes; sha256=$entry.sha256
+                })
             }
         }
         [string[]]$lines = @($files.ToArray() | ForEach-Object { $_.path + ':' + $_.sha256 })

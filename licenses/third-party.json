@@ -83,7 +83,7 @@
       "credit": "wordfreq by Robyn Speer (Luminoso)",
       "license": "CC BY-SA 4.0（データ）／Apache-2.0（コード）",
       "note": "初回起動時に取得し、端末内で ASCII 小文字の頻度上位 30,000 語に抽出します（卑語・短縮形語幹は除外）。改変物は端末内にのみ存在し、配布物には含まれません。",
-      "platforms": ["windows"]
+      "platforms": ["android", "windows"]
     },
     {
       "id": "plamo",

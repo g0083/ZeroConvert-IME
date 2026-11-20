@@ -1,4 +1,5 @@
 mod benchmark_runtime;
+mod english_dictionary;
 mod ipc;
 mod jev_api;
 mod model_catalog;
@@ -718,6 +719,18 @@ async fn translation_model_download(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn english_dictionary_status() -> english_dictionary::Status {
+    english_dictionary::status()
+}
+
+#[tauri::command]
+async fn english_dictionary_download(
+    app: tauri::AppHandle,
+) -> Result<english_dictionary::Status, String> {
+    english_dictionary::install(app).await
+}
+
 fn to_hiragana(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -1328,6 +1341,8 @@ pub fn run() {
             run_quick_benchmark,
             translation_model_status,
             translation_model_download,
+            english_dictionary_status,
+            english_dictionary_download,
             run_ai_assist_benchmark_item,
             get_active_model,
             switch_model

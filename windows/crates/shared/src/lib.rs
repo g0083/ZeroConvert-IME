@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod assist_policy;
 pub mod conversion_policy;
+pub mod english_dictionary;
 pub mod english_learning;
 pub mod learning_policy;
 pub mod session_policy;
@@ -1221,7 +1222,10 @@ mod tests {
         );
 
         for (raw, expected) in [
-            (r#"{"auto_typo_correction":"off"}"#, AutoTypoCorrectionStrength::Off),
+            (
+                r#"{"auto_typo_correction":"off"}"#,
+                AutoTypoCorrectionStrength::Off,
+            ),
             (
                 r#"{"auto_typo_correction":"conservative"}"#,
                 AutoTypoCorrectionStrength::Conservative,
@@ -1953,7 +1957,9 @@ where
     match Option::<Value>::deserialize(deserializer)? {
         Some(Value::Bool(false)) => Ok(assist_policy::AutoTypoCorrectionStrength::Off),
         Some(Value::Bool(true)) | None => Ok(assist_policy::AutoTypoCorrectionStrength::Standard),
-        Some(Value::Str(s)) => Ok(assist_policy::AutoTypoCorrectionStrength::from_str_lossy(&s)),
+        Some(Value::Str(s)) => Ok(assist_policy::AutoTypoCorrectionStrength::from_str_lossy(
+            &s,
+        )),
     }
 }
 

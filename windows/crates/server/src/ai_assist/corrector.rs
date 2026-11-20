@@ -70,9 +70,9 @@ fn has_pending_romaji_tail(input: &str) -> bool {
 }
 
 fn has_floating_ascii(input: &str) -> bool {
-    input
-        .chars()
-        .any(|c| c.is_ascii_alphabetic() || ('ａ'..='ｚ').contains(&c) || ('Ａ'..='Ｚ').contains(&c))
+    input.chars().any(|c| {
+        c.is_ascii_alphabetic() || ('ａ'..='ｚ').contains(&c) || ('Ａ'..='Ｚ').contains(&c)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,10 +230,9 @@ pub fn can_auto_apply_composition_suggestion_with_strength(
         return false;
     }
     trailing_phrase(input, baseline).is_some_and(|(prefix, target)| {
-        suggestion
-            .surface
-            .strip_prefix(prefix)
-            .is_some_and(|s| can_auto_apply_inner(target, s, suggestion.channel_confidence, strength))
+        suggestion.surface.strip_prefix(prefix).is_some_and(|s| {
+            can_auto_apply_inner(target, s, suggestion.channel_confidence, strength)
+        })
     })
 }
 
@@ -619,8 +618,7 @@ pub fn suggest_auto_refinement(
         .or_else(|| romaji_decoder::decode_floating_consonant_typo(origin).map(|s| (s, false)));
     if let Some((cand, is_explicit_table)) = deterministic_candidate {
         let cand_hira = katakana_to_hiragana(&cand);
-        if cand_hira == curr_hira || cand == baseline || cand_hira.starts_with(&orig_prefix_hira)
-        {
+        if cand_hira == curr_hira || cand == baseline || cand_hira.starts_with(&orig_prefix_hira) {
             return eval_current_trailing(true);
         }
         if !super::reading_check::has_same_reading(&cand, current_reading)
@@ -803,8 +801,9 @@ pub fn can_auto_apply_channel_repair_with_strength(
     } else {
         gain_tenths >= tail_min
     };
-    let passes_disambiguation =
-        !confidence.has_alt_reading || has_floating_ascii || alt_min.is_none_or(|min| gain_tenths >= min);
+    let passes_disambiguation = !confidence.has_alt_reading
+        || has_floating_ascii
+        || alt_min.is_none_or(|min| gain_tenths >= min);
     passes_base && passes_disambiguation
 }
 
@@ -818,8 +817,9 @@ fn can_auto_apply_inner(
         return false;
     }
     can_auto_apply(input, surface)
-        || channel_confidence
-            .is_some_and(|c| can_auto_apply_channel_repair_with_strength(input, surface, c, strength))
+        || channel_confidence.is_some_and(|c| {
+            can_auto_apply_channel_repair_with_strength(input, surface, c, strength)
+        })
 }
 
 pub fn can_auto_apply_suggestion(input: &str, suggestion: &TypoSuggestion) -> bool {
@@ -1543,8 +1543,12 @@ mod tests {
         // 1. Refinement auto-apply & hysteresis.
         let calls = Arc::new(Mutex::new(Vec::new()));
         let replies = Arc::new(Mutex::new(vec![
-            Some(json!({"observed": "しゅてんします", "reading": "しゅってんします", "gain": 82.0})),
-            Some(json!({"observed": "しゅてんします", "reading": "しゅってんします", "alt_reading": "しゅうてんします", "gain": 82.0})),
+            Some(
+                json!({"observed": "しゅてんします", "reading": "しゅってんします", "gain": 82.0}),
+            ),
+            Some(
+                json!({"observed": "しゅてんします", "reading": "しゅってんします", "alt_reading": "しゅうてんします", "gain": 82.0}),
+            ),
         ]));
         runtime::with_backend(
             Box::new(SeqBackend {
@@ -1843,39 +1847,39 @@ mod tests {
                 calls: Arc::new(Mutex::new(Vec::new())),
                 replies: trail_replies_a,
             }),
-            || {
-                match suggest_auto_refinement(
-                    "",
-                    "きょうはあしだ",
-                    "今日はあしだ",
-                    "",
-                    "",
-                    "qwerty",
-                    &AutoRefinementContext {
-                        origin_reading: "きょおはあしだ",
-                        origin_raw: "kyoohaashida",
-                        origin_touch_hints: "",
-                        applied_prefix: "きょうは",
-                    },
-                    AutoTypoCorrectionStrength::Standard,
-                    &config,
-                ) {
-                    CorrectionOutcome::Suggestion {
-                        suggestion,
-                        auto_apply,
-                        ..
-                    } => {
-                        assert_eq!(suggestion.surface, "きょうはあした");
-                        assert!(auto_apply);
-                    }
-                    other => panic!("expected 2nd typo suggestion, got {other:?}"),
+            || match suggest_auto_refinement(
+                "",
+                "きょうはあしだ",
+                "今日はあしだ",
+                "",
+                "",
+                "qwerty",
+                &AutoRefinementContext {
+                    origin_reading: "きょおはあしだ",
+                    origin_raw: "kyoohaashida",
+                    origin_touch_hints: "",
+                    applied_prefix: "きょうは",
+                },
+                AutoTypoCorrectionStrength::Standard,
+                &config,
+            ) {
+                CorrectionOutcome::Suggestion {
+                    suggestion,
+                    auto_apply,
+                    ..
+                } => {
+                    assert_eq!(suggestion.surface, "きょうはあした");
+                    assert!(auto_apply);
                 }
+                other => panic!("expected 2nd typo suggestion, got {other:?}"),
             },
         );
 
         // 5b. Trailing 2nd typo detected via alt_reading on confirmed prefix.
         let trail_replies_b = Arc::new(Mutex::new(vec![
-            Some(json!({"observed": "きょおはあしだ", "reading": "きょうはあしだ", "alt_reading": "きょおはあした", "gain": 88.0})),
+            Some(
+                json!({"observed": "きょおはあしだ", "reading": "きょうはあしだ", "alt_reading": "きょおはあした", "gain": 88.0}),
+            ),
             Some(json!({"observed": "きょうはあしだ", "reading": "きょうはあした", "gain": 92.0})),
         ]));
         runtime::with_backend(
@@ -1883,33 +1887,31 @@ mod tests {
                 calls: Arc::new(Mutex::new(Vec::new())),
                 replies: trail_replies_b,
             }),
-            || {
-                match suggest_auto_refinement(
-                    "",
-                    "きょうはあしだ",
-                    "今日はあしだ",
-                    "",
-                    "",
-                    "qwerty",
-                    &AutoRefinementContext {
-                        origin_reading: "きょおはあしだ",
-                        origin_raw: "kyoohaashida",
-                        origin_touch_hints: "",
-                        applied_prefix: "きょうは",
-                    },
-                    AutoTypoCorrectionStrength::Standard,
-                    &config,
-                ) {
-                    CorrectionOutcome::Suggestion {
-                        suggestion,
-                        auto_apply,
-                        ..
-                    } => {
-                        assert_eq!(suggestion.surface, "きょうはあした");
-                        assert!(auto_apply);
-                    }
-                    other => panic!("expected 2nd typo via alt_reading, got {other:?}"),
+            || match suggest_auto_refinement(
+                "",
+                "きょうはあしだ",
+                "今日はあしだ",
+                "",
+                "",
+                "qwerty",
+                &AutoRefinementContext {
+                    origin_reading: "きょおはあしだ",
+                    origin_raw: "kyoohaashida",
+                    origin_touch_hints: "",
+                    applied_prefix: "きょうは",
+                },
+                AutoTypoCorrectionStrength::Standard,
+                &config,
+            ) {
+                CorrectionOutcome::Suggestion {
+                    suggestion,
+                    auto_apply,
+                    ..
+                } => {
+                    assert_eq!(suggestion.surface, "きょうはあした");
+                    assert!(auto_apply);
                 }
+                other => panic!("expected 2nd typo via alt_reading, got {other:?}"),
             },
         );
     }

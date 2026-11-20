@@ -9,13 +9,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ELF = runpy.run_path(str(ROOT / 'scripts/check-android-native.py'))
 OUTPUT = ROOT / 'android/rebuilt/build/outputs/apk/debug'
+DICTIONARY = ROOT / 'data/dictionary'
 
 
 def main():
     metadata = json.loads((OUTPUT / 'output-metadata.json').read_text(encoding='utf-8'))
+    with zipfile.ZipFile(DICTIONARY / 'additional-louds.zip') as overlay:
+        dictionary = json.loads(overlay.read('manifest.json'))
+    dictionary_files = dict(dictionary['files'])
+    dictionary_files['Reverse/reverse-v2.bin'] = dictionary['reverse']['sha256']
+    for notice in (DICTIONARY / 'AdditionalDictionaryNotices').iterdir():
+        dictionary_files[f'AdditionalDictionaryNotices/{notice.name}'] = hashlib.sha256(notice.read_bytes()).hexdigest()
     for artifact in metadata['elements']:
         apk = OUTPUT / artifact['outputFile']
-        with zipfile.ZipFile(apk) as archive:
+        # Android asset names are UTF-8 even when ZIP's UTF-8 flag is unset.
+        with zipfile.ZipFile(apk, metadata_encoding='utf-8') as archive:
             names = set(archive.namelist())
             if 'assets/NOTICE-keyboard-typo-dictionary.md' in names or 'assets/keyboard-typo-cases.tsv' in names:
                 raise ValueError(f'{apk.name}: obsolete keyboard typo dictionary asset')
@@ -47,10 +55,13 @@ def main():
                         raise ValueError(f'{apk.name}: missing runtime CPU backend {backend}')
             if 'assets/dictionary/reverse-v2.bin' in names:
                 raise ValueError(f'{apk.name}: duplicate reverse dictionary')
-            shared_reverse = archive.read('assets/shared-engine/Dictionary/Reverse/reverse-v2.bin')
-            if hashlib.sha256(shared_reverse).digest() != hashlib.sha256(
-                (ROOT / 'engine/build/assets/shared-engine/Dictionary/Reverse/reverse-v2.bin').read_bytes()).digest():
-                raise ValueError(f'{apk.name}: wrong shared reverse dictionary')
+            for name, expected_hash in dictionary_files.items():
+                asset = f'assets/shared-engine/Dictionary/{name}'
+                if asset not in names or hashlib.sha256(archive.read(asset)).hexdigest() != expected_hash:
+                    raise ValueError(f'{apk.name}: missing or changed dictionary asset {asset}')
+            for name in dictionary['removed']:
+                if f'assets/shared-engine/Dictionary/{name}' in names:
+                    raise ValueError(f'{apk.name}: stale dictionary asset {name}')
             # The packaged lock is what identifies the engine revision this APK
             # was built from, so it must be the committed one.
             packaged_lock = archive.read('assets/shared-engine/lock.json')
@@ -73,7 +84,7 @@ def main():
                 name = 'assets/' + model.relative_to(ROOT / 'android/app/src/main/assets').as_posix()
                 if hashlib.sha256(archive.read(name)).digest() != hashlib.sha256(model.read_bytes()).digest():
                     raise ValueError(f'{apk.name}: model was changed or omitted: {name}')
-        print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; runtime closure, CPU backends, shared reverse and model hashes verified.')
+        print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; models, runtime and {dictionary["reverse"]["pairs"]:,}-pair dictionary verified.')
         print(f'  engine lock: converter {engine_lock["converterRevision"]}, swift {engine_lock["swiftSources"][:12]}')
 
 

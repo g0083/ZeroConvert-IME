@@ -93,4 +93,32 @@ Reject { Read-TrialUpdate $update } 'reject damaged partial payload'
 Put 'windows/frontend/node_modules/generated.js' 'ignored'
 $ignored=Get-TrialInputSnapshot $fixture $removed
 Assert ($ignored.frontend.hash -eq $removed.frontend.hash) 'generated dependencies do not trigger rebuild'
+Put 'new-dictionary/Dictionary/louds/charID.chid' 'characters'
+Put 'new-dictionary/Dictionary/mm.binary' 'costs'
+Put 'new-dictionary/Dictionary/Reverse/reverse-v2.bin' 'reverse'
+Put 'new-dictionary/Dictionary/louds/new0.loudstxt3' 'additional'
+$additional = Join-Path $fixture 'new-dictionary'
+$baseSource = Join-Path $fixture 'windows/server-swift/azooKey_dictionary_storage'
+$baseRevision = & git -C $baseSource rev-parse HEAD
+$stagedManifest = @{
+    schemaVersion=1; kind='additional-trial-dictionary'; baseRevision=$baseRevision
+    files=@(Get-ArtifactEntries (Join-Path $additional 'Dictionary'))
+}
+Write-ArtifactJson (Join-Path $additional 'additional-dictionary.json') $stagedManifest
+$enabled = Get-TrialInputSnapshot $fixture $ignored $additional
+$rolledBack = Get-TrialInputSnapshot $fixture $enabled
+Assert ($enabled.dictionary.hash -ne $ignored.dictionary.hash) 'selecting additional dictionary invalidates dictionary files'
+Assert ($enabled.shared.hash -eq $ignored.shared.hash) 'dictionary selection preserves unrelated groups'
+Assert ($rolledBack.dictionary.hash -eq $ignored.dictionary.hash) 'omitting selection restores standard dictionary input identity'
+Assert ($enabled.dictionary.files.path -ccontains 'additional-dictionary/louds/new0.loudstxt3') 'stage entries retain their relative destinations'
+$dictionaryOnly = Get-TrialInputSnapshot $fixture $enabled $additional -DictionaryOnly
+Assert ($dictionaryOnly.PSObject.Properties.Name -ceq 'dictionary') 'isolated dictionary run ignores pending edits in other groups'
+Put 'data/dictionary/additional-louds.zip' 'bundled dictionary expansion'
+$default = Get-TrialInputSnapshot $fixture $enabled -DictionaryOnly
+$base = Get-TrialInputSnapshot $fixture $default -DictionaryOnly -BaseDictionary
+Assert ($default.dictionary.files.path -ccontains 'data/dictionary/additional-louds.zip') 'normal build fingerprints the bundled expansion'
+Assert ($default.dictionary.hash -ne $base.dictionary.hash) 'explicit base comparison changes the dictionary identity'
+Assert ($base.dictionary.hash -eq $ignored.dictionary.hash) 'explicit base comparison restores the upstream dictionary inputs'
+Put 'new-dictionary/Dictionary/Reverse/reverse-v2.bin' 'tampered'
+Reject { Get-TrialInputSnapshot $fixture $enabled $additional } 'additional dictionary hash mismatch fails before deployment'
 Write-Host "PASS: $script:checks incremental assertions. Evidence: $fixture"

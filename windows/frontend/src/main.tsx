@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { AppSidebar, settingsPages } from "@/components/app-sidebar";
 import { UpdateProvider } from "@/components/update-provider";
 import { FirstLaunchQuickBenchmark } from "@/components/first-launch-quick-benchmark";
+import { FirstLaunchEnglishDictionary } from "@/components/first-launch-english-dictionary";
 import { SettingsSearch, openSettingsSearch } from "@/components/settings-search";
 import { consumePendingSettingsTarget, findSettingsRow } from "@/lib/settings-search-target";
 import { General } from "@/pages/general";
@@ -50,6 +51,7 @@ function SettingsLayout() {
             <UpdateProvider>
                 <SidebarProvider className="h-dvh min-h-0 overflow-hidden" style={{ "--sidebar-width": "14rem" } as React.CSSProperties}>
                     <FirstLaunchQuickBenchmark />
+                    <FirstLaunchEnglishDictionary />
                     <SettingsSearch />
                     <AppSidebar />
                     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">

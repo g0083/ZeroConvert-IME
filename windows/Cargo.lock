@@ -1223,6 +1223,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "azookey-server",
+ "flate2",
  "hyper-util",
  "reqwest",
  "semver",

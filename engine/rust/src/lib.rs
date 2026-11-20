@@ -11,6 +11,9 @@ pub mod bridge;
 #[path = "../../../windows/crates/shared/src/conversion_policy.rs"]
 pub mod conversion_policy;
 
+#[path = "../../../windows/crates/shared/src/english_dictionary.rs"]
+pub mod english_dictionary;
+
 #[path = "../../../windows/crates/shared/src/english_learning.rs"]
 pub mod english_learning;
 

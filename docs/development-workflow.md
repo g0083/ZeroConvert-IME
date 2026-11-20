@@ -65,6 +65,8 @@ Gitのコミット・pushは、この図のどの適用操作の代わりにも�
 
 失敗やエラーがあれば反映完了とは扱わない。`Build-Trial.bat -WhatIf` は変更判定だけで、ビルドも適用も行わない。`Restart-IME.bat` は既存の実行物を再起動するだけで、新しいソースをビルド・適用しない。
 
+Windowsの通常ビルドとAndroid APKには、SudachiDict FullとWikidataの追加語を含む629,045組の辞書を同梱する。Windowsで別の試験辞書を使う場合は `Build-Trial.bat -DictionaryOnly -AdditionalDictionaryDirectory <生成先>` を実行する。azooKeyの元辞書との比較には `Build-Trial.bat -DictionaryOnly -BaseDictionary` を使う。`Build-Trial.bat -DictionaryOnly` で通常同梱の辞書に戻る。 [追加辞書の生成と比較](investigations/additional-dictionary-plan.md)
+
 ## 動作確認した一式をインストーラーにする
 
 普段の増分更新をそのまま「配布用の完全パッケージ」として扱わない。配布前には一式をそろえて確認する。

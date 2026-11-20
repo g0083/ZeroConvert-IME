@@ -1,6 +1,6 @@
 # Fast local development loop. Distribution builds remain separate and complete.
 [CmdletBinding(SupportsShouldProcess)]
-param([switch]$Force, [switch]$NoRestart)
+param([switch]$Force, [switch]$NoRestart, [string]$AdditionalDictionaryDirectory, [switch]$DictionaryOnly, [switch]$BaseDictionary)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'distribution.psm1') -Force
@@ -13,13 +13,18 @@ $timer = [Diagnostics.Stopwatch]::StartNew()
 if (-not (Test-Path -LiteralPath (Join-Path $trialRoot 'build-info.json'))) { throw 'Prepare and apply a complete package once before using Build-Trial.bat.' }
 $previous = if (Test-Path -LiteralPath $statePath) { Get-Content -Encoding UTF8 -Raw -LiteralPath $statePath | ConvertFrom-Json } else { $null }
 if ($previous -and $previous.schemaVersion -ne 1) { throw 'Unsupported incremental state. Use the complete package workflow to reset the trial.' }
-$snapshot = Get-TrialInputSnapshot $repoRoot $(if ($previous -and -not $Force) { $previous.inputs } else { $null })
+if ($AdditionalDictionaryDirectory) {
+    if ($BaseDictionary) { throw 'Choose either -BaseDictionary or -AdditionalDictionaryDirectory.' }
+    $AdditionalDictionaryDirectory = (Resolve-Path -LiteralPath $AdditionalDictionaryDirectory).ProviderPath
+}
+$snapshot = Get-TrialInputSnapshot $repoRoot $(if ($previous -and -not $Force) { $previous.inputs } else { $null }) $AdditionalDictionaryDirectory -DictionaryOnly:$DictionaryOnly -BaseDictionary:$BaseDictionary
 $changed = @($snapshot.PSObject.Properties | Where-Object {
     $Force -or -not $previous -or -not $previous.inputs.PSObject.Properties[$_.Name] -or $previous.inputs.($_.Name).hash -ne $_.Value.hash
 } | ForEach-Object { $_.Name })
 # Repair deployment drift even when source files did not change.
 if ($previous) {
     foreach ($group in $previous.outputs.PSObject.Properties) {
+        if ($DictionaryOnly -and $group.Name -ne 'dictionary') { continue }
         foreach ($entry in $group.Value) {
             $destination = [IO.Path]::GetFullPath((Join-Path $trialRoot $entry.path))
             if (-not $destination.StartsWith($trialRoot+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid saved output path.' }
@@ -53,6 +58,13 @@ if ('runtime' -in $plan -and -not $outputs.Contains('runtime')) {
     # refuses removals if a user has changed any of these files independently.
     $legacyManifest = Get-Content -Raw (Join-Path $repoRoot 'artifacts/runtime/windows/dependencies-manifest.json') | ConvertFrom-Json
     $outputs['runtime'] = @($legacyManifest.files | Where-Object { $_.path -match '^llama_(cpu|vulkan)/' })
+}
+$packageManifest = Join-Path $trialRoot 'package-manifest.json'
+if ('dictionary' -in $plan -and -not $outputs.Contains('dictionary') -and
+    (Test-Path -LiteralPath $packageManifest -PathType Leaf)) {
+    $fullPackage = Get-Content -LiteralPath $packageManifest -Encoding UTF8 -Raw | ConvertFrom-Json
+    $managedDictionary = @($fullPackage.files | Where-Object { $_.path -cmatch '^Dictionary/' })
+    if ($managedDictionary.Count) { $outputs['dictionary'] = $managedDictionary }
 }
 $sources = [ordered]@{}
 function Add-TrialOutput([string]$Group, [string]$Source, [string]$Relative) {
@@ -156,8 +168,25 @@ while ($true) {
     }
     foreach ($dataGroup in @('dictionary','emoji','deployment','models')) {
         if ($dataGroup -notin $plan) { continue }
+        if ($dataGroup -eq 'dictionary') {
+            if ($AdditionalDictionaryDirectory) {
+                $prefix = 'additional-dictionary/'
+                $sourceDirectory = Get-ArtifactPath $AdditionalDictionaryDirectory 'Dictionary'
+                $entries = @($snapshot.dictionary.files | Where-Object { $_.path.StartsWith($prefix,[StringComparison]::Ordinal) })
+                $relativePaths = @($entries | ForEach-Object { $_.path.Substring($prefix.Length) })
+            } else {
+                $sourceDirectory = Join-Path $windowsRoot 'target/trial-dictionary/Dictionary'
+                $arguments = @('scripts/prepare_dictionary.py','--output',$sourceDirectory)
+                if ($BaseDictionary) { $arguments += '--base-only' }
+                Invoke-TrialStep $repoRoot 'python.exe' $arguments
+                $relativePaths = @(Get-ArtifactEntries $sourceDirectory -NamesOnly)
+            }
+            foreach ($relative in $relativePaths) {
+                Add-TrialOutput 'dictionary' (Get-ArtifactPath $sourceDirectory $relative) ('Dictionary/'+$relative)
+            }
+            continue
+        }
         $prefix = switch ($dataGroup) {
-            'dictionary' { 'windows/server-swift/azooKey_dictionary_storage/Dictionary/' }
             'emoji' { 'windows/server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary/' }
             'deployment' { 'windows/deployment/' }
             'models' { 'artifacts/models/zerocon/' }
@@ -165,17 +194,12 @@ while ($true) {
         foreach ($entry in $snapshot.$dataGroup.files) {
             if (-not $entry.path.StartsWith($prefix,[StringComparison]::Ordinal)) { continue }
             $name=$entry.path.Substring($prefix.Length)
-            if ($dataGroup -eq 'dictionary') { $name='Dictionary/'+$name }
             if ($dataGroup -eq 'emoji') { $name='EmojiDictionary/'+$name }
             if ($dataGroup -eq 'models') { $name='models/'+$name }
             Add-TrialOutput $dataGroup (Join-Path $repoRoot $entry.path) $name
         }
-        if ($dataGroup -eq 'dictionary') {
-            Invoke-TrialStep $windowsRoot 'node.exe' @('scripts/generate-reverse-dictionary.mjs')
-            Add-TrialOutput 'dictionary' (Join-Path $windowsRoot 'target/azookey-reverse-dictionary/reverse-v2.bin') 'Dictionary/Reverse/reverse-v2.bin'
-        }
     }
-    $afterSnapshot = Get-TrialInputSnapshot $repoRoot $snapshot
+    $afterSnapshot = Get-TrialInputSnapshot $repoRoot $snapshot $AdditionalDictionaryDirectory -DictionaryOnly:$DictionaryOnly -BaseDictionary:$BaseDictionary
     $duringBuild = @(Get-TrialInputChanges $snapshot $afterSnapshot)
     if (-not $duringBuild.Count) { break }
     foreach ($change in $duringBuild) {
@@ -221,10 +245,17 @@ if ($changes.Count -or $removals.Count) {
     & (Join-Path $PSScriptRoot 'apply-trial-package.ps1') -UpdateDirectory $updateRoot -NoRestart:$NoRestart
 }
 foreach ($group in @($outputs.Keys)) {
+    if ($DictionaryOnly -and $group -ne 'dictionary') { continue }
     $outputs[$group]=@($outputs[$group] | ForEach-Object {
         $file=[IO.FileInfo]::new((Join-Path $trialRoot $_.path))
         [pscustomobject]@{path=$_.path;bytes=$_.bytes;sha256=$_.sha256;ticks=$file.LastWriteTimeUtc.Ticks.ToString()}
     })
 }
-Write-ArtifactJson $statePath @{ schemaVersion=1; inputs=$afterSnapshot; outputs=$outputs; updatedAt=[DateTimeOffset]::Now.ToString('o') }
+$nextInputs = $afterSnapshot
+if ($DictionaryOnly -and $previous) {
+    $nextInputs = [ordered]@{}
+    foreach ($group in $previous.inputs.PSObject.Properties) { $nextInputs[$group.Name] = $group.Value }
+    $nextInputs['dictionary'] = $afterSnapshot.dictionary
+}
+Write-ArtifactJson $statePath @{ schemaVersion=1; inputs=$nextInputs; outputs=$outputs; updatedAt=[DateTimeOffset]::Now.ToString('o') }
 Write-Host "Incremental trial ready: $($changes.Count) changed files, $($removals.Count) removals ($([math]::Round($timer.Elapsed.TotalSeconds,1))s)."

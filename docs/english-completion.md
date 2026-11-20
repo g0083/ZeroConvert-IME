@@ -10,9 +10,23 @@
 - 左右キー・Delete: 単語を確定する。その後のキー操作は通常のアプリ入力になる。
 - 日本語モード切替・フォーカス移動: 既存のcomposition終了処理で確定する。
 
-実装は `windows/crates/client/src/engine/composition/english.rs` と共通ストア `windows/crates/shared/src/english_learning.rs`。辞書はAndroid側の既存 `android/app/src/main/assets/english_words.txt` を基に、単語と頻度順位をコンパイル時の配列 `english_words.rs` に格納する。検索は二分探索で前方一致範囲を絞り、共有Rustの英字学習結果（`english-learning.json`）と合わせて上位候補を構成する。入力ごとのディスク読み込み・英語LLM推論は行わず、Windows側は非同期RPC＋ローカルキャッシュで同期し、Android側は `engine/rust` 経由で同ロジックを呼ぶ。日本語AIアシストと変換学習から分離し、パスワード等の機密入力欄では新しい英字compositionを開始しない（学習の読み書きも抑止する）。
+実装は `windows/crates/client/src/engine/composition/english.rs` と共通ストア `windows/crates/shared/src/english_learning.rs`。検索は二分探索で前方一致範囲を絞り、共有Rustの英字学習結果（`english-learning.json`）と合わせて上位候補を構成する。辞書本体は同梱せず、下記「英単語辞書の実行時取得」のキャッシュを読む。入力ごとのディスク読み込み・英語LLM推論は行わず、Windows側は非同期RPC＋ローカルキャッシュで同期し、Android側は `engine/rust` 経由で同ロジックを呼ぶ。日本語AIアシストと変換学習から分離し、パスワード等の機密入力欄では新しい英字compositionを開始しない（学習の読み書きも抑止する）。
 
 単語・補完の学習と頻度反映は行うが、文脈からの次単語予測（bigram予測）は行わない。
+
+## 英単語辞書の実行時取得（2026-11-21）
+
+英単語辞書はインストーラーにもAPKにも同梱しない。初回起動時に設定画面のポップアップから取得し、その場で端末内のフィルタを通して保存する。
+
+- 取得元: `wordfreq` 3.1.1 の `wordfreq/data/large_en.msgpack.gz`。commit `ec48c0a1237f271b343fa4e38fb896c8da587804` にピン留めした `raw.githubusercontent.com` のURLを使う（1,494,836 bytes / SHA-256 `dffae8066b78dce0a6667cf5f58e567054f902674667090a7ac8a8a44628b05c`）。配布wheelは全言語入りで56.8MBあるため使用しない。
+- 保存先: Windows `%LOCALAPPDATA%\ZeroConIME\english\english-words.txt`、Android は `filesDir/english/english-words.txt`。
+- 生成規則: gzip展開 → msgpack（cB形式、配列の先頭がheader、以降が頻度ビン）→ ASCII小文字2〜24文字に限定 → 卑語と短縮形語幹（`don` / `isn` 等）を除外 → 頻度順の上位30,000語 → 自前の補助リスト（技術語・現代語）を末尾に重複なく追加。キャッシュは `#` ヘッダ付きのランク順テキストで、行順が順位。
+- 実装: 共通Rust `windows/crates/shared/src/english_dictionary.rs`（解析・フィルタ・原子的な書き込み・読み込み・前方一致）。Windows の取得は `windows/frontend/src-tauri/src/english_dictionary.rs`（reqwest＋flate2、SHA-256検証、進捗イベント）が担当する。
+- Android の取得は `android/app/src/main/java/com/zeroconvert/ime/EnglishDictionaryManager.kt`（HttpURLConnection＋GZIPInputStream、SHA-256検証、`.part`後始末）。展開済みmsgpackのパスを `engine/rust` の `englishDictionaryImport` op に渡し、抽出と並べ替えは共有Rust側で行う。`engine/rust/src/bridge.rs` を変更したため、APKビルド前に `scripts/build-android-shared-engine.ps1` で両ABIの共有エンジンを再生成する必要がある（`verifySharedEngine` が検査する）。
+- `EnglishWordDictionary` は辞書順インデックスを一度だけ構築し、前方一致は二分探索で範囲を絞ってから順位で選択する（全走査と毎語の小文字化割り当てをやめた）。
+- ライセンス: 頻度データは CC BY-SA 4.0（帰属は wordfreq と上流データ源）。配布物にはデータを含めず、各端末が上流から取得して端末内で抽出するため、アプリ本体とモデル重みに継承は及ばない。
+- キャッシュが無い間は辞書が使えない。ファイルの有無が取得ポップアップの条件であり、`localStorage` の完了フラグは使わない（端末にデータがあれば初回でも出ない）。
+- 語彙数を3万より増やしても、頻度順に並べる方式では8件が既に揃うプレフィックスの上位候補は変化しない（実測: 30,000→288,992語で変化0件）。増分は名前・伸ばし語・ノイズが中心で、読込時間とヒープだけが増えるため、語彙の拡張は補助リスト側で行う。
 
 ## 初期検証・適用ログ（2026-10-23・アーカイブ）
 

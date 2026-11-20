@@ -20,5 +20,8 @@ gradlew text eol=lf
 *.jar binary
 # LOUDS dictionaries contain binary tables even when Git's heuristic sees text.
 /android/app/src/main/assets/dictionary/** binary
+# Keep the dictionary archive and upstream notice bytes unchanged across platforms.
+/data/dictionary/*.zip binary
+/data/dictionary/AdditionalDictionaryNotices/** -text
 # Keep the empty trailing dictionary column; it is source data, not code whitespace.
 /android/app/src/main/assets/emoji_all_E15.1.txt whitespace=-blank-at-eol

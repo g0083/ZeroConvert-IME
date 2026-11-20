@@ -558,8 +558,15 @@ pub fn repair_readings_with_hints(
     input_mode: &str,
     wait_for_worker: bool,
 ) -> Option<Vec<String>> {
-    repair_candidate_with_hints(context, input, raw, touch_hints, input_mode, wait_for_worker)
-        .map(candidate_readings)
+    repair_candidate_with_hints(
+        context,
+        input,
+        raw,
+        touch_hints,
+        input_mode,
+        wait_for_worker,
+    )
+    .map(candidate_readings)
 }
 
 /// Repair reading via candidate search + main conversion model likelihood scoring.
@@ -741,7 +748,14 @@ mod tests {
         let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
         let backend = CaptureBackend(std::sync::Arc::clone(&captured));
         let result = super::runtime::with_backend(Box::new(backend), || {
-            repair_readings_with_hints("", "ーあそこん", "-asokon", "0:p=0.85,l=0.40", "qwerty", false)
+            repair_readings_with_hints(
+                "",
+                "ーあそこん",
+                "-asokon",
+                "0:p=0.85,l=0.40",
+                "qwerty",
+                false,
+            )
         });
         assert!(result.is_none());
         assert_eq!(

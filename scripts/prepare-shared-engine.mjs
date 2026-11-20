@@ -89,14 +89,8 @@ let package = Package(name: "ZeroConEmbedded", products: [
 `);
 const assets = path.join(root, 'engine/build/assets/shared-engine');
 await mkdir(assets, { recursive: true });
-await pruneStaleFiles(path.join(assets, 'Dictionary'), path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), assets);
-await cp(path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), path.join(assets, 'Dictionary'), {
-  recursive: true, filter: source => !['.git', '.gitkeep'].includes(path.basename(source)),
-});
-await mkdir(path.join(assets, 'Dictionary/Reverse'), { recursive: true });
-execFileSync(process.execPath, [path.join(root, 'windows/scripts/generate-reverse-dictionary.mjs'),
-  '--source', path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary/louds'),
-  '--output', path.join(assets, 'Dictionary/Reverse/reverse-v2.bin')], { stdio: 'inherit' });
+execFileSync('python', [path.join(root, 'scripts/prepare_dictionary.py'),
+  '--output', path.join(assets, 'Dictionary')], { stdio: 'inherit' });
 await mkdir(path.join(assets, 'EmojiDictionary'), { recursive: true });
 await cp(path.join(root, 'android/app/src/main/assets/emoji_all_E15.1.txt'), path.join(assets, 'EmojiDictionary/emoji_all_E15.1.txt'));
 const sourceFiles = [];
@@ -112,6 +106,7 @@ await fingerprint(path.join(root, 'windows/server-swift/Sources'), 'windows/serv
 await fingerprint(path.join(root, 'windows/crates/server/src/ai_assist'), 'windows/crates/server/src/ai_assist');
 await fingerprint(path.join(converterSource, 'Sources/KanaKanjiConverterModule'), `${converterRelative}/Sources/KanaKanjiConverterModule`);
 await fingerprint(path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), 'windows/server-swift/azooKey_dictionary_storage/Dictionary');
+await fingerprint(path.join(root, 'data/dictionary'), 'data/dictionary');
 for (const directory of ['engine/swift', 'engine/native', 'engine/rust/src']) await fingerprint(path.join(root, directory), directory);
 for (const file of [...NATIVE_INPUTS, ...SHARED_INPUTS]) {
   sourceFiles.push({ path: file, sha256: createHash('sha256').update(await readFile(path.join(root, file))).digest('hex') });
@@ -133,7 +128,7 @@ const lock = {
   rustLock: await fileDigest('engine/rust/Cargo.lock'),
   swiftSources: digestOf(group('windows/server-swift/Sources/')),
   converterSources: digestOf(group(`${converterRelative}/Sources/KanaKanjiConverterModule/`)),
-  dictionary: digestOf(group('windows/server-swift/azooKey_dictionary_storage/Dictionary/')),
+  dictionary: digestOf([...group('windows/server-swift/azooKey_dictionary_storage/Dictionary/'), ...group('data/dictionary/')]),
   engineSources: digestOf([
     ...group('engine/swift/'), ...group('engine/native/'), ...group('engine/rust/src/'),
   ]),

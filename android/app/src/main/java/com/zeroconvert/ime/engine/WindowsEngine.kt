@@ -671,6 +671,29 @@ object WindowsEngine {
         return EnglishSuggestResponse(suggestions, obj.optBoolean("promotedPrefix", false))
     }
 
+    /**
+     * 展開済みのwordfreq msgpackを読み、端末内でフィルタしてキャッシュを書く。
+     * 取得（HTTPS）とgzip展開は `EnglishDictionaryManager`、抽出と並べ替えは共有Rustの責務。
+     * 戻り値は書き込んだ語数。失敗時は -1。
+     */
+    fun importEnglishDictionary(
+        sourcePath: String,
+        destinationPath: String,
+        limit: Int = 30_000
+    ): Int = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking -1
+        val reply = assistReply(
+            assistRequest(
+                JSONObject()
+                    .put("op", "englishDictionaryImport")
+                    .put("source", sourcePath)
+                    .put("destination", destinationPath)
+                    .put("limit", limit)
+            )
+        ) ?: return@runBlocking -1
+        runCatching { JSONObject(reply).optInt("words", -1) }.getOrDefault(-1)
+    }
+
     fun recordEnglishWord(
         prefix: String,
         word: String,

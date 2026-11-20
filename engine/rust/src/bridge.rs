@@ -267,6 +267,28 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             "forgot": ai_assist::english_learning::clear_english_learning(),
         }));
     }
+    if envelope["op"] == "englishDictionaryImport" {
+        let source = envelope["source"]
+            .as_str()
+            .ok_or("missing decompressed dictionary path")?;
+        let destination = envelope["destination"]
+            .as_str()
+            .ok_or("missing cache path")?;
+        let limit = envelope["limit"]
+            .as_u64()
+            .unwrap_or(crate::english_dictionary::DEFAULT_WORD_LIMIT as u64)
+            .clamp(1_000, 200_000) as usize;
+        let bytes = std::fs::read(source).map_err(|error| error.to_string())?;
+        if bytes.len() > 32 * 1024 * 1024 {
+            return Err("english dictionary payload exceeds limits".into());
+        }
+        let words = crate::english_dictionary::import(
+            &bytes,
+            std::path::Path::new(destination),
+            limit,
+        )?;
+        return Ok(json!({ "words": words }));
+    }
     if envelope["op"] == "englishPromotedWords" {
         let read_learning = envelope["readLearning"].as_bool().unwrap_or(false);
         let words = if read_learning {
@@ -323,31 +345,33 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
                     origin_touch_hints: &request.origin_touch_hints,
                     applied_prefix: &request.applied_prefix,
                 };
-                return Ok(match ai_assist::corrector::suggest_auto_refinement(
-                    &request.context,
-                    assist_reading,
-                    &request.baseline,
-                    &request.raw,
-                    &request.touch_hints,
-                    &request.input_mode,
-                    &refinement,
-                    strength,
-                    &config,
-                ) {
-                    ai_assist::corrector::CorrectionOutcome::RevertToOrigin => {
-                        json!({"revertToOrigin": true, "autoApply": true, "relevance": 100})
-                    }
-                    ai_assist::corrector::CorrectionOutcome::Suggestion {
-                        suggestion,
-                        auto_apply,
-                        ..
-                    } if suggestion.surface != request.baseline
-                        && suggestion.surface != request.input =>
-                    {
-                        correction_suggestion_json(&suggestion, auto_apply)
-                    }
-                    _ => Value::Null,
-                });
+                return Ok(
+                    match ai_assist::corrector::suggest_auto_refinement(
+                        &request.context,
+                        assist_reading,
+                        &request.baseline,
+                        &request.raw,
+                        &request.touch_hints,
+                        &request.input_mode,
+                        &refinement,
+                        strength,
+                        &config,
+                    ) {
+                        ai_assist::corrector::CorrectionOutcome::RevertToOrigin => {
+                            json!({"revertToOrigin": true, "autoApply": true, "relevance": 100})
+                        }
+                        ai_assist::corrector::CorrectionOutcome::Suggestion {
+                            suggestion,
+                            auto_apply,
+                            ..
+                        } if suggestion.surface != request.baseline
+                            && suggestion.surface != request.input =>
+                        {
+                            correction_suggestion_json(&suggestion, auto_apply)
+                        }
+                        _ => Value::Null,
+                    },
+                );
             }
             Ok(ai_assist::corrector::suggest_composition_with_input_hints(
                 &request.context,
@@ -371,17 +395,32 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             })
             .unwrap_or(Value::Null))
         }
-        "prediction" => Ok(ai_assist::prediction::suggest(&request.context, assist_reading, &request.baseline, &config)
-            .map(|s| json!({"text": format!("{}{}", request.baseline, s.continuation),
-                "continuation": s.continuation, "relevance": s.relevance})).unwrap_or(Value::Null)),
-        "macros" => Ok(json!(ai_assist::current_expansions(&request.input).iter().map(|m| &m.text).collect::<Vec<_>>())),
+        "prediction" => Ok(ai_assist::prediction::suggest(
+            &request.context,
+            assist_reading,
+            &request.baseline,
+            &config,
+        )
+        .map(|s| {
+            json!({"text": format!("{}{}", request.baseline, s.continuation),
+                "continuation": s.continuation, "relevance": s.relevance})
+        })
+        .unwrap_or(Value::Null)),
+        "macros" => Ok(json!(ai_assist::current_expansions(&request.input)
+            .iter()
+            .map(|m| &m.text)
+            .collect::<Vec<_>>())),
         "clear" => {
             ai_assist::corrector::clear_cache();
             ai_assist::prediction::clear_cache();
             Ok(Value::Null)
         }
-        "learn" => Ok(json!({"saved": ai_assist::record_learned_typo(&request.input, &request.baseline)})),
-        "forget" => Ok(json!({"forgot": ai_assist::learning::forget_learned_typo(&request.input, &request.baseline)})),
+        "learn" => {
+            Ok(json!({"saved": ai_assist::record_learned_typo(&request.input, &request.baseline)}))
+        }
+        "forget" => Ok(
+            json!({"forgot": ai_assist::learning::forget_learned_typo(&request.input, &request.baseline)}),
+        ),
         "forgetAll" => Ok(json!({"forgot": ai_assist::learning::clear_learned_typos()})),
         "learningStats" => Ok(json!({
             "typoCount": ai_assist::learning::learned_typo_count(),

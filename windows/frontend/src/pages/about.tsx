@@ -121,6 +121,17 @@ export const About = () => {
                     ))}
             </SettingsSection>
 
+            <SettingsSection title="利用規約">
+                <div className="p-4 space-y-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                        ZeroCon IME は個人・非商業利用に限り無償で提供されます。商用組み込み・再配布・ZeroCon Model Nano の重み・学習データの再利用は許諾しません。インストール先の USE-TERMS.txt にも同じ文面を同梱しています。
+                    </p>
+                    <div className="max-h-72 overflow-y-auto rounded-md border border-border/50 bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                        {useTermsText}
+                    </div>
+                </div>
+            </SettingsSection>
+
             <SettingsSection title="ライセンス全文">
                 <div className="p-4 space-y-3">
                     <p className="text-xs text-muted-foreground leading-relaxed">
@@ -146,16 +157,6 @@ export const About = () => {
                 </div>
             </SettingsSection>
 
-            <SettingsSection title="利用規約">
-                <div className="p-4 space-y-3">
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                        ZeroCon IME は個人・非商業利用に限り無償で提供されます。商用組み込み・再配布・ZeroCon Model Nano の重み・学習データの再利用は許諾しません。インストール先の USE-TERMS.txt にも同じ文面を同梱しています。
-                    </p>
-                    <div className="max-h-72 overflow-y-auto rounded-md border border-border/50 bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
-                        {useTermsText}
-                    </div>
-                </div>
-            </SettingsSection>
         </div>
     );
 };

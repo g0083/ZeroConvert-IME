@@ -270,7 +270,14 @@ impl CorrectionState {
         let undo_accepted = self.accepted.clone();
         let undo_protected = self.protected.clone();
         let undo_hold = self.hold_auto_commit;
-        self.install_correction(reading, surface, explicit, undo_accepted, undo_protected, undo_hold);
+        self.install_correction(
+            reading,
+            surface,
+            explicit,
+            undo_accepted,
+            undo_protected,
+            undo_hold,
+        );
         true
     }
 
@@ -653,7 +660,10 @@ mod tests {
             AutoTypoCorrectionStrength::Aggressive,
         ] {
             assert_eq!(AutoTypoCorrectionStrength::from_u8(preset.to_u8()), preset);
-            assert_eq!(preset.is_enabled(), preset != AutoTypoCorrectionStrength::Off);
+            assert_eq!(
+                preset.is_enabled(),
+                preset != AutoTypoCorrectionStrength::Off
+            );
         }
 
         let mut state = CorrectionState::default();
@@ -741,10 +751,9 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let edited = dispatch(
-            &serde_json::json!({"op": "edited", "state": applied["state"]}).to_string(),
-        )
-        .unwrap();
+        let edited =
+            dispatch(&serde_json::json!({"op": "edited", "state": applied["state"]}).to_string())
+                .unwrap();
         let refined = dispatch(
             &serde_json::json!({
                 "op": "refine",

@@ -51,7 +51,6 @@ Invoke-BuildStep $windowsRoot 'cargo.exe' @('build', '--release', '--locked', '-
 $frontendRoot = Join-Path $windowsRoot 'frontend'
 Invoke-BuildStep $frontendRoot 'npm.cmd' @('ci', '--no-audit', '--no-fund')
 Invoke-BuildStep $frontendRoot 'npm.cmd' @('run', 'tauri:build')
-Invoke-BuildStep $windowsRoot 'node.exe' @('scripts/generate-reverse-dictionary.mjs')
 
 $files = [ordered]@{
     'keyboard-prior.exe' = (& (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1'))
@@ -63,7 +62,6 @@ $files = [ordered]@{
     'frontend.exe' = Join-Path $windowsRoot 'target\release\frontend.exe'
     'azookey-server.dll' = Join-Path $swiftBin 'azookey-server.dll'
     'zeroconvert.ico' = Join-Path $windowsRoot 'crates\client\res\zeroconvert.ico'
-    'Dictionary\Reverse\reverse-v2.bin' = Join-Path $windowsRoot 'target\azookey-reverse-dictionary\reverse-v2.bin'
 }
 foreach ($file in Get-ChildItem -LiteralPath $SwiftRuntimeDirectory -Filter '*.dll' -File) { $files[$file.Name] = $file.FullName }
 foreach ($name in $files.Keys) {
@@ -80,7 +78,7 @@ foreach ($name in $files.Keys) {
 $buildInfoPath = Join-Path $windowsRoot 'target/azookey-build/build-info.json'
 $installerMetadataPath = Join-Path $windowsRoot 'target/azookey-build/AppVersion.iss'
 $receipt = @{
-    assetLayout = 3; files = $receiptFiles
+    assetLayout = 4; files = $receiptFiles
     buildInfo = @{ path = $buildInfoPath; sha256 = Get-ArtifactHash $buildInfoPath }
     installerMetadata = @{ path = $installerMetadataPath; sha256 = Get-ArtifactHash $installerMetadataPath }
 }

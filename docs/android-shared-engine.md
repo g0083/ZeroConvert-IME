@@ -88,6 +88,8 @@ Windowsの正本を変更 → Windowsと共通Rustのテスト
 `rebuilt-arm64-v8a-debug.apk` とx86_64用の `rebuilt-x86_64-debug.apk` を別々に出力する。
 両方のCPUを1つに含める必要がある場合は `Build-Android.bat -UniversalApk`。
 出力一覧はGradleの `output-metadata.json` を正本とし、古い `rebuilt-debug.apk` を流用しない。
+
+かな漢字変換の辞書はWindowsの通常版と同じ629,045組を `assets/shared-engine/Dictionary/` に収録する。組み込み辞書を更新すると、端末で次に変換エンジンを起動する際に新しい辞書を展開する。 [追加辞書の更新手順](investigations/additional-dictionary-plan.md)
 ビルドは端末更新、IME選択、
 release署名、Git保存を行わない。
 
