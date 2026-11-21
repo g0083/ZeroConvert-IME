@@ -60,6 +60,13 @@ object EnglishDictionaryManager {
             withContext(Dispatchers.IO) {
                 runCatching {
                     if (isReady(context)) return@runCatching 0
+                    // 抽出は共有エンジンの op（englishDictionaryImport）が行う。
+                    // モデル取得だけ済んでエンジンが未初期化のまま呼ばれる場合があるため、
+                    // ここで初期化してから取り込む（設定画面から単独で取得する経路も含む）。
+                    if (!WindowsEngine.isReady()) {
+                        ZenzNative.init(context)
+                        check(WindowsEngine.isReady()) { "変換エンジンを初期化できないため英語辞書を展開できません" }
+                    }
                     val directory = directory(context)
                     val gzip = File(directory, CACHE_NAME + GZIP_SUFFIX)
                     val msgpack = File(directory, CACHE_NAME + MSGPACK_SUFFIX)

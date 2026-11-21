@@ -68,6 +68,14 @@ Java_com_zeroconvert_ime_engine_WindowsEngine_nativeSetDataRoot(JNIEnv *env, job
     setenv("APPDATA", text.c_str(), 1);
 }
 
+// The Japanese dictionary is downloaded after install, so the engine cannot rely
+// on the executable-relative copy. Point Swift at the extracted dictionary.
+extern "C" JNIEXPORT void JNICALL
+Java_com_zeroconvert_ime_engine_WindowsEngine_nativeSetDictionaryRoot(JNIEnv *env, jobject, jstring input) {
+    auto text = assist_from_java(env, input);
+    setenv("ZEROCON_DICTIONARY_DIR", text.c_str(), 1);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_zeroconvert_ime_engine_WindowsEngine_nativeLoadBackends(JNIEnv *env, jobject, jstring input) {
     const auto directory = assist_from_java(env, input);

@@ -44,8 +44,8 @@ SOFTWARE.
 
 - **Upstream Model**: `Miwa-Keita/zenz-v3.2-xsmall` (base), with a fine-tuned `Miwa-Keita/zenz-v3.2-small` teacher
 - **Author**: Miwa Keita (ensan-hcl)
-- **License of the upstream base**: Apache License 2.0 (`LICENSE-Apache-2.0.txt`)
-- **License of these derivatives**: ZeroCon Model Nano の重み・学習物は独自改変物であり、本製品外での利用・再配布を許諾しません。上流部分には Apache License 2.0 の条件（著作権表示・ライセンス文の同梱・変更の明示）が及び、本パッケージはそれを満たしています。
+- **License of the upstream base used for training**: Apache License 2.0 (`LICENSE-Apache-2.0.txt`). [Pinned xsmall revision](https://huggingface.co/Miwa-Keita/zenz-v3.2-xsmall-gguf/raw/4f5423f0fad41a73b1242eb96fe5c12ae4fdca83/README.md) · [Pinned small revision](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/raw/c67e03e07d215c869f591b274c1631170d3e11fe/README.md)
+- **ZeroCon modifications**: ZeroCon's terms reserve rights in its own modifications where no separate permission has been granted. Rights already granted under third-party licenses continue to apply.
 - **Notice**:
   - `models/zerocon-nano-v4.1-iq4nl-emb8.gguf`, `models/zerocon-nano-v4.1-q8_0.gguf`, `models/zerocon-standard-v4.1-iq4nl-emb8.gguf`, `models/zerocon-standard-v4.1-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall` (nano) / `Miwa-Keita/zenz-v3.2-small` (standard), trained with rank-64 DoRA, target-corrected dual-anchor distillation, and v4.1 conversational/anti-over-kanji & numeral robustness tuning (`nam` digit-masking compatibility). The weights are fetched on demand from the pinned GitHub release and are not redistributed with the bundled installer/APK.
   - The IQ4_NL variant protects input/output tensors with Q8_0 (`IQ4_NL` body with `Q8_0` embeddings/output). The Q8_0 variant preserves full precision quantization across all tensors.
@@ -117,7 +117,7 @@ SOFTWARE.
 - **azooKey Dictionary Storage / Emoji Dictionary Storage**: Apache License 2.0 (`LICENSE-Apache-2.0.txt`). Copyright (c) Miwa / Ensan and contributors.
 - **Google Mozc dictionary data and keyboard typo rewrite rules**: BSD 3-Clause License. The rewrite rules and validation follow [Mozc KeyCorrector](https://github.com/google/mozc/blob/851c3fe33060d2a6090363e4d7ec44fafde2c03d/src/converter/key_corrector.cc).
 - **Unicode Emoji Data** (`emoji_all_E15.1.txt`, `emoji_catalog.tsv`): Unicode License v3 (`LICENSE-Unicode.txt`).
-- **Additional vocabulary**: Selected entries from SudachiDict Full 20260723 were normalized and incorporated into the azooKey dictionary. The expansion also contains Wikidata structured data (CC0 1.0). See `Dictionary/AdditionalDictionaryNotices/` for the Apache License 2.0 text, SudachiDict's upstream `LEGAL` notices, and the Wikidata attribution.
+- **Additional vocabulary**: Selected entries from SudachiDict Full 20260723 (Works Applications Co., Ltd.) were extracted and converted to azooKey's readings, part-of-speech IDs, and scores. The expansion also contains Wikidata structured data (CC0 1.0). The installer ships `AdditionalDictionaryNotices/` with the full Apache License 2.0 text, upstream `LEGAL` (including UniDic and NEologd), and Wikidata attribution. The downloaded dictionary carries those documents under `Dictionary/AdditionalDictionaryNotices/`.
 
 Mozc BSD 3-Clause text applies to the Mozc-derived dictionary data and rewrite rules:
 

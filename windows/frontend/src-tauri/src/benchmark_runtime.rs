@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
-pub fn backend_directory(backend: &str) -> &'static str {
-    match backend.trim().to_ascii_lowercase().as_str() {
-        "vulkan" => "llama_vulkan",
-        _ => "llama_cpu",
-    }
+pub fn backend_directory(_backend: &str) -> &'static str {
+    // CPU and Vulkan share the unified `llama` directory; the difference is
+    // only the `-ngl` layer count. Kept for callers that need the directory
+    // name; `server_path` falls back to legacy `llama_cpu`/`llama_vulkan`
+    // via `runtime_assets::backend` when `llama/` is absent.
+    "llama"
 }
 
 pub fn find_server(roots: &[PathBuf], backend: &str) -> Option<PathBuf> {
@@ -23,13 +24,15 @@ mod tests {
     use super::*;
     #[test]
     fn backend_directory_maps_vulkan_and_cpu() {
+        // Non-existent install root has no unified dir, so backend() falls
+        // back to the legacy per-backend directory.
         assert_eq!(
             server_path(Path::new("install"), "vulkan"),
             Path::new("install/llama_vulkan/llama-server.exe")
         );
-        assert_eq!(backend_directory("Vulkan"), "llama_vulkan");
-        assert_eq!(backend_directory("cuda"), "llama_cpu");
-        assert_eq!(backend_directory("cpu"), "llama_cpu");
+        assert_eq!(backend_directory("Vulkan"), "llama");
+        assert_eq!(backend_directory("cuda"), "llama");
+        assert_eq!(backend_directory("cpu"), "llama");
     }
 
     #[test]

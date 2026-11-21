@@ -112,6 +112,28 @@ private let embeddedPerformance = EmbeddedPerformance()
         normalNBestSupplementConverter = KanaKanjiConverter(dictionaryURL: converterDictionaryURL, preloadDictionary: false)
         return [:]
     }
+    // The Japanese dictionary is downloaded after first install. Windows restarts
+    // its server to pick it up; Android rebuilds the same state in place.
+    if op == "setDictionary" {
+        guard let path = request["path"] as? String, !path.isEmpty else {
+            return ["error": "missing dictionary path"]
+        }
+        let dictionaryURL = URL(filePath: path, directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: dictionaryURL.appendingPathComponent("louds/charID.chid").path) else {
+            return ["error": "dictionary is incomplete"]
+        }
+        _ = flush_learning_memory()
+        clear_text()
+        converterDictionaryURL = dictionaryURL
+        do {
+            try reconversionDictionary.load(from: dictionaryURL)
+        } catch {
+            reconversionDictionary = ReconversionDictionary()
+        }
+        converter = KanaKanjiConverter(dictionaryURL: converterDictionaryURL, preloadDictionary: false)
+        normalNBestSupplementConverter = KanaKanjiConverter(dictionaryURL: converterDictionaryURL, preloadDictionary: false)
+        return ["ready": true]
+    }
     if op == "resetLearning" {
         let reset = reset_learning_memory()
         return ["reset": reset, "stats": embeddedLearningStats()]

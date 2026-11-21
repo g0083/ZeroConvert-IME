@@ -20,6 +20,28 @@ def verify = tasks.register('verifyConversionModels') {
         // 残ってもAPKへは入らないため、ここでは件数だけ記録する。
         def localLeftovers = fileTree(assets) { include '**/*.gguf' }.size()
         if (localLeftovers > 0) println "Note: $localLeftovers local .gguf leftovers are excluded from the APK."
+
+        // 日本語辞書も同梱しない（初回起動時に DictionaryDownloadManager が取得）。
+        // Kotlin 側の固定値がカタログとずれると、取得した辞書を検証できない。
+        def dictionaryCatalog = new JsonSlurper().parse(rootProject.file('../windows/deployment/dictionary-catalog.json'))
+        def dictionary = dictionaryCatalog.dictionary
+        assert dictionary.filename ==~ /^[a-z0-9][a-z0-9._-]*\.zip$/ : "Invalid dictionary filename: ${dictionary.filename}"
+        assert dictionary.bytes > 0 && dictionary.files > 0
+        assert dictionary.sha256 ==~ /[0-9a-f]{64}/
+        def manager = rootProject.file('app/src/main/java/com/zeroconvert/ime/model/DictionaryDownloadManager.kt').text
+            .replaceAll(/(?<=\d)_(?=\d)/, '')
+        assert manager.contains('const val FILENAME = "' + dictionary.filename + '"') :
+            'DictionaryDownloadManager.FILENAME does not match dictionary-catalog.json'
+        assert manager.contains('const val EXPECTED_BYTES = ' + dictionary.bytes + 'L') :
+            'DictionaryDownloadManager.EXPECTED_BYTES does not match dictionary-catalog.json'
+        assert manager.contains('const val SHA256 = "' + dictionary.sha256 + '"') :
+            'DictionaryDownloadManager.SHA256 does not match dictionary-catalog.json'
+        assert manager.contains('const val FILE_COUNT = ' + dictionary.files) :
+            'DictionaryDownloadManager.FILE_COUNT does not match dictionary-catalog.json'
+        assert manager.contains('const val RELEASE_TAG = "' + dictionaryCatalog.releaseTag + '"') :
+            'DictionaryDownloadManager.RELEASE_TAG does not match dictionary-catalog.json'
+        def bundledDictionary = fileTree(rootProject.file('../engine/build/assets')) { include 'shared-engine/Dictionary/**' }.size()
+        if (bundledDictionary > 0) println "Note: $bundledDictionary staged dictionary files are excluded from the APK."
     }
 }
 tasks.named('preBuild').configure { dependsOn(verify) }

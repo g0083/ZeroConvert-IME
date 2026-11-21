@@ -98,14 +98,34 @@ internal class ReverseReadingDictionary(private val bytes: ByteArray) {
 
 object ReadingCheck {
     @Volatile private var dictionary: ReverseReadingDictionary? = null
+
+    /**
+     * 逆引き辞書を読む。APKには辞書を同梱しないため、初回起動で取得した
+     * `files/dictionary/Dictionary/Reverse/reverse-v2.bin` を先に探し、
+     * 無ければ旧APKのアセット（`WINDOWS_ENGINE=false` の旧経路）を使う。
+     */
     fun load(context: Context) {
         if (dictionary != null) return
         dictionary = try {
-            val asset = if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE)
-                "shared-engine/Dictionary/Reverse/reverse-v2.bin" else "dictionary/reverse-v2.bin"
-            context.assets.open(asset).use { ReverseReadingDictionary(it.readBytes()) }
+            val downloaded = java.io.File(
+                context.filesDir,
+                "dictionary/Dictionary/Reverse/reverse-v2.bin"
+            )
+            if (downloaded.isFile) {
+                ReverseReadingDictionary(downloaded.readBytes())
+            } else {
+                val asset = if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE)
+                    "shared-engine/Dictionary/Reverse/reverse-v2.bin" else "dictionary/reverse-v2.bin"
+                context.assets.open(asset).use { ReverseReadingDictionary(it.readBytes()) }
+            }
         } catch (error: Exception) { null }
     }
+    /** 辞書を取得した後に呼ぶ。次回の [load] で新しい辞書を読み直す。 */
+    fun reload(context: Context) {
+        dictionary = null
+        load(context)
+    }
+
     fun hasSameReading(surface: String, reading: String): Boolean =
         KanaKanjiConverter.toHiragana(surface) == KanaKanjiConverter.toHiragana(reading) ||
             dictionary?.matches(surface, reading, AssistVocabulary.userReadings()) == true

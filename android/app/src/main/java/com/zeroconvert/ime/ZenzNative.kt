@@ -314,8 +314,30 @@ object ZenzNative {
         }
 
         // 2. Initialize azooKey System Dictionary
+        // 変換の正本は共有エンジン側の `Dictionary`（初回起動で files/dictionary へ取得）。
+        // ただし `lookupDict`（誤入力補正の辞書照合）は旧 LOUDS 経路を使うため、
+        // 同じ取得済み辞書を native 側にも読ませる。旧 `assets/dictionary` は
+        // APK に含めない（build.gradle.kts で除外）。アセット展開は
+        // WINDOWS_ENGINE=false の旧経路だけで行う。
         if (!isDictInitialized) {
-            val dictDir = File(context.filesDir, "dictionary")
+            initializeNativeDictionary(context)
+        }
+
+        return isInitialized
+    }
+
+    /**
+     * `lookupDict` が使う旧 LOUDS 経路を、端末にある辞書で初期化する。
+     * WINDOWS_ENGINE=true では初回起動で取得した `files/dictionary/Dictionary` を使い、
+     * 未取得なら何もしない（辞書の取得後に [refreshDictionary] が呼ばれる）。
+     */
+    private fun initializeNativeDictionary(context: Context): Boolean {
+        val dictDir = if (BuildConfig.WINDOWS_ENGINE) {
+            com.zeroconvert.ime.model.DictionaryDownloadManager.dictionaryDir(context)
+        } else {
+            File(context.filesDir, "dictionary")
+        }
+        if (!BuildConfig.WINDOWS_ENGINE) {
             val loudsDir = File(dictDir, "louds")
             val chidFile = File(loudsDir, "charID.chid")
             val cbFile = File(dictDir, "cb_packed.binary")
@@ -331,14 +353,24 @@ object ZenzNative {
                     Log.w(TAG, "Could not create version marker", e)
                 }
             }
-
-            isDictInitialized = nativeInitDict(dictDir.absolutePath)
-            Log.i(TAG, "azooKey dictionary init result: $isDictInitialized")
-            // Dictionary contents may have changed; drop memoized lookups.
-            dictCache.clear()
         }
+        if (!File(dictDir, "louds/charID.chid").isFile) {
+            Log.i(TAG, "azooKey dictionary is not available yet: ${dictDir.absolutePath}")
+            return false
+        }
+        isDictInitialized = nativeInitDict(dictDir.absolutePath)
+        Log.i(TAG, "azooKey dictionary init result: $isDictInitialized (${dictDir.absolutePath})")
+        // Dictionary contents may have changed; drop memoized lookups.
+        dictCache.clear()
+        return isDictInitialized
+    }
 
-        return isInitialized
+    /** 辞書を取得した後に呼ぶ。旧 LOUDS 経路を新しい辞書で読み直す。 */
+    @Synchronized
+    fun refreshDictionary(context: Context): Boolean {
+        isDictInitialized = false
+        dictCache.clear()
+        return initializeNativeDictionary(context)
     }
 
     private fun copyAssetFolder(context: Context, assetPath: String, destDir: File) {

@@ -8,12 +8,16 @@ import unicodeText from "../../../deployment/LICENSE-Unicode.txt?raw";
 import thirdPartyText from "../../../deployment/THIRD_PARTY_LICENSES.md?raw";
 import rustText from "../../../deployment/THIRD_PARTY_RUST.md?raw";
 import frontendText from "../../../deployment/THIRD_PARTY_FRONTEND.md?raw";
+import sudachiLegalText from "../../../../data/dictionary/AdditionalDictionaryNotices/LEGAL?raw";
+import wikidataText from "../../../../data/dictionary/AdditionalDictionaryNotices/Wikidata.txt?raw";
 import { Button } from "@/components/ui/button";
 import { SettingsRow, SettingsSection } from "@/components/settings-section";
 import { useUpdates } from "@/components/update-provider";
 import { ZeroConvertLogo } from "@/components/zeroconvert-logo";
 
 const fullTexts: Record<string, { label: string; text: string }> = {
+    "sudachidict-legal": { label: "SudachiDict / UniDic / NEologd（上流の LEGAL）", text: sudachiLegalText },
+    "wikidata-cc0": { label: "Wikidata（CC0 1.0・出典）", text: wikidataText },
     apache: { label: "Apache License 2.0（全文）", text: apacheText },
     swift: { label: "Swift Runtime Exception（全文）", text: swiftText },
     unicode: { label: "Unicode License V3（全文）", text: unicodeText },

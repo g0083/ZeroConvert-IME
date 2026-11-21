@@ -63,6 +63,68 @@ pub fn model_size_bytes(id: &str) -> Option<u64> {
     }
 }
 
+/// 日本語辞書一式（azooKey標準辞書＋追加辞書）はインストーラー・APKに同梱せず、
+/// 初回起動時にGitHubリリースの固定アセット（zip）から取得する。
+/// 値は `windows/deployment/dictionary-catalog.json` と一致させる
+/// （生成は `scripts/build-dictionary-asset.py`）。
+pub const DICTIONARY_ASSET_FILENAME: &str = "zerocon-dictionary-azookey-expanded.zip";
+pub const DICTIONARY_ASSET_SHA256: &str =
+    "9f406888dd17b8e9ab1aff60891a1786f40966898f90368d9e6e62d30d59d29b";
+pub const DICTIONARY_ASSET_BYTES: u64 = 23_357_023;
+pub const DICTIONARY_ASSET_FILES: u64 = 3_621;
+pub const DICTIONARY_RELEASE_REPOSITORY: &str = "g0083/ZeroConvert-IME";
+pub const DICTIONARY_RELEASE_TAG: &str = "dictionary-v1";
+/// 展開後の `Dictionary` ディレクトリを置くサブディレクトリ名。
+pub const DICTIONARY_DIR: &str = "Dictionary";
+
+pub fn dictionary_download_url() -> String {
+    format!(
+        "https://github.com/{DICTIONARY_RELEASE_REPOSITORY}/releases/download/{DICTIONARY_RELEASE_TAG}/{DICTIONARY_ASSET_FILENAME}"
+    )
+}
+
+/// 辞書キャッシュのルート（`%LOCALAPPDATA%\ZeroConIME\dictionary\`）。
+/// `Dictionary\` と、展開完了を示す `.complete` を同じ階層に置く。
+pub fn dictionary_download_root() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("ZeroConIME")
+        .join("dictionary")
+}
+
+/// キャッシュ済み辞書の `Dictionary` ディレクトリ。
+/// 展開中にサーバーが半端な内容を読まないよう、`.complete` を必須にする。
+pub fn cached_dictionary_dir() -> Option<PathBuf> {
+    cached_dictionary_dir_at(&dictionary_download_root())
+}
+
+/// 任意のキャッシュルートについて同じ判定を行う（テストと診断用）。
+pub fn cached_dictionary_dir_at(cache_root: &Path) -> Option<PathBuf> {
+    if !cache_root.join(".complete").is_file() {
+        return None;
+    }
+    let dictionary = cache_root.join(DICTIONARY_DIR);
+    let marker = dictionary.join("louds").join("charID.chid");
+    marker.is_file().then_some(dictionary)
+}
+
+/// 変換サーバーが使う辞書ディレクトリ。インストール先の `Dictionary\` を
+/// 最優先し（`Build-Trial -DictionaryOnly` の辞書比較をそのまま使える）、
+/// 無ければ取得済みキャッシュを使う。配布版はインストーラーが `Dictionary\` を
+/// 同梱しないため、初回起動時はキャッシュだけが存在する。
+pub fn dictionary_dir(install: &Path) -> PathBuf {
+    resolve_dictionary_dir(install, &dictionary_download_root())
+}
+
+fn resolve_dictionary_dir(install: &Path, cache_root: &Path) -> PathBuf {
+    let installed = install.join(DICTIONARY_DIR);
+    if installed.join("louds").join("charID.chid").is_file() {
+        return installed;
+    }
+    cached_dictionary_dir_at(cache_root).unwrap_or(installed)
+}
+
 /// 変換モデルの取得先（`%LOCALAPPDATA%\ZeroConIME\models\`）。
 /// 翻訳モデルのキャッシュと同一ルートに置き、配布物の `models\` とは区別する。
 pub fn model_download_root() -> PathBuf {
@@ -171,7 +233,17 @@ pub fn converter_model(install: &Path, id: &str) -> PathBuf {
     conversion_model_path(install, id)
 }
 
+/// Unified llama runtime directory. CPU and Vulkan share one physical
+/// directory; the difference is only the `-ngl` layer count passed to
+/// `llama-server.exe`. Legacy `llama_cpu`/`llama_vulkan` layouts remain
+/// valid as fallback during upgrade.
+pub const LLAMA_UNIFIED_DIR: &str = "llama";
+
 pub fn backend(install: &Path, name: &str) -> PathBuf {
+    let unified = install.join(LLAMA_UNIFIED_DIR);
+    if unified.join("llama.dll").is_file() {
+        return unified;
+    }
     install.join(
         if name.eq_ignore_ascii_case("vulkan") || name.eq_ignore_ascii_case("cuda") {
             "llama_vulkan"
@@ -230,8 +302,12 @@ mod tests {
 
     #[test]
     fn canonical_models_are_selected_without_copying_the_active_weights() {
-        if model_download_root().join(NANO_IQ4).is_file() {
-            // 取得済みキャッシュが存在する環境ではそちらが優先されるため検証対象外。
+        // 取得済みキャッシュが存在する環境ではそちらが優先されるため検証対象外。
+        // 実機では Standard だけを取得している場合もあるので4種すべてを見る。
+        if [NANO_IQ4, NANO_Q8, STANDARD_IQ4, STANDARD_Q8]
+            .iter()
+            .any(|name| model_download_root().join(name).is_file())
+        {
             return;
         }
         let root = std::env::temp_dir().join(format!("zerocon-model-paths-{}", std::process::id()));
@@ -317,6 +393,79 @@ mod tests {
         assert_eq!(backend(&root, "cuda"), root.join("llama_vulkan"));
         assert_eq!(zerocon_backend(&root, "cuda"), root.join("llama_vulkan"));
 
+        // Unified layout takes priority for both backends once present.
+        std::fs::create_dir_all(root.join(LLAMA_UNIFIED_DIR)).unwrap();
+        std::fs::write(root.join("llama/llama.dll"), []).unwrap();
+        assert_eq!(backend(&root, "cpu"), root.join("llama"));
+        assert_eq!(backend(&root, "vulkan"), root.join("llama"));
+        assert_eq!(zerocon_backend(&root, "vulkan"), root.join("llama"));
+        // Dedicated ZeroCon override still wins for CPU.
+        assert_eq!(zerocon_backend(&root, "cpu"), root.join("llama_zerocon"));
+
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dictionary_prefers_completed_cache_and_falls_back_to_the_install_dir() {
+        let root = std::env::temp_dir().join(format!("zerocon-dictionary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let install = root.join("install");
+        let cache = root.join("cache");
+        std::fs::create_dir_all(install.join(DICTIONARY_DIR)).unwrap();
+
+        // Nothing downloaded yet and no install copy: the path is simply absent.
+        assert_eq!(
+            resolve_dictionary_dir(&install, &cache),
+            install.join(DICTIONARY_DIR)
+        );
+        assert_eq!(cached_dictionary_dir_at(&cache), None);
+
+        // An extraction marker without the dictionary content is not usable, and
+        // a half-extracted dictionary must not win over the fallback.
+        std::fs::create_dir_all(cache.join(DICTIONARY_DIR)).unwrap();
+        std::fs::write(cache.join(".complete"), []).unwrap();
+        assert_eq!(cached_dictionary_dir_at(&cache), None);
+        assert_eq!(
+            resolve_dictionary_dir(&install, &cache),
+            install.join(DICTIONARY_DIR)
+        );
+
+        std::fs::create_dir_all(cache.join(DICTIONARY_DIR).join("louds")).unwrap();
+        std::fs::write(cache.join(DICTIONARY_DIR).join("louds/charID.chid"), []).unwrap();
+        assert_eq!(
+            resolve_dictionary_dir(&install, &cache),
+            cache.join(DICTIONARY_DIR)
+        );
+
+        // A dictionary without the completion marker is ignored entirely.
+        std::fs::remove_file(cache.join(".complete")).unwrap();
+        assert_eq!(
+            resolve_dictionary_dir(&install, &cache),
+            install.join(DICTIONARY_DIR)
+        );
+
+        // A trial install keeps its own dictionary so Build-Trial -DictionaryOnly
+        // can compare dictionaries without clearing the downloaded cache.
+        std::fs::write(cache.join(".complete"), []).unwrap();
+        std::fs::create_dir_all(install.join(DICTIONARY_DIR).join("louds")).unwrap();
+        std::fs::write(install.join(DICTIONARY_DIR).join("louds/charID.chid"), []).unwrap();
+        assert_eq!(
+            resolve_dictionary_dir(&install, &cache),
+            install.join(DICTIONARY_DIR)
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dictionary_download_url_is_pinned_to_the_release_asset() {
+        let url = dictionary_download_url();
+        assert!(url.starts_with(&format!(
+            "https://github.com/{DICTIONARY_RELEASE_REPOSITORY}/releases/download/{DICTIONARY_RELEASE_TAG}/"
+        )));
+        assert!(url.ends_with(DICTIONARY_ASSET_FILENAME));
+        assert_eq!(DICTIONARY_ASSET_SHA256.len(), 64);
+        assert!(DICTIONARY_ASSET_BYTES > 0);
+        assert!(DICTIONARY_ASSET_FILES > 0);
     }
 }

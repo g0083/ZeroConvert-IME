@@ -7,8 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { AppSidebar, settingsPages } from "@/components/app-sidebar";
 import { UpdateProvider } from "@/components/update-provider";
 import { FirstLaunchQuickBenchmark } from "@/components/first-launch-quick-benchmark";
-import { FirstLaunchEnglishDictionary } from "@/components/first-launch-english-dictionary";
-import { FirstLaunchConversionModel } from "@/components/first-launch-conversion-model";
+import { SetupProvider } from "@/components/setup-provider";
 import { SettingsSearch, openSettingsSearch } from "@/components/settings-search";
 import { consumePendingSettingsTarget, findSettingsRow } from "@/lib/settings-search-target";
 import { General } from "@/pages/general";
@@ -50,33 +49,33 @@ function SettingsLayout() {
     return (
         <ThemeProvider>
             <UpdateProvider>
-                <SidebarProvider className="h-dvh min-h-0 overflow-hidden" style={{ "--sidebar-width": "14rem" } as React.CSSProperties}>
-                    <FirstLaunchQuickBenchmark />
-                    <FirstLaunchEnglishDictionary />
-                    <FirstLaunchConversionModel />
-                    <SettingsSearch />
-                    <AppSidebar />
-                    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-                        <header className="flex shrink-0 items-center gap-3 border-b px-4 py-4 sm:px-6">
-                            <SidebarTrigger aria-label="設定メニューを開閉" />
-                            <h1 ref={headerRef} tabIndex={-1} className="text-lg font-semibold outline-none">{title}</h1>
-                            <button
-                                type="button"
-                                onClick={openSettingsSearch}
-                                className="ml-auto hidden cursor-pointer items-center gap-1.5 rounded-md border border-border/70 bg-background/70 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
-                                aria-label="設定を検索"
-                            >
-                                検索
-                                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-sans text-[10px]">Ctrl</kbd>
-                                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-sans text-[10px]">K</kbd>
-                            </button>
-                        </header>
-                        <div key={pathname} className={`settings-page min-h-0 flex-1 p-4 sm:p-6 ${pathname === "/dictionary" ? "overflow-hidden" : "overflow-auto"}`}>
-                            <Outlet />
-                        </div>
-                    </main>
-                    <Toaster position="top-right" closeButton />
-                </SidebarProvider>
+                <SetupProvider>
+                    <SidebarProvider className="h-dvh min-h-0 overflow-hidden" style={{ "--sidebar-width": "14rem" } as React.CSSProperties}>
+                        <FirstLaunchQuickBenchmark />
+                        <SettingsSearch />
+                        <AppSidebar />
+                        <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+                            <header className="flex shrink-0 items-center gap-3 border-b px-4 py-4 sm:px-6">
+                                <SidebarTrigger aria-label="設定メニューを開閉" />
+                                <h1 ref={headerRef} tabIndex={-1} className="text-lg font-semibold outline-none">{title}</h1>
+                                <button
+                                    type="button"
+                                    onClick={openSettingsSearch}
+                                    className="ml-auto hidden cursor-pointer items-center gap-1.5 rounded-md border border-border/70 bg-background/70 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
+                                    aria-label="設定を検索"
+                                >
+                                    検索
+                                    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-sans text-[10px]">Ctrl</kbd>
+                                    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-sans text-[10px]">K</kbd>
+                                </button>
+                            </header>
+                            <div key={pathname} className={`settings-page min-h-0 flex-1 p-4 sm:p-6 ${pathname === "/dictionary" ? "overflow-hidden" : "overflow-auto"}`}>
+                                <Outlet />
+                            </div>
+                        </main>
+                    </SidebarProvider>
+                </SetupProvider>
+                <Toaster position="top-right" closeButton />
             </UpdateProvider>
         </ThemeProvider>
     );

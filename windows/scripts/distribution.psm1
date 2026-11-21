@@ -141,8 +141,13 @@ function Read-PreparedPackage([string]$Directory) {
     # 変換モデルは同梱しない（%LOCALAPPDATA%\ZeroConIME\models へ設定画面から取得）。
     foreach ($required in @('frontend.exe','launcher.exe','ui.exe','azookey-server.exe','azookey-server.dll',
         'azookey.dll','azookey32.dll','settings.json','build-info.json',
-        'llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe')) {
+        'llama/llama-server.exe','llama/ggml-vulkan.dll')) {
         if ($required -notin @($manifest.files.path)) { throw "Incomplete package: $required" }
+    }
+    # 日本語辞書（azooKey標準辞書＋追加辞書）は初回起動時に取得するため同梱しない。
+    # github release の dictionary-catalog.json と対応する zip が配布元。
+    foreach ($bundled in @($manifest.files.path | Where-Object { $_ -cmatch '^Dictionary/' })) {
+        throw "Dictionary must not be bundled: $bundled"
     }
     $info = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $payload 'build-info.json') | ConvertFrom-Json
     if (($info | ConvertTo-Json -Compress) -ne ($manifest.build | ConvertTo-Json -Compress)) {

@@ -16,16 +16,16 @@
 
 ## 英単語辞書の実行時取得（2026-11-21）
 
-英単語辞書はインストーラーにもAPKにも同梱しない。初回起動時に設定画面のポップアップから取得し、その場で端末内のフィルタを通して保存する。
+英単語辞書はインストーラーにもAPKにも同梱しない。初回起動時に変換モデル・日本語辞書とまとめた1つの確認ダイアログから取得し、その場で端末内のフィルタを通して保存する（ダイアログと起動ゲートの仕様は [dictionary-assets.md](dictionary-assets.md)）。
 
 - 取得元: `wordfreq` 3.1.1 の `wordfreq/data/large_en.msgpack.gz`。commit `ec48c0a1237f271b343fa4e38fb896c8da587804` にピン留めした `raw.githubusercontent.com` のURLを使う（1,494,836 bytes / SHA-256 `dffae8066b78dce0a6667cf5f58e567054f902674667090a7ac8a8a44628b05c`）。配布wheelは全言語入りで56.8MBあるため使用しない。
 - 保存先: Windows `%LOCALAPPDATA%\ZeroConIME\english\english-words.txt`、Android は `filesDir/english/english-words.txt`。
 - 生成規則: gzip展開 → msgpack（cB形式、配列の先頭がheader、以降が頻度ビン）→ ASCII小文字2〜24文字に限定 → 卑語と短縮形語幹（`don` / `isn` 等）を除外 → 頻度順の上位30,000語 → 自前の補助リスト（技術語・現代語）を末尾に重複なく追加。キャッシュは `#` ヘッダ付きのランク順テキストで、行順が順位。
 - 実装: 共通Rust `windows/crates/shared/src/english_dictionary.rs`（解析・フィルタ・原子的な書き込み・読み込み・前方一致）。Windows の取得は `windows/frontend/src-tauri/src/english_dictionary.rs`（reqwest＋flate2、SHA-256検証、進捗イベント）が担当する。
-- Android の取得は `android/app/src/main/java/com/zeroconvert/ime/EnglishDictionaryManager.kt`（HttpURLConnection＋GZIPInputStream、SHA-256検証、`.part`後始末）。展開済みmsgpackのパスを `engine/rust` の `englishDictionaryImport` op に渡し、抽出と並べ替えは共有Rust側で行う。`engine/rust/src/bridge.rs` を変更したため、APKビルド前に `scripts/build-android-shared-engine.ps1` で両ABIの共有エンジンを再生成する必要がある（`verifySharedEngine` が検査する）。
+- Android の取得は `android/app/src/main/java/com/zeroconvert/ime/EnglishDictionaryManager.kt`（HttpURLConnection＋GZIPInputStream、SHA-256検証、`.part`後始末）。展開済みmsgpackのパスを `engine/rust` の `englishDictionaryImport` op に渡し、抽出と並べ替えは共有Rust側で行う。この op は共有エンジンが受けるため、**取り込み前に `WindowsEngine` が初期化済みである必要がある**。初回の一括取得はモデル→エンジン初期化→日本語辞書→英語辞書の順で進め、`EnglishDictionaryManager` も未初期化なら自分で `ZenzNative.init` を呼んでから取り込む（初期化前に取り込むと書き込み語数が `-1` になり「辞書の抽出に失敗しました」となる）。`engine/rust/src/bridge.rs` を変更したため、APKビルド前に `scripts/build-android-shared-engine.ps1` で両ABIの共有エンジンを再生成する必要がある（`verifySharedEngine` が検査する）。
 - `EnglishWordDictionary` は辞書順インデックスを一度だけ構築し、前方一致は二分探索で範囲を絞ってから順位で選択する（全走査と毎語の小文字化割り当てをやめた）。
 - ライセンス: 頻度データは CC BY-SA 4.0（帰属は wordfreq と上流データ源）。配布物にはデータを含めず、各端末が上流から取得して端末内で抽出するため、アプリ本体とモデル重みに継承は及ばない。
-- キャッシュが無い間は辞書が使えない。ファイルの有無が取得ポップアップの条件であり、`localStorage` の完了フラグは使わない（端末にデータがあれば初回でも出ない）。
+- キャッシュが無い間は辞書が使えない。ファイルの有無が取得ダイアログと起動ゲートの条件であり、`localStorage` の完了フラグは使わない（端末にデータがあれば初回でも出ない）。
 - 語彙数を3万より増やしても、頻度順に並べる方式では8件が既に揃うプレフィックスの上位候補は変化しない（実測: 30,000→288,992語で変化0件）。増分は名前・伸ばし語・ノイズが中心で、読込時間とヒープだけが増えるため、語彙の拡張は補助リスト側で行う。
 
 ## 初期検証・適用ログ（2026-10-23・アーカイブ）

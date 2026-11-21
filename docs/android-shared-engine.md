@@ -89,7 +89,7 @@ Windowsの正本を変更 → Windowsと共通Rustのテスト
 両方のCPUを1つに含める必要がある場合は `Build-Android.bat -UniversalApk`。
 出力一覧はGradleの `output-metadata.json` を正本とし、古い `rebuilt-debug.apk` を流用しない。
 
-かな漢字変換の辞書はWindowsの通常版と同じ629,045組を `assets/shared-engine/Dictionary/` に収録する。組み込み辞書を更新すると、端末で次に変換エンジンを起動する際に新しい辞書を展開する。 [追加辞書の更新手順](investigations/additional-dictionary-plan.md)
+かな漢字変換の辞書はWindowsの通常版と同じ629,045組だが、APKには同梱せず初回起動時に `files/dictionary/` へ取得する（[日本語辞書の実行時取得](dictionary-assets.md)）。ステージ済みの `engine/build/assets/shared-engine/Dictionary/` は `sharedEngineAssets` が APK から除外し、`verifyConversionModels` と `scripts/check-android-apk.py` が無同梱を検査する。 [追加辞書の更新手順](investigations/additional-dictionary-plan.md)
 ビルドは端末更新、IME選択、
 release署名、Git保存を行わない。
 

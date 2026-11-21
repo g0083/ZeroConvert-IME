@@ -13,17 +13,34 @@ fun requiredProperty(name: String): String =
 
 val sharedHostAssets by tasks.registering(Sync::class) {
     from("../app/src/main/assets") {
-        exclude("dictionary/reverse-v2.bin")
+        // 旧 `assets/dictionary` は `engine/build/assets/shared-engine/Dictionary`
+        // とほぼ重複する（louds/mm の二重格納）。`WINDOWS_ENGINE=true` では
+        // 共有エンジン側が正本であり、旧辞書の `assets/dictionary` は
+        // `ZenzNative` 旧経路でしか読まれないため APK に含めない。
+        // 源ファイル自体は `WINDOWS_ENGINE=false` ビルド用に残す。
+        exclude("dictionary/**")
         // 変換モデルはAPKに同梱しない（端末のキャッシュへ取得）。
         exclude { it.file.extension == "gguf" }
     }
     into(layout.buildDirectory.dir("sharedHostAssets"))
+}
+
+// 日本語辞書は初回起動時に files/dictionary へ取得する。ステージ済みアセットから
+// shared-engine/Dictionary を除いてAPKへ入れない（残しても約21MB増えるだけ）。
+val sharedEngineAssets by tasks.registering(Sync::class) {
+    from("../../engine/build/assets") {
+        exclude("shared-engine/Dictionary/**")
+    }
+    into(layout.buildDirectory.dir("sharedEngineAssets"))
     from("../THIRD_PARTY_LICENSES.md") {
         into("licenses")
     }
     // Shared with the Windows settings app; the single source is licenses/third-party.json.
     from("../../licenses/third-party.json") {
         into("licenses")
+    }
+    from("../../data/dictionary/AdditionalDictionaryNotices") {
+        into("licenses/AdditionalDictionaryNotices")
     }
 }
 
@@ -91,7 +108,7 @@ android {
             manifest.srcFile("../app/src/main/AndroidManifest.xml")
             java.srcDir("../app/src/main/java")
             res.srcDir("../app/src/main/res")
-            assets.srcDirs(sharedHostAssets.map { it.destinationDir }, "../../engine/build/assets")
+            assets.srcDirs(sharedHostAssets.map { it.destinationDir }, sharedEngineAssets.map { it.destinationDir })
             jniLibs.srcDir("../../engine/build/jniLibs")
         }
         getByName("debug").java.srcDir("../app/src/debug/java")
@@ -152,7 +169,7 @@ val verifyAssistAssets by tasks.registering {
         }
     }
 }
-tasks.named("preBuild").configure { dependsOn(verifyAssistAssets, sharedHostAssets) }
+tasks.named("preBuild").configure { dependsOn(verifyAssistAssets, sharedHostAssets, sharedEngineAssets) }
 
 val verifySharedEngine by tasks.registering {
     doLast {

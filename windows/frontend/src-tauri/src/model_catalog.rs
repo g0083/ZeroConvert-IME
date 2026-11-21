@@ -45,6 +45,12 @@ const CHOICES: [Choice; 4] = [
     },
 ];
 
+/// `available` の判定は `shared::runtime_assets::conversion_model_path` と同じ順序。
+fn model_is_available(choice: &Choice, install_dir: &Path, cache_root: &Path) -> bool {
+    cache_root.join(choice.filename).is_file()
+        || install_dir.join("models").join(choice.filename).is_file()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelInfo {
     pub id: String,
@@ -104,6 +110,22 @@ pub fn list(
     install_dir: &Path,
     directories: &[PathBuf],
 ) -> io::Result<ModelListResponse> {
+    list_with_cache_root(
+        active_path,
+        install_dir,
+        directories,
+        &shared::runtime_assets::model_download_root(),
+    )
+}
+
+/// `cache_root` は取得済みモデルの保存先（`%LOCALAPPDATA%\ZeroConIME\models`）。
+/// テストが実機キャッシュの有無に左右されないよう分離してある。
+fn list_with_cache_root(
+    active_path: &Path,
+    install_dir: &Path,
+    directories: &[PathBuf],
+    cache_root: &Path,
+) -> io::Result<ModelListResponse> {
     let active_size = match active_path.metadata() {
         Ok(metadata) => Some(metadata.len()),
         // 未取得・削除済みなど、ファイルが無い/開けない場合は「未選択」として扱う。
@@ -131,10 +153,12 @@ pub fn list(
             id: choice.id.into(),
             name: choice.name.into(),
             filename: choice.filename.into(),
-            size_mb: size.map(|s| s as f64 / (1024.0 * 1024.0)).unwrap_or(catalog_size as f64 / (1024.0 * 1024.0)),
+            size_mb: size
+                .map(|s| s as f64 / (1024.0 * 1024.0))
+                .unwrap_or(catalog_size as f64 / (1024.0 * 1024.0)),
             description: choice.description.into(),
             is_active,
-            available: shared::runtime_assets::conversion_model_path(install_dir, choice.id).is_file(),
+            available: model_is_available(choice, install_dir, cache_root),
         });
     }
     Ok(ModelListResponse { active_id, models })
@@ -147,6 +171,8 @@ mod tests {
     fn identifies_both_models_by_content_even_when_sizes_match() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = vec![dir.path().to_path_buf()];
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(dir.path().join(CHOICES[0].filename), b"nano-iq4").unwrap();
         std::fs::write(dir.path().join(CHOICES[1].filename), b"nano-q8").unwrap();
         std::fs::write(dir.path().join(CHOICES[2].filename), b"standard-iq4").unwrap();
@@ -154,21 +180,32 @@ mod tests {
         let active = dir.path().join("zenz.gguf");
         for choice in &CHOICES {
             std::fs::copy(source_for(choice.id, &dirs).unwrap(), &active).unwrap();
-            let result = list(&active, dir.path(), &dirs).unwrap();
+            let result = list_with_cache_root(&active, dir.path(), &dirs, &cache).unwrap();
             assert_eq!(result.active_id, choice.id);
             assert_eq!(result.models.iter().filter(|m| m.is_active).count(), 1);
         }
         std::fs::write(&active, b"retired!").unwrap();
-        assert!(list(&active, dir.path(), &dirs).unwrap().active_id.is_empty());
+        assert!(list_with_cache_root(&active, dir.path(), &dirs, &cache)
+            .unwrap()
+            .active_id
+            .is_empty());
 
         // 開発用 artifacts のコピーが検索ディレクトリにあるだけでは available にしない。
-        let artifact_only = list(&active, dir.path(), &dirs).unwrap();
+        let artifact_only = list_with_cache_root(&active, dir.path(), &dirs, &cache).unwrap();
         assert!(artifact_only.models.iter().all(|m| !m.available));
         // キャッシュ（install=models）にあるファイルは available。
         std::fs::create_dir_all(dir.path().join("models")).unwrap();
-        std::fs::write(dir.path().join("models").join(CHOICES[0].filename), b"cached").unwrap();
-        let cached = list(&active, dir.path(), &[]).unwrap();
+        std::fs::write(
+            dir.path().join("models").join(CHOICES[0].filename),
+            b"cached",
+        )
+        .unwrap();
+        let cached = list_with_cache_root(&active, dir.path(), &[], &cache).unwrap();
         assert!(cached.models[0].available && !cached.models[1].available);
+        // 取得済みキャッシュ（download root）にあれば、インストール先に無くても available。
+        std::fs::write(cache.join(CHOICES[2].filename), b"downloaded").unwrap();
+        let downloaded = list_with_cache_root(&active, dir.path(), &[], &cache).unwrap();
+        assert!(downloaded.models[2].available);
         std::fs::remove_dir_all(dir.path().join("models")).unwrap();
         assert!(source_for("iq4xs", &dirs).is_err());
     }
@@ -176,6 +213,8 @@ mod tests {
     fn missing_nano_is_unavailable_and_never_resolves_to_corrector() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = vec![dir.path().to_path_buf()];
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(
             dir.path().join("typo-corrector-xsmall-q4km.gguf"),
             b"corrector",
@@ -187,7 +226,8 @@ mod tests {
             b"nano-v2",
         )
         .unwrap();
-        let result = list(&dir.path().join("zenz.gguf"), &dirs[0], &dirs).unwrap();
+        let result =
+            list_with_cache_root(&dir.path().join("zenz.gguf"), &dirs[0], &dirs, &cache).unwrap();
         assert!(result.active_id.is_empty());
         assert_eq!(result.models.len(), 4);
         assert!(result.models.iter().all(|model| !model.available));

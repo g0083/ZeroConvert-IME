@@ -121,15 +121,15 @@ Win32入力欄では「鳴門山」の候補表示と、削除・カーソル移
 
 300件すべてで第1候補の表記が一致した。Win32入力欄で「しぶやすかいについてしらべます」を入力し、「SHIBUYA SKYについて調べます」が第3候補に出た。途中削除と再入力、左右のカーソル操作後にEscで入力を取り消せることも確認した。実IMEでの確認時は自動確定を無効にした。比較結果と起動測定を `artifacts/results/additional-dictionary-100000/comparison-run` に保存した。試験IMEは629,045組の辞書を適用し、辞書ファイルを照合して通常設定で再起動した。
 
-### 通常版に同梱する辞書を更新する
+### 配布する辞書アセットを更新する
 
-通常ビルドでは、[prepare_dictionary.py](../../scripts/prepare_dictionary.py) が固定したazooKeyの元辞書と `data/dictionary/additional-louds.zip` を結合する。試験済みの順引きと逆引きのハッシュを照合するため、通常ビルドで選出をやり直す必要はない。Windowsは `Dictionary/`、Androidは `assets/shared-engine/Dictionary/` に同じ辞書を収録する。
+通常ビルドでは、[prepare_dictionary.py](../../scripts/prepare_dictionary.py) が固定したazooKeyの元辞書と `data/dictionary/additional-louds.zip` を結合する。試験済みの順引きと逆引きのハッシュを照合するため、通常ビルドで選出をやり直す必要はない。ただし結合結果は**配布物に同梱しない**。初回起動時に設定画面が取得する zip アセットとして配る（[日本語辞書の実行時取得](../dictionary-assets.md)）。
 
-次回の選出・比較が済んだら `python scripts/prepare_dictionary.py --freeze-trial <検証済みの生成先>` で差分とライセンス文書を更新する。WindowsパッケージとAndroid APKを両方作り、各成果物の辞書を照合する。
+次回の選出・比較が済んだら `python scripts/prepare_dictionary.py --freeze-trial <検証済みの生成先>` で差分とライセンス文書を更新し、続けて [build-dictionary-asset.py](../../scripts/build-dictionary-asset.py) で zip と `windows/deployment/dictionary-catalog.json` を作り直す。zip は GitHub リリースへ置き、カタログ・`windows/crates/shared/src/runtime_assets.rs`・`DictionaryDownloadManager.kt` の固定値を同じ版にそろえる。WindowsパッケージとAndroid APKの両方を作り、どちらにも辞書が入っていないことを検査する。
 
 ### 配布時に同梱する表記
 
 - SudachiDict Fullの対象版、著作権表示、Apache License 2.0全文、上流の `LEGAL` を辞書と一緒に同梱する。追加語を抽出し、読みを正規化してazooKey形式に組み込んだことを記す。上流の `LEGAL` にはUniDicとNEologd等の表記が含まれる。 [SudachiDict v20260723のLEGAL](https://github.com/WorksApplications/SudachiDict/blob/v20260723/LEGAL) · [Apache License 2.0 §4](https://www.apache.org/licenses/LICENSE-2.0#redistribution)
 - Wikidataの構造化データはCC0 1.0として記載し、取得元とQIDを選出記録に残す。 [Wikidataのライセンス](https://www.wikidata.org/wiki/Wikidata:Licensing)
 - 日本語Wikipediaは出現頻度を集計したコーパスとして、取得元とスナップショットの日付を記す。生成した辞書には、記事本文や抜粋を収録していない。 [Wikimediaの利用規約](https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use/en)
-- `Dictionary/AdditionalDictionaryNotices/` にSudachiDictの `LEGAL` とライセンス全文、Wikidataの出典を同梱する。 [Windows配布用ライセンス一覧](../../windows/deployment/THIRD_PARTY_LICENSES.md) · [Androidライセンス一覧](../../android/THIRD_PARTY_LICENSES.md)
+- 辞書ZIPの `Dictionary/AdditionalDictionaryNotices/` にSudachiDictの `LEGAL` とライセンス全文、Wikidataの出典を収録する。WindowsとAndroidのライセンス画面も、アプリに収録した同じ文書を表示する。 [Windows配布用ライセンス一覧](../../windows/deployment/THIRD_PARTY_LICENSES.md) · [Androidライセンス一覧](../../android/THIRD_PARTY_LICENSES.md)

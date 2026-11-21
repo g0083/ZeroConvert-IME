@@ -40,7 +40,7 @@ WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。S
 
 ### 変換・補正・先読み・自動確定・英字・翻訳の役割分離
 
-1. **通常変換**: Swiftが設定で選ばれた ZeroCon Model（`nano_v4_1_iq4_emb8` / `nano_v4_1_q8` / `standard_v4_1_iq4_emb8` / `standard_v4_1_q8`）と辞書を使う。モデルは配布物に同梱せずキャッシュから取得する（[model-assets.md](model-assets.md)）。`general.experimental_typo_correction` はSwiftのキーボードタイポ補正へ渡される（既定true、保存済みのfalseは維持）。Androidのタッチ位置は同じSwiftの `KeyboardCorrectionPolicy.swift` へ入力スナップショット付きで渡し、最大4件の辞書照合と候補の重み付けに使う。`PostCompositionPrediction.swift` により確定後の次語予測も通常変換側で扱う。
+1. **通常変換**: Swiftが設定で選ばれた ZeroCon Model（`nano_v4_1_iq4_emb8` / `nano_v4_1_q8` / `standard_v4_1_iq4_emb8` / `standard_v4_1_q8`）と辞書を使う。モデルと日本語辞書は配布物に同梱せずキャッシュから取得する（[model-assets.md](model-assets.md)・[dictionary-assets.md](dictionary-assets.md)）。`general.experimental_typo_correction` はSwiftのキーボードタイポ補正へ渡される（既定true、保存済みのfalseは維持）。Androidのタッチ位置は同じSwiftの `KeyboardCorrectionPolicy.swift` へ入力スナップショット付きで渡し、最大4件の辞書照合と候補の重み付けに使う。`PostCompositionPrediction.swift` により確定後の次語予測も通常変換側で扱う。
 2. **タイポ補正のフォールバック**: 通常変換と同じ `general.experimental_typo_correction` 配下。共通Rustの `assist_policy::request_plan` が通常候補の補正済み読みと採用状態を調べ、未補正の場合だけRustの補正候補生成を実行する。採用済み学習、固定タイポ表、打鍵候補（Windows は `keyboard-prior.exe`、Android は `engine/native/keyboard_assist.cpp`）、メイン変換モデル（ポート18091）でのStage-2評価を使い、候補ID `999901` で提案する。なお旧 `zerocon-model-keyboard-prior.gguf` および独立 Corrector サーバー（ポート18090）は廃止済み。
 3. **文の先読み**: `general.experimental_ai_assist` 配下で独立して切り替える。通常変換の表記と読みを基準に、ポート18091のメイン変換モデルで生成する。Swiftが通常候補を補正済みなら `predictionReading` で補正後の読みをRustへ渡す。共通Rustの `assist_reading` がこの読みを選び、`ai_assist/prediction.rs` が先読みを生成・検査する（`nam` 数値マスキング対応）。
 4. **アシストの採用**: 候補ID `999901`（補正）/`999902`（先読み）の優先順位、表示対象の維持、採用時の置換／確定、取消と学習記録は `windows/crates/shared/src/assist_policy.rs` が担当する。WindowsはTab、Androidはタップから同じポリシーを呼ぶ。TSF/InputConnectionの入力先照合・文字列反映・復元用スナップショットは各OSのホストが管理する。`999903` は動的マクロ、`ENGLISH_LEARNING`（`999904`）は英字学習候補の削除対象識別用。予約IDはサーバーで処理し、Swiftの通常候補学習に渡さない。
@@ -74,6 +74,7 @@ Androidの「補正候補を自動で反映」は `auto_typo_correction` に対�
 - **実設定・学習データの保存先**:
   - 実設定: `%APPDATA%\Azookey\settings.json`。`windows/deployment/settings.json` は配布時の初期コピー元であり、既存設定があれば上書きしない。
   - ユーザー辞書は `%APPDATA%\Azookey\user-dictionary.json` に最大10,000件を保存する。旧 `settings.json` の登録語は初回読込時に移行する。設定画面で固有名詞、一般名詞、サ変名詞、定型文、記号を選べる。
+  - 変換用の日本語辞書は設定画面が `%LOCALAPPDATA%\ZeroConIME\dictionary\Dictionary` へ取得する。変換サーバーは `ZEROCON_DICTIONARY_DIR` → 実行ファイル横の `Dictionary\` → 取得済みキャッシュの順に解決する。
   - 補正学習: `%APPDATA%\Azookey\ai-assist-learning.json`（最大500件）、追加補正語彙は `ai-assist-vocabulary.json`。
   - 英字学習: `%APPDATA%\Azookey\english-learning.json`（Androidはアプリデータ配下 `Azookey/english-learning.json`）。
   - 変換学習・確定後予測: `%APPDATA%\Azookey\LearningMemory\`（`selection-overrides.json`、`post-composition-bigrams.json` 等）。選択履歴は左文脈と明示選択を記録し、1回の確定に含まれる文節間の遷移を確定後予測に利用する。

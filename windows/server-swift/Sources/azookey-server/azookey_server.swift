@@ -14,11 +14,49 @@ private let fallbackDictionaryURL =
     executableDirectoryURL()?.appendingPathComponent("Dictionary", isDirectory: true)
     ?? URL(filePath: FileManager.default.currentDirectoryPath)
 
+/// 日本語辞書は設定アプリ/設定画面が初回起動時に端末キャッシュへ取得する
+/// （配布物には同梱しない）。解決順は次のとおり。
+/// 1. `ZEROCON_DICTIONARY_DIR`（Android の JNI が設定する展開済み辞書）
+/// 2. 実行ファイル横の `Dictionary\`（`Build-Trial -DictionaryOnly` の比較用）
+/// 3. `%LOCALAPPDATA%\ZeroConIME\dictionary\Dictionary`（取得済みキャッシュ）
+/// 3 は展開完了を示す `.complete` を伴うときだけ採用する。
+func dictionaryDirectoryURL(executableDirectory: URL?) -> URL {
+    let installed = executableDirectory?.appendingPathComponent("Dictionary", isDirectory: true)
+        ?? URL(filePath: FileManager.default.currentDirectoryPath)
+    let environment = ProcessInfo.processInfo.environment
+    if let explicit = environment["ZEROCON_DICTIONARY_DIR"], !explicit.isEmpty {
+        let directory = URL(filePath: explicit, directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: directory.appendingPathComponent("louds/charID.chid").path) {
+            return directory
+        }
+    }
+    if FileManager.default.fileExists(atPath: installed.appendingPathComponent("louds/charID.chid").path) {
+        return installed
+    }
+    guard let localAppData = environment["LOCALAPPDATA"], !localAppData.isEmpty else {
+        return installed
+    }
+    let cacheRoot = URL(filePath: localAppData, directoryHint: .isDirectory)
+        .appendingPathComponent("ZeroConIME", isDirectory: true)
+        .appendingPathComponent("dictionary", isDirectory: true)
+    let markFile = cacheRoot.appendingPathComponent(".complete", isDirectory: false)
+    let cache = cacheRoot.appendingPathComponent("Dictionary", isDirectory: true)
+    guard FileManager.default.fileExists(atPath: markFile.path),
+          FileManager.default.fileExists(
+            atPath: cache.appendingPathComponent("louds/charID.chid").path
+          ) else {
+        return installed
+    }
+    return cache
+}
+
+let resolvedDictionaryURL = dictionaryDirectoryURL(executableDirectory: executableDirectoryURL())
+
 // Serialized by the single-threaded FFI executor in Rust and @MainActor in tests.
-nonisolated(unsafe) var converterDictionaryURL = fallbackDictionaryURL
+nonisolated(unsafe) var converterDictionaryURL = resolvedDictionaryURL
 nonisolated(unsafe) var converterPreloadDictionary = false
 nonisolated(unsafe) var converterDicdataStore = DicdataStore(
-    dictionaryURL: fallbackDictionaryURL,
+    dictionaryURL: resolvedDictionaryURL,
     preloadDictionary: false
 )
 nonisolated(unsafe) var converter = KanaKanjiConverter(dicdataStore: converterDicdataStore)
@@ -3315,7 +3353,8 @@ public func initialize(
     serverLog("INFO", "Initialize: start path=\(path) use_zenzai=\(use_zenzai)")
     execURL = URL(filePath: path)
     emojiTextReplacerCache.reset()
-    converterDictionaryURL = execURL.appendingPathComponent("Dictionary")
+    // 設定アプリが取得した辞書キャッシュを優先する（無ければ実行ファイル横）。
+    converterDictionaryURL = dictionaryDirectoryURL(executableDirectory: execURL)
     converterPreloadDictionary = true
     ensureConverterRuntimeDirectory()
     let reverseIndexStart = performanceNow()

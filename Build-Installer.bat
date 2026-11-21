@@ -1,5 +1,8 @@
 @echo off
 setlocal
+rem %~dp0 must be captured before the argument loop: shifting past the last
+rem argument replaces %0, which would make %~dp0 point at an argument.
+set "REPO_ROOT=%~dp0"
 set "NO_PAUSE=0"
 if /I "%ZEROCON_NO_PAUSE:~0,1%"=="1" set "NO_PAUSE=1"
 if /I "%ZEROCON_NO_PAUSE%"=="true" set "NO_PAUSE=1"
@@ -19,7 +22,7 @@ shift
 goto arg_loop
 :arg_done
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows\scripts\build-local-installer.ps1"%PASSTHROUGH_ARGS%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%windows\scripts\build-local-installer.ps1"%PASSTHROUGH_ARGS%
 set "buildResult=%ERRORLEVEL%"
 echo.
 if not "%buildResult%"=="0" echo Installer creation failed. See the error above.

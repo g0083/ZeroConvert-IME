@@ -2,10 +2,10 @@ ZeroCon IME / ZeroCon Model Nano (g0083) — 所有権および利用許諾
 
 Copyright (c) g0083
 
-本リポジトリの ZeroConvert IME および ZeroCon Model Nano に関するソースコード、モデル重み、学習データ、ドキュメント等のうち、第三者のオープンソースコンポーネントに由来しない部分については、製作者が権利を保有し、All Rights Reserved とします。
+ZeroConvert IME および ZeroCon Model Nano の独自部分のうち、製作者が権利を保有し、個別のライセンスを適用していないコード、モデルの改変部分、学習データ、ドキュメント等は All Rights Reserved とします。
 
-個人利用はこのリポジトリ自身の README に記載された条件と、インストール時に表示される利用規約に従うものとします。商用組み込み、再配布、サービス提供、モデル重みの再利用は許諾しません。
+この範囲での個人利用は [利用規約](LICENSE) に従います。商用組み込み、再配布、サービス提供、モデルの改変部分の本製品外での再利用は許諾しません。
 
-第三者コンポーネント（azooKey-Windows、AzooKeyKanaKanjiConverter、llama.cpp、AndroidX / Jetpack Compose、Swift ランタイム、Unicode データなど）はそれぞれのライセンス（MIT、Apache License 2.0、Unicode License v3 など）の条件に従い、その部分については再利用が可能です。それらのライセンスの全文と帰属表示は、Windows 版では `windows/deployment/THIRD_PARTY_LICENSES.md`、Android 版では `android/THIRD_PARTY_LICENSES.md` および同梱の `assets/licenses/` に記載しています。設定画面に表示される一覧は `licenses/third-party.json` を正本とします。
+第三者コンポーネントや、個別のライセンスを明示した成果物には、それぞれの条件が適用されます。これらにより既に許諾された権利は製品の利用規約でも維持します。SudachiDict 改変辞書のライセンス全文と上流の帰属表示、Wikidata 構造化データの出典は、配布辞書の `AdditionalDictionaryNotices/` とアプリのライセンス表示から確認できます。 [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) · [Androidの表示](android/THIRD_PARTY_LICENSES.md) · [設定画面の共通データ](licenses/third-party.json)
 
-なお、Apache License 2.0 はコピーレフトではないため、上流の zenz-v3.2-xsmall（Apache License 2.0）から派生した ZeroCon Model Nano をプロプライエタリな条件で提供することができます。派生成果物を配布する場合に必要な帰属表示・ライセンス文の同梱・変更内容の明示は、THIRD_PARTY_LICENSES.md および同梱ファイルで満たしています。
+ZeroCon Model v4.1 の学習に使った zenz-v3.2 の GGUF は、学習時の上流リビジョンで Apache License 2.0 が明示されていました。Apache-2.0 §4 は、上流の条件を守ったうえで独自改変に別の条件を付けることを認めています。現在の上流の公開条件と、学習時のファイルを確認するためのリビジョン・ハッシュは、モデルの来歴に記録しています。 [モデルの来歴](docs/model-assets.md#上流ライセンス) · [Apache License 2.0 §4](https://www.apache.org/licenses/LICENSE-2.0#redistribution)

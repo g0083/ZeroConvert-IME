@@ -156,8 +156,9 @@ fn find_runtime_dir_and_layers(
     gpu_layers: u32,
 ) -> (PathBuf, u32) {
     let exec_parent = executable.parent().unwrap_or(root);
-    // Legacy layout places keyboard-prior.exe inside `llama_cpu/`, where Windows
-    // forces static DLL imports from `executable.parent()` regardless of PATH.
+    // Unified layout and legacy layout place keyboard-prior.exe inside a
+    // `llama*` directory, where Windows forces static DLL imports from
+    // `executable.parent()` regardless of PATH.
     if exec_parent
         .file_name()
         .and_then(|name| name.to_str())
@@ -175,12 +176,34 @@ fn find_runtime_dir_and_layers(
         };
         return (exec_parent.to_path_buf(), layers);
     }
+    if exec_parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("llama"))
+    {
+        let layers = if backend.eq_ignore_ascii_case("vulkan") && vulkan_loader_available() {
+            gpu_layers
+        } else {
+            0
+        };
+        return (exec_parent.to_path_buf(), layers);
+    }
 
     let install_root = if executable.starts_with(root) {
         root
     } else {
         exec_parent
     };
+    // Unified `llama/` serves both backends; Vulkan only differs by -ngl.
+    let unified_dir = install_root.join("llama");
+    if unified_dir.join("llama.dll").is_file() {
+        let layers = if backend.eq_ignore_ascii_case("vulkan") && vulkan_loader_available() {
+            gpu_layers
+        } else {
+            0
+        };
+        return (unified_dir, layers);
+    }
     if backend.eq_ignore_ascii_case("vulkan") {
         let vulkan_dir = install_root.join("llama_vulkan");
         if vulkan_dir.join("llama.dll").is_file() && vulkan_loader_available() {

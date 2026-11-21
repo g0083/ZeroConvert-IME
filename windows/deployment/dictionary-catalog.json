@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "releaseTag": "dictionary-v1",
+  "downloadBaseUrl": "https://github.com/g0083/ZeroConvert-IME/releases/download/dictionary-v1",
+  "dictionary": {
+    "id": "azookey-expanded",
+    "filename": "zerocon-dictionary-azookey-expanded.zip",
+    "sha256": "9f406888dd17b8e9ab1aff60891a1786f40966898f90368d9e6e62d30d59d29b",
+    "bytes": 23357023,
+    "expandedBytes": 55094243,
+    "files": 3621,
+    "reversePairs": 629045,
+    "overlayPairs": 105039
+  }
+}

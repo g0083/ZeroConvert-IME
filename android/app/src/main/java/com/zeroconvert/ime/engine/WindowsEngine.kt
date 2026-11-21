@@ -40,6 +40,7 @@ object WindowsEngine {
         }
     }
     private lateinit var application: Context
+    private lateinit var dataRoot: File
     private lateinit var root: File
     private var modelPath = ""
     private var lastSettings = ""
@@ -68,6 +69,7 @@ object WindowsEngine {
         return reply
     }
     private external fun nativeSetDataRoot(root: String)
+    private external fun nativeSetDictionaryRoot(path: String)
     private external fun nativeConversionEpoch(): Long
     private external fun nativeAbortConversion()
     private external fun nativeLoadBackends(directory: String)
@@ -103,29 +105,59 @@ object WindowsEngine {
             nativeLoadBackends(application.applicationInfo.nativeLibraryDir)
             backendsLoaded = true
         }
-        val dataRoot = File(application.filesDir, "windows-engine").apply { mkdirs() }
+        val engineRoot = File(application.filesDir, "windows-engine").apply { mkdirs() }
+        dataRoot = engineRoot
         val fingerprint = application.assets.open("shared-engine/sources.json").bufferedReader().use { it.readText() }
         val revision = java.security.MessageDigest.getInstance("SHA-256").digest(fingerprint.toByteArray())
             .joinToString("") { "%02x".format(it) }
-        root = File(dataRoot, "runtime-$revision")
+        root = File(engineRoot, "runtime-$revision")
         if (!File(root, ".complete").exists()) {
             copyAssets("shared-engine", root)
             File(root, ".complete").writeText(revision)
         }
         nativeSetDataRoot(dataRoot.absolutePath)
         modelPath = selectedModel.absolutePath
-        migrateSelections(File(dataRoot, "Azookey/LearningMemory"))
-        migrateCorrections(File(dataRoot, "Azookey/ai-assist-learning.json"))
-        migrateEnglishLearning(File(dataRoot, "Azookey/english-learning.json"))
-        val reverseDictionaryPath = File(root, "Dictionary/Reverse/reverse-v2.bin").absolutePath
-        assistRequest(JSONObject().put("op", "configurePaths")
-            .put("settings", File(dataRoot, "Azookey/settings.json").absolutePath)
-            .put("reverse", reverseDictionaryPath))
-        nativePreloadAssistDictionary(reverseDictionaryPath)
+        migrateSelections(File(engineRoot, "Azookey/LearningMemory"))
+        migrateCorrections(File(engineRoot, "Azookey/ai-assist-learning.json"))
+        migrateEnglishLearning(File(engineRoot, "Azookey/english-learning.json"))
+        useDictionary(resolveDictionaryRoot())
         loadInputPolicy()
         lastSettings = ""
         configure(true, "", true, false)
         ready = true
+        true
+    }
+
+    /**
+     * 日本語辞書の実体を選ぶ。配布APKは辞書を同梱しないため、初回起動で
+     * `files/dictionary/` へ取得した一式を使う。取得前（または旧APKの同梱辞書が
+     * 残っている場合）だけ、アセットを展開した `runtime-<rev>/Dictionary` を使う。
+     */
+    private fun resolveDictionaryRoot(): File {
+        val downloaded = com.zeroconvert.ime.model.DictionaryDownloadManager.dictionaryDir(application)
+        if (com.zeroconvert.ime.model.DictionaryDownloadManager.isReady(application)) return downloaded
+        return File(root, "Dictionary")
+    }
+
+    /** Swift側へ辞書ルートを渡し、再変換辞書と変換器をその辞書で作り直す。 */
+    private fun useDictionary(dictionary: File) {
+        nativeSetDictionaryRoot(dictionary.absolutePath)
+        val reverseDictionaryPath = File(dictionary, "Reverse/reverse-v2.bin").absolutePath
+        assistRequest(JSONObject().put("op", "configurePaths")
+            .put("settings", File(dataRoot, "Azookey/settings.json").absolutePath)
+            .put("reverse", reverseDictionaryPath))
+        nativePreloadAssistDictionary(reverseDictionaryPath)
+    }
+
+    /**
+     * 辞書のダウンロード完了後に呼ぶ。初期化済みでも辞書だけ差し替える
+     * （Windowsの変換サーバー再起動に相当）。
+     */
+    fun reloadDictionary(): Boolean = runBlocking(dispatcher) {
+        if (!ready) return@runBlocking false
+        val dictionary = resolveDictionaryRoot()
+        useDictionary(dictionary)
+        checkedSwift(JSONObject().put("op", "setDictionary").put("path", dictionary.absolutePath))
         true
     }
 

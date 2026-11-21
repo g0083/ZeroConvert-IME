@@ -8,7 +8,7 @@ package com.zeroconvert.ime
 internal object UseTerms {
     const val ASSET = "licenses/USE-TERMS.txt"
 
-    const val BUNDLED_FALLBACK = "ZeroCon Keyboard は個人的・非商業的な利用に限り無償で提供されます。\n" +
-        "商用目的での組み込み、再配布、ZeroCon Model Nano の重み・学習データの再利用は許諾しません。\n" +
-        "第三者ライセンスの詳細は設定画面「オープンソースライセンス」と同梱の assets/licenses/ を参照してください。"
+    const val BUNDLED_FALLBACK = "別個の許諾がないZeroCon独自部分は、個人的・非商業的な利用に限り無償で提供します。\n" +
+        "その独自部分の商用組み込み、再配布、モデル改変部分・学習データの再利用は許諾しません。\n" +
+        "第三者ライセンスや個別の条件で既に許諾された権利は維持します。詳細は設定画面「オープンソースライセンス」を参照してください。"
 }

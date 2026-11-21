@@ -23,6 +23,63 @@ foreach ($entry in $dependencies.files) {
         throw "Unexpected dependency file: $($entry.path)"
     }
 }
+# llama の配布対象は llama-server 起動に必要な閉包だけに限定する。
+# 上流 zip は各バックエンドごとに対応 CLI/bench ツールを丸ごと含むが
+# (
+#   llama-server.exe -> llama-server-impl.dll ->
+#     llama-common.dll / mtmd.dll / llama.dll / ggml.dll / ggml-base.dll -> libomp.dll
+#   動的ロード: ggml-cpu*.dll, ggml-vulkan.dll および旧 ggml.dll が import する ggml-rpc.dll
+# ) それ以外は実行時に読み込まれない。
+$essentialLlamaLeaf = @(
+    'llama-server.exe', 'llama-server-impl.dll', 'llama-common.dll', 'llama.dll', 'mtmd.dll',
+    'ggml.dll', 'ggml-base.dll', 'ggml-rpc.dll', 'libomp.dll', 'LICENSE-LLVM-OpenMP',
+    'ggml-base.def', 'ggml-base.lib', 'ggml.def', 'ggml.lib', 'llama.def', 'llama.lib'
+)
+function Test-DistributableDependency([string]$Path) {
+    if ($Path -notmatch '^(llama_cpu|llama_vulkan)/') { return $true }
+    $leaf = Split-Path -Leaf $Path
+    if ($leaf -in $essentialLlamaLeaf) { return $true }
+    if ($leaf -like 'ggml-cpu*.dll') { return $true }
+    if ($leaf -eq 'ggml-vulkan.dll') { return $true }
+    return $false
+}
+$distributableDependencies = @($dependencies.files | Where-Object { Test-DistributableDependency $_.path })
+if (-not $distributableDependencies.Count) { throw 'No distributable llama files selected.' }
+foreach ($required in @('llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe')) {
+    if ($required -notin @($distributableDependencies.path)) { throw "Essential runtime missing: $required" }
+}
+# CPU/Vulkan は単一の llama/ に統合する。重複する共通 DLL を片方だけ
+# 格納し、差分 ggml-vulkan.dll だけを追加する。両 backend の
+# llama-server.exe は同一バイナリで、違いは -ngl 層数だけ。
+$cpuEntries = @($distributableDependencies | Where-Object { $_.path -match '^llama_cpu/' })
+$vulkanEntries = @($distributableDependencies | Where-Object { $_.path -match '^llama_vulkan/' })
+$nonLlamaEntries = @($distributableDependencies | Where-Object { $_.path -notmatch '^(llama_cpu|llama_vulkan)/' })
+$cpuByLeaf = @{}
+foreach ($entry in $cpuEntries) { $cpuByLeaf[(Split-Path -Leaf $entry.path)] = $entry }
+foreach ($entry in $vulkanEntries) {
+    $leaf = Split-Path -Leaf $entry.path
+    if ($cpuByLeaf.ContainsKey($leaf) -and $leaf -ne 'ggml-vulkan.dll') {
+        $cpuHash = Get-ArtifactHash (Get-ArtifactPath $dependencyRoot $cpuByLeaf[$leaf].path)
+        $vulkanHash = Get-ArtifactHash (Get-ArtifactPath $dependencyRoot $entry.path)
+        if ($cpuHash -ne $vulkanHash) { throw "Divergent shared llama file: $leaf" }
+    }
+}
+$payloadDependencies = @()
+foreach ($entry in $nonLlamaEntries) {
+    $payloadDependencies += [pscustomobject]@{ path = $entry.path; bytes = $entry.bytes; sha256 = $entry.sha256; sourcePath = $entry.path }
+}
+foreach ($entry in $cpuEntries) {
+    $leaf = Split-Path -Leaf $entry.path
+    $payloadDependencies += [pscustomobject]@{ path = "llama/$leaf"; bytes = $entry.bytes; sha256 = $entry.sha256; sourcePath = $entry.path }
+}
+$vulkanDllEntries = @($vulkanEntries | Where-Object { (Split-Path -Leaf $_.path) -eq 'ggml-vulkan.dll' })
+if (-not $vulkanDllEntries.Count) { throw 'Essential runtime missing: llama_vulkan/ggml-vulkan.dll' }
+foreach ($entry in $vulkanDllEntries) {
+    $payloadDependencies += [pscustomobject]@{ path = 'llama/ggml-vulkan.dll'; bytes = $entry.bytes; sha256 = $entry.sha256; sourcePath = $entry.path }
+}
+foreach ($required in @('llama/llama-server.exe','llama/ggml-vulkan.dll')) {
+    if ($required -notin @($payloadDependencies.path)) { throw "Essential runtime missing: $required" }
+}
 # The model store is canonical; this build never reads the live trial environment.
 & (Join-Path $PSScriptRoot 'sync-distribution-models.ps1') | Out-Host
 $packagesRoot = Join-Path $repoRoot 'dist/packages'
@@ -65,10 +122,10 @@ try {
         }
     }
 
-    foreach ($entry in $dependencies.files) {
-        Copy-PayloadFile (Get-ArtifactPath $dependencyRoot $entry.path) $entry.path
+    foreach ($entry in $payloadDependencies) {
+        Copy-PayloadFile (Get-ArtifactPath $dependencyRoot $entry.sourcePath) $entry.path
     }
-    Test-ArtifactEntries $payloadRoot $dependencies.files
+    Test-ArtifactEntries $payloadRoot $payloadDependencies
     # 変換モデルは配布物に同梱しない。英字辞書・翻訳モデルと同じく、利用者が
     # cache（%LOCALAPPDATA%\ZeroConIME\models）を持たない場合は設定画面から
     # model-catalog.json の GitHub リリース固定アセットをダウンロードする。
@@ -81,9 +138,16 @@ try {
             Copy-PayloadFile $file.FullName $file.Name
         }
     }
+    foreach ($notice in @('LEGAL', 'LICENSE-2.0.txt', 'Wikidata.txt')) {
+        Copy-PayloadFile (Join-Path $repoRoot "data/dictionary/AdditionalDictionaryNotices/$notice") "AdditionalDictionaryNotices/$notice"
+    }
 
-    & python (Join-Path $repoRoot 'scripts/prepare_dictionary.py') --output (Join-Path $payloadRoot 'Dictionary')
-    if ($LASTEXITCODE -ne 0) { throw 'Default dictionary preparation failed.' }
+    # 日本語辞書は同梱しない（初回起動時に設定アプリが取得して展開する）。
+    # 配布物に含めない辞書は `windows/deployment/dictionary-catalog.json` の
+    # 固定アセットとして GitHub リリースへ置く（scripts/build-dictionary-asset.py）。
+    # 旧パッケージから残った Dictionary/ は apply 時の差分削除に任せる。
+    $bundledDictionary = @(Get-ChildItem -LiteralPath $payloadRoot -Filter 'Dictionary' -Directory -ErrorAction SilentlyContinue)
+    if ($bundledDictionary.Count) { throw 'Dictionary must not be bundled in the payload.' }
     $emojiSource = Join-Path $windowsRoot 'server-swift\azooKey_emoji_dictionary_storage\EmojiDictionary'
     foreach ($file in Get-ChildItem -LiteralPath $emojiSource -File -Recurse) {
         $relative = $file.FullName.Substring($emojiSource.TrimEnd('\').Length + 1)

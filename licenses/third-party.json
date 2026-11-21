@@ -18,10 +18,10 @@
     },
     {
       "id": "zenz",
-      "title": "ZeroCon Model Nano v4.1（上流: zenz-v3.2-xsmall）",
+      "title": "ZeroCon Model v4.1（上流: zenz-v3.2）",
       "credit": "上流モデル Copyright (c) Miwa Keita (ensan-hcl)",
-      "license": "Apache-2.0（上流）",
-      "note": "ZeroCon Model Nano の重み・学習物は独自改変物で、本製品外での利用・再配布を許諾しません。",
+      "license": "Apache-2.0（学習に使った上流リビジョン）",
+      "note": "上流から既に許諾された権利は維持します。個別の許諾がないZeroCon独自の改変部分は、本製品外での利用・再配布を許諾しません。",
       "platforms": ["android", "windows"]
     },
     {
@@ -29,6 +29,22 @@
       "title": "Dictionary（かな漢字変換辞書データ）",
       "credit": "azooKey Dictionary / Mozc / Unicode Emoji Data",
       "license": "Apache-2.0 / BSD-3-Clause / Unicode-3.0",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "sudachidict",
+      "title": "SudachiDict Full 20260723（追加辞書）",
+      "credit": "Works Applications Co., Ltd. / UniDic Consortium / NEologd contributors",
+      "license": "Apache-2.0 / 上流の LEGAL に記載された個別条件",
+      "note": "名詞を抽出し、読み・品詞・スコアをazooKey形式に変換して組み込みました。ライセンス全文と上流の帰属表示は設定画面と配布辞書に収録しています。",
+      "platforms": ["android", "windows"]
+    },
+    {
+      "id": "wikidata",
+      "title": "Wikidata（追加辞書）",
+      "credit": "Wikidata contributors",
+      "license": "CC0 1.0 Universal",
+      "note": "構造化データから日本語の表記と読みを採用しました。",
       "platforms": ["android", "windows"]
     },
     {
@@ -106,6 +122,18 @@
     }
   ],
   "fullTexts": [
+    {
+      "id": "sudachidict-legal",
+      "title": "SudachiDict / UniDic / NEologd（上流の LEGAL）",
+      "windowsFile": "AdditionalDictionaryNotices/LEGAL",
+      "androidAsset": "licenses/AdditionalDictionaryNotices/LEGAL"
+    },
+    {
+      "id": "wikidata-cc0",
+      "title": "Wikidata（CC0 1.0・出典）",
+      "windowsFile": "AdditionalDictionaryNotices/Wikidata.txt",
+      "androidAsset": "licenses/AdditionalDictionaryNotices/Wikidata.txt"
+    },
     {
       "id": "apache",
       "title": "Apache License 2.0（全文）",

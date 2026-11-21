@@ -80,18 +80,23 @@ function Assert-InstallPayload {
         "ui.exe",
         "build-info.json",
         "THIRD_PARTY_LICENSES.md",
-        "zenz.gguf",
-        "Dictionary",
-        "Dictionary\Reverse\reverse-v2.bin",
         "EmojiDictionary",
-        "llama_cpu",
-        "llama_vulkan"
+        "llama"
     )
 
     foreach ($relativePath in $requiredPaths) {
         $path = Join-Path $InstallLocation $relativePath
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Required install payload is missing: $path"
+        }
+    }
+
+    # 日本語辞書は同梱せず、初回起動時に設定アプリが
+    # %LOCALAPPDATA%\ZeroConIME\dictionary\ へ取得する。インストール先に
+    # Dictionary/ や旧モデルが残っていれば、同梱が復活したかビルドが古い。
+    foreach ($bundled in @('Dictionary', 'Dictionary\Reverse\reverse-v2.bin', 'zenz.gguf')) {
+        if (Test-Path -LiteralPath (Join-Path $InstallLocation $bundled)) {
+            throw "Payload must not bundle the dictionary or model weights: $bundled"
         }
     }
 
@@ -119,8 +124,12 @@ function Wait-AzookeyUninstalled {
         [string]$InstallLocation
     )
 
+    # 取得物（変換モデル・日本語辞書・英字辞書）はインストール先ではなく
+    # %LOCALAPPDATA%\ZeroConIME に置くため、アンインストールで消えたことも確認する。
+    $cacheRoot = Join-Path $env:LOCALAPPDATA "ZeroConIME"
     $payloadPaths = @("frontend.exe", "azookey.dll", "azookey32.dll", "launcher.exe") |
         ForEach-Object { Join-Path $InstallLocation $_ }
+    $payloadPaths += $cacheRoot
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSec) {
         $taskRemains = $null -ne (Get-ScheduledTask -TaskName "Azookey Startup" -ErrorAction SilentlyContinue)

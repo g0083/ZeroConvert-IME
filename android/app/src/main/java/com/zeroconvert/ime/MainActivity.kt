@@ -84,6 +84,7 @@ import com.zeroconvert.ime.benchmark.BenchmarkKind
 import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
 import com.zeroconvert.ime.model.ConversionModelDownloadManager
+import com.zeroconvert.ime.model.DictionaryDownloadManager
 import com.zeroconvert.ime.model.ModelInfo
 import com.zeroconvert.ime.model.ModelManager
 import com.zeroconvert.ime.translation.TranslationEngine
@@ -338,9 +339,6 @@ fun MainScreen(
     // キャッシュが無い間は辞書が使えない（学習語だけ）ため、ファイルの有無そのものを条件にする。
     // 初回でなくても、端末にデータがあれば表示しない。
     var englishDictionaryReady by remember { mutableStateOf(EnglishDictionaryManager.isReady(context)) }
-    var showEnglishDictionaryDialog by remember {
-        mutableStateOf(!EnglishDictionaryManager.isReady(context))
-    }
     var englishDictionaryProgress by remember { mutableStateOf<EnglishDictionaryManager.Progress?>(null) }
     var englishDictionaryError by remember { mutableStateOf<String?>(null) }
     var englishDictionaryJob by remember { mutableStateOf<Job?>(null) }
@@ -351,10 +349,18 @@ fun MainScreen(
             ConversionModelDownloadManager.hasVerified(context, ModelManager.DEFAULT_MODEL_SPEC)
         )
     }
-    var showMandatoryModelDialog by remember { mutableStateOf(!mandatoryModelReady) }
     var mandatoryModelProgress by remember { mutableStateOf<ConversionModelDownloadManager.Progress?>(null) }
     var mandatoryModelError by remember { mutableStateOf<String?>(null) }
     var mandatoryModelJob by remember { mutableStateOf<Job?>(null) }
+    // 日本語辞書はAPKに同梱せず、初回起動時に files/dictionary へ取得する。
+    var dictionaryReady by remember { mutableStateOf(DictionaryDownloadManager.isReady(context)) }
+    var dictionaryProgress by remember { mutableStateOf<DictionaryDownloadManager.Progress?>(null) }
+    var dictionaryError by remember { mutableStateOf<String?>(null) }
+    var dictionaryJob by remember { mutableStateOf<Job?>(null) }
+    var setupDownloadJob by remember { mutableStateOf<Job?>(null) }
+    val setupReady = mandatoryModelReady && dictionaryReady && englishDictionaryReady
+    // 変換モデル・日本語辞書・英語辞書を1つの確認ダイアログで案内する。
+    var showSetupDialog by remember { mutableStateOf(!setupReady) }
     var downloadingModelName by remember { mutableStateOf<String?>(null) }
     var modelDownloadProgress by remember { mutableStateOf<ConversionModelDownloadManager.Progress?>(null) }
     var modelDownloadJob by remember { mutableStateOf<Job?>(null) }
@@ -481,27 +487,73 @@ fun MainScreen(
         }
     }
 
-    fun startMandatoryModelDownload() {
-        if (mandatoryModelJob?.isActive == true) return
+    /**
+     * 変換モデル→日本語辞書→英語辞書の順に、足りないものだけをまとめて取得する。
+     * モデルが揃った直後に変換エンジンを初期化し、辞書は取得後に差し替える
+     * （Windowsのサーバー再起動に相当）。英語辞書の抽出は共有エンジンが行うため、
+     * 初期化は英語辞書の取得より先に済ませる。
+     */
+    fun startSetupDownload() {
+        if (setupDownloadJob?.isActive == true) return
         mandatoryModelError = null
-        mandatoryModelProgress = ConversionModelDownloadManager.Progress(0, ModelManager.DEFAULT_MODEL_SPEC.expectedSize)
-        mandatoryModelJob = coroutineScope.launch {
-            val result = ConversionModelDownloadManager.download(context, ModelManager.DEFAULT_MODEL_SPEC) { progress ->
-                coroutineScope.launch(Dispatchers.Main) { mandatoryModelProgress = progress }
-            }
-            mandatoryModelProgress = null
-            result.onSuccess {
-                mandatoryModelError = null
-                mandatoryModelReady = true
-                showMandatoryModelDialog = false
-                // 取得したモデルで再 init し、モデル欄の状態も更新する。
-                val ready = withContext(Dispatchers.IO) { ZenzNative.init(context) }
-                onModelStatusChange(if (ready) "${ZenzNative.currentModelName} — 準備完了" else "エラー: モデルのロードに失敗しました")
-                availableModels = ModelManager.getAvailableModels(context)
-                Toast.makeText(context, "変換モデルを保存しました", Toast.LENGTH_SHORT).show()
-            }.onFailure { error ->
-                mandatoryModelError = error.message ?: "ダウンロードに失敗しました"
+        dictionaryError = null
+        englishDictionaryError = null
+        setupDownloadJob = coroutineScope.launch {
+            if (!mandatoryModelReady) {
+                mandatoryModelProgress = ConversionModelDownloadManager.Progress(0, ModelManager.DEFAULT_MODEL_SPEC.expectedSize)
+                val result = ConversionModelDownloadManager.download(context, ModelManager.DEFAULT_MODEL_SPEC) { progress ->
+                    coroutineScope.launch(Dispatchers.Main) { mandatoryModelProgress = progress }
+                }
+                mandatoryModelProgress = null
+                result.onSuccess { mandatoryModelReady = true }
+                    .onFailure { mandatoryModelError = it.message ?: "ダウンロードに失敗しました" }
                 mandatoryModelReady = ConversionModelDownloadManager.hasVerified(context, ModelManager.DEFAULT_MODEL_SPEC)
+            }
+            // 英語辞書の import（msgpack抽出）は共有エンジンに op を送るため、
+            // 辞書の有無に関わらずここでエンジンを ready にしておく。
+            if (mandatoryModelReady) {
+                val engineReady = withContext(Dispatchers.IO) { ZenzNative.init(context) }
+                onModelStatusChange(
+                    if (engineReady) "${ZenzNative.currentModelName} — 準備完了"
+                    else "エラー: モデルのロードに失敗しました"
+                )
+                if (!engineReady) mandatoryModelError = "モデルのロードに失敗しました"
+            }
+            if (!dictionaryReady) {
+                dictionaryProgress = DictionaryDownloadManager.Progress(0, DictionaryDownloadManager.EXPECTED_BYTES)
+                val result = DictionaryDownloadManager.download(context) { progress ->
+                    coroutineScope.launch(Dispatchers.Main) { dictionaryProgress = progress }
+                }
+                dictionaryProgress = null
+                result.onSuccess { dictionaryReady = true }
+                    .onFailure { dictionaryError = it.message ?: "ダウンロードに失敗しました" }
+                dictionaryReady = DictionaryDownloadManager.isReady(context)
+            }
+            if (dictionaryReady) {
+                withContext(Dispatchers.IO) {
+                    com.zeroconvert.ime.engine.WindowsEngine.reloadDictionary()
+                    // 誤入力補正の辞書照合（lookupDict）が使う旧LOUDS経路も同じ辞書で読み直す。
+                    ZenzNative.refreshDictionary(context)
+                    // 読み推定（ReadingCheck）の逆引き辞書も取得済みの辞書から読み直す。
+                    com.zeroconvert.ime.assist.ReadingCheck.reload(context)
+                }
+            }
+            if (!englishDictionaryReady) {
+                englishDictionaryProgress = EnglishDictionaryManager.Progress(0)
+                val result = EnglishDictionaryManager.download(context) { progress ->
+                    coroutineScope.launch(Dispatchers.Main) { englishDictionaryProgress = progress }
+                }
+                englishDictionaryProgress = null
+                result.onSuccess {
+                    englishDictionaryReady = true
+                    EnglishWordDictionary.reload(context)
+                }.onFailure { englishDictionaryError = it.message ?: "ダウンロードに失敗しました" }
+                englishDictionaryReady = EnglishDictionaryManager.isReady(context)
+            }
+            if (mandatoryModelReady && dictionaryReady && englishDictionaryReady) {
+                availableModels = ModelManager.getAvailableModels(context)
+                showSetupDialog = false
+                Toast.makeText(context, "必要なデータを準備しました", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1550,7 +1602,7 @@ fun MainScreen(
                         text = if (englishDictionaryProgress != null) "取得中…" else "ダウンロード",
                         palette = palette,
                         enabled = englishDictionaryProgress == null,
-                        onClick = { showEnglishDictionaryDialog = true }
+                        onClick = { startEnglishDictionaryDownload() }
                     )
                 }
             }
@@ -2558,6 +2610,23 @@ fun MainScreen(
         colorScheme = colorScheme,
         typography = typography
     ) {
+        if (!setupReady) {
+            // 「後で」を選んだ場合もここに留まる。使えるのはダウンロードボタンだけ。
+            SetupRequiredContent(
+                palette = palette,
+                mandatoryModelReady = mandatoryModelReady,
+                dictionaryReady = dictionaryReady,
+                englishDictionaryReady = englishDictionaryReady,
+                modelProgress = mandatoryModelProgress,
+                dictionaryProgress = dictionaryProgress,
+                englishProgress = englishDictionaryProgress,
+                modelError = mandatoryModelError,
+                dictionaryError = dictionaryError,
+                englishError = englishDictionaryError,
+                downloading = setupDownloadJob?.isActive == true,
+                onDownload = { startSetupDownload() }
+            )
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -2728,106 +2797,19 @@ fun MainScreen(
             )
         }
 
-        if (showMandatoryModelDialog) {
-            val progress = mandatoryModelProgress
-            val error = mandatoryModelError
-            AlertDialog(
-                onDismissRequest = { showMandatoryModelDialog = false },
-                title = { Text("変換モデルをダウンロード") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "かな漢字変換に使う ZeroCon Model Nano v4.1 IQ4_emb8（約18.7MB）を初回のみダウンロードします。端末のキャッシュに無い場合だけ取得し、無い間は辞書変換のみが利用できます。",
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "モデルはAPKに含まれません。取得時にサイズとSHA-256を検証し、中途半端なキャッシュは次回再開します。",
-                            fontSize = 12.sp
-                        )
-                        if (progress != null) {
-                            LinearProgressIndicator(
-                                progress = { (progress.fraction * 100).roundToInt() / 100f },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Text("ダウンロード中 ${progress.downloaded / 1024}KB / ${progress.total / 1024}KB", fontSize = 12.sp)
-                        }
-                        if (error != null) {
-                            Text("取得に失敗しました: $error", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
+        if (showSetupDialog) {
+            SetupConfirmDialog(
+                palette = palette,
+                mandatoryModelReady = mandatoryModelReady,
+                dictionaryReady = dictionaryReady,
+                englishDictionaryReady = englishDictionaryReady,
+                onDownload = {
+                    showSetupDialog = false
+                    startSetupDownload()
                 },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showMandatoryModelDialog = false
-                            startMandatoryModelDownload()
-                            showMandatoryModelDialog = true
-                        },
-                        enabled = mandatoryModelProgress == null
-                    ) {
-                        Text("同意してダウンロード")
-                    }
-                },
-                dismissButton = {
-                    // 無い間は辞書変換だけのため、次回表示時に再案内される。
-                    TextButton(onClick = { showMandatoryModelDialog = false }) {
-                        Text("後で")
-                    }
-                }
+                onLater = { showSetupDialog = false }
             )
         }
-        if (showEnglishDictionaryDialog) {
-            val progress = englishDictionaryProgress
-            val error = englishDictionaryError
-            AlertDialog(
-                onDismissRequest = { showEnglishDictionaryDialog = false },
-                title = { Text("英語辞書をダウンロード") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "英字モードの単語補完に使う辞書（約3万語、約1.4MB）を初回のみダウンロードします。",
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "単語頻度データは wordfreq（CC BY-SA 4.0）から取得し、この端末内で抽出・並べ替えて保存します。配布物にデータは含まれません。",
-                            fontSize = 12.sp
-                        )
-                        TextButton(onClick = {
-                            uriHandler.openUri("https://creativecommons.org/licenses/by-sa/4.0/")
-                        }) {
-                            Text("CC BY-SA 4.0 を開く", fontSize = 12.sp)
-                        }
-                        if (progress != null) {
-                            LinearProgressIndicator(
-                                progress = { (progress.fraction * 100).roundToInt() / 100f },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Text("ダウンロード中 ${progress.received / 1024}KB / ${progress.total / 1024}KB", fontSize = 12.sp)
-                        }
-                        if (error != null) {
-                            Text("取得に失敗しました: $error", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showEnglishDictionaryDialog = false
-                            startEnglishDictionaryDownload()
-                        },
-                        enabled = englishDictionaryProgress == null
-                    ) {
-                        Text("同意してダウンロード")
-                    }
-                },
-                dismissButton = {
-                    // ファイルが無い間は辞書が使えないため、閉じても次回起動時に再表示される。
-                    // 設定画面の「英語辞書」行からでも再取得できる。
-                    TextButton(onClick = { showEnglishDictionaryDialog = false }) {
-                        Text("後で")
-                    }
-                }
-            )
         }
     }
 }
@@ -2916,6 +2898,189 @@ private fun SplitKeyboardGapSetting(
             }
         }
     }
+}
+
+/** 初回起動で必要なデータ（変換モデル・日本語辞書・英語辞書）の一覧。 */
+private data class SetupRequirement(
+    val label: String,
+    val detail: String,
+    val ready: Boolean,
+    val progress: Float?,
+    val error: String?
+)
+
+private fun setupRequirements(
+    mandatoryModelReady: Boolean,
+    dictionaryReady: Boolean,
+    englishDictionaryReady: Boolean,
+    modelProgress: ConversionModelDownloadManager.Progress?,
+    dictionaryProgress: DictionaryDownloadManager.Progress?,
+    englishProgress: EnglishDictionaryManager.Progress?,
+    modelError: String?,
+    dictionaryError: String?,
+    englishError: String?
+): List<SetupRequirement> = listOf(
+    SetupRequirement(
+        label = "変換モデル（ZeroCon Model Nano v4.1）",
+        detail = "約18.7MB · 文脈に応じた漢字選択に使います",
+        ready = mandatoryModelReady,
+        progress = modelProgress?.fraction,
+        error = modelError
+    ),
+    SetupRequirement(
+        label = "日本語辞書",
+        detail = "約22.3MB · azooKey標準辞書と固有名詞などの追加辞書",
+        ready = dictionaryReady,
+        progress = dictionaryProgress?.fraction,
+        error = dictionaryError
+    ),
+    SetupRequirement(
+        label = "英語辞書",
+        detail = "約1.4MB · 英字入力の単語補完に使います",
+        ready = englishDictionaryReady,
+        progress = englishProgress?.fraction,
+        error = englishError
+    )
+)
+
+/**
+ * 未取得データがある間の全画面表示。確認ダイアログで「後で」を選ぶと
+ * この画面だけが残り、使えるのはダウンロードボタンだけになる。
+ */
+@Composable
+private fun SetupRequiredContent(
+    palette: ZeroConPalette,
+    mandatoryModelReady: Boolean,
+    dictionaryReady: Boolean,
+    englishDictionaryReady: Boolean,
+    modelProgress: ConversionModelDownloadManager.Progress?,
+    dictionaryProgress: DictionaryDownloadManager.Progress?,
+    englishProgress: EnglishDictionaryManager.Progress?,
+    modelError: String?,
+    dictionaryError: String?,
+    englishError: String?,
+    downloading: Boolean,
+    onDownload: () -> Unit
+) {
+    val requirements = setupRequirements(
+        mandatoryModelReady, dictionaryReady, englishDictionaryReady,
+        modelProgress, dictionaryProgress, englishProgress,
+        modelError, dictionaryError, englishError
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(palette.canvas)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            ZeroConLogo(size = 44.dp)
+            Column {
+                Text("必要データの準備", color = palette.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "ダウンロードが終わるまで設定と入力は使えません。",
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+        SettingsSection("ダウンロードするデータ", palette) {
+            requirements.forEachIndexed { index, requirement ->
+                if (index > 0) SettingsDivider(palette)
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = requirement.label,
+                            color = palette.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = if (requirement.ready) "準備済み"
+                            else if (requirement.progress != null) "ダウンロード中"
+                            else "未取得",
+                            color = if (requirement.ready) palette.readyEmerald else palette.textMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Text(requirement.detail, color = palette.textMuted, fontSize = 11.sp)
+                    requirement.progress?.let { fraction ->
+                        LinearProgressIndicator(
+                            progress = { fraction },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = palette.primaryAccent,
+                            trackColor = palette.surfaceElevated
+                        )
+                    }
+                    requirement.error?.let { message ->
+                        Text("取得に失敗しました: $message", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+        SettingsPrimaryButton(
+            text = if (downloading) "必要データをダウンロード中です…" else "ダウンロードする",
+            palette = palette,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !downloading,
+            onClick = onDownload
+        )
+    }
+}
+
+/** 変換モデル・日本語辞書・英語辞書をまとめて案内する唯一の確認ダイアログ。 */
+@Composable
+private fun SetupConfirmDialog(
+    palette: ZeroConPalette,
+    mandatoryModelReady: Boolean,
+    dictionaryReady: Boolean,
+    englishDictionaryReady: Boolean,
+    onDownload: () -> Unit,
+    onLater: () -> Unit
+) {
+    val requirements = setupRequirements(
+        mandatoryModelReady, dictionaryReady, englishDictionaryReady,
+        null, null, null, null, null, null
+    ).filter { !it.ready }
+    AlertDialog(
+        onDismissRequest = onLater,
+        title = { Text("必要データを準備します") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "変換モデル・日本語辞書・英語辞書はアプリに含まれていません。初回起動時にまとめてダウンロードします（サイズとSHA-256を検証）。",
+                    fontSize = 13.sp
+                )
+                requirements.forEach { requirement ->
+                    Text("・${requirement.label}（${requirement.detail.substringBefore(" ·")}）", fontSize = 12.sp)
+                }
+                Text(
+                    "「あとで」を選ぶとダウンロードボタンだけの画面になり、準備が終わるまで設定と入力は使えません。",
+                    fontSize = 12.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDownload) { Text("ダウンロードする") }
+        },
+        dismissButton = {
+            TextButton(onClick = onLater) { Text("あとで") }
+        }
+    )
 }
 
 @Composable

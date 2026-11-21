@@ -114,7 +114,7 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | --- | --- |
 | `W/target/`、各crateの `target/`、`W/build/`、`server-swift/.build/`、フロント `dist/` | ビルド出力・生成Protobuf・取得依存。`.proto`・実ソース・ビルド定義を変更して再生成。`W/build/` はビルド時の出力先で、調査時点では存在しない |
 | `W/target/azookey-build/`、配布 `build-info.json` | `app-version.json` と `scripts/sync-version.mjs` が生成。frontendの版フィールドも同スクリプトの同期対象 |
-| `Dictionary/Reverse/reverse-v2.bin` | `W/scripts/generate-reverse-dictionary.mjs` で生成 |
+| `Dictionary/Reverse/reverse-v2.bin` | `W/scripts/generate-reverse-dictionary.mjs` で生成。辞書一式は配布物に同梱せず、初回起動時に `scripts/build-dictionary-asset.py` が作る zip を取得する（[dictionary-assets.md](dictionary-assets.md)） |
 | `node_modules/`、`.gradle/`、Android `rebuilt/build/` / `.cxx/`、`engine/build/` | 依存・ビルド生成物。Gradle/npm/CMakeの入力を変更 |
 | Android `app/src/main/cpp/llama.cpp/`、Swift取得依存・辞書サブモジュール | 外部コード・データ。変更が必要なら依存元とライセンス、更新方法を先に確認 |
 | 配布先のDLL/EXE、`.lib`/`.obj`/`.exp`、GGUF/safetensors、checkpoint | 手編集しない。ソース・学習入力から作る。`.old*` / `.bak*` / `.tmp` は現行ソースとみなさない |

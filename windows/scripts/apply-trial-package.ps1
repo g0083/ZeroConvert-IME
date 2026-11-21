@@ -30,6 +30,33 @@ if (-not $UpdateDirectory) {
     $entries += [pscustomobject]@{ path = 'package-manifest.json'; sha256 = $package.Record.manifestSha256; bytes = (Get-Item -LiteralPath (Join-Path $package.Payload 'package-manifest.json')).Length }
 }
 $removals = if ($UpdateDirectory) { @($package.Manifest.removals) } else { @() }
+if (-not $UpdateDirectory) {
+    # A complete package replaces the previous payload. Files the previous
+    # package owned and this one no longer ships (e.g. the bundled dictionary,
+    # which is now downloaded on first launch) must not linger and silently keep
+    # winning the runtime lookup. Files changed outside package management are
+    # left alone with a warning instead of failing the deployment.
+    $previousManifestPath = Join-Path $trial 'package-manifest.json'
+    if (Test-Path -LiteralPath $previousManifestPath -PathType Leaf) {
+        $previousManifest = Get-Content -Encoding UTF8 -Raw -LiteralPath $previousManifestPath | ConvertFrom-Json
+        $currentPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($entry in $entries) { $null = $currentPaths.Add($entry.path) }
+        foreach ($old in @($previousManifest.files)) {
+            if ($currentPaths.Contains($old.path)) { continue }
+            # The Japanese dictionary is downloaded on first launch in release
+            # builds, but Build-Trial manages the trial's own Dictionary/ files
+            # itself (-DictionaryOnly). Never retire them here.
+            if ($old.path -cmatch '^Dictionary/') { continue }
+            $existing = Get-ArtifactPath $trial $old.path
+            if (-not (Test-Path -LiteralPath $existing -PathType Leaf)) { continue }
+            if ((Get-ArtifactHash $existing) -ne $old.sha256) {
+                Write-Warning "Keeping externally changed file from a retired payload path: $($old.path)"
+                continue
+            }
+            $removals += [pscustomobject]@{ path = $old.path; sha256 = $old.sha256 }
+        }
+    }
+}
 foreach ($entry in $removals) {
     $destination = Get-ArtifactPath $trial $entry.path
     if ((Test-Path -LiteralPath $destination) -and (Get-ArtifactHash $destination) -ne $entry.sha256) { throw "Refusing to remove an externally changed file: $($entry.path)" }

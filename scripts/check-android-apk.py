@@ -1,6 +1,6 @@
 """Inspect actual APK outputs: ABI closure, compressed runtime and unchanged models."""
-import hashlib
 import json
+import re
 import runpy
 import sys
 import zipfile
@@ -9,17 +9,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ELF = runpy.run_path(str(ROOT / 'scripts/check-android-native.py'))
 OUTPUT = ROOT / 'android/rebuilt/build/outputs/apk/debug'
-DICTIONARY = ROOT / 'data/dictionary'
 
 
 def main():
     metadata = json.loads((OUTPUT / 'output-metadata.json').read_text(encoding='utf-8'))
-    with zipfile.ZipFile(DICTIONARY / 'additional-louds.zip') as overlay:
-        dictionary = json.loads(overlay.read('manifest.json'))
-    dictionary_files = dict(dictionary['files'])
-    dictionary_files['Reverse/reverse-v2.bin'] = dictionary['reverse']['sha256']
-    for notice in (DICTIONARY / 'AdditionalDictionaryNotices').iterdir():
-        dictionary_files[f'AdditionalDictionaryNotices/{notice.name}'] = hashlib.sha256(notice.read_bytes()).hexdigest()
+    catalog = json.loads((ROOT / 'windows/deployment/dictionary-catalog.json').read_text(encoding='utf-8'))
+    dictionary = catalog['dictionary']
+    manager = (ROOT / 'android/app/src/main/java/com/zeroconvert/ime/model/DictionaryDownloadManager.kt').read_text(encoding='utf-8')
+    manager = re.sub(r'(?<=\d)_(?=\d)', '', manager)
+    for name, value in (
+        ('FILENAME', f'"{dictionary["filename"]}"'),
+        ('EXPECTED_BYTES', f'{dictionary["bytes"]}L'),
+        ('SHA256', f'"{dictionary["sha256"]}"'),
+        ('FILE_COUNT', str(dictionary['files'])),
+        ('RELEASE_TAG', f'"{catalog["releaseTag"]}"'),
+    ):
+        if f'const val {name} = {value}' not in manager:
+            raise ValueError(f'DictionaryDownloadManager.{name} does not match dictionary-catalog.json')
     for artifact in metadata['elements']:
         apk = OUTPUT / artifact['outputFile']
         # Android asset names are UTF-8 even when ZIP's UTF-8 flag is unset.
@@ -32,6 +38,16 @@ def main():
             mozc_notice = 'assets/licenses/NOTICE-Mozc.txt'
             if archive.read(mozc_notice) != (ROOT / 'android/app/src/main' / mozc_notice).read_bytes():
                 raise ValueError(f'{apk.name}: bundled Mozc notice differs from source')
+            notices = ROOT / 'data/dictionary/AdditionalDictionaryNotices'
+            for source in sorted(notices.iterdir()):
+                asset = f'assets/licenses/{notices.name}/{source.name}'
+                if archive.read(asset) != source.read_bytes():
+                    raise ValueError(f'{apk.name}: bundled dictionary notice differs from source: {asset}')
+            if archive.read('assets/licenses/third-party.json') != (ROOT / 'licenses/third-party.json').read_bytes():
+                raise ValueError(f'{apk.name}: bundled license list differs from source')
+            terms = 'assets/licenses/USE-TERMS.txt'
+            if archive.read(terms) != (ROOT / 'android/app/src/main' / terms).read_bytes():
+                raise ValueError(f'{apk.name}: bundled use terms differ from source')
             abis = {name.split('/')[1] for name in names if name.startswith('lib/') and name.endswith('.so')}
             expected = {item['value'] for item in artifact['filters'] if item['filterType'] == 'ABI'}
             if expected and abis != expected:
@@ -55,13 +71,11 @@ def main():
                         raise ValueError(f'{apk.name}: missing runtime CPU backend {backend}')
             if 'assets/dictionary/reverse-v2.bin' in names:
                 raise ValueError(f'{apk.name}: duplicate reverse dictionary')
-            for name, expected_hash in dictionary_files.items():
-                asset = f'assets/shared-engine/Dictionary/{name}'
-                if asset not in names or hashlib.sha256(archive.read(asset)).hexdigest() != expected_hash:
-                    raise ValueError(f'{apk.name}: missing or changed dictionary asset {asset}')
-            for name in dictionary['removed']:
-                if f'assets/shared-engine/Dictionary/{name}' in names:
-                    raise ValueError(f'{apk.name}: stale dictionary asset {name}')
+            # 日本語辞書は初回起動時に files/dictionary へ取得する。APKに辞書が
+            # 入っていれば、同梱が復活したかアセット除外が壊れている。
+            bundled = [name for name in names if name.startswith('assets/shared-engine/Dictionary/')]
+            if bundled:
+                raise ValueError(f'{apk.name}: bundled Japanese dictionary ({len(bundled)} files); it must be downloaded on device')
             # The packaged lock is what identifies the engine revision this APK
             # was built from, so it must be the committed one.
             packaged_lock = archive.read('assets/shared-engine/lock.json')
@@ -76,7 +90,7 @@ def main():
                 raise ValueError(f'{apk.name}: bundled converter model; models must be downloaded on device')
             for spec in specs:
                 assert spec['sha256'] and len(spec['sha256']) == 64 and spec['bytes'] > 0, f'bad catalog entry: {spec["id"]}'
-        print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; no bundled models, runtime and {dictionary["reverse"]["pairs"]:,}-pair dictionary verified.')
+        print(f'{apk.name}: {apk.stat().st_size} bytes; {", ".join(sorted(abis))}; no bundled models or dictionary, runtime verified.')
         print(f'  engine lock: converter {engine_lock["converterRevision"]}, swift {engine_lock["swiftSources"][:12]}')
 
 

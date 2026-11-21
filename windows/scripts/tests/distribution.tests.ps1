@@ -7,10 +7,10 @@ $testRoot = Join-Path $repoRoot ('.local/distribution-tests/' + [guid]::NewGuid(
 $packageRoot = Join-Path $testRoot 'package'
 $payload = Join-Path $packageRoot 'payload'
 New-Item -ItemType Directory -Path $payload -Force | Out-Null
-# 変換モデルは同梱しない（%LOCALAPPDATA%\ZeroConIME\models へ設定画面から取得）。
+# 変換モデル・日本語辞書は同梱しない（%LOCALAPPDATA%\ZeroConIME へ設定画面から取得）。
 $required = @('frontend.exe','launcher.exe','ui.exe','azookey-server.exe','azookey-server.dll',
     'azookey.dll','azookey32.dll','settings.json',
-    'llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe',('Dictionary/' + [char]0x3064 + '.louds'),('Dictionary/' + [char]0x309D + '.louds'),('Dictionary/' + [char]0x30FD + '.louds'))
+    'llama/llama-server.exe','llama/ggml-vulkan.dll')
 foreach ($name in $required) {
     $file = Get-ArtifactPath $payload $name
     New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
@@ -70,6 +70,32 @@ try {
 Assert-True ([IO.File]::ReadAllText((Join-Path $trial 'azookey.dll')) -eq 'old DLL') 'rollback restores earlier replaced DLL'
 Assert-True ([IO.File]::ReadAllText((Join-Path $trial 'frontend.exe')) -eq 'old frontend') 'locked original preserved'
 Assert-True ([IO.File]::ReadAllText((Join-Path $trial 'personal-history.txt')) -eq 'keep me') 'rollback preserves unmanaged file'
+# A complete package retires files the previous package owned and no longer ships
+# (the bundled dictionary now downloads on first launch). Modified files stay.
+$retired = Get-ArtifactPath $payload 'retired/component.bin'
+New-Item -ItemType Directory -Path (Split-Path -Parent $retired) -Force | Out-Null
+[IO.File]::WriteAllText($retired, 'retired component')
+Seal-Package
+& (Join-Path $scriptsRoot 'apply-trial-package.ps1') -PackageDirectory $packageRoot -TrialDirectory $trial -NoRestart
+Assert-True (Test-Path -LiteralPath (Join-Path $trial 'retired/component.bin')) 'component packaged before retirement'
+Remove-Item -LiteralPath $retired
+Seal-Package
+& (Join-Path $scriptsRoot 'apply-trial-package.ps1') -PackageDirectory $packageRoot -TrialDirectory $trial -NoRestart
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $trial 'retired/component.bin'))) 'retired packaged file is removed'
+# Build-Trial owns the trial's Dictionary/ files, so a full package apply must
+# not retire a dictionary the developer applied for comparison.
+$trialDictionary = Get-ArtifactPath $trial 'Dictionary/trial-only.louds'
+New-Item -ItemType Directory -Path (Split-Path -Parent $trialDictionary) -Force | Out-Null
+[IO.File]::WriteAllText($trialDictionary, 'trial dictionary')
+$packageDictionary = Get-ArtifactPath $payload 'Dictionary'
+New-Item -ItemType Directory -Path $packageDictionary -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $packageDictionary 'retired.louds'), 'packaged dictionary')
+Write-Warning 'The dictionary bundle check is expected to reject this fixture next.'
+Assert-Rejected { Read-PreparedPackage $packageRoot } 'reject a complete package that bundles the dictionary'
+Remove-Item -LiteralPath $packageDictionary -Recurse -Force
+Seal-Package
+& (Join-Path $scriptsRoot 'apply-trial-package.ps1') -PackageDirectory $packageRoot -TrialDirectory $trial -NoRestart
+Assert-True (Test-Path -LiteralPath (Join-Path $trial 'Dictionary/trial-only.louds')) 'trial dictionary survives a full package apply'
 # Dependencies must not import app binaries, Swift DLLs, models, settings or logs.
 $depSource = Join-Path $testRoot 'dependency-source'
 foreach ($name in @('llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe','vcruntime140.dll','frontend.exe','swiftCore.dll','settings.json','zenz.gguf','private.log')) {
@@ -99,4 +125,10 @@ try {
 } finally {
     if (-not $child.HasExited) { Stop-Process -Id $child.Id -Force }
 }
+# 取得物（変換モデル・日本語辞書・英字辞書）は %LOCALAPPDATA%\ZeroConIME に置くため、
+# アンインストーラーがそこを消す設定を保つ（インストール先を消すだけでは残ってしまう）。
+$installerScript = Get-Content -LiteralPath (Join-Path $repoRoot "windows/installer/Installer.iss") -Raw
+$uninstallSection = ($installerScript -split "(?m)^\[UninstallDelete\]\r?$")[1]
+Assert-True ($uninstallSection -match [regex]::Escape("{localappdata}\ZeroConIME")) "uninstall removes the downloaded assets"
+
 Write-Host "PASS: $script:checks distribution assertions; evidence: $testRoot"

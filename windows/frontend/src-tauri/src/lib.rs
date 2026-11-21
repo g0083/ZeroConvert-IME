@@ -1,5 +1,6 @@
 mod benchmark_runtime;
 mod conversion_model;
+mod dictionary;
 mod english_dictionary;
 mod ipc;
 mod jev_api;
@@ -681,8 +682,9 @@ fn get_active_model(
     let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
     // 現在選択中のモデルファイルがまだ無い（削除済み・未取得）場合でも一覧は返す。
     // `list()` は active が無いとき active_id を空にして処理を続ける。
-    let active = get_benchmark_model_path(&config)
-        .unwrap_or_else(|_| shared::runtime_assets::model_download_root().join("active-model.gguf"));
+    let active = get_benchmark_model_path(&config).unwrap_or_else(|_| {
+        shared::runtime_assets::model_download_root().join("active-model.gguf")
+    });
     let install_dir = install_dir_from_current_exe();
     model_catalog::list(&active, &install_dir, &get_models_search_dirs())
         .map_err(|error| error.to_string())
@@ -762,6 +764,43 @@ async fn english_dictionary_download(
     app: tauri::AppHandle,
 ) -> Result<english_dictionary::Status, String> {
     english_dictionary::install(app).await
+}
+
+#[tauri::command]
+fn dictionary_status() -> dictionary::Status {
+    dictionary::status(&install_dir_from_current_exe())
+}
+
+#[tauri::command]
+async fn dictionary_download(app: tauri::AppHandle) -> Result<dictionary::Status, String> {
+    let install_dir = install_dir_from_current_exe();
+    dictionary::install(&install_dir, app).await
+}
+
+#[tauri::command]
+fn dictionary_cancel() {
+    dictionary::cancel();
+}
+
+/// 初回起動の準備ダイアログが一度に問い合わせる3点セット。
+/// 変換モデル（必須）・日本語辞書・英字辞書を同じ判定順で返す。
+#[derive(Serialize)]
+struct SetupAssets {
+    model: conversion_model::Status,
+    dictionary: dictionary::Status,
+    english: english_dictionary::Status,
+}
+
+#[tauri::command]
+fn setup_assets_status() -> Result<SetupAssets, String> {
+    let install_dir = install_dir_from_current_exe();
+    // 必須モデルは shared の既定（Nano v4.1 IQ4_emb8）と同じ解決を使う。
+    let mandatory_model = shared::runtime_assets::default_model();
+    Ok(SetupAssets {
+        model: conversion_model::status(&install_dir, &mandatory_model)?,
+        dictionary: dictionary::status(&install_dir),
+        english: english_dictionary::status(),
+    })
 }
 
 fn to_hiragana(s: &str) -> String {
@@ -1380,6 +1419,10 @@ pub fn run() {
             conversion_model_delete,
             english_dictionary_status,
             english_dictionary_download,
+            dictionary_status,
+            dictionary_download,
+            dictionary_cancel,
+            setup_assets_status,
             run_ai_assist_benchmark_item,
             get_active_model,
             switch_model

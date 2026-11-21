@@ -33,12 +33,11 @@ pub fn reverse_dictionary_path() -> Option<PathBuf> {
     if let Some(paths) = PATHS.get() {
         return Some(paths.reverse_dictionary.clone());
     }
-    Some(
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("Dictionary/Reverse/reverse-v2.bin"),
-    )
+    // 日本語辞書は配布物に同梱せず、初回起動時に設定画面が
+    // `%LOCALAPPDATA%\ZeroConIME\dictionary` へ展開する。補正ワーカーも
+    // 変換サーバーと同じ解決順（インストール先→取得済みキャッシュ）を使う。
+    let install = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    Some(shared::runtime_assets::dictionary_dir(&install).join("Reverse/reverse-v2.bin"))
 }
 
 pub trait CompletionBackend {

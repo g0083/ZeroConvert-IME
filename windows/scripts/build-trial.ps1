@@ -147,10 +147,18 @@ while ($true) {
         Add-TrialOutput 'frontend' (Join-Path $windowsRoot 'target/release/frontend.exe') 'azookey-updater-helper.exe'
     }
     if ('runtime' -in $plan) {
-        foreach ($backend in @('llama_cpu','llama_vulkan')) {
-            foreach ($entry in Get-ArtifactEntries (Join-Path $modernLlama.runtime $backend)) {
-                Add-TrialOutput 'runtime' (Join-Path $modernLlama.runtime "$backend/$($entry.path)") "$backend/$($entry.path)"
-            }
+        # 配布と同一の必須閉包のみを出す（prepare-distribution.ps1 と同条件）。
+        # CPU/Vulkan は単一 llama/ に統合し、共通 DLL は cpu 側から1回だけ出す。
+        $essentialLlamaLeaf = @('llama-server.exe','llama-server-impl.dll','llama-common.dll','llama.dll','mtmd.dll','ggml.dll','ggml-base.dll','ggml-rpc.dll','libomp.dll','LICENSE-LLVM-OpenMP','ggml-base.def','ggml-base.lib','ggml.def','ggml.lib','llama.def','llama.lib')
+        foreach ($entry in Get-ArtifactEntries (Join-Path $modernLlama.runtime 'llama_cpu')) {
+            $leaf = Split-Path -Leaf $entry.path
+            if ($leaf -notin $essentialLlamaLeaf -and $leaf -notlike 'ggml-cpu*.dll' -and $leaf -ne 'ggml-vulkan.dll') { continue }
+            Add-TrialOutput 'runtime' (Join-Path $modernLlama.runtime "llama_cpu/$($entry.path)") "llama/$leaf"
+        }
+        foreach ($entry in Get-ArtifactEntries (Join-Path $modernLlama.runtime 'llama_vulkan')) {
+            $leaf = Split-Path -Leaf $entry.path
+            if ($leaf -ne 'ggml-vulkan.dll') { continue }
+            Add-TrialOutput 'runtime' (Join-Path $modernLlama.runtime "llama_vulkan/$($entry.path)") "llama/$leaf"
         }
     }
     if ('translation-model' -in $plan) {

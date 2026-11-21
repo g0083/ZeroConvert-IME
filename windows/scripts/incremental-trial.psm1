@@ -19,7 +19,10 @@ function Get-TrialInputGroups {
             'windows/frontend/vite.config.ts','windows/frontend/tsconfig.json','windows/frontend/tsconfig.node.json',
             'windows/frontend/package.json','windows/frontend/package-lock.json','windows/frontend/src-tauri/src',
             'windows/frontend/src-tauri/build.rs','windows/frontend/src-tauri/Cargo.toml',
-            'windows/frontend/src-tauri/tauri.conf.json','windows/frontend/src-tauri/capabilities','windows/frontend/src-tauri/icons')
+            'windows/frontend/src-tauri/tauri.conf.json','windows/frontend/src-tauri/capabilities','windows/frontend/src-tauri/icons',
+            'licenses/third-party.json','windows/deployment/USE-TERMS.txt','windows/deployment/LICENSE-Apache-2.0.txt',
+            'windows/deployment/LICENSE-Swift.txt','windows/deployment/LICENSE-Unicode.txt','windows/deployment/THIRD_PARTY_LICENSES.md',
+            'windows/deployment/THIRD_PARTY_RUST.md','windows/deployment/THIRD_PARTY_FRONTEND.md','data/dictionary/AdditionalDictionaryNotices')
         swift = @('windows/server-swift/Sources','windows/server-swift/Package.swift','windows/server-swift/Package.resolved')
         dictionary = @('windows/server-swift/azooKey_dictionary_storage/Dictionary','windows/scripts/generate-reverse-dictionary.mjs',
             'scripts/prepare_dictionary.py','data/dictionary')

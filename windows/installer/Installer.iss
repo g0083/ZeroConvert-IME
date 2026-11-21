@@ -104,9 +104,15 @@ Name: "{userdesktop}\ZeroConvert IME"; IconFilename: "{app}\zeroconvert.ico"; Fi
 Filename: "{app}\{#MySettingsAppName}"; Description: "設定アプリを起動"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [InstallDelete]
+; 日本語辞書は初回起動時に設定アプリが %LOCALAPPDATA%\ZeroConIME\dictionary へ取得する。
+; 旧版が同梱していた Dictionary\ は残さず、取得済みの辞書だけを使う。
+Type: filesandordirs; Name: "{app}\Dictionary"
 #ifdef LocalZeroConPackage
 ; Retired bundled engines and model aliases, restricted to known install-owned paths.
 Type: filesandordirs; Name: "{app}\llama_cuda"
+; Unified llama/ replaces dual llama_cpu/llama_vulkan; remove legacy copies on upgrade.
+Type: filesandordirs; Name: "{app}\llama_cpu"
+Type: filesandordirs; Name: "{app}\llama_vulkan"
 Type: files; Name: "{app}\llama_cpu\keyboard-prior.exe"
 Type: filesandordirs; Name: "{app}\llama_lfm"
 Type: files; Name: "{app}\zenz.gguf"
@@ -142,6 +148,7 @@ Type: files; Name: "{app}\keyboard-typo-dictionary-NOTICE.md"
 Type: files; Name: "{app}\keyboard-typo-rewrite-NOTICE.md"
 Type: filesandordirs; Name: "{app}\Dictionary"
 Type: filesandordirs; Name: "{app}\EmojiDictionary"
+Type: filesandordirs; Name: "{app}\llama"
 Type: filesandordirs; Name: "{app}\llama_cpu"
 Type: filesandordirs; Name: "{app}\llama_cuda"
 Type: filesandordirs; Name: "{app}\llama_vulkan"
@@ -163,12 +170,17 @@ Type: files; Name: "{userappdata}\Azookey\*.vbs"
 Type: files; Name: "{userappdata}\Azookey\*.gguf"
 Type: filesandordirs; Name: "{userappdata}\Azookey\Dictionary"
 Type: filesandordirs; Name: "{userappdata}\Azookey\EmojiDictionary"
+Type: filesandordirs; Name: "{userappdata}\Azookey\llama"
 Type: filesandordirs; Name: "{userappdata}\Azookey\llama_cpu"
 Type: filesandordirs; Name: "{userappdata}\Azookey\llama_cuda"
 Type: filesandordirs; Name: "{userappdata}\Azookey\llama_vulkan"
 Type: filesandordirs; Name: "{userappdata}\Azookey\backend"
 Type: filesandordirs; Name: "{localappdata}\Azookey\ui-webview"
 Type: filesandordirs; Name: "{localappdata}\com.azookey.app"
+; 変換モデル・日本語辞書・英字辞書は初回起動時に {localappdata}\ZeroConIME へ
+; 取得する。アンインストーラーと一緒に消さないと再インストール後も残り続けるため、
+; 取得物だけを削除する（設定と学習履歴は {userappdata}\Azookey 側にある）。
+Type: filesandordirs; Name: "{localappdata}\ZeroConIME"
 
 #include "LegacyPayloadDetection.iss"
 

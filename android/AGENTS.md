@@ -18,6 +18,7 @@
 | 補正・先読み・採用学習 | 同 `assist/` |
 | キーボード・候補表示・設定 | 同 `ComposeKeyboardView.kt`、`FlickKeyboardView.kt`、`MainActivity.kt` |
 | モデル配置・選択・切替 | 同 `model/ModelManager.kt`、`model/ConversionModelDownloadManager.kt`、`ZenzNative.kt`（変換モデルは同梱せずキャッシュへ取得） |
+| 日本語辞書の取得・差し替え | 同 `model/DictionaryDownloadManager.kt`、`MainActivity.kt`（初回の準備ダイアログ）、`engine/WindowsEngine.kt`、`engine/swift/AndroidBridge.swift`（辞書は同梱せず `files/dictionary` へ取得） |
 | JNI・推論・LOUDS辞書 | `app/src/main/cpp/zenz_jni.cpp`、`azookey_louds.cpp`、`azookey_louds.h`。nativeのビルド定義は `engine/native/CMakeLists.txt`（`:rebuilt` はGradleのexternalNativeBuildを使わない） |
 | SDK・ABI・版・ビルド | `gradle.properties`（版・SDK・NDKの正本）、`rebuilt/build.gradle.kts`、`gradle/wrapper/gradle-wrapper.properties` |
 | 権限・IME登録・コンテンツ共有 | `app/src/main/AndroidManifest.xml`、`app/src/main/res/xml/` |
