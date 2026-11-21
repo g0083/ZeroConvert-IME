@@ -32,7 +32,10 @@ data class TypoBenchmarkItem(
     val inputReading: String,
     val targetReading: String,
     val expected: String,
-    val acceptable: List<String>
+    val acceptable: List<String>,
+    val inputMode: String = "kana",
+    val origin: String = "",
+    val sourceSubset: String = ""
 )
 
 data class PredictiveBenchmarkItem(
@@ -44,6 +47,17 @@ data class PredictiveBenchmarkItem(
     val acceptableContinuations: List<String>,
     val fullSentence: String
 )
+
+enum class TypoStatus(val wire: String) {
+    EXACT_MATCH("exact_match"),
+    VARIANT_MATCH("variant_match"),
+    CLEAN_PRESERVED("clean_preserved"),
+    FALSE_POSITIVE("false_positive"),
+    MISSED("missed");
+    companion object {
+        fun fromWire(wire: String): TypoStatus? = entries.firstOrNull { it.wire == wire }
+    }
+}
 
 enum class BenchmarkKind {
     CONVERSION,
@@ -67,8 +81,8 @@ data class BenchmarkProgress(
 
 object BenchmarkRunner {
 
-    const val CONVERSION_DATASET_NAME = "かな漢字変換 480問"
-    const val TYPO_DATASET_NAME = "タイポ補正 300問"
+    const val CONVERSION_DATASET_NAME = "かな漢字変換 740問"
+    const val TYPO_DATASET_NAME = "タイポ補正 450問"
     const val PREDICTIVE_DATASET_NAME = "先読み 30問"
 
     fun loadDataset(context: Context): List<BenchmarkItem> {
@@ -131,33 +145,129 @@ object BenchmarkRunner {
         return list
     }
 
-    private fun evaluateOutput(output: String, item: BenchmarkItem): Pair<Int, String> {
-        val out = output.trim().replace("\r", "").replace("\n", "")
-        val expected = item.expected.trim()
-        val acceptable = item.acceptable.map { it.trim() }
-        val forbidden = item.forbidden.map { it.trim() }
+    // 共通ベンチマーク採点 (Rust benchmark.rs と同一契約)。結果を同一にするため
+    // Kotlin ミラーは parity_cases.jsonl と突合して検証する。
+    internal fun cleanScoringInput(s: String): String =
+        s.trim().replace("\r", "").replace("\n", "")
 
+    internal fun normalizeWhitespace(s: String): String =
+        s.filterNot { it.isWhitespace() || it == '　' }
+
+    private fun matchesExact(candidate: String, expected: String, acceptable: List<String>): Boolean {
+        val cand = cleanScoringInput(candidate)
+        val exp = expected.trim()
+        if (cand == exp || acceptable.any { it.trim() == cand }) return true
+        val normCand = normalizeWhitespace(cand)
+        if (normCand == normalizeWhitespace(exp)) return true
+        return acceptable.any { normCand == normalizeWhitespace(it.trim()) }
+    }
+
+    private fun matchesVariant(candidate: String, expected: String): Boolean {
+        val cand = cleanScoringInput(candidate)
+        val exp = expected.trim()
+        if (cand.isEmpty() || exp.isEmpty()) return false
+        return cand.contains(exp) || exp.contains(cand)
+    }
+
+    data class ConversionScore(val isCorrect: Boolean, val reason: String)
+
+    internal fun scoreConversion(
+        output: String,
+        expected: String,
+        acceptable: List<String>,
+        forbidden: List<String>
+    ): ConversionScore {
+        val out = cleanScoringInput(output)
+        val exp = expected.trim()
         for (fb in forbidden) {
-            if (fb.isNotEmpty() && out.contains(fb)) {
-                return Pair(0, "NG (禁止語含有: $fb)")
+            val fbTrim = fb.trim()
+            if (fbTrim.isNotEmpty() && out.contains(fbTrim)) {
+                return ConversionScore(false, "forbidden")
             }
         }
-
-        if (out == expected || acceptable.contains(out)) {
-            return Pair(2, "OK (完全一致)")
+        if (out == exp || acceptable.any { it.trim() == out }) {
+            return ConversionScore(true, "exact")
         }
-
-        if (out.replace(" ", "").replace("　", "") == expected.replace(" ", "").replace("　", "")) {
-            return Pair(2, "OK (空白差異)")
+        if (normalizeWhitespace(out) == normalizeWhitespace(exp)) {
+            return ConversionScore(true, "whitespace")
         }
-
         val hiraOut = KanaKanjiConverter.toHiragana(out)
-        val hiraExp = KanaKanjiConverter.toHiragana(expected)
-        if (hiraOut == hiraExp) {
-            return Pair(2, "OK (かな差異)")
+        if (hiraOut == KanaKanjiConverter.toHiragana(exp)) {
+            return ConversionScore(true, "kana")
         }
+        for (acc in acceptable) {
+            val accTrim = acc.trim()
+            if (normalizeWhitespace(out) == normalizeWhitespace(accTrim)) {
+                return ConversionScore(true, "whitespace_acceptable")
+            }
+            if (hiraOut == KanaKanjiConverter.toHiragana(accTrim)) {
+                return ConversionScore(true, "kana_acceptable")
+            }
+        }
+        return ConversionScore(false, "mismatch")
+    }
 
-        return Pair(0, "NG (出力=[$out] vs 正解=[$expected])")
+    data class TypoScore(val status: TypoStatus, val suggestionExact: Boolean)
+
+    internal fun scoreTypo(
+        item: TypoBenchmarkItem,
+        mainOutput: String,
+        suggestion: String?
+    ): TypoScore {
+        if (item.isClean) {
+            if (suggestion == null) return TypoScore(TypoStatus.CLEAN_PRESERVED, false)
+            val sugg = cleanScoringInput(suggestion)
+            val suggExact = matchesExact(sugg, item.expected, item.acceptable)
+            if (suggExact) return TypoScore(TypoStatus.CLEAN_PRESERVED, true)
+            if (sugg == cleanScoringInput(mainOutput)) return TypoScore(TypoStatus.CLEAN_PRESERVED, false)
+            if (normalizeWhitespace(sugg) == normalizeWhitespace(item.inputReading)) {
+                return TypoScore(TypoStatus.CLEAN_PRESERVED, false)
+            }
+            return TypoScore(TypoStatus.FALSE_POSITIVE, false)
+        }
+        val suggExact = suggestion != null && matchesExact(suggestion, item.expected, item.acceptable)
+        val mainExact = matchesExact(mainOutput, item.expected, item.acceptable)
+        if (suggExact || mainExact) return TypoScore(TypoStatus.EXACT_MATCH, suggExact)
+        var variant = false
+        if (suggestion != null) variant = variant || matchesVariant(suggestion, item.expected)
+        variant = variant || matchesVariant(mainOutput, item.expected)
+        if (variant) return TypoScore(TypoStatus.VARIANT_MATCH, suggExact)
+        return TypoScore(TypoStatus.MISSED, suggExact)
+    }
+
+    internal fun scorePredictive(
+        prediction: String?,
+        fullSentence: String,
+        expectedContinuation: String,
+        acceptable: List<String>
+    ): Boolean {
+        if (prediction == null) return false
+        val pred = prediction.trim()
+        if (pred.isEmpty()) return false
+        if (pred == fullSentence.trim()) return true
+        val expected = expectedContinuation.trim()
+        if (expected.isNotEmpty() && pred.endsWith(expected)) return true
+        return acceptable.any { it.trim().isNotEmpty() && pred.endsWith(it.trim()) }
+    }
+
+    internal fun latencyPercentiles(latencies: List<Double>): Triple<Double, Double, Double> {
+        if (latencies.isEmpty()) return Triple(0.0, 0.0, 0.0)
+        val sorted = latencies.sorted()
+        fun at(p: Double): Double {
+            val rank = kotlin.math.ceil(p / 100.0 * sorted.size).toInt()
+            return sorted[(rank - 1).coerceIn(0, sorted.size - 1)]
+        }
+        return Triple(at(50.0), at(95.0), at(99.0))
+    }
+
+    private fun evaluateOutput(output: String, item: BenchmarkItem): Pair<Int, String> {
+        val out = cleanScoringInput(output)
+        val score = scoreConversion(output, item.expected, item.acceptable, item.forbidden)
+        return if (score.isCorrect) {
+            Pair(2, "OK (${score.reason})")
+        } else {
+            Pair(0, "NG (出力=[$out] vs 正解=[${item.expected}])")
+        }
     }
 
     suspend fun runBenchmark(
@@ -256,7 +366,10 @@ object BenchmarkRunner {
                                     inputReading = inputReading,
                                     targetReading = obj.optString("target_reading", ""),
                                     expected = obj.optString("expected", ""),
-                                    acceptable = acceptable
+                                    acceptable = acceptable,
+                                    inputMode = obj.optString("input_mode", "kana"),
+                                    origin = obj.optString("origin", ""),
+                                    sourceSubset = obj.optString("source_subset", "")
                                 )
                             )
                         }
@@ -271,19 +384,15 @@ object BenchmarkRunner {
     }
 
     internal fun isTypoCorrectionAccepted(item: TypoBenchmarkItem, correction: String?): Boolean {
+        // 旧 API の互換: メイン出力は correction として評価する（提案単独）。
         if (correction == null) return false
-        if (correction == item.expected || item.acceptable.contains(correction)) return true
-        if (correction.replace(" ", "").replace("　", "") == item.expected.replace(" ", "").replace("　", "")) {
-            return true
-        }
-        return correction.contains(item.expected) || item.expected.contains(correction)
+        return scoreTypo(item, correction, correction).status == TypoStatus.EXACT_MATCH ||
+            scoreTypo(item, correction, correction).status == TypoStatus.VARIANT_MATCH
     }
 
     internal fun isCleanInputPreserved(item: TypoBenchmarkItem, correction: String?): Boolean {
         if (correction == null) return true
-        if (correction == item.expected || correction == item.inputReading) return true
-        return correction.replace(" ", "").replace("　", "") ==
-            item.inputReading.replace(" ", "").replace("　", "")
+        return scoreTypo(item, "", correction).status == TypoStatus.CLEAN_PRESERVED
     }
 
     suspend fun runTypoBenchmark(
@@ -304,15 +413,20 @@ object BenchmarkRunner {
         for (i in items.indices) {
             val item = items[i]
             val t0 = System.currentTimeMillis()
+            // Windows と同一契約: タイポ入力でメイン変換を先に求め、それを baseline として補正提案する。
+            val mainOutput = runCatching {
+                ZenzNative.convert(item.context, KanaKanjiConverter.toKatakana(item.inputReading))
+            }.getOrElse { item.inputReading }
             val correction = com.zeroconvert.ime.assist.ModelCorrector(ZenzNative.assistSession())
-                .suggest(item.context, item.inputReading, item.inputReading)?.text
+                .suggest(item.context, item.inputReading, mainOutput)?.text
             val latency = (System.currentTimeMillis() - t0).toDouble()
             totalLatency += latency
 
+            val score = scoreTypo(item, mainOutput, correction)
             val isPreserved: Boolean
             if (item.isClean) {
                 cleanTotal++
-                isPreserved = isCleanInputPreserved(item, correction)
+                isPreserved = score.status == TypoStatus.CLEAN_PRESERVED
                 if (isPreserved) {
                     cleanPreserved++
                 } else {
@@ -320,7 +434,7 @@ object BenchmarkRunner {
                 }
             } else {
                 typoTotal++
-                isPreserved = isTypoCorrectionAccepted(item, correction)
+                isPreserved = score.status == TypoStatus.EXACT_MATCH || score.status == TypoStatus.VARIANT_MATCH
                 if (isPreserved) typoCorrect++
             }
             if (isPreserved) successCount++
@@ -432,11 +546,7 @@ object BenchmarkRunner {
             val latency = (System.currentTimeMillis() - t0).toDouble()
             totalLatency += latency
 
-            val isMatch = (pred != null && (
-                pred == item.fullSentence ||
-                pred.endsWith(item.expectedContinuation) ||
-                item.acceptableContinuations.any { pred.endsWith(it) }
-            ))
+            val isMatch = scorePredictive(pred, item.fullSentence, item.expectedContinuation, item.acceptableContinuations)
             if (isMatch) {
                 perfectCount++
             }

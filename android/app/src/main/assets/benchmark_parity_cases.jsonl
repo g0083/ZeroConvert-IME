@@ -1,0 +1,20 @@
+{"kind":"conversion","output":"記者が取材する","expected":"記者が取材する","acceptable":[],"forbidden":[],"is_correct":true,"reason":"exact"}
+{"kind":"conversion","output":"汽車が駅に到着した","expected":"汽車が駅に到着した","acceptable":[],"forbidden":[],"is_correct":true,"reason":"exact"}
+{"kind":"conversion","output":"記者が駅に到着した","expected":"汽車が駅に到着した","acceptable":[],"forbidden":["記者が駅に到着した"],"is_correct":false,"reason":"forbidden"}
+{"kind":"conversion","output":"今日は 天気が いい","expected":"今日は天気がいい","acceptable":[],"forbidden":[],"is_correct":true,"reason":"whitespace"}
+{"kind":"conversion","output":"今日は天気がイイ","expected":"今日は天気がいい","acceptable":[],"forbidden":[],"is_correct":true,"reason":"kana"}
+{"kind":"conversion","output":"明日は東京駅で待ち合わせる","expected":"明日は東京駅で待ち合わせる","acceptable":["明日は東京駅でまちあわせる"],"forbidden":[],"is_correct":true,"reason":"exact"}
+{"kind":"conversion","output":"電車がおくれている","expected":"電車が遅れている","acceptable":["電車がおくれている"],"forbidden":[],"is_correct":true,"reason":"exact"}
+{"kind":"conversion","output":"まったく別の文","expected":"今日は天気がいい","acceptable":[],"forbidden":[],"is_correct":false,"reason":"mismatch"}
+{"kind":"typo","is_clean":false,"expected":"ご確認ください","acceptable":[],"input_reading":"ゴカクニンクダサ","main_output":"ご確認ください","suggestion":null,"status":"exact_match","suggestion_exact":false}
+{"kind":"typo","is_clean":false,"expected":"ご確認ください","acceptable":[],"input_reading":"ゴカクニンクダサ","main_output":"ご確認します","suggestion":"ご確認ください","status":"exact_match","suggestion_exact":true}
+{"kind":"typo","is_clean":false,"expected":"ご確認ください","acceptable":[],"input_reading":"ゴカクニンクダサ","main_output":"ご確認ください。","suggestion":null,"status":"variant_match","suggestion_exact":false}
+{"kind":"typo","is_clean":false,"expected":"ご確認ください","acceptable":[],"input_reading":"ゴカクニンクダサ","main_output":"まったく違う","suggestion":null,"status":"missed","suggestion_exact":false}
+{"kind":"typo","is_clean":true,"expected":"検討いたします","acceptable":[],"input_reading":"ケントウイタシマス","main_output":"検討いたします","suggestion":null,"status":"clean_preserved","suggestion_exact":false}
+{"kind":"typo","is_clean":true,"expected":"検討いたします","acceptable":[],"input_reading":"ケントウイタシマス","main_output":"検討いたします","suggestion":"検討いたします","status":"clean_preserved","suggestion_exact":true}
+{"kind":"typo","is_clean":true,"expected":"検討いたします","acceptable":[],"input_reading":"ケントウイタシマス","main_output":"検討いたします","suggestion":"ケントウイタシマス","status":"clean_preserved","suggestion_exact":false}
+{"kind":"typo","is_clean":true,"expected":"検討いたします","acceptable":[],"input_reading":"ケントウイタシマス","main_output":"検討いたします","suggestion":"原因を検討します","status":"false_positive","suggestion_exact":false}
+{"kind":"predictive","prediction":"いつもお世話になっております。","full_sentence":"いつもお世話になっております。","expected_continuation":"なっております。","acceptable_continuations":["なっております","なり、ありがとうございます。"],"is_match":true}
+{"kind":"predictive","prediction":"よろしくお願いいたします。","full_sentence":"よろしくお願いいたします。","expected_continuation":"いたします。","acceptable_continuations":["いたします","します。","申し上げます。"],"is_match":true}
+{"kind":"predictive","prediction":"よろしくお願いします。","full_sentence":"よろしくお願いいたします。","expected_continuation":"いたします。","acceptable_continuations":["いたします","します。","申し上げます。"],"is_match":true}
+{"kind":"predictive","prediction":null,"full_sentence":"いつもお世話になっております。","expected_continuation":"なっております。","acceptable_continuations":["なっております"],"is_match":false}

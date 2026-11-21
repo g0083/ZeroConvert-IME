@@ -1,5 +1,8 @@
 # 評価コード
 
+Windows/Android の実機ベンチマーク正本は [common/](common/README.md)（変換740・タイポ450・先読み30）。
+同フォルダが採点契約正本（Rust `benchmark.rs`）と同期スクリプトを持つ。本 README は研究用評価の案内。
+
 Standard v4のQWERTY候補順位付け、実打鍵の記録、policy固定後の評価は
 [QWERTY候補順位付け手順](../docs/qwerty-ranking-corrector.md)を参照。
 `research/evaluate_qwerty_ranker.py`はCPU GGUFを採点し、`record_qwerty_trace.py`は専用画面の打鍵だけを記録する。

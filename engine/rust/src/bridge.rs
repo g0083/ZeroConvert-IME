@@ -295,6 +295,60 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         };
         return Ok(json!({ "words": words }));
     }
+    // 共通ベンチマーク採点（純関数、推論なし）。Windows/Android が同一結果にする。
+    if envelope["op"] == "benchmarkScoreConversion" {
+        let output = envelope["output"].as_str().ok_or("missing output")?;
+        let expected = envelope["expected"].as_str().ok_or("missing expected")?;
+        let acceptable: Vec<String> = envelope["acceptable"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let forbidden: Vec<String> = envelope["forbidden"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let score = ai_assist::benchmark::score_conversion(output, expected, &acceptable, &forbidden);
+        return Ok(json!({ "isCorrect": score.is_correct, "reason": score.reason }));
+    }
+    if envelope["op"] == "benchmarkScoreTypo" {
+        let is_clean = envelope["isClean"].as_bool().ok_or("missing isClean")?;
+        let expected = envelope["expected"].as_str().ok_or("missing expected")?;
+        let acceptable: Vec<String> = envelope["acceptable"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let input_reading = envelope["inputReading"].as_str().unwrap_or("");
+        let main_output = envelope["mainOutput"].as_str().unwrap_or("");
+        let suggestion = envelope["suggestion"].as_str();
+        let score =
+            ai_assist::benchmark::score_typo(is_clean, expected, &acceptable, input_reading, main_output, suggestion);
+        return Ok(json!({ "status": score.status.as_str(), "suggestionExact": score.suggestion_exact }));
+    }
+    if envelope["op"] == "benchmarkScorePredictive" {
+        let prediction = envelope["prediction"].as_str();
+        let full_sentence = envelope["fullSentence"].as_str().ok_or("missing fullSentence")?;
+        let expected_continuation =
+            envelope["expectedContinuation"].as_str().ok_or("missing expectedContinuation")?;
+        let acceptable: Vec<String> = envelope["acceptableContinuations"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let ok = ai_assist::benchmark::score_predictive(
+            prediction,
+            full_sentence,
+            expected_continuation,
+            &acceptable,
+        );
+        return Ok(json!({ "isMatch": ok }));
+    }
+    if envelope["op"] == "benchmarkLatencyPercentiles" {
+        let latencies: Vec<f64> = envelope["latencies"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+            .unwrap_or_default();
+        let (p50, p95, p99) = ai_assist::benchmark::latency_percentiles(&latencies);
+        return Ok(json!({ "p50": p50, "p95": p95, "p99": p99 }));
+    }
     let request: Request = serde_json::from_str(value).map_err(|e| e.to_string())?;
     if request.input.chars().count() > 512
         || request.baseline.chars().count() > 2048

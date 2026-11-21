@@ -2,8 +2,10 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useBlocker } from "react-router";
 import { toast } from "sonner";
-import rawBenchmarkData from "@/data/benchmark480.json";
-import rawTypoData from "@/data/typo_benchmark300.json";
+import rawBenchmarkData from "@/data/benchmark740.json";
+import rawTypoData from "@/data/typo_benchmark450.json";
+import rawPredictiveData from "@/data/predictive_testset.json";
+import type { LucideIcon } from "lucide-react";
 import { 
     Play, 
     Square, 
@@ -19,7 +21,8 @@ import {
     Check,
     AlertTriangle,
     ShieldCheck,
-    Filter
+    Filter,
+    X
 } from "lucide-react";
 import { ZeroConvertLogo } from "@/components/zeroconvert-logo";
 import {
@@ -62,7 +65,7 @@ function BenchmarkDepartureGuard({ running }: { running: boolean }) {
 
 export type BenchmarkItem = {
     id: number;
-    subset: "basic" | "hard";
+    subset: "basic" | "hard" | "realistic" | "colloquial";
     subset_label: string;
     category: string;
     left_context: string;
@@ -91,6 +94,10 @@ export type TypoBenchmarkItem = {
     input_reading: string;
     target_reading: string;
     expected: string;
+    acceptable?: string[];
+    input_mode?: string;
+    origin?: string;
+    source_subset?: string;
 };
 
 export type TypoItemResult = {
@@ -99,6 +106,24 @@ export type TypoItemResult = {
     moshikashite_output?: string | null;
     predictive_output?: string | null;
     status: "exact_match" | "variant_match" | "clean_preserved" | "false_positive" | "missed";
+    latency_ms: number;
+};
+
+export type PredictiveBenchmarkItem = {
+    id: number;
+    category: string;
+    context: string;
+    partial_input: string;
+    expected_continuation: string;
+    acceptable_continuations?: string[];
+    full_sentence: string;
+    origin?: string;
+};
+
+export type PredictiveItemResult = {
+    id: number;
+    prediction: string | null;
+    is_match: boolean;
     latency_ms: number;
 };
 
@@ -119,17 +144,78 @@ type ModelListResponse = {
 
 const BENCHMARK_ITEMS: BenchmarkItem[] = rawBenchmarkData as BenchmarkItem[];
 const TYPO_ITEMS: TypoBenchmarkItem[] = rawTypoData as TypoBenchmarkItem[];
+const PREDICTIVE_ITEMS: PredictiveBenchmarkItem[] = rawPredictiveData as PredictiveBenchmarkItem[];
 
+// --- 共通ベンチマーク採点ミラー (Rust benchmark.rs と同一契約、parity_cases で照合) ---
+// TS 側は表示用に複写する。結果（status）の正本は Rust の score_typo。
+function normalizeWhitespace(s: string): string {
+    return s.replace(/[\s\u3000]+/g, "");
+}
+function cleanScoringInput(s: string): string {
+    return s.trim().replace(/\r/g, "").replace(/\n/g, "");
+}
+function matchesExact(candidate: string, expected: string, acceptable: string[] = []): boolean {
+    const cand = cleanScoringInput(candidate);
+    const exp = expected.trim();
+    if (cand === exp || acceptable.some((a) => a.trim() === cand)) return true;
+    const normCand = normalizeWhitespace(cand);
+    if (normCand === normalizeWhitespace(exp)) return true;
+    return acceptable.some((a) => normCand === normalizeWhitespace(a.trim()));
+}
+function matchesVariant(candidate: string, expected: string): boolean {
+    const cand = cleanScoringInput(candidate);
+    const exp = expected.trim();
+    if (!cand || !exp) return false;
+    return cand.includes(exp) || exp.includes(cand);
+}
+function scoreTypoCommon(
+    item: TypoBenchmarkItem,
+    mainOutput: string,
+    suggestion: string | null | undefined,
+): TypoItemResult["status"] {
+    const acceptable = item.acceptable ?? [];
+    if (item.is_clean) {
+        if (suggestion == null) return "clean_preserved";
+        const sugg = cleanScoringInput(suggestion);
+        if (matchesExact(sugg, item.expected, acceptable)) return "clean_preserved";
+        if (sugg === cleanScoringInput(mainOutput)) return "clean_preserved";
+        if (normalizeWhitespace(sugg) === normalizeWhitespace(item.input_reading)) return "clean_preserved";
+        return "false_positive";
+    }
+    const suggExact = suggestion != null ? matchesExact(suggestion, item.expected, acceptable) : false;
+    const mainExact = matchesExact(mainOutput, item.expected, acceptable);
+    if (suggExact || mainExact) return "exact_match";
+    let variant = false;
+    if (suggestion != null) variant = variant || matchesVariant(suggestion, item.expected);
+    variant = variant || matchesVariant(mainOutput, item.expected);
+    if (variant) return "variant_match";
+    return "missed";
+}
+/** 最近傍順位の分位数 (Rust latency_percentiles と同一)。 */
+function latencyPercentiles(latencies: number[]): { p50: number; p95: number; p99: number } {
+    if (latencies.length === 0) return { p50: 0, p95: 0, p99: 0 };
+    const sorted = [...latencies].sort((a, b) => a - b);
+    const at = (p: number) => {
+        const rank = Math.ceil((p / 100) * sorted.length);
+        return sorted[Math.min(Math.max(rank - 1, 0), sorted.length - 1)];
+    };
+    return { p50: at(50), p95: at(95), p99: at(99) };
+}
+
+// 共通ベンチマーク正本 benchmarks/common (740問)。subset_label の件数は正本 manifest と一致させる。
 const SUBSETS = [
-    { id: "all", label: "全480問 (基本230 + 高難度250)" },
+    { id: "all", label: "全740問 (230+250+160+100)" },
     { id: "basic", label: "基本・文脈 (230問)" },
     { id: "hard", label: "高難度文脈 (250問)" },
+    { id: "realistic", label: "実IME (160問)" },
+    { id: "colloquial", label: "口語 (100問)" },
 ];
 
 const TYPO_FILTER_TYPES = [
-    { id: "all", label: "すべて (300問)" },
+    { id: "all", label: "すべて (450問)" },
     { id: "typo_only", label: "タイポ誤りのみ (255問)" },
-    { id: "clean_only", label: "正常入力・FP検証 (45問)" },
+    { id: "clean_only", label: "正常入力・FP検証 (195問)" },
+    { id: "derived_clean", label: "増強 clean (150問)" },
     { id: "geminate", label: "促音 っ (25問)" },
     { id: "nasal", label: "撥音 ん (25問)" },
     { id: "transposition", label: "順序入替・転置 (40問)" },
@@ -139,10 +225,131 @@ const TYPO_FILTER_TYPES = [
     { id: "prolonged", label: "長音 (15問)" },
 ];
 
-export function Benchmark() {
-    const [benchmarkTab, setBenchmarkTab] = useState<"zenzai" | "typo">("zenzai");
+// --- 表示部スピ子の共通部品 タブ間の見た目を揃える。
+function KpiCard({
+    label,
+    value,
+    sub,
+    icon: Icon,
+    iconClassName,
+    valueClassName,
+}: {
+    label: string;
+    value: string;
+    sub: string;
+    icon?: LucideIcon;
+    iconClassName?: string;
+    valueClassName?: string;
+}) {
+    return (
+        <div className="flex flex-col gap-1 rounded-xl border border-border/70 bg-card/60 p-4 shadow-xs">
+            <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-[11px] font-medium text-muted-foreground">{label}</span>
+                {Icon ? <Icon className={`size-3.5 shrink-0 ${iconClassName ?? "text-muted-foreground"}`} aria-hidden /> : null}
+            </div>
+            <div className={`truncate text-2xl font-bold tabular-nums tracking-tight text-foreground ${valueClassName ?? ""}`} title={value}>
+                {value}
+            </div>
+            <div className="truncate text-[11px] text-muted-foreground" title={sub}>{sub}</div>
+        </div>
+    );
+}
 
-    // --- かな漢字変換 (480問) State ---
+function FilterPill({
+    active,
+    onClick,
+    children,
+    label,
+}: {
+    active: boolean;
+    onClick: () => void;
+    children: React.ReactNode;
+    label: string;
+}) {
+    return (
+        <button
+            type="button"
+            aria-label={label}
+            aria-pressed={active}
+            onClick={onClick}
+            className={`shrink-0 rounded-md px-2.5 py-1 text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer ${
+                active
+                    ? "bg-card font-semibold text-foreground shadow-2xs"
+                    : "text-muted-foreground hover:text-foreground"
+            }`}
+        >
+            {children}
+        </button>
+    );
+}
+
+function SearchField({
+    value,
+    onChange,
+    placeholder,
+}: {
+    value: string;
+    onChange: (v: string) => void;
+    placeholder: string;
+}) {
+    return (
+        <div className="relative flex-1 sm:w-56 sm:flex-none">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <input
+                type="search"
+                aria-label="検索"
+                placeholder={placeholder}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                className="w-full rounded-lg border border-border bg-card py-1.5 pl-8 pr-8 text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            {value ? (
+                <button
+                    type="button"
+                    aria-label="検索をクリア"
+                    onClick={() => onChange("")}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+                >
+                    <X className="size-3.5" aria-hidden />
+                </button>
+            ) : null}
+        </div>
+    );
+}
+
+const SUBSET_BADGE: Record<string, string> = {
+    basic: "bg-sky-500/10 border-sky-500/30 text-sky-700 dark:text-sky-300",
+    hard: "bg-violet-500/10 border-violet-500/30 text-violet-700 dark:text-violet-300",
+    realistic: "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300",
+    colloquial: "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300",
+};
+
+function SubsetBadge({ subset }: { subset: BenchmarkItem["subset"] }) {
+    const label = subset === "basic" ? "基本230" : subset === "hard" ? "高難度250" : subset === "realistic" ? "実IME160" : "口語100";
+    return (
+        <span className={`inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium ${SUBSET_BADGE[subset] ?? "border-border text-muted-foreground"}`}>
+            {label}
+        </span>
+    );
+}
+
+const TABLE_HEAD = "border-b border-border/70 bg-muted/40 font-medium text-muted-foreground";
+const TABLE_HEAD_CELL = "sticky top-0 bg-muted/40 p-3";
+
+function EmptyRow({ colSpan, message }: { colSpan: number; message: string }) {
+    return (
+        <tr>
+            <td colSpan={colSpan} className="p-8 text-center text-xs text-muted-foreground">
+                {message}
+            </td>
+        </tr>
+    );
+}
+
+export function Benchmark() {
+    const [benchmarkTab, setBenchmarkTab] = useState<"zenzai" | "typo" | "predictive">("zenzai");
+
+    // --- かな漢字変換 (740問) State ---
     const [results, setResults] = useState<Record<number, ItemResult>>({});
     const [isRunning, setIsRunning] = useState(false);
     const [selectedSubset, setSelectedSubset] = useState<string>("all");
@@ -150,12 +357,16 @@ export function Benchmark() {
     const [showErrorsOnly, setShowErrorsOnly] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
 
-    // --- タイポ補正 (300問) State ---
+    // --- タイポ補正 (450問) State ---
     const [typoResults, setTypoResults] = useState<Record<number, TypoItemResult>>({});
     const [isTypoRunning, setIsTypoRunning] = useState(false);
     const [selectedTypoFilter, setSelectedTypoFilter] = useState("all");
     const [showTypoErrorsOnly, setShowTypoErrorsOnly] = useState(false);
     const [typoSearchQuery, setTypoSearchQuery] = useState("");
+
+    // --- 先読み (30問) State --- Android と同一データで判定する。
+    const [predictiveResults, setPredictiveResults] = useState<Record<number, PredictiveItemResult>>({});
+    const [isPredictiveRunning, setIsPredictiveRunning] = useState(false);
 
     // --- モデル情報 ---
     const [activeModelId, setActiveModelId] = useState<string>("");
@@ -165,11 +376,13 @@ export function Benchmark() {
 
     const stopSignalRef = useRef(false);
     const stopTypoSignalRef = useRef(false);
+    const stopPredictiveSignalRef = useRef(false);
 
     useEffect(() => {
         return () => {
             stopSignalRef.current = true;
             stopTypoSignalRef.current = true;
+            stopPredictiveSignalRef.current = true;
         };
     }, []);
 
@@ -183,7 +396,7 @@ export function Benchmark() {
     }, []);
 
     const handleSwitchModel = async (newModelId: string) => {
-        if (newModelId === activeModelId || isSwitchingModel || isRunning || isTypoRunning) return;
+        if (newModelId === activeModelId || isSwitchingModel || isRunning || isTypoRunning || isPredictiveRunning) return;
         setIsSwitchingModel(true);
         const toastId = toast.loading("モデル切り替え中... (サーバー再起動)");
         try {
@@ -242,9 +455,13 @@ export function Benchmark() {
     const evaluatedCount = evaluatedList.length;
     const correctCount = evaluatedList.filter((r) => r.is_correct).length;
     const overallAccuracy = evaluatedCount > 0 ? ((correctCount / evaluatedCount) * 100).toFixed(1) : "0.0";
-    const avgLatency = evaluatedCount > 0 
-        ? (evaluatedList.reduce((acc, r) => acc + r.latency_ms, 0) / evaluatedCount).toFixed(1) 
+    const avgLatency = evaluatedCount > 0
+        ? (evaluatedList.reduce((acc, r) => acc + r.latency_ms, 0) / evaluatedCount).toFixed(1)
         : "0.0";
+    const latencyP = useMemo(
+        () => latencyPercentiles(evaluatedList.map((r) => r.latency_ms)),
+        [evaluatedList],
+    );
 
     const runItem = async (item: BenchmarkItem): Promise<ItemResult> => {
         try {
@@ -288,7 +505,8 @@ export function Benchmark() {
         return TYPO_ITEMS.filter((item) => {
             if (selectedTypoFilter === "typo_only" && item.is_clean) return false;
             if (selectedTypoFilter === "clean_only" && !item.is_clean) return false;
-            if (!["all", "typo_only", "clean_only"].includes(selectedTypoFilter) && item.typo_type !== selectedTypoFilter) {
+            if (selectedTypoFilter === "derived_clean" && item.origin !== "derived-clean") return false;
+            if (!["all", "typo_only", "clean_only", "derived_clean"].includes(selectedTypoFilter) && item.typo_type !== selectedTypoFilter) {
                 return false;
             }
             const res = typoResults[item.id];
@@ -337,6 +555,10 @@ export function Benchmark() {
     const avgTypoLatency = typoEvaluatedCount > 0
         ? (typoEvaluatedList.reduce((acc, r) => acc + r.latency_ms, 0) / typoEvaluatedCount).toFixed(1)
         : "0.0";
+    const typoLatencyP = useMemo(
+        () => latencyPercentiles(typoEvaluatedList.map((r) => r.latency_ms)),
+        [typoEvaluatedList],
+    );
 
     const handleRunTypoBenchmark = async (itemsToRun: TypoBenchmarkItem[]) => {
         if (isTypoRunning) return;
@@ -363,31 +585,8 @@ export function Benchmark() {
                     input: item.input_reading,
                 });
 
-                // 判定ロジック
-                let status: TypoItemResult["status"];
-                const output = res.moshikashite_output || res.main_output;
-                
-                if (item.is_clean) {
-                    // 正常入力の場合: 元の意図を破壊した余計な補正を行ったら False Positive
-                    if (res.moshikashite_output && res.moshikashite_output !== item.expected && res.moshikashite_output !== res.main_output) {
-                        status = "false_positive";
-                    } else {
-                        status = "clean_preserved";
-                    }
-                } else {
-                    // タイポ入力の場合:
-                    if (output === item.expected || res.main_output === item.expected || (res.moshikashite_output && res.moshikashite_output === item.expected)) {
-                        status = "exact_match";
-                    } else if (
-                        output.includes(item.expected) || 
-                        item.expected.includes(output) ||
-                        res.main_output.replace(/\s/g, "") === item.expected.replace(/\s/g, "")
-                    ) {
-                        status = "variant_match";
-                    } else {
-                        status = "missed";
-                    }
-                }
+                // 判定ロジックは共通エンジン (benchmark.rs) と同一契約のミラー。
+                const status = scoreTypoCommon(item, res.main_output, res.moshikashite_output ?? null);
 
                 setTypoResults((prev) => ({
                     ...prev,
@@ -409,134 +608,147 @@ export function Benchmark() {
         }
     };
 
+    const predictiveEvaluatedList = useMemo(() => Object.values(predictiveResults), [predictiveResults]);
+    const predictiveCorrect = predictiveEvaluatedList.filter((r) => r.is_match).length;
+    const predictiveAccuracy = predictiveEvaluatedList.length > 0
+        ? ((predictiveCorrect / predictiveEvaluatedList.length) * 100).toFixed(1)
+        : "0.0";
+    const predictiveLatencyP = useMemo(
+        () => latencyPercentiles(predictiveEvaluatedList.map((r) => r.latency_ms)),
+        [predictiveEvaluatedList],
+    );
+
+    const handleRunPredictiveBenchmark = async (itemsToRun: PredictiveBenchmarkItem[]) => {
+        if (isPredictiveRunning) return;
+        setIsPredictiveRunning(true);
+        stopPredictiveSignalRef.current = false;
+        const toastId = toast.loading("先読みベンチマーク実行中...");
+        try {
+            for (const item of itemsToRun) {
+                if (stopPredictiveSignalRef.current) break;
+                const res = await invoke<{ id: number; prediction: string | null; is_match: boolean; latency_ms: number }>(
+                    "run_predictive_benchmark_item",
+                    {
+                        id: item.id,
+                        context: item.context,
+                        partialInput: item.partial_input,
+                        fullSentence: item.full_sentence,
+                        expectedContinuation: item.expected_continuation,
+                        acceptableContinuations: item.acceptable_continuations ?? [],
+                    },
+                );
+                setPredictiveResults((prev) => ({
+                    ...prev,
+                    [item.id]: {
+                        id: item.id,
+                        prediction: res.prediction,
+                        is_match: res.is_match,
+                        latency_ms: res.latency_ms,
+                    },
+                }));
+            }
+            toast.success("先読みベンチマーク完了！", { id: toastId });
+        } catch (err) {
+            toast.error(`実行エラー: ${err}`, { id: toastId });
+        } finally {
+            setIsPredictiveRunning(false);
+        }
+    };
+
+    const anyRunning = isRunning || isTypoRunning || isPredictiveRunning;
+    const tabDefs = [
+        { id: "zenzai" as const, icon: Zap, label: "かな漢字変換", meta: "740問" },
+        { id: "typo" as const, icon: Layers, label: "タイポ補正", meta: "450問" },
+        { id: "predictive" as const, icon: Zap, label: "先読み", meta: "30問" },
+    ];
+
     return (
-        <div className="space-y-6 max-w-5xl mx-auto pb-12">
-            <BenchmarkDepartureGuard running={isRunning || isTypoRunning} />
+        <div className="mx-auto max-w-7xl space-y-6 pb-12">
+            <BenchmarkDepartureGuard running={anyRunning} />
             {/* Tab Selector */}
-            <div className="flex items-center gap-2 border-b pb-3">
-                <button
-                    type="button"
-                    onClick={() => setBenchmarkTab("zenzai")}
-                    className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                        benchmarkTab === "zenzai"
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                >
-                    <Zap className="size-4" />
-                    かな漢字変換 (480問: 基本230 + 高難度250)
-                </button>
-                <button
-                    type="button"
-                    onClick={() => setBenchmarkTab("typo")}
-                    className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                        benchmarkTab === "typo"
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "bg-muted text-muted-foreground hover:text-foreground"
-                    }`}
-                >
-                    <Layers className="size-4" />
-                    メインモデル統合タイポ補正 (300問 / FP検証)
-                </button>
+            <div role="tablist" aria-label="ベンチマーク種別" className="flex flex-wrap items-center gap-2 border-b border-border/60 pb-3">
+                {tabDefs.map(({ id, icon: TabIcon, label, meta }) => {
+                    const active = benchmarkTab === id;
+                    return (
+                        <button
+                            key={id}
+                            type="button"
+                            role="tab"
+                            aria-selected={active}
+                            disabled={anyRunning}
+                            onClick={() => setBenchmarkTab(id)}
+                            className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 enabled:cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
+                                active
+                                    ? "bg-primary text-primary-foreground shadow-sm"
+                                    : "bg-muted text-muted-foreground hover:text-foreground"
+                            }`}
+                        >
+                            <TabIcon className="size-4" aria-hidden />
+                            <span>{label}</span>
+                            <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${active ? "bg-primary-foreground/20" : "bg-card/70 text-muted-foreground"}`}>{meta}</span>
+                        </button>
+                    );
+                })}
             </div>
 
             {/* Header / Intro */}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b pb-4">
-                <div>
-                    <h2 className="text-xl font-semibold tracking-tight text-foreground flex items-center gap-2.5">
-                        <ZeroConvertLogo className="size-5 rounded-sm shadow-2xs" />
-                        {benchmarkTab === "zenzai" 
-                            ? "ZeroCon Model かな漢字変換ベンチマーク (480問)" 
-                            : "メインモデル統合タイポ補正ベンチマーク (300問)"}
-                    </h2>
-                    <p className="text-xs text-muted-foreground mt-0.5">
+            <div className="flex flex-col gap-3 border-b border-border/60 pb-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                    <h2 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
+                        <ZeroConvertLogo className="size-5 shrink-0 rounded-sm shadow-2xs" />
                         {benchmarkTab === "zenzai"
-                            ? "基本・文脈230問＋高難度文脈250問の計480問で、Nano v4.1 モデル直結推論の正解率とレイテンシを直接検証します。"
-                            : "Nano v4.1 メインモデル統合タイポ補正（促音・撥音・転置・QWERTY隣接・母音抜け等255件）と正常入力誤補正抑止（45件）を実機測定します。"}
+                            ? "かな漢字変換ベンチマーク（740問）"
+                            : benchmarkTab === "predictive"
+                              ? "先読みベンチマーク（30問）"
+                              : "タイポ補正ベンチマーク（450問）"}
+                    </h2>
+                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                        {benchmarkTab === "zenzai"
+                            ? "基本230問＋高難度250問＋実IME160問＋口語100問。Nano v4.1 直結推論の正解率とレイテンシ（p50/p95/p99）を検証します。"
+                            : benchmarkTab === "predictive"
+                              ? "Android と同一の30問で先読みの継続一致率とレイテンシを検証します。判定は共通エンジン（benchmark.rs）と同一です。"
+                              : "メインモデル統合タイポ補正255件と、正常入力を誤補正しないこと（195件＝旧45＋増強150）を実機測定します。"}
                     </p>
                 </div>
 
                 {/* Model Selector Pill */}
-                <div className="flex items-center gap-1.5 p-1 rounded-xl bg-muted/60 border border-border/70 self-start sm:self-auto">
+                <fieldset className="shrink-0 self-start lg:self-auto">
+                    <legend className="sr-only">対象モデル</legend>
+                    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/70 bg-muted/60 p-1">
                     {models.map((model) => (
                         <button
                             key={model.id}
                             type="button"
-                            disabled={isSwitchingModel || isRunning || isTypoRunning || !model.available}
+                            aria-pressed={activeModelId === model.id}
+                            disabled={isSwitchingModel || anyRunning || !model.available}
                             onClick={() => handleSwitchModel(model.id)}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer ${
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
                                 activeModelId === model.id
-                                    ? "bg-card text-foreground shadow-xs font-semibold border border-border/80"
+                                    ? "border border-border/80 bg-card font-semibold text-foreground shadow-xs"
                                     : "text-muted-foreground hover:text-foreground"
                             }`}
                         >
-                            <Cpu className="size-3.5" />
+                            <Cpu className="size-3.5" aria-hidden />
                             <span>{model.name}</span>
-                            <span className="text-[10px] text-muted-foreground px-1 py-0.2 rounded bg-muted">
+                            <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
                                 {model.available ? `${model.size_mb.toFixed(1)}MB` : "未配置"}
                             </span>
-                            {activeModelId === model.id && <Check className="size-3 text-emerald-500 stroke-[2.5]" />}
+                            {activeModelId === model.id && <Check className="size-3 text-emerald-500 stroke-[2.5]" aria-hidden />}
                         </button>
                     ))}
-                </div>
+                    </div>
+                </fieldset>
             </div>
 
-            {/* TAB 1: かな漢字変換 (480問) */}
+            {/* TAB 1: かな漢字変換 (740問) */}
             {benchmarkTab === "zenzai" && (
-                <>
+                <div role="tabpanel" aria-label="かな漢字変換ベンチマーク" className="space-y-6">
                     {/* Metric KPI Cards */}
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>正解率 (Top 1 Accuracy)</span>
-                                <CheckCircle2 className="size-3.5 text-emerald-500" />
-                            </div>
-                            <div className="text-2xl font-bold tracking-tight text-foreground">
-                                {evaluatedCount > 0 ? `${overallAccuracy}%` : "—"}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                {evaluatedCount > 0 ? `${correctCount} / ${evaluatedCount} 問 正解` : "未評価"}
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>平均推論レイテンシ</span>
-                                <Clock className="size-3.5 text-sky-500" />
-                            </div>
-                            <div className="text-2xl font-bold tracking-tight text-foreground">
-                                {evaluatedCount > 0 ? `${avgLatency} ms` : "—"}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                1文あたりの実効処理時間
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>評価進捗 ({SUBSETS.find((s) => s.id === selectedSubset)?.label})</span>
-                                <Layers className="size-3.5 text-muted-foreground" />
-                            </div>
-                            <div className="text-2xl font-bold tracking-tight text-foreground">
-                                {evaluatedCount} / {subsetItems.length}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                {evaluatedCount === subsetItems.length ? "対象セット検証完了" : "テスト準備完了"}
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>選択モデル</span>
-                                <SlidersHorizontal className="size-3.5 text-muted-foreground" />
-                            </div>
-                            <div className="text-lg font-bold tracking-tight text-foreground truncate">
-                                {activeModel?.name ?? "未選択"}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                {activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "モデルを選択してください"}
-                            </div>
-                        </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+                        <KpiCard label="正解率 (Top 1)" value={evaluatedCount > 0 ? `${overallAccuracy}%` : "—"} sub={evaluatedCount > 0 ? `${correctCount} / ${evaluatedCount} 問 正解` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
+                        <KpiCard label="平均レイテンシ" value={evaluatedCount > 0 ? `${avgLatency} ms` : "—"} sub={evaluatedCount > 0 ? `p50 ${latencyP.p50.toFixed(0)} / p95 ${latencyP.p95.toFixed(0)} / p99 ${latencyP.p99.toFixed(0)} ms` : "1文あたりの実効処理時間"} icon={Clock} iconClassName="text-sky-500" />
+                        <KpiCard label={`評価進捗（${SUBSETS.find((s) => s.id === selectedSubset)?.label ?? ""}）`} value={`${evaluatedCount} / ${subsetItems.length}`} sub={evaluatedCount === subsetItems.length ? "対象セット検証完了" : "テスト準備完了"} icon={Layers} />
+                        <KpiCard label="選択モデル" value={activeModel?.name ?? "未選択"} sub={activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "モデルを選択してください"} icon={SlidersHorizontal} valueClassName="text-base" />
                     </div>
 
                     {/* Action Bar / Controls */}
@@ -584,45 +796,33 @@ export function Benchmark() {
                             )}
                         </div>
 
-                        {/* Subset Selector Pill */}
-                        <div className="flex items-center gap-1 bg-muted p-1 rounded-lg border border-border/70 text-xs">
+                        <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border/70 bg-muted p-1 text-xs">
                             {SUBSETS.map((subset) => (
-                                <button
-                                    key={subset.id}
-                                    type="button"
-                                    onClick={() => {
-                                        setSelectedSubset(subset.id);
-                                        setSelectedCategory("すべて");
-                                    }}
-                                    className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                                        selectedSubset === subset.id
-                                            ? "bg-card text-foreground shadow-2xs font-semibold"
-                                            : "text-muted-foreground hover:text-foreground"
-                                    }`}
-                                >
+                                <FilterPill key={subset.id} active={selectedSubset === subset.id} label={subset.label} onClick={() => { setSelectedSubset(subset.id); setSelectedCategory("すべて"); }}>
                                     {subset.label}
-                                </button>
+                                </FilterPill>
                             ))}
                         </div>
                     </div>
 
                     {/* Filter & Search Bar */}
-                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
-                        <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
-                            <span className="text-xs text-muted-foreground font-medium flex items-center gap-1 shrink-0">
-                                <Filter className="size-3.5" />
-                                カテゴリ:
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="flex items-start gap-2 sm:items-center">
+                            <span className="flex shrink-0 items-center gap-1 pt-1.5 text-xs font-medium text-muted-foreground sm:pt-0">
+                                <Filter className="size-3.5" aria-hidden />
+                                カテゴリ
                             </span>
-                            <div className="flex gap-1.5 overflow-x-auto">
-                                {availableCategories.slice(0, 8).map((cat) => (
+                            <div className="flex max-w-full gap-1.5 overflow-x-auto pb-1">
+                                {availableCategories.map((cat) => (
                                     <button
                                         key={cat}
                                         type="button"
+                                        aria-pressed={selectedCategory === cat}
                                         onClick={() => setSelectedCategory(cat)}
-                                        className={`px-2.5 py-1 text-xs rounded-lg transition-colors cursor-pointer shrink-0 ${
+                                        className={`shrink-0 rounded-lg px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer ${
                                             selectedCategory === cat
-                                                ? "bg-primary text-primary-foreground font-medium shadow-2xs"
-                                                : "bg-muted/80 text-muted-foreground hover:text-foreground border border-border/40"
+                                                ? "bg-primary font-medium text-primary-foreground shadow-2xs"
+                                                : "border border-border/40 bg-muted/80 text-muted-foreground hover:text-foreground"
                                         }`}
                                     >
                                         {cat}
@@ -632,90 +832,74 @@ export function Benchmark() {
                         </div>
 
                         <div className="flex items-center gap-2">
-                            <div className="relative flex-1 sm:w-56">
-                                <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                                <input
-                                    type="text"
-                                    placeholder="文脈・読み・期待表記..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-border bg-card placeholder:text-muted-foreground/60 focus:outline-hidden focus:ring-1 focus:ring-primary"
-                                />
-                            </div>
+                            <SearchField value={searchQuery} onChange={setSearchQuery} placeholder="文脈・読み・期待表記..." />
                             <button
                                 type="button"
+                                aria-pressed={showErrorsOnly}
                                 onClick={() => setShowErrorsOnly(!showErrorsOnly)}
-                                className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                                     showErrorsOnly
-                                        ? "bg-destructive/10 border-destructive/30 text-destructive font-medium"
+                                        ? "border-destructive/30 bg-destructive/10 font-medium text-destructive"
                                         : "border-border text-muted-foreground hover:text-foreground"
                                 }`}
                             >
-                                <XCircle className="size-3.5" />
+                                <XCircle className="size-3.5" aria-hidden />
                                 不正解のみ
                             </button>
                         </div>
                     </div>
 
                     {/* Results Table */}
-                    <div className="rounded-xl border border-border/70 overflow-hidden bg-card/60 shadow-xs">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left text-xs border-collapse">
-                                <thead>
-                                    <tr className="border-b border-border/70 bg-muted/40 font-medium text-muted-foreground">
-                                        <th className="p-3 w-12 text-center">#</th>
-                                        <th className="p-3 w-24">セット</th>
-                                        <th className="p-3 w-28">カテゴリ</th>
-                                        <th className="p-3">文脈 (左側)</th>
-                                        <th className="p-3">入力読み</th>
-                                        <th className="p-3">期待表記 (正解)</th>
-                                        <th className="p-3">モデル予測</th>
-                                        <th className="p-3 w-20 text-right">遅延</th>
-                                        <th className="p-3 w-20 text-center">判定</th>
+                    <div className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-xs">
+                        <div className="max-h-[640px] overflow-auto">
+                            <table className="w-full min-w-[900px] border-collapse text-left text-xs">
+                                <thead className={TABLE_HEAD}>
+                                    <tr>
+                                        <th className={`${TABLE_HEAD_CELL} w-12 text-center`}>#</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-28`}>セット</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-28`}>カテゴリ</th>
+                                        <th className={`${TABLE_HEAD_CELL} min-w-[180px]`}>前文</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-28`}>入力読み</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-32`}>期待表記（正解）</th>
+                                        <th className={`${TABLE_HEAD_CELL} min-w-[140px]`}>モデル予測</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-20 text-right`}>遅延</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-20 text-center`}>判定</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border/50">
-                                    {filteredItems.slice(0, 100).map((item) => {
+                                    {filteredItems.length === 0 ? (
+                                        <EmptyRow colSpan={9} message="条件に一致する問題はありません" />
+                                    ) : filteredItems.slice(0, 100).map((item) => {
                                         const res = results[item.id];
                                         return (
                                             <tr key={item.id} className="hover:bg-muted/30 transition-colors">
-                                                <td className="p-3 text-center text-muted-foreground font-mono">{item.id}</td>
-                                                <td className="p-3">
-                                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
-                                                        item.subset === "basic"
-                                                            ? "bg-sky-500/10 border-sky-500/30 text-sky-700 dark:text-sky-300"
-                                                            : "bg-purple-500/10 border-purple-500/30 text-purple-700 dark:text-purple-300"
-                                                    }`}>
-                                                        {item.subset === "basic" ? "基本230" : "高難度250"}
-                                                    </span>
-                                                </td>
+                                                <td className="p-3 text-center font-mono text-muted-foreground">{item.id}</td>
+                                                <td className="p-3"><SubsetBadge subset={item.subset} /></td>
                                                 <td className="p-3 text-muted-foreground font-medium">{item.category}</td>
                                                 <td className="p-3 text-muted-foreground max-w-xs truncate" title={item.left_context}>
                                                     {item.left_context || <span className="opacity-40">なし</span>}
                                                 </td>
                                                 <td className="p-3 font-semibold text-foreground">{item.target}</td>
                                                 <td className="p-3 font-medium text-foreground">{item.expected}</td>
-                                                <td className="p-3 font-medium">
+                                                <td className="p-3">
                                                     {res ? (
-                                                        <span className={res.is_correct ? "text-foreground" : "text-destructive font-semibold"}>
-                                                            {res.top1}
-                                                        </span>
+                                                        <span className={res.is_correct ? "font-medium text-foreground" : "font-semibold text-destructive"}>{res.top1}</span>
                                                     ) : (
                                                         <span className="text-muted-foreground/30">—</span>
                                                     )}
                                                 </td>
-                                                <td className="p-3 text-right font-mono text-[11px] text-muted-foreground">
+                                                <td className="p-3 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
                                                     {res ? `${res.latency_ms.toFixed(0)} ms` : "—"}
                                                 </td>
                                                 <td className="p-3 text-center">
                                                     {res ? (
                                                         res.is_correct ? (
-                                                            <CheckCircle2 className="size-4 text-emerald-500 mx-auto" />
+                                                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-4" aria-hidden />正解</span>
                                                         ) : (
-                                                            <XCircle className="size-4 text-rose-500 mx-auto" />
+                                                            <span className="inline-flex items-center gap-1 text-rose-500"><XCircle className="size-4" aria-hidden />不正解</span>
                                                         )
                                                     ) : (
-                                                        <span className="text-muted-foreground/30 text-[11px]">—</span>
+                                                        <span className="text-[11px] text-muted-foreground/30">—</span>
                                                     )}
                                                 </td>
                                             </tr>
@@ -725,70 +909,23 @@ export function Benchmark() {
                             </table>
                         </div>
                         {filteredItems.length > 100 && (
-                            <div className="p-2 text-center text-xs text-muted-foreground border-t bg-muted/20">
-                                最初の100件を表示中（全 {filteredItems.length} 件）
+                            <div className="border-t border-border/50 bg-muted/20 p-2 text-center text-xs text-muted-foreground">
+                                最初の100件を表示中（絞り込み後 {filteredItems.length} 件）
                             </div>
                         )}
                     </div>
-                </>
+                </div>
             )}
 
-            {/* TAB 2: タイポ補正 (300問) */}
+            {/* TAB 2: タイポ補正 (450問) */}
             {benchmarkTab === "typo" && (
-                <div className="space-y-6">
+                <div role="tabpanel" aria-label="タイポ補正ベンチマーク" className="space-y-6">
                     {/* KPI Cards */}
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>タイポ正解率 (完全一致)</span>
-                                <CheckCircle2 className="size-3.5 text-emerald-500" />
-                            </div>
-                            <div className="text-2xl font-bold tracking-tight text-foreground">
-                                {typoCasesTested.length > 0 ? `${typoAccuracyExact}%` : "—"}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                {typoCasesTested.length > 0 ? `${exactMatches} / ${typoCasesTested.length} 問 (実質: ${typoAccuracyEffective}%)` : "未評価"}
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>正常入力 誤補正 (FP)</span>
-                                <ShieldCheck className="size-3.5 text-sky-500" />
-                            </div>
-                            <div className={`text-2xl font-bold tracking-tight ${falsePositives > 0 ? "text-destructive" : "text-foreground"}`}>
-                                {cleanCasesTested.length > 0 ? `${falsePositives} 件` : "—"}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                {cleanCasesTested.length > 0 ? `${cleanCasesTested.length - falsePositives} / ${cleanCasesTested.length} 正常保持 (誤補正率 ${fpRate}%)` : "45問のクリーン入力で検証"}
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>平均推論レイテンシ</span>
-                                <Clock className="size-3.5 text-amber-500" />
-                            </div>
-                            <div className="text-2xl font-bold tracking-tight text-foreground font-mono">
-                                {typoEvaluatedCount > 0 ? `${avgTypoLatency} ms` : "—"}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                メインモデル統合推論の実効遅延
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl border border-border/70 bg-card/60 shadow-xs space-y-1">
-                            <div className="text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                                <span>評価進捗</span>
-                                <Layers className="size-3.5 text-muted-foreground" />
-                            </div>
-                            <div className="text-2xl font-bold tracking-tight text-foreground font-mono">
-                                {typoEvaluatedCount} / {TYPO_ITEMS.length}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                                {typoEvaluatedCount === TYPO_ITEMS.length ? "全300件評価完了" : "300件ベンチマーク準備完了"}
-                            </div>
-                        </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+                        <KpiCard label="タイポ正解率（完全一致）" value={typoCasesTested.length > 0 ? `${typoAccuracyExact}%` : "—"} sub={typoCasesTested.length > 0 ? `${exactMatches} / ${typoCasesTested.length} 問（実質 ${typoAccuracyEffective}%）` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
+                        <KpiCard label="正常入力の誤補正 (FP)" value={cleanCasesTested.length > 0 ? `${falsePositives} 件` : "—"} sub={cleanCasesTested.length > 0 ? `${cleanCasesTested.length - falsePositives} / ${cleanCasesTested.length} 保持（誤補正率 ${fpRate}%）` : "195問で検証"} icon={ShieldCheck} iconClassName={falsePositives > 0 ? "text-rose-500" : "text-sky-500"} valueClassName={falsePositives > 0 ? "text-destructive" : undefined} />
+                        <KpiCard label="平均レイテンシ" value={typoEvaluatedCount > 0 ? `${avgTypoLatency} ms` : "—"} sub={typoEvaluatedCount > 0 ? `p50 ${typoLatencyP.p50.toFixed(0)} / p95 ${typoLatencyP.p95.toFixed(0)} / p99 ${typoLatencyP.p99.toFixed(0)} ms` : "1文あたりの実効処理時間"} icon={Clock} iconClassName="text-amber-500" />
+                        <KpiCard label="評価進捗" value={`${typoEvaluatedCount} / ${TYPO_ITEMS.length}`} sub={typoEvaluatedCount === TYPO_ITEMS.length ? "全450件評価完了" : "450件ベンチマーク準備完了"} icon={Layers} />
                     </div>
 
                     {/* Action Bar */}
@@ -836,62 +973,27 @@ export function Benchmark() {
                             )}
                         </div>
 
-                        {/* Filter Pill */}
-                        <div className="flex items-center gap-1 bg-muted p-1 rounded-lg border border-border/70 text-xs overflow-x-auto max-w-full">
-                            {TYPO_FILTER_TYPES.slice(0, 3).map((ft) => (
-                                <button
-                                    key={ft.id}
-                                    type="button"
-                                    onClick={() => setSelectedTypoFilter(ft.id)}
-                                    className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer whitespace-nowrap ${
-                                        selectedTypoFilter === ft.id
-                                            ? "bg-card text-foreground shadow-2xs font-semibold"
-                                            : "text-muted-foreground hover:text-foreground"
-                                    }`}
-                                >
+                        <div className="flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-border/70 bg-muted p-1 text-xs">
+                            {TYPO_FILTER_TYPES.map((ft) => (
+                                <FilterPill key={ft.id} active={selectedTypoFilter === ft.id} label={ft.label} onClick={() => setSelectedTypoFilter(ft.id)}>
                                     {ft.label}
-                                </button>
+                                </FilterPill>
                             ))}
                         </div>
                     </div>
 
                     {/* Filter & Search Bar */}
-                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
-                        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-                            <span className="text-xs text-muted-foreground font-medium shrink-0">詳細種別:</span>
-                            {TYPO_FILTER_TYPES.slice(3).map((ft) => (
-                                <button
-                                    key={ft.id}
-                                    type="button"
-                                    onClick={() => setSelectedTypoFilter(ft.id)}
-                                    className={`px-2 py-0.5 text-xs rounded-md transition-colors cursor-pointer shrink-0 ${
-                                        selectedTypoFilter === ft.id
-                                            ? "bg-primary text-primary-foreground font-medium"
-                                            : "bg-muted text-muted-foreground hover:text-foreground"
-                                    }`}
-                                >
-                                    {ft.label}
-                                </button>
-                            ))}
-                        </div>
-
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs text-muted-foreground">{filteredTypoItems.length} / {TYPO_ITEMS.length} 件を表示中（種別は上のフィルタで切替）</p>
                         <div className="flex items-center gap-2">
-                            <div className="relative flex-1 sm:w-56">
-                                <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                                <input
-                                    type="text"
-                                    placeholder="文脈・入力・期待表記..."
-                                    value={typoSearchQuery}
-                                    onChange={(e) => setTypoSearchQuery(e.target.value)}
-                                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-border bg-card placeholder:text-muted-foreground/60 focus:outline-hidden focus:ring-1 focus:ring-primary"
-                                />
-                            </div>
+                            <SearchField value={typoSearchQuery} onChange={setTypoSearchQuery} placeholder="文脈・入力・期待表記..." />
                             <button
                                 type="button"
+                                aria-pressed={showTypoErrorsOnly}
                                 onClick={() => setShowTypoErrorsOnly(!showTypoErrorsOnly)}
-                                className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                                     showTypoErrorsOnly
-                                        ? "bg-destructive/10 border-destructive/30 text-destructive font-medium"
+                                        ? "border-destructive/30 bg-destructive/10 font-medium text-destructive"
                                         : "border-border text-muted-foreground hover:text-foreground"
                                 }`}
                             >
@@ -902,23 +1004,25 @@ export function Benchmark() {
                     </div>
 
                     {/* Typo Results Table */}
-                    <div className="rounded-xl border border-border/70 overflow-hidden bg-card/60 shadow-xs">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left text-xs border-collapse">
-                                <thead>
-                                    <tr className="border-b border-border/70 bg-muted/40 font-medium text-muted-foreground">
-                                        <th className="p-3 w-12 text-center">#</th>
-                                        <th className="p-3 w-32">種別</th>
-                                        <th className="p-3">文脈 (前文)</th>
-                                        <th className="p-3">入力読み (タイポ)</th>
-                                        <th className="p-3">期待表記 (正解)</th>
-                                        <th className="p-3">補正出力</th>
-                                        <th className="p-3 w-20 text-right">遅延</th>
-                                        <th className="p-3 w-28 text-center">判定</th>
+                    <div className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-xs">
+                        <div className="max-h-[640px] overflow-auto">
+                            <table className="w-full min-w-[880px] border-collapse text-left text-xs">
+                                <thead className={TABLE_HEAD}>
+                                    <tr>
+                                        <th className={`${TABLE_HEAD_CELL} w-12 text-center`}>#</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-36`}>種別</th>
+                                        <th className={`${TABLE_HEAD_CELL} min-w-[160px]`}>前文</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-32`}>入力読み</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-32`}>期待表記（正解）</th>
+                                        <th className={`${TABLE_HEAD_CELL} min-w-[140px]`}>補正出力</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-20 text-right`}>遅延</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-28 text-center`}>判定</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border/50">
-                                    {filteredTypoItems.slice(0, 100).map((item) => {
+                                    {filteredTypoItems.length === 0 ? (
+                                        <EmptyRow colSpan={8} message="条件に一致する問題はありません" />
+                                    ) : filteredTypoItems.slice(0, 100).map((item) => {
                                         const res = typoResults[item.id];
                                         return (
                                             <tr key={item.id} className="hover:bg-muted/30 transition-colors">
@@ -991,6 +1095,67 @@ export function Benchmark() {
                                 最初の100件を表示中（全 {filteredTypoItems.length} 件）
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+            {benchmarkTab === "predictive" && (
+                <div role="tabpanel" aria-label="先読みベンチマーク" className="space-y-6">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+                        <KpiCard label="継続一致率" value={predictiveEvaluatedList.length > 0 ? `${predictiveAccuracy}%` : "—"} sub={predictiveEvaluatedList.length > 0 ? `${predictiveCorrect} / ${predictiveEvaluatedList.length} 問 命中` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
+                        <KpiCard label="平均レイテンシ" value={predictiveEvaluatedList.length > 0 ? `${(predictiveEvaluatedList.reduce((a, r) => a + r.latency_ms, 0) / predictiveEvaluatedList.length).toFixed(1)} ms` : "—"} sub={predictiveEvaluatedList.length > 0 ? `p50 ${predictiveLatencyP.p50.toFixed(0)} / p95 ${predictiveLatencyP.p95.toFixed(0)} / p99 ${predictiveLatencyP.p99.toFixed(0)} ms` : "1文あたりの実効処理時間"} icon={Clock} iconClassName="text-sky-500" />
+                        <KpiCard label="評価進捗" value={`${predictiveEvaluatedList.length} / ${PREDICTIVE_ITEMS.length}`} sub={predictiveEvaluatedList.length === PREDICTIVE_ITEMS.length ? "全30問評価完了" : "30問ベンチマーク準備完了"} icon={Layers} />
+                        <KpiCard label="選択モデル" value={activeModel?.name ?? "未選択"} sub={activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "モデルを選択してください"} icon={SlidersHorizontal} valueClassName="text-base" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/30 p-3.5">
+                        {!isPredictiveRunning ? (
+                            <button type="button" onClick={() => handleRunPredictiveBenchmark(PREDICTIVE_ITEMS)} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                <Play className="size-3.5 fill-current" aria-hidden /> 先読みベンチマーク開始 ({PREDICTIVE_ITEMS.length}問)
+                            </button>
+                        ) : (
+                            <button type="button" onClick={() => { stopPredictiveSignalRef.current = true; }} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                <Square className="size-3.5 fill-current" aria-hidden /> 中断
+                            </button>
+                        )}
+                        {predictiveEvaluatedList.length > 0 && !isPredictiveRunning && (
+                            <button type="button" onClick={() => setPredictiveResults({})} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                <RotateCcw className="size-3.5" aria-hidden /> 結果リセット
+                            </button>
+                        )}
+                    </div>
+                    <div className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-xs">
+                        <div className="max-h-[640px] overflow-auto">
+                            <table className="w-full min-w-[760px] border-collapse text-left text-xs">
+                                <thead className={TABLE_HEAD}>
+                                    <tr>
+                                        <th className={`${TABLE_HEAD_CELL} w-12 text-center`}>#</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-32`}>カテゴリ</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-40`}>部分入力</th>
+                                        <th className={`${TABLE_HEAD_CELL} min-w-[200px]`}>予測（完全文）</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-40`}>正解継続</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-20 text-right`}>遅延</th>
+                                        <th className={`${TABLE_HEAD_CELL} w-24 text-center`}>判定</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border/30">
+                                    {PREDICTIVE_ITEMS.map((item) => {
+                                        const res = predictiveResults[item.id];
+                                        return (
+                                            <tr key={item.id} className="hover:bg-muted/30 transition-colors">
+                                                <td className="p-3 text-center text-muted-foreground font-mono">{item.id}</td>
+                                                <td className="p-3 text-muted-foreground font-medium">{item.category}</td>
+                                                <td className="p-3 font-semibold text-foreground">{item.partial_input}</td>
+                                                <td className="p-3 font-medium text-foreground">{res?.prediction ?? <span className="text-muted-foreground/30">—</span>}</td>
+                                                <td className="p-3 text-muted-foreground">{item.expected_continuation}</td>
+                                                <td className="p-3 text-right font-mono text-[11px] text-muted-foreground">{res ? `${res.latency_ms.toFixed(0)} ms` : "—"}</td>
+                                                <td className="p-3 text-center">
+                                                    {res ? (res.is_match ? (<span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium text-[11px]"><CheckCircle2 className="size-3.5" /> 命中</span>) : (<span className="inline-flex items-center gap-1 text-rose-500 font-medium text-[11px]"><XCircle className="size-3.5" /> 不一致</span>)) : (<span className="text-muted-foreground/30 text-[11px]">—</span>)}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             )}

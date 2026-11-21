@@ -9,7 +9,10 @@
     "expected": "記者が取材する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 2,
@@ -21,7 +24,10 @@
     "expected": "汽車が出発する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 3,
@@ -33,7 +39,10 @@
     "expected": "貴社に提案する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 4,
@@ -45,7 +54,10 @@
     "expected": "記者に質問する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 5,
@@ -57,7 +69,10 @@
     "expected": "橋を渡る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はし"
+    "focus": "はし",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 6,
@@ -69,7 +84,10 @@
     "expected": "箸を持つ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はし"
+    "focus": "はし",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 7,
@@ -81,7 +99,10 @@
     "expected": "端に寄せる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はし"
+    "focus": "はし",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 8,
@@ -93,7 +114,10 @@
     "expected": "橋を直す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はし"
+    "focus": "はし",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 9,
@@ -105,7 +129,10 @@
     "expected": "雨が降る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "あめ"
+    "focus": "あめ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 10,
@@ -117,7 +144,10 @@
     "expected": "飴をなめる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "あめ"
+    "focus": "あめ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 11,
@@ -129,7 +159,10 @@
     "expected": "今日は医者に行く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "いしゃ/はいしゃ"
+    "focus": "いしゃ/はいしゃ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 12,
@@ -141,7 +174,10 @@
     "expected": "今日歯医者に行く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "いしゃ/はいしゃ"
+    "focus": "いしゃ/はいしゃ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 13,
@@ -153,7 +189,10 @@
     "expected": "司会を頼む",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しかい"
+    "focus": "しかい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 14,
@@ -165,7 +204,10 @@
     "expected": "歯科医に診てもらう",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しかい"
+    "focus": "しかい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 15,
@@ -177,7 +219,10 @@
     "expected": "会場を予約する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "かいじょう"
+    "focus": "かいじょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 16,
@@ -189,7 +234,10 @@
     "expected": "海上を進む",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "かいじょう"
+    "focus": "かいじょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 17,
@@ -201,7 +249,10 @@
     "expected": "5時に開場する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "かいじょう"
+    "focus": "かいじょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 18,
@@ -213,7 +264,10 @@
     "expected": "ドアを解錠する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "かいじょう"
+    "focus": "かいじょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 19,
@@ -225,7 +279,10 @@
     "expected": "構成を見直す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 20,
@@ -237,7 +294,10 @@
     "expected": "校正を行う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 21,
@@ -249,7 +309,10 @@
     "expected": "鋼製の部品を使う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 22,
@@ -261,7 +324,10 @@
     "expected": "後世に残す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 23,
@@ -273,7 +339,10 @@
     "expected": "普及を目指す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ふきゅう"
+    "focus": "ふきゅう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 24,
@@ -285,7 +354,10 @@
     "expected": "復旧を急ぐ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ふきゅう"
+    "focus": "ふきゅう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 25,
@@ -297,7 +369,10 @@
     "expected": "差額を精算する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "せいせい"
+    "focus": "せいせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 26,
@@ -309,7 +384,10 @@
     "expected": "原料を精製する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "せいせい"
+    "focus": "せいせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 27,
@@ -321,7 +399,10 @@
     "expected": "商品を紹介する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しょうひん"
+    "focus": "しょうひん",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 28,
@@ -333,7 +414,10 @@
     "expected": "賞品を授与する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しょうひん"
+    "focus": "しょうひん",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 29,
@@ -345,7 +429,10 @@
     "expected": "帰省ラッシュを避ける",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きせい"
+    "focus": "きせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 30,
@@ -357,7 +444,10 @@
     "expected": "規制を見直す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きせい"
+    "focus": "きせい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 31,
@@ -369,7 +459,10 @@
     "expected": "仕様を確定する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しよう"
+    "focus": "しよう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 32,
@@ -381,7 +474,10 @@
     "expected": "使用を開始する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しよう"
+    "focus": "しよう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 33,
@@ -393,7 +489,10 @@
     "expected": "史料を読み解く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しりょう"
+    "focus": "しりょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 34,
@@ -405,7 +504,10 @@
     "expected": "資料を配布する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しりょう"
+    "focus": "しりょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 35,
@@ -417,7 +519,10 @@
     "expected": "効果を検証する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 36,
@@ -429,7 +534,10 @@
     "expected": "高価で買えない",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 37,
@@ -441,7 +549,10 @@
     "expected": "硬貨を1枚出す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうか/こうそく"
+    "focus": "こうか/こうそく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 38,
@@ -453,7 +564,10 @@
     "expected": "校則を変える",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうか/こうそく"
+    "focus": "こうか/こうそく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 39,
@@ -465,7 +579,10 @@
     "expected": "高速に乗る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうそく"
+    "focus": "こうそく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 40,
@@ -477,7 +594,10 @@
     "expected": "拘束を続ける",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうそく"
+    "focus": "こうそく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 41,
@@ -489,7 +609,10 @@
     "expected": "機械を点検する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きかい"
+    "focus": "きかい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 42,
@@ -501,7 +624,10 @@
     "expected": "機会を待つ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きかい"
+    "focus": "きかい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 43,
@@ -513,7 +639,10 @@
     "expected": "合意に至る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "あう"
+    "focus": "あう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 44,
@@ -525,7 +654,10 @@
     "expected": "体に合う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "あう"
+    "focus": "あう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 45,
@@ -537,7 +669,10 @@
     "expected": "承認を得る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しょうにん/にんしょう"
+    "focus": "しょうにん/にんしょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 46,
@@ -549,7 +684,10 @@
     "expected": "認証に成功する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しょうにん/にんしょう"
+    "focus": "しょうにん/にんしょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 47,
@@ -561,7 +699,10 @@
     "expected": "映画を観る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "みる"
+    "focus": "みる",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 48,
@@ -573,7 +714,10 @@
     "expected": "患者を診る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "みる"
+    "focus": "みる",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 49,
@@ -585,7 +729,10 @@
     "expected": "時間を見る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "みる"
+    "focus": "みる",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 50,
@@ -597,7 +744,10 @@
     "expected": "子供の面倒を見る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "みる"
+    "focus": "みる",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 51,
@@ -609,7 +759,10 @@
     "expected": "標高を測る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ひょう"
+    "focus": "ひょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 52,
@@ -621,7 +774,10 @@
     "expected": "票を数える",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ひょう"
+    "focus": "ひょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 53,
@@ -633,7 +789,10 @@
     "expected": "紅葉を見る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうよう/こよう"
+    "focus": "こうよう/こよう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 54,
@@ -645,7 +804,10 @@
     "expected": "雇用契約を結ぶ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "こうよう/こよう"
+    "focus": "こうよう/こよう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 55,
@@ -657,7 +819,10 @@
     "expected": "配達が完了する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はいたつ/せいさく"
+    "focus": "はいたつ/せいさく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 56,
@@ -669,7 +834,10 @@
     "expected": "政策を評価する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はいたつ/せいさく"
+    "focus": "はいたつ/せいさく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 57,
@@ -681,7 +849,10 @@
     "expected": "形式を変換する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "へんかん/のりかえ"
+    "focus": "へんかん/のりかえ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 58,
@@ -693,7 +864,10 @@
     "expected": "電車を乗り換える",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "へんかん/のりかえ"
+    "focus": "へんかん/のりかえ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 59,
@@ -705,7 +879,10 @@
     "expected": "品質を保証する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ほしょう"
+    "focus": "ほしょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 60,
@@ -717,7 +894,10 @@
     "expected": "損害を補償する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ほしょう"
+    "focus": "ほしょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 61,
@@ -729,7 +909,10 @@
     "expected": "経路を確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "けいろ/けいり"
+    "focus": "けいろ/けいり",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 62,
@@ -741,7 +924,10 @@
     "expected": "経理に確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "けいろ/けいり"
+    "focus": "けいろ/けいり",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 63,
@@ -753,7 +939,10 @@
     "expected": "論点をまとめる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ろんてん/ろんそう"
+    "focus": "ろんてん/ろんそう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 64,
@@ -765,7 +954,10 @@
     "expected": "論争に参加する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ろんてん/ろんそう"
+    "focus": "ろんてん/ろんそう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 65,
@@ -777,7 +969,10 @@
     "expected": "性質を分析する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "せいしつ/せいそう"
+    "focus": "せいしつ/せいそう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 66,
@@ -789,7 +984,10 @@
     "expected": "清掃を行う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "せいしつ/せいそう"
+    "focus": "せいしつ/せいそう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 67,
@@ -801,7 +999,10 @@
     "expected": "修正版を保存する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうせい/しゅうし"
+    "focus": "しゅうせい/しゅうし",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 68,
@@ -813,7 +1014,10 @@
     "expected": "修士を取得する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうせい/しゅうし"
+    "focus": "しゅうせい/しゅうし",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 69,
@@ -825,7 +1029,10 @@
     "expected": "収穫が増える",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうかく/しゅうがく"
+    "focus": "しゅうかく/しゅうがく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 70,
@@ -837,7 +1044,10 @@
     "expected": "修学期間を終える",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうかく/しゅうがく"
+    "focus": "しゅうかく/しゅうがく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 71,
@@ -849,7 +1059,10 @@
     "expected": "就職先を探す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうしょく/しゅうぜん"
+    "focus": "しゅうしょく/しゅうぜん",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 72,
@@ -861,7 +1074,10 @@
     "expected": "服を修繕する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうしょく/しゅうぜん"
+    "focus": "しゅうしょく/しゅうぜん",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 73,
@@ -873,7 +1089,10 @@
     "expected": "周波数を測る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうは"
+    "focus": "しゅうは",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 74,
@@ -885,7 +1104,10 @@
     "expected": "宗派の違いを学ぶ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうは"
+    "focus": "しゅうは",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 75,
@@ -897,7 +1119,10 @@
     "expected": "額を決める",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "がく"
+    "focus": "がく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 76,
@@ -909,7 +1134,10 @@
     "expected": "額を選ぶ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "がく"
+    "focus": "がく",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 77,
@@ -921,7 +1149,10 @@
     "expected": "比較した結果を示す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ひかく/ひふか"
+    "focus": "ひかく/ひふか",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 78,
@@ -933,7 +1164,10 @@
     "expected": "皮膚科を受診する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ひかく/ひふか"
+    "focus": "ひかく/ひふか",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 79,
@@ -945,7 +1179,10 @@
     "expected": "契約条件を確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "じょうけん/しょうじょう"
+    "focus": "じょうけん/しょうじょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 80,
@@ -957,7 +1194,10 @@
     "expected": "症状を説明する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "じょうけん/しょうじょう"
+    "focus": "じょうけん/しょうじょう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 81,
@@ -969,7 +1209,10 @@
     "expected": "必要な物を用意する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ようい/ゆうい"
+    "focus": "ようい/ゆうい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 82,
@@ -981,7 +1224,10 @@
     "expected": "優位性を示す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ようい/ゆうい"
+    "focus": "ようい/ゆうい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 83,
@@ -993,7 +1239,10 @@
     "expected": "相違を確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "そうい"
+    "focus": "そうい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 84,
@@ -1005,7 +1254,10 @@
     "expected": "創意工夫する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "そうい"
+    "focus": "そうい",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 85,
@@ -1017,7 +1269,10 @@
     "expected": "消費電力を減らす",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しょうひ/しょうしつ"
+    "focus": "しょうひ/しょうしつ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 86,
@@ -1029,7 +1284,10 @@
     "expected": "建物が焼失する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しょうひ/しょうしつ"
+    "focus": "しょうひ/しょうしつ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 87,
@@ -1041,7 +1299,10 @@
     "expected": "群衆を誘導する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ぐんしゅう"
+    "focus": "ぐんしゅう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 88,
@@ -1053,7 +1314,10 @@
     "expected": "軍習を行う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "ぐんしゅう"
+    "focus": "ぐんしゅう",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 89,
@@ -1065,7 +1329,10 @@
     "expected": "決を採る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "けつ"
+    "focus": "けつ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 90,
@@ -1077,7 +1344,10 @@
     "expected": "血を検査する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "けつ"
+    "focus": "けつ",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 91,
@@ -1089,7 +1359,10 @@
     "expected": "枝を切る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きる"
+    "focus": "きる",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 92,
@@ -1101,7 +1374,10 @@
     "expected": "接続が切れる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "きる"
+    "focus": "きる",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 93,
@@ -1113,7 +1389,10 @@
     "expected": "鼻が詰まる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はな"
+    "focus": "はな",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 94,
@@ -1125,7 +1404,10 @@
     "expected": "花が咲く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はな"
+    "focus": "はな",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 95,
@@ -1137,7 +1419,10 @@
     "expected": "話をする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はな"
+    "focus": "はな",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 96,
@@ -1149,7 +1434,10 @@
     "expected": "花を贈る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "はな"
+    "focus": "はな",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 97,
@@ -1161,7 +1449,10 @@
     "expected": "喉を痛める",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "のど/みち"
+    "focus": "のど/みち",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 98,
@@ -1173,7 +1464,10 @@
     "expected": "道を広げる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "のど/みち"
+    "focus": "のど/みち",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 99,
@@ -1185,7 +1479,10 @@
     "expected": "修繕計画を立てる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうぜん/しゅうれん"
+    "focus": "しゅうぜん/しゅうれん",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 100,
@@ -1197,7 +1494,10 @@
     "expected": "修練を積む",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "しゅうぜん/しゅうれん"
+    "focus": "しゅうぜん/しゅうれん",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 101,
@@ -1209,7 +1509,10 @@
     "expected": "今日は天気がいい",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 102,
@@ -1221,7 +1524,10 @@
     "expected": "明日は東京駅で待ち合わせる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 103,
@@ -1233,7 +1539,10 @@
     "expected": "資料を確認して返信する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 104,
@@ -1245,7 +1554,10 @@
     "expected": "電車が遅れている",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 105,
@@ -1257,7 +1569,10 @@
     "expected": "日本語入力を改善する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 106,
@@ -1269,7 +1584,10 @@
     "expected": "午後3時に会議を始める",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 107,
@@ -1281,7 +1599,10 @@
     "expected": "来週の予定を確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 108,
@@ -1293,7 +1614,10 @@
     "expected": "必要な書類を準備する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 109,
@@ -1305,7 +1629,10 @@
     "expected": "駅まで歩いて10分かかる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 110,
@@ -1317,7 +1644,10 @@
     "expected": "朝ご飯を食べてから出かける",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 111,
@@ -1329,7 +1659,10 @@
     "expected": "新しいパソコンを設定する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 112,
@@ -1341,7 +1674,10 @@
     "expected": "写真をフォルダに保存する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 113,
@@ -1353,7 +1689,10 @@
     "expected": "接続が切れたので再接続する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 114,
@@ -1365,7 +1704,10 @@
     "expected": "電源を入れて起動を待つ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 115,
@@ -1377,7 +1719,10 @@
     "expected": "設定画面を開いて変更する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 116,
@@ -1389,7 +1734,10 @@
     "expected": "検索結果を日付順に並べる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 117,
@@ -1401,7 +1749,10 @@
     "expected": "音声入力を有効にする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 118,
@@ -1413,7 +1764,10 @@
     "expected": "漢字変換の精度を測る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 119,
@@ -1425,7 +1779,10 @@
     "expected": "変換結果をファイルに記録する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 120,
@@ -1437,7 +1794,10 @@
     "expected": "間違えた部分だけを修正する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 121,
@@ -1449,7 +1809,10 @@
     "expected": "候補を3つ表示する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 122,
@@ -1461,7 +1824,10 @@
     "expected": "最も高いスコアを選ぶ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 123,
@@ -1473,7 +1839,10 @@
     "expected": "入力履歴をローカルに保存する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 124,
@@ -1485,7 +1854,10 @@
     "expected": "通信を使わずに処理する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 125,
@@ -1497,7 +1869,10 @@
     "expected": "平均応答時間を計測する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 126,
@@ -1509,7 +1884,10 @@
     "expected": "同じテストを3回実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 127,
@@ -1521,7 +1899,10 @@
     "expected": "結果のばらつきを確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 128,
@@ -1533,7 +1914,10 @@
     "expected": "入力にない言葉を追加しない",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 129,
@@ -1545,7 +1929,10 @@
     "expected": "助詞や語順を変えない",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 130,
@@ -1557,7 +1944,10 @@
     "expected": "不明な言葉はひらがなのまま残す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 131,
@@ -1569,7 +1959,10 @@
     "expected": "確定済みの部分は変更しない",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 132,
@@ -1581,7 +1974,10 @@
     "expected": "カーソル周辺だけを再変換する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 133,
@@ -1593,7 +1989,10 @@
     "expected": "ウェブサイトを開いて内容を確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 134,
@@ -1605,7 +2004,10 @@
     "expected": "クラウドではなく端末内で実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 135,
@@ -1617,7 +2019,10 @@
     "expected": "モデルのメモリ使用量を調べる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 136,
@@ -1629,7 +2034,10 @@
     "expected": "重みをGPUに読み込む",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 137,
@@ -1641,7 +2049,10 @@
     "expected": "処理が終わるまで2秒待つ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 138,
@@ -1653,7 +2064,10 @@
     "expected": "アプリを再起動して試す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 139,
@@ -1665,7 +2079,10 @@
     "expected": "エラーログを確認する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 140,
@@ -1677,7 +2094,10 @@
     "expected": "問題を再現する手順をまとめる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 141,
@@ -1689,7 +2109,10 @@
     "expected": "変更前の設定に戻す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 142,
@@ -1701,7 +2124,10 @@
     "expected": "読みと出力が一致するか確かめる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 143,
@@ -1713,7 +2139,10 @@
     "expected": "同音異義語を文脈で選ぶ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 144,
@@ -1725,7 +2154,10 @@
     "expected": "左文脈を200文字渡す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 145,
@@ -1737,7 +2169,10 @@
     "expected": "短い文と長文を別々に試す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 146,
@@ -1749,7 +2184,10 @@
     "expected": "テストの正解率を計算する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 147,
@@ -1761,7 +2199,10 @@
     "expected": "重大違反を別に集計する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 148,
@@ -1773,7 +2214,10 @@
     "expected": "モデルごとの結果を比較する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 149,
@@ -1785,7 +2229,10 @@
     "expected": "温度を0に固定する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 150,
@@ -1797,7 +2244,10 @@
     "expected": "出力は変換結果だけにする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "一般変換"
+    "focus": "一般変換",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 151,
@@ -1809,7 +2259,10 @@
     "expected": "LM Studioでサーバーを起動する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 152,
@@ -1821,7 +2274,10 @@
     "expected": "VRAM12GBでモデルを実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 153,
@@ -1833,7 +2289,10 @@
     "expected": "ESP32をWi-Fiに接続する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 154,
@@ -1845,7 +2304,10 @@
     "expected": "http://192.168.68.68:1234/v1/modelsにアクセスする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 155,
@@ -1857,7 +2319,10 @@
     "expected": "Qwen3.5-4BをGPUにロードする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 156,
@@ -1869,7 +2334,10 @@
     "expected": "Python3.13でテストする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 157,
@@ -1881,7 +2349,10 @@
     "expected": "CUDA12.8をインストールする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 158,
@@ -1893,7 +2364,10 @@
     "expected": "RTX 5070 Tiを使う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 159,
@@ -1905,7 +2379,10 @@
     "expected": "localhost:1234へ送信する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 160,
@@ -1917,7 +2394,10 @@
     "expected": "C:\\Users\\Tomoki\\Modelsを開く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 161,
@@ -1929,7 +2409,10 @@
     "expected": "/home/user/modelsに保存する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 162,
@@ -1941,7 +2424,10 @@
     "expected": "test@example.comへ送る",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 163,
@@ -1953,7 +2439,10 @@
     "expected": "Bluetooth 5.4を有効にする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 164,
@@ -1965,7 +2454,10 @@
     "expected": "USB4 Gen 3x2で接続する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 165,
@@ -1977,7 +2469,10 @@
     "expected": "temperature=0.0に設定する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 166,
@@ -1989,7 +2484,10 @@
     "expected": "top_pを0.95にする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 167,
@@ -2001,7 +2499,10 @@
     "expected": "max_tokensは256にする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 168,
@@ -2013,7 +2514,10 @@
     "expected": "Q4_K_M版をダウンロードする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 169,
@@ -2025,7 +2529,10 @@
     "expected": "GGUFファイルを読み込む",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 170,
@@ -2037,7 +2544,10 @@
     "expected": "llama.cppをビルドする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 171,
@@ -2049,7 +2559,10 @@
     "expected": "CMakeLists.txtを編集する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 172,
@@ -2061,7 +2574,10 @@
     "expected": "docker compose up -dを実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 173,
@@ -2073,7 +2589,10 @@
     "expected": "git checkout mainを実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 174,
@@ -2085,7 +2604,10 @@
     "expected": "npm run devでサーバーを起動する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 175,
@@ -2097,7 +2619,10 @@
     "expected": "SELECT * FROM usersを実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 176,
@@ -2109,7 +2634,10 @@
     "expected": "API_KEY=abc-123を設定する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 177,
@@ -2121,7 +2649,10 @@
     "expected": "SHA-256でハッシュを計算する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 178,
@@ -2133,7 +2664,10 @@
     "expected": "UTF-8でエンコードする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 179,
@@ -2145,7 +2679,10 @@
     "expected": "README.mdに説明を書く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 180,
@@ -2157,7 +2694,10 @@
     "expected": "@tomokiに返信する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "リテラル保持"
+    "focus": "リテラル保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 181,
@@ -2171,7 +2711,10 @@
     "forbidden_examples": [
       "明日行く予定です"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 182,
@@ -2185,7 +2728,10 @@
     "forbidden_examples": [
       "資料を送ってください"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 183,
@@ -2199,7 +2745,10 @@
     "forbidden_examples": [
       "後ほどご連絡いたします"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 184,
@@ -2213,7 +2762,10 @@
     "forbidden_examples": [
       "それで大丈夫です"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 185,
@@ -2227,7 +2779,10 @@
     "forbidden_examples": [
       "申し訳ありませんが、分かりません"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 186,
@@ -2241,7 +2796,10 @@
     "forbidden_examples": [
       "私は昨日東京に行きました"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 187,
@@ -2255,7 +2813,10 @@
     "forbidden_examples": [
       "彼が私に言った"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 188,
@@ -2269,7 +2830,10 @@
     "forbidden_examples": [
       "この本は面白かったです"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 189,
@@ -2283,7 +2847,10 @@
     "forbidden_examples": [
       "俺は昨日行った"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 190,
@@ -2297,7 +2864,10 @@
     "forbidden_examples": [
       "これは多分無理です"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 191,
@@ -2311,7 +2881,10 @@
     "forbidden_examples": [
       "あと5分ほどお待ちください"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 192,
@@ -2325,7 +2898,10 @@
     "forbidden_examples": [
       "それは知りません"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 193,
@@ -2339,7 +2915,10 @@
     "forbidden_examples": [
       "なぜそうなるのですか"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 194,
@@ -2353,7 +2932,10 @@
     "forbidden_examples": [
       "今日は無理かもしれません"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 195,
@@ -2367,7 +2949,10 @@
     "forbidden_examples": [
       "彼は昨日来た"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 196,
@@ -2381,7 +2966,10 @@
     "forbidden_examples": [
       "それは高くない"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 197,
@@ -2395,7 +2983,10 @@
     "forbidden_examples": [
       "資料だけ送ってください"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 198,
@@ -2409,7 +3000,10 @@
     "forbidden_examples": [
       "後で連絡します"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 199,
@@ -2423,7 +3017,10 @@
     "forbidden_examples": [
       "多分そうだと思います"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 200,
@@ -2437,7 +3034,10 @@
     "forbidden_examples": [
       "対応できません"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 201,
@@ -2451,7 +3051,10 @@
     "forbidden_examples": [
       "それは違います"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 202,
@@ -2465,7 +3068,10 @@
     "forbidden_examples": [
       "知りません"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 203,
@@ -2479,7 +3085,10 @@
     "forbidden_examples": [
       "大変です"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 204,
@@ -2493,7 +3102,10 @@
     "forbidden_examples": [
       "その通りです"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 205,
@@ -2507,7 +3119,10 @@
     "forbidden_examples": [
       "了解しました"
     ],
-    "focus": "余計な改変禁止"
+    "focus": "余計な改変禁止",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 206,
@@ -2519,7 +3134,10 @@
     "expected": "ぬるぽんえっくすを起動する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 207,
@@ -2531,7 +3149,10 @@
     "expected": "るきあんと会う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 208,
@@ -2543,7 +3164,10 @@
     "expected": "ふらみどーるにログインする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 209,
@@ -2555,7 +3179,10 @@
     "expected": "ねふぃらに連絡する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 210,
@@ -2567,7 +3194,10 @@
     "expected": "ぞるてぃあを招待する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 211,
@@ -2579,7 +3209,10 @@
     "expected": "かふぇるのあで待つ",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 212,
@@ -2591,7 +3224,10 @@
     "expected": "ねくさりおを起動する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 213,
@@ -2603,7 +3239,10 @@
     "expected": "ほしみるを公開する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 214,
@@ -2615,7 +3254,10 @@
     "expected": "るなせとへ行く",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 215,
@@ -2627,7 +3269,10 @@
     "expected": "くろのしずくを使う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 216,
@@ -2639,7 +3284,10 @@
     "expected": "SoraNeko-2Bをロードする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 217,
@@ -2651,7 +3299,10 @@
     "expected": "exp_kana_v7を実行する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 218,
@@ -2663,7 +3314,10 @@
     "expected": "みらいそうぞうしつに相談する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 219,
@@ -2675,7 +3329,10 @@
     "expected": "トワちゃんに会う",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 220,
@@ -2687,7 +3344,10 @@
     "expected": "もちまるに餌をあげる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 221,
@@ -2699,7 +3359,10 @@
     "expected": "株式会社るみなすと契約する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 222,
@@ -2711,7 +3374,10 @@
     "expected": "Project KUMOを再開する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 223,
@@ -2723,7 +3389,10 @@
     "expected": "しろかぜ駅で降りる",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 224,
@@ -2735,7 +3404,10 @@
     "expected": "ぬめぴょん化する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 225,
@@ -2747,7 +3419,10 @@
     "expected": "じぇぶるを試す",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 226,
@@ -2759,7 +3434,10 @@
     "expected": "すらりんぐを有効にする",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 227,
@@ -2771,7 +3449,10 @@
     "expected": "sample.nyaを読み込む",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 228,
@@ -2783,7 +3464,10 @@
     "expected": "あずれいとうを探検する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 229,
@@ -2795,7 +3479,10 @@
     "expected": "ほしのこーどを入力する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 230,
@@ -2807,7 +3494,10 @@
     "expected": "みるふぁんぐを再起動する",
     "acceptable": [],
     "forbidden_examples": [],
-    "focus": "未知部分保持"
+    "focus": "未知部分保持",
+    "origin": "data/kana_kanji_llm_testset_5x.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 231,
@@ -2822,7 +3512,10 @@
       "校正を見直す",
       "鋼製を見直す"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 232,
@@ -2837,7 +3530,10 @@
       "構成を行う",
       "公正を行う"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 233,
@@ -2854,7 +3550,10 @@
       "構成橋梁",
       "公正橋梁"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 234,
@@ -2869,7 +3568,10 @@
       "構成に残す",
       "校正に残す"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 235,
@@ -2884,7 +3586,10 @@
       "構成に出る",
       "校正に出る"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 236,
@@ -2899,7 +3604,10 @@
       "構成を図る",
       "校正を図る"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 237,
@@ -2914,7 +3622,10 @@
       "構成を観測する",
       "校正を観測する"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 238,
@@ -2929,7 +3640,10 @@
       "構成物質を投与する",
       "後世物質を投与する"
     ],
-    "focus": "こうせい"
+    "focus": "こうせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 239,
@@ -2944,7 +3658,10 @@
       "薬の硬貨を実感する",
       "薬の降下を実感する"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 240,
@@ -2959,7 +3676,10 @@
       "効果を投入する",
       "高価を投入する"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 241,
@@ -2974,7 +3694,10 @@
       "人事効果を決める",
       "人事硬貨を決める"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 242,
@@ -2991,7 +3714,10 @@
       "効果を始めました",
       "硬貨を始めました"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 243,
@@ -3006,7 +3732,10 @@
       "効果線路を走る",
       "硬貨線路を走る"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 244,
@@ -3021,7 +3750,10 @@
       "効果な美術品",
       "硬貨な美術品"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 245,
@@ -3036,7 +3768,10 @@
       "コンクリートの効果を待つ",
       "コンクリートの硬貨を待つ"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 246,
@@ -3053,7 +3788,10 @@
       "効果を斉唱する",
       "硬貨を斉唱する"
     ],
-    "focus": "こうか"
+    "focus": "こうか",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 247,
@@ -3070,7 +3808,10 @@
       "建築の欠陥や菓子",
       "建築の欠陥や歌詞"
     ],
-    "focus": "かし"
+    "focus": "かし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 248,
@@ -3085,7 +3826,10 @@
       "お茶に合う歌詞を買う",
       "お茶に合う瑕疵を買う"
     ],
-    "focus": "かし"
+    "focus": "かし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 249,
@@ -3102,7 +3846,10 @@
       "メロディーにお菓子をつける",
       "メロディーに瑕疵をつける"
     ],
-    "focus": "かし"
+    "focus": "かし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 250,
@@ -3119,7 +3866,10 @@
       "菓子の麻痺を治療する",
       "歌詞の麻痺を治療する"
     ],
-    "focus": "かし"
+    "focus": "かし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 251,
@@ -3134,7 +3884,10 @@
       "宝物を菓子される",
       "宝物を歌詞される"
     ],
-    "focus": "かし"
+    "focus": "かし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 252,
@@ -3151,7 +3904,10 @@
       "菓子状態に陥る",
       "歌詞状態に陥る"
     ],
-    "focus": "かし"
+    "focus": "かし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 253,
@@ -3166,7 +3922,10 @@
       "窓口で神聖する",
       "窓口で新生する"
     ],
-    "focus": "しんせい"
+    "focus": "しんせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 254,
@@ -3181,7 +3940,10 @@
       "申請な森に入る",
       "新生な森に入る"
     ],
-    "focus": "しんせい"
+    "focus": "しんせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 255,
@@ -3196,7 +3958,10 @@
       "申請チームの誕生",
       "神聖チームの誕生"
     ],
-    "focus": "しんせい"
+    "focus": "しんせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 256,
@@ -3211,7 +3976,10 @@
       "申請てんかんの診断",
       "神聖てんかんの診断"
     ],
-    "focus": "しんせい"
+    "focus": "しんせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 257,
@@ -3228,7 +3996,10 @@
       "銀河系に申請が現れる",
       "銀河系に神聖が現れる"
     ],
-    "focus": "しんせい"
+    "focus": "しんせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 258,
@@ -3243,7 +4014,10 @@
       "天皇の申請を始める",
       "天皇の神聖を始める"
     ],
-    "focus": "しんせい"
+    "focus": "しんせい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 259,
@@ -3260,7 +4034,10 @@
       "固い石を貫く",
       "固い医師を貫く"
     ],
-    "focus": "いし"
+    "focus": "いし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 260,
@@ -3275,7 +4052,10 @@
       "先人の医師を継ぐ",
       "先人の石を継ぐ"
     ],
-    "focus": "いし"
+    "focus": "いし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 261,
@@ -3290,7 +4070,10 @@
       "当事者の医師を確認する",
       "当事者の遺志を確認する"
     ],
-    "focus": "いし"
+    "focus": "いし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 262,
@@ -3305,7 +4088,10 @@
       "意思の診断を受ける",
       "意志の診断を受ける"
     ],
-    "focus": "いし"
+    "focus": "いし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 263,
@@ -3322,7 +4108,10 @@
       "医師物の届出",
       "意思物の届出"
     ],
-    "focus": "いし"
+    "focus": "いし",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 264,
@@ -3337,7 +4126,10 @@
       "映画を干渉する",
       "映画を感傷する"
     ],
-    "focus": "かんしょう"
+    "focus": "かんしょう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 265,
@@ -3352,7 +4144,10 @@
       "鑑賞に浸る",
       "干渉に浸る"
     ],
-    "focus": "かんしょう"
+    "focus": "かんしょう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 266,
@@ -3367,7 +4162,10 @@
       "干渉地帯を設ける",
       "鑑賞地帯を設ける"
     ],
-    "focus": "かんしょう"
+    "focus": "かんしょう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 267,
@@ -3382,7 +4180,10 @@
       "内政に鑑賞する",
       "内政に感傷する"
     ],
-    "focus": "かんしょう"
+    "focus": "かんしょう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 268,
@@ -3397,7 +4198,10 @@
       "健診の鑑賞を行う",
       "健診の干渉を行う"
     ],
-    "focus": "かんしょう"
+    "focus": "かんしょう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 269,
@@ -3412,7 +4216,10 @@
       "新聞の汽車が取材する",
       "新聞の貴社が取材する"
     ],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 270,
@@ -3429,7 +4236,10 @@
       "記者のますますのご発展",
       "汽車のますますのご発展"
     ],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 271,
@@ -3446,7 +4256,10 @@
       "5時に記者予定です",
       "5時に汽車予定です"
     ],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 272,
@@ -3463,7 +4276,10 @@
       "モクモクと煙を吐く記者",
       "モクモクと煙を吐く貴社"
     ],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 273,
@@ -3478,7 +4294,10 @@
       "財産を記者する",
       "財産を帰社する"
     ],
-    "focus": "きしゃ"
+    "focus": "きしゃ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 274,
@@ -3493,7 +4312,10 @@
       "アンケートに解答する",
       "アンケートに解凍する"
     ],
-    "focus": "かいとう"
+    "focus": "かいとう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 275,
@@ -3508,7 +4330,10 @@
       "問題の回答用紙",
       "問題の解凍用紙"
     ],
-    "focus": "かいとう"
+    "focus": "かいとう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 276,
@@ -3523,7 +4348,10 @@
       "冷凍肉を回答する",
       "冷凍肉を解答する"
     ],
-    "focus": "かいとう"
+    "focus": "かいとう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 277,
@@ -3538,7 +4366,10 @@
       "解答乱麻の勢い",
       "回答乱麻の勢い"
     ],
-    "focus": "かいとう"
+    "focus": "かいとう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 278,
@@ -3553,7 +4384,10 @@
       "夜を騒がす回答",
       "夜を騒がす解答"
     ],
-    "focus": "かいとう"
+    "focus": "かいとう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 279,
@@ -3568,7 +4402,10 @@
       "勝機を取り戻す",
       "商機を取り戻す"
     ],
-    "focus": "しょうき"
+    "focus": "しょうき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 280,
@@ -3583,7 +4420,10 @@
       "正気を見出す",
       "商機を見出す"
     ],
-    "focus": "しょうき"
+    "focus": "しょうき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 281,
@@ -3598,7 +4438,10 @@
       "新たな正機を探る",
       "新たな勝機を探る"
     ],
-    "focus": "しょうき"
+    "focus": "しょうき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 282,
@@ -3615,7 +4458,10 @@
       "山の奥に立ち込める正気",
       "山の奥に立ち込める勝機"
     ],
-    "focus": "しょうき"
+    "focus": "しょうき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 283,
@@ -3630,7 +4476,10 @@
       "テレビ番組を包装する",
       "テレビ番組を法曹する"
     ],
-    "focus": "ほうそう"
+    "focus": "ほうそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 284,
@@ -3645,7 +4494,10 @@
       "プレゼントを放送する",
       "プレゼントを法曹する"
     ],
-    "focus": "ほうそう"
+    "focus": "ほうそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 285,
@@ -3660,7 +4512,10 @@
       "放送界の重鎮",
       "包装界の重鎮"
     ],
-    "focus": "ほうそう"
+    "focus": "ほうそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 286,
@@ -3675,7 +4530,10 @@
       "放送が猛威を振るう",
       "包装が猛威を振るう"
     ],
-    "focus": "ほうそう"
+    "focus": "ほうそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 287,
@@ -3690,7 +4548,10 @@
       "会期分析を行う",
       "快気分析を行う"
     ],
-    "focus": "かいき"
+    "focus": "かいき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 288,
@@ -3705,7 +4566,10 @@
       "国会の回帰を延長する",
       "国会の快気を延長する"
     ],
-    "focus": "かいき"
+    "focus": "かいき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 289,
@@ -3723,7 +4587,10 @@
       "寺院の会期を称える",
       "寺院の回帰を称える"
     ],
-    "focus": "かいき"
+    "focus": "かいき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 290,
@@ -3738,7 +4605,10 @@
       "会期祝いを届ける",
       "回帰祝いを届ける"
     ],
-    "focus": "かいき"
+    "focus": "かいき",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 291,
@@ -3753,7 +4623,10 @@
       "通信回線が服装する",
       "通信回線が復興する"
     ],
-    "focus": "ふくそう"
+    "focus": "ふくそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 292,
@@ -3768,7 +4641,10 @@
       "式典に合う輻輳",
       "式典に合う復興"
     ],
-    "focus": "ふくそう"
+    "focus": "ふくそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 293,
@@ -3782,7 +4658,10 @@
     "forbidden_examples": [
       "面接の輻輳を整える"
     ],
-    "focus": "ふくそう"
+    "focus": "ふくそう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 294,
@@ -3797,7 +4676,10 @@
       "法律を嗜好する",
       "法律を志向する"
     ],
-    "focus": "しこう"
+    "focus": "しこう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 295,
@@ -3814,7 +4696,10 @@
       "強制嗜好の申立て",
       "強制志向の申立て"
     ],
-    "focus": "しこう"
+    "focus": "しこう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 296,
@@ -3829,7 +4714,10 @@
       "個人の施行品",
       "個人の志向品"
     ],
-    "focus": "しこう"
+    "focus": "しこう",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 297,
@@ -3844,7 +4732,10 @@
       "債券を回収する",
       "再建を回収する"
     ],
-    "focus": "さいけん"
+    "focus": "さいけん",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 298,
@@ -3859,7 +4750,10 @@
       "国債などの債権を買う",
       "国債などの再建を買う"
     ],
-    "focus": "さいけん"
+    "focus": "さいけん",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 299,
@@ -3874,7 +4768,10 @@
       "経営の債権を目指す",
       "経営の債券を目指す"
     ],
-    "focus": "さいけん"
+    "focus": "さいけん",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 300,
@@ -3888,7 +4785,10 @@
     "forbidden_examples": [
       "スマホで決裁する"
     ],
-    "focus": "けっさい"
+    "focus": "けっさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 301,
@@ -3902,7 +4802,10 @@
     "forbidden_examples": [
       "上司に決済を仰ぐ"
     ],
-    "focus": "けっさい"
+    "focus": "けっさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 302,
@@ -3916,7 +4819,10 @@
     "forbidden_examples": [
       "カードで決裁を行う"
     ],
-    "focus": "けっさい"
+    "focus": "けっさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 303,
@@ -3931,7 +4837,10 @@
       "対等額で総裁する",
       "対等額で葬祭する"
     ],
-    "focus": "そうさい"
+    "focus": "そうさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 304,
@@ -3946,7 +4855,10 @@
       "与党の新相殺を選ぶ",
       "与党の新葬祭を選ぶ"
     ],
-    "focus": "そうさい"
+    "focus": "そうさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 305,
@@ -3961,7 +4873,10 @@
       "冠婚相殺の式",
       "冠婚総裁の式"
     ],
-    "focus": "そうさい"
+    "focus": "そうさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 306,
@@ -3975,7 +4890,10 @@
     "forbidden_examples": [
       "相殺な気分を味わう"
     ],
-    "focus": "そうかい"
+    "focus": "そうかい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 307,
@@ -3989,7 +4907,10 @@
     "forbidden_examples": [
       "温室効果ガスの輩出"
     ],
-    "focus": "はいしゅつ"
+    "focus": "はいしゅつ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 308,
@@ -4003,7 +4924,10 @@
     "forbidden_examples": [
       "優秀な人材を排出する"
     ],
-    "focus": "はいしゅつ"
+    "focus": "はいしゅつ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 309,
@@ -4017,7 +4941,10 @@
     "forbidden_examples": [
       "体内の老廃物を輩出する"
     ],
-    "focus": "はいしゅつ"
+    "focus": "はいしゅつ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 310,
@@ -4031,7 +4958,10 @@
     "forbidden_examples": [
       "ノーベル賞受賞者を排出する"
     ],
-    "focus": "はいしゅつ"
+    "focus": "はいしゅつ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 311,
@@ -4047,7 +4977,10 @@
     "forbidden_examples": [
       "菓子担保責任を問う"
     ],
-    "focus": "瑕疵"
+    "focus": "瑕疵",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 312,
@@ -4061,7 +4994,10 @@
     "forbidden_examples": [
       "前後策を講じる"
     ],
-    "focus": "善後策"
+    "focus": "善後策",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 313,
@@ -4075,7 +5011,10 @@
     "forbidden_examples": [
       "競走地の所有権"
     ],
-    "focus": "係争"
+    "focus": "係争",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 314,
@@ -4089,7 +5028,10 @@
     "forbidden_examples": [
       "請求を企画する"
     ],
-    "focus": "棄却"
+    "focus": "棄却",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 315,
@@ -4103,7 +5045,10 @@
     "forbidden_examples": [
       "訴えを脚下する"
     ],
-    "focus": "却下"
+    "focus": "却下",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 316,
@@ -4117,7 +5062,10 @@
     "forbidden_examples": [
       "国際条約を規準する"
     ],
-    "focus": "批准"
+    "focus": "批准",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 317,
@@ -4131,7 +5079,10 @@
     "forbidden_examples": [
       "被疑者を交流する"
     ],
-    "focus": "勾留"
+    "focus": "勾留",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 318,
@@ -4145,7 +5096,10 @@
     "forbidden_examples": [
       "短期の交流に処す"
     ],
-    "focus": "拘留"
+    "focus": "拘留",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 319,
@@ -4159,7 +5113,10 @@
     "forbidden_examples": [
       "過去に訴求して適用する"
     ],
-    "focus": "遡及"
+    "focus": "遡及",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 320,
@@ -4173,7 +5130,10 @@
     "forbidden_examples": [
       "全員の第三者を保護する"
     ],
-    "focus": "善意"
+    "focus": "善意",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 321,
@@ -4187,7 +5147,10 @@
     "forbidden_examples": [
       "長官解雇に処する"
     ],
-    "focus": "懲戒"
+    "focus": "懲戒",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 322,
@@ -4201,7 +5164,10 @@
     "forbidden_examples": [
       "面積事項を定める"
     ],
-    "focus": "免責"
+    "focus": "免責",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 323,
@@ -4215,7 +5181,10 @@
     "forbidden_examples": [
       "術後の汚語は良好だ"
     ],
-    "focus": "予後"
+    "focus": "予後",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 324,
@@ -4229,7 +5198,10 @@
     "forbidden_examples": [
       "病状が感懐に至る"
     ],
-    "focus": "寛解"
+    "focus": "寛解",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 325,
@@ -4243,7 +5215,10 @@
     "forbidden_examples": [
       "臨床上の初見を述べる"
     ],
-    "focus": "所見"
+    "focus": "所見",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 326,
@@ -4257,7 +5232,10 @@
     "forbidden_examples": [
       "高齢者の誤認を防ぐ"
     ],
-    "focus": "誤嚥"
+    "focus": "誤嚥",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 327,
@@ -4271,7 +5249,10 @@
     "forbidden_examples": [
       "感染症に離職する"
     ],
-    "focus": "罹患"
+    "focus": "罹患",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 328,
@@ -4285,7 +5266,10 @@
     "forbidden_examples": [
       "この薬の併用は近畿だ"
     ],
-    "focus": "禁忌"
+    "focus": "禁忌",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 329,
@@ -4299,7 +5283,10 @@
     "forbidden_examples": [
       "がん細胞が侵入する"
     ],
-    "focus": "浸潤"
+    "focus": "浸潤",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 330,
@@ -4313,7 +5300,10 @@
     "forbidden_examples": [
       "組織の政見を行う"
     ],
-    "focus": "生検"
+    "focus": "生検",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 331,
@@ -4327,7 +5317,10 @@
     "forbidden_examples": [
       "血管の閉塞で絵師する"
     ],
-    "focus": "壊死"
+    "focus": "壊死",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 332,
@@ -4341,7 +5334,10 @@
     "forbidden_examples": [
       "足の腐種が見られる"
     ],
-    "focus": "浮腫"
+    "focus": "浮腫",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 333,
@@ -4355,7 +5351,10 @@
     "forbidden_examples": [
       "予感と高熱が襲う"
     ],
-    "focus": "悪寒"
+    "focus": "悪寒",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 334,
@@ -4369,7 +5368,10 @@
     "forbidden_examples": [
       "豚服薬を飲む"
     ],
-    "focus": "頓服"
+    "focus": "頓服",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 335,
@@ -4383,7 +5385,10 @@
     "forbidden_examples": [
       "サーバーを情長化する"
     ],
-    "focus": "冗長化"
+    "focus": "冗長化",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 336,
@@ -4397,7 +5402,10 @@
     "forbidden_examples": [
       "検出の敷地を設定する"
     ],
-    "focus": "閾値"
+    "focus": "閾値",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 337,
@@ -4411,7 +5419,10 @@
     "forbidden_examples": [
       "曲線の全近線を求める"
     ],
-    "focus": "漸近"
+    "focus": "漸近",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 338,
@@ -4425,7 +5436,10 @@
     "forbidden_examples": [
       "ケーブルの絶滅を確認する"
     ],
-    "focus": "絶縁"
+    "focus": "絶縁",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 339,
@@ -4439,7 +5453,10 @@
     "forbidden_examples": [
       "レーザーで原子を礼記する"
     ],
-    "focus": "励起"
+    "focus": "励起",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 340,
@@ -4453,7 +5470,10 @@
     "forbidden_examples": [
       "化学反応の食売となる"
     ],
-    "focus": "触媒"
+    "focus": "触媒",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 341,
@@ -4467,7 +5487,10 @@
     "forbidden_examples": [
       "回線の服装を解消する"
     ],
-    "focus": "輻輳"
+    "focus": "輻輳",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 342,
@@ -4481,7 +5504,10 @@
     "forbidden_examples": [
       "APIの劇透性を保証する"
     ],
-    "focus": "冪等"
+    "focus": "冪等",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 343,
@@ -4495,7 +5521,10 @@
     "forbidden_examples": [
       "メモリの骨格を防ぐ"
     ],
-    "focus": "枯渇"
+    "focus": "枯渇",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 344,
@@ -4509,7 +5538,10 @@
     "forbidden_examples": [
       "信号の原水をおさえる"
     ],
-    "focus": "減衰"
+    "focus": "減衰",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 345,
@@ -4523,7 +5555,10 @@
     "forbidden_examples": [
       "分布のワイドを計算する"
     ],
-    "focus": "歪度"
+    "focus": "歪度",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 346,
@@ -4537,7 +5572,10 @@
     "forbidden_examples": [
       "スレッドの配達制御"
     ],
-    "focus": "排他"
+    "focus": "排他",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 347,
@@ -4551,7 +5589,10 @@
     "forbidden_examples": [
       "人事効果を取りまとめる"
     ],
-    "focus": "考課"
+    "focus": "考課",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 348,
@@ -4565,7 +5606,10 @@
     "forbidden_examples": [
       "原価焼却を計上する"
     ],
-    "focus": "減価償却"
+    "focus": "減価償却",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 349,
@@ -4580,7 +5624,10 @@
       "決定のりん議書を回す",
       "決定の任期書を回す"
     ],
-    "focus": "稟議"
+    "focus": "稟議",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 350,
@@ -4594,7 +5641,10 @@
     "forbidden_examples": [
       "貸し倒れ引き当て金を積む"
     ],
-    "focus": "引当金"
+    "focus": "引当金",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 351,
@@ -4608,7 +5658,10 @@
     "forbidden_examples": [
       "住民税を負荷する"
     ],
-    "focus": "賦課"
+    "focus": "賦課",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 352,
@@ -4622,7 +5675,10 @@
     "forbidden_examples": [
       "債務者に督促状をおくる"
     ],
-    "focus": "督促"
+    "focus": "督促",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 353,
@@ -4636,7 +5692,10 @@
     "forbidden_examples": [
       "債券譲渡を通知する"
     ],
-    "focus": "債権譲渡"
+    "focus": "債権譲渡",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 354,
@@ -4652,7 +5711,10 @@
     "forbidden_examples": [
       "帳簿の科学を点検する"
     ],
-    "focus": "帳簿"
+    "focus": "帳簿",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 355,
@@ -4666,7 +5728,10 @@
     "forbidden_examples": [
       "税務上の損金に進入する"
     ],
-    "focus": "損金"
+    "focus": "損金",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 356,
@@ -4682,7 +5747,10 @@
     "forbidden_examples": [
       "税金の首延を行う"
     ],
-    "focus": "繰延"
+    "focus": "繰延",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 357,
@@ -4696,7 +5764,10 @@
     "forbidden_examples": [
       "不動産を田んぼに入れる"
     ],
-    "focus": "担保"
+    "focus": "担保",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 358,
@@ -4710,7 +5781,10 @@
     "forbidden_examples": [
       "企業の買修を提案する"
     ],
-    "focus": "買収"
+    "focus": "買収",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 359,
@@ -4724,7 +5798,10 @@
     "forbidden_examples": [
       "ゲラの構成刷りを読む"
     ],
-    "focus": "校正"
+    "focus": "校正",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 360,
@@ -4738,7 +5815,10 @@
     "forbidden_examples": [
       "原稿の光悦を依頼する"
     ],
-    "focus": "校閲"
+    "focus": "校閲",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 361,
@@ -4752,7 +5832,10 @@
     "forbidden_examples": [
       "辞書の判例を確認する"
     ],
-    "focus": "凡例"
+    "focus": "凡例",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 362,
@@ -4766,7 +5849,10 @@
     "forbidden_examples": [
       "歴史書の編散に取り組む"
     ],
-    "focus": "編纂"
+    "focus": "編纂",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 363,
@@ -4780,7 +5866,10 @@
     "forbidden_examples": [
       "古代の意向を発掘する"
     ],
-    "focus": "遺構"
+    "focus": "遺構",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 364,
@@ -4795,7 +5884,10 @@
       "古文書の資料を披見する",
       "古文書の史料を必見する"
     ],
-    "focus": "史料"
+    "focus": "史料",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 365,
@@ -4809,7 +5901,10 @@
     "forbidden_examples": [
       "実験結果の交差を述べる"
     ],
-    "focus": "考察"
+    "focus": "考察",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 366,
@@ -4823,7 +5918,10 @@
     "forbidden_examples": [
       "天皇に代わり殺生を置く"
     ],
-    "focus": "摂政"
+    "focus": "摂政",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 367,
@@ -4837,7 +5935,10 @@
     "forbidden_examples": [
       "町武行を務める"
     ],
-    "focus": "奉行"
+    "focus": "奉行",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 368,
@@ -4851,7 +5952,10 @@
     "forbidden_examples": [
       "和歌集の直選を命じる"
     ],
-    "focus": "勅撰"
+    "focus": "勅撰",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 369,
@@ -4865,7 +5969,10 @@
     "forbidden_examples": [
       "引用の天拠を明らかにする"
     ],
-    "focus": "典拠"
+    "focus": "典拠",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 370,
@@ -4881,7 +5988,10 @@
     "forbidden_examples": [
       "くずし字の本告を行う"
     ],
-    "focus": "翻刻"
+    "focus": "翻刻",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 371,
@@ -4897,7 +6007,10 @@
     "forbidden_examples": [
       "見解がくがくの議論"
     ],
-    "focus": "喧々諤々"
+    "focus": "喧々諤々",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 372,
@@ -4911,7 +6024,10 @@
     "forbidden_examples": [
       "かんかんがくがくと意見を戦わせる"
     ],
-    "focus": "侃々諤々"
+    "focus": "侃々諤々",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 373,
@@ -4925,7 +6041,10 @@
     "forbidden_examples": [
       "球体依然とした体質"
     ],
-    "focus": "旧態依然"
+    "focus": "旧態依然",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 374,
@@ -4939,7 +6058,10 @@
     "forbidden_examples": [
       "鳥類暮改の方針"
     ],
-    "focus": "朝令暮改"
+    "focus": "朝令暮改",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 375,
@@ -4953,7 +6075,10 @@
     "forbidden_examples": [
       "流飲を下げる思い"
     ],
-    "focus": "溜飲を下げる"
+    "focus": "溜飲を下げる",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 376,
@@ -4967,7 +6092,10 @@
     "forbidden_examples": [
       "人口に開写した名作"
     ],
-    "focus": "人口に膾炙"
+    "focus": "人口に膾炙",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 377,
@@ -4981,7 +6109,10 @@
     "forbidden_examples": [
       "反対派を怪獣する"
     ],
-    "focus": "懐柔"
+    "focus": "懐柔",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 378,
@@ -4995,7 +6126,10 @@
     "forbidden_examples": [
       "世界経済の修正"
     ],
-    "focus": "趨勢"
+    "focus": "趨勢",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 379,
@@ -5009,7 +6143,10 @@
     "forbidden_examples": [
       "取り越し苦労の帰結に終わる"
     ],
-    "focus": "杞憂"
+    "focus": "杞憂",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 380,
@@ -5023,7 +6160,10 @@
     "forbidden_examples": [
       "上司の意向を洗濯する"
     ],
-    "focus": "忖度"
+    "focus": "忖度",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 381,
@@ -5037,7 +6177,10 @@
     "forbidden_examples": [
       "プロとしての教示を持つ"
     ],
-    "focus": "矜持"
+    "focus": "矜持",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 382,
@@ -5053,7 +6196,10 @@
     "forbidden_examples": [
       "時勢たる思いに駆られる"
     ],
-    "focus": "忸怩"
+    "focus": "忸怩",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 383,
@@ -5067,7 +6213,10 @@
     "forbidden_examples": [
       "近代小説の校舎"
     ],
-    "focus": "嚆矢"
+    "focus": "嚆矢",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 384,
@@ -5081,7 +6230,10 @@
     "forbidden_examples": [
       "全作品中白美の名作"
     ],
-    "focus": "白眉"
+    "focus": "白眉",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 385,
@@ -5095,7 +6247,10 @@
     "forbidden_examples": [
       "仲間と切磋拓真する"
     ],
-    "focus": "切磋琢磨"
+    "focus": "切磋琢磨",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 386,
@@ -5109,7 +6264,10 @@
     "forbidden_examples": [
       "騎士回生の一手を打つ"
     ],
-    "focus": "起死回生"
+    "focus": "起死回生",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 387,
@@ -5123,7 +6281,10 @@
     "forbidden_examples": [
       "画心賞賛の日々を過ごす"
     ],
-    "focus": "臥薪嘗胆"
+    "focus": "臥薪嘗胆",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 388,
@@ -5137,7 +6298,10 @@
     "forbidden_examples": [
       "県境一擲の大勝負"
     ],
-    "focus": "乾坤一擲"
+    "focus": "乾坤一擲",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 389,
@@ -5151,7 +6315,10 @@
     "forbidden_examples": [
       "孤立無縁の状況"
     ],
-    "focus": "孤立無援"
+    "focus": "孤立無援",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 390,
@@ -5167,7 +6334,10 @@
     "forbidden_examples": [
       "お亀八目で見渡す"
     ],
-    "focus": "傍目八目"
+    "focus": "傍目八目",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 391,
@@ -5183,7 +6353,10 @@
     "forbidden_examples": [
       "気力が竜頭蛇美に終わる"
     ],
-    "focus": "竜頭蛇尾"
+    "focus": "竜頭蛇尾",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 392,
@@ -5197,7 +6370,10 @@
     "forbidden_examples": [
       "高山無恥な言い訳"
     ],
-    "focus": "厚顔無恥"
+    "focus": "厚顔無恥",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 393,
@@ -5211,7 +6387,10 @@
     "forbidden_examples": [
       "古典を間骨脱退する"
     ],
-    "focus": "換骨奪胎"
+    "focus": "換骨奪胎",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 394,
@@ -5225,7 +6404,10 @@
     "forbidden_examples": [
       "忠告を馬耳同封と聞き流す"
     ],
-    "focus": "馬耳東風"
+    "focus": "馬耳東風",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 395,
@@ -5239,7 +6421,10 @@
     "forbidden_examples": [
       "波竹の勢いで連勝する"
     ],
-    "focus": "破竹の勢い"
+    "focus": "破竹の勢い",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 396,
@@ -5255,7 +6440,10 @@
     "forbidden_examples": [
       "県土重来を期す"
     ],
-    "focus": "捲土重来"
+    "focus": "捲土重来",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 397,
@@ -5269,7 +6457,10 @@
     "forbidden_examples": [
       "敵に囲まれ四面楚歌におちいる"
     ],
-    "focus": "四面楚歌"
+    "focus": "四面楚歌",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 398,
@@ -5283,7 +6474,10 @@
     "forbidden_examples": [
       "強敵を前に五越同舟"
     ],
-    "focus": "呉越同舟"
+    "focus": "呉越同舟",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 399,
@@ -5297,7 +6491,10 @@
     "forbidden_examples": [
       "自乗自縛に陥る"
     ],
-    "focus": "自縄自縛"
+    "focus": "自縄自縛",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 400,
@@ -5311,7 +6508,10 @@
     "forbidden_examples": [
       "百科繚乱の時代"
     ],
-    "focus": "百花繚乱"
+    "focus": "百花繚乱",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 401,
@@ -5327,7 +6527,10 @@
     "forbidden_examples": [
       "神羅万象のことわり"
     ],
-    "focus": "森羅万象"
+    "focus": "森羅万象",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 402,
@@ -5341,7 +6544,10 @@
     "forbidden_examples": [
       "成功雨読の生活"
     ],
-    "focus": "晴耕雨読"
+    "focus": "晴耕雨読",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 403,
@@ -5355,7 +6561,10 @@
     "forbidden_examples": [
       "臨機応変にたいしょする"
     ],
-    "focus": "臨機応変"
+    "focus": "臨機応変",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 404,
@@ -5369,7 +6578,10 @@
     "forbidden_examples": [
       "施行錯誤を重ねる"
     ],
-    "focus": "試行錯誤"
+    "focus": "試行錯誤",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 405,
@@ -5383,7 +6595,10 @@
     "forbidden_examples": [
       "真相棒大に言いふらす"
     ],
-    "focus": "針小棒大"
+    "focus": "針小棒大",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 406,
@@ -5397,7 +6612,10 @@
     "forbidden_examples": [
       "強豪相手に一死を報いる"
     ],
-    "focus": "一矢を報いる"
+    "focus": "一矢を報いる",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 407,
@@ -5411,7 +6629,10 @@
     "forbidden_examples": [
       "信頼を裏切る配信行為"
     ],
-    "focus": "背信行為"
+    "focus": "背信行為",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 408,
@@ -5425,7 +6646,10 @@
     "forbidden_examples": [
       "合意即妙な応答"
     ],
-    "focus": "当意即妙"
+    "focus": "当意即妙",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 409,
@@ -5441,7 +6665,10 @@
     "forbidden_examples": [
       "大変自若と構える"
     ],
-    "focus": "泰然自若"
+    "focus": "泰然自若",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 410,
@@ -5457,7 +6684,10 @@
     "forbidden_examples": [
       "波乱万条の人生"
     ],
-    "focus": "波乱万丈"
+    "focus": "波乱万丈",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 411,
@@ -5471,7 +6701,10 @@
     "forbidden_examples": [
       "決済書類の構成と決裁を行う"
     ],
-    "focus": "決裁/校正/決済"
+    "focus": "決裁/校正/決済",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 412,
@@ -5485,7 +6718,10 @@
     "forbidden_examples": [
       "汽車の記者が降下を検証する"
     ],
-    "focus": "貴社/記者/効果"
+    "focus": "貴社/記者/効果",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 413,
@@ -5499,7 +6735,10 @@
     "forbidden_examples": [
       "意志の患者に対する医師を確認する"
     ],
-    "focus": "医師/意思"
+    "focus": "医師/意思",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 414,
@@ -5513,7 +6752,10 @@
     "forbidden_examples": [
       "菓子の保証と硬貨を請求する"
     ],
-    "focus": "瑕疵/効果"
+    "focus": "瑕疵/効果",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 415,
@@ -5527,7 +6769,10 @@
     "forbidden_examples": [
       "前後策の嗜好と決済を急ぐ"
     ],
-    "focus": "善後策/施行/決裁"
+    "focus": "善後策/施行/決裁",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 416,
@@ -5541,7 +6786,10 @@
     "forbidden_examples": [
       "回答の構成と提出を準備する"
     ],
-    "focus": "解答/校正"
+    "focus": "解答/校正",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 417,
@@ -5555,7 +6803,10 @@
     "forbidden_examples": [
       "債券の交換と債権の交付を行う"
     ],
-    "focus": "債権/債券"
+    "focus": "債権/債券",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 418,
@@ -5569,7 +6820,10 @@
     "forbidden_examples": [
       "申請な神殿で神聖の手続きをする"
     ],
-    "focus": "神聖/申請"
+    "focus": "神聖/申請",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 419,
@@ -5583,7 +6837,10 @@
     "forbidden_examples": [
       "構成な態度で構成物質の降下を測る"
     ],
-    "focus": "公正/抗生物質/効果"
+    "focus": "公正/抗生物質/効果",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 420,
@@ -5597,7 +6854,10 @@
     "forbidden_examples": [
       "干渉地帯で映画の感傷を楽しむ"
     ],
-    "focus": "緩衝/鑑賞"
+    "focus": "緩衝/鑑賞",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 421,
@@ -5611,7 +6871,10 @@
     "forbidden_examples": [
       "服装した回線で輻輳の点検をする"
     ],
-    "focus": "輻輳/服装"
+    "focus": "輻輳/服装",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 422,
@@ -5625,7 +6888,10 @@
     "forbidden_examples": [
       "包装事故を防ぐために放送を徹底する"
     ],
-    "focus": "放送/包装"
+    "focus": "放送/包装",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 423,
@@ -5639,7 +6905,10 @@
     "forbidden_examples": [
       "汽車の帰りに記者に乗る"
     ],
-    "focus": "帰社/汽車"
+    "focus": "帰社/汽車",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 424,
@@ -5653,7 +6922,10 @@
     "forbidden_examples": [
       "回帰の終了とともに会期分析を行う"
     ],
-    "focus": "会期/回帰"
+    "focus": "会期/回帰",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 425,
@@ -5667,7 +6939,10 @@
     "forbidden_examples": [
       "勝気を失わずに正気を見出す"
     ],
-    "focus": "正気/勝機"
+    "focus": "正気/勝機",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 426,
@@ -5681,7 +6956,10 @@
     "forbidden_examples": [
       "相殺の指示で債権を総裁する"
     ],
-    "focus": "総裁/債権/相殺"
+    "focus": "総裁/債権/相殺",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 427,
@@ -5695,7 +6973,10 @@
     "forbidden_examples": [
       "硬貨の高い効果の選別を行う"
     ],
-    "focus": "効果/硬貨"
+    "focus": "効果/硬貨",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 428,
@@ -5709,7 +6990,10 @@
     "forbidden_examples": [
       "意思の医師を継いで病院を債権する"
     ],
-    "focus": "医師/遺志/再建"
+    "focus": "医師/遺志/再建",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 429,
@@ -5723,7 +7007,10 @@
     "forbidden_examples": [
       "菓子の原因となった瑕疵の製造ラインを調査する"
     ],
-    "focus": "瑕疵/菓子"
+    "focus": "瑕疵/菓子",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 430,
@@ -5737,7 +7024,10 @@
     "forbidden_examples": [
       "施行錯誤の末に法律の嗜好を迎える"
     ],
-    "focus": "試行錯誤/施行"
+    "focus": "試行錯誤/施行",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 431,
@@ -5751,7 +7041,10 @@
     "forbidden_examples": [
       "光悦を経て本の編散を完了する"
     ],
-    "focus": "校閲/編纂"
+    "focus": "校閲/編纂",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 432,
@@ -5765,7 +7058,10 @@
     "forbidden_examples": [
       "汚語の観察と薬の近畿事項を確認する"
     ],
-    "focus": "予後/禁忌"
+    "focus": "予後/禁忌",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 433,
@@ -5779,7 +7075,10 @@
     "forbidden_examples": [
       "冗長化の設計と敷地の調整を行う"
     ],
-    "focus": "冗長化/閾値"
+    "focus": "冗長化/閾値",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 434,
@@ -5793,7 +7092,10 @@
     "forbidden_examples": [
       "人事効果の結果と焼却費の計上"
     ],
-    "focus": "人事考課/償却費"
+    "focus": "人事考課/償却費",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 435,
@@ -5807,7 +7109,10 @@
     "forbidden_examples": [
       "球体依然な体質を改めて申請なチームを作る"
     ],
-    "focus": "旧態依然/新生"
+    "focus": "旧態依然/新生",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 436,
@@ -5821,7 +7126,10 @@
     "forbidden_examples": [
       "鳥類暮改の方針に対し見解がくがくの議論となる"
     ],
-    "focus": "朝令暮改/喧々諤々"
+    "focus": "朝令暮改/喧々諤々",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 437,
@@ -5835,7 +7143,10 @@
     "forbidden_examples": [
       "流飲を下げるような騎士回生の一手を放つ"
     ],
-    "focus": "溜飲を下げる/起死回生"
+    "focus": "溜飲を下げる/起死回生",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 438,
@@ -5849,7 +7160,10 @@
     "forbidden_examples": [
       "画心賞賛の末に大変自若の境地を得る"
     ],
-    "focus": "臥薪嘗胆/泰然自若"
+    "focus": "臥薪嘗胆/泰然自若",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 439,
@@ -5863,7 +7177,10 @@
     "forbidden_examples": [
       "劇透性のあるAPIで服装を解消する"
     ],
-    "focus": "冪等性/輻輳"
+    "focus": "冪等性/輻輳",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 440,
@@ -5877,7 +7194,10 @@
     "forbidden_examples": [
       "前後策を講じて孤立無縁の状況を脱する"
     ],
-    "focus": "善後策/孤立無援"
+    "focus": "善後策/孤立無援",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 441,
@@ -5893,7 +7213,10 @@
     "forbidden_examples": [
       "財務者に資料を提示して督促を行う"
     ],
-    "focus": "債務者/督促"
+    "focus": "債務者/督促",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 442,
@@ -5907,7 +7230,10 @@
     "forbidden_examples": [
       "臨床初見に基づき絵師した組織を切除する"
     ],
-    "focus": "臨床所見/壊死"
+    "focus": "臨床所見/壊死",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 443,
@@ -5921,7 +7247,10 @@
     "forbidden_examples": [
       "病状が感懐し腐種も改善した"
     ],
-    "focus": "寛解/浮腫"
+    "focus": "寛解/浮腫",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 444,
@@ -5935,7 +7264,10 @@
     "forbidden_examples": [
       "コンクリートが効果する前に効果橋を補強する"
     ],
-    "focus": "硬化/高架橋"
+    "focus": "硬化/高架橋",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 445,
@@ -5949,7 +7281,10 @@
     "forbidden_examples": [
       "配信行為を糾弾し長官処分を下す"
     ],
-    "focus": "背信行為/懲戒"
+    "focus": "背信行為/懲戒",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 446,
@@ -5965,7 +7300,10 @@
     "forbidden_examples": [
       "高山無恥な態度を諌め臨機応変におさめる"
     ],
-    "focus": "厚顔無恥/臨機応変"
+    "focus": "厚顔無恥/臨機応変",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 447,
@@ -5979,7 +7317,10 @@
     "forbidden_examples": [
       "教示を全うし合意即妙な弁舌を振るう"
     ],
-    "focus": "矜持/当意即妙"
+    "focus": "矜持/当意即妙",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 448,
@@ -5993,7 +7334,10 @@
     "forbidden_examples": [
       "殺生の命により直選和歌集を編散する"
     ],
-    "focus": "摂政/勅撰/編纂"
+    "focus": "摂政/勅撰/編纂",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 449,
@@ -6007,7 +7351,10 @@
     "forbidden_examples": [
       "絶滅の不良により信号が原水する"
     ],
-    "focus": "絶縁/減衰"
+    "focus": "絶縁/減衰",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 450,
@@ -6021,7 +7368,10 @@
     "forbidden_examples": [
       "離職率の修正を調べ干渉地帯を設ける"
     ],
-    "focus": "罹患率/趨勢/緩衝地帯"
+    "focus": "罹患率/趨勢/緩衝地帯",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 451,
@@ -6036,7 +7386,10 @@
       "試案けど",
       "私覧けど"
     ],
-    "focus": "知らんけど"
+    "focus": "知らんけど",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 452,
@@ -6051,7 +7404,10 @@
       "阿寒やつ",
       "亜館やつ"
     ],
-    "focus": "あかんやつ"
+    "focus": "あかんやつ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 453,
@@ -6065,7 +7421,10 @@
     "forbidden_examples": [
       "施矢なと思う"
     ],
-    "focus": "せやな"
+    "focus": "せやな",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 454,
@@ -6081,7 +7440,10 @@
     "forbidden_examples": [
       "本間にありがとう"
     ],
-    "focus": "ほんまに"
+    "focus": "ほんまに",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 455,
@@ -6095,7 +7457,10 @@
     "forbidden_examples": [
       "滅茶美味い"
     ],
-    "focus": "めっちゃうまい"
+    "focus": "めっちゃうまい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 456,
@@ -6109,7 +7474,10 @@
     "forbidden_examples": [
       "土内したん"
     ],
-    "focus": "どないしたん"
+    "focus": "どないしたん",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 457,
@@ -6125,7 +7493,10 @@
     "forbidden_examples": [
       "お憑かれ様でした"
     ],
-    "focus": "お疲れ様でした"
+    "focus": "お疲れ様でした",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 458,
@@ -6141,7 +7512,10 @@
     "forbidden_examples": [
       "夜露死苦お願いします"
     ],
-    "focus": "よろしくお願いします"
+    "focus": "よろしくお願いします",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 459,
@@ -6158,7 +7532,10 @@
     "forbidden_examples": [
       "百円の雨"
     ],
-    "focus": "100円"
+    "focus": "100円",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 460,
@@ -6174,7 +7551,10 @@
     "forbidden_examples": [
       "三会の部屋"
     ],
-    "focus": "3階"
+    "focus": "3階",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 461,
@@ -6190,7 +7570,10 @@
     "forbidden_examples": [
       "二千二十六年"
     ],
-    "focus": "2026年"
+    "focus": "2026年",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 462,
@@ -6206,7 +7589,10 @@
     "forbidden_examples": [
       "五強化のテスト"
     ],
-    "focus": "5教科"
+    "focus": "5教科",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 463,
@@ -6222,7 +7608,10 @@
     "forbidden_examples": [
       "阿鼻を呼び出す"
     ],
-    "focus": "API"
+    "focus": "API",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 464,
@@ -6238,7 +7627,10 @@
     "forbidden_examples": [
       "自費言うを使う"
     ],
-    "focus": "GPU"
+    "focus": "GPU",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 465,
@@ -6254,7 +7646,10 @@
     "forbidden_examples": [
       "外胚につなぐ"
     ],
-    "focus": "Wi-Fi"
+    "focus": "Wi-Fi",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 466,
@@ -6270,7 +7665,10 @@
     "forbidden_examples": [
       "優越日メモリ"
     ],
-    "focus": "USBメモリ"
+    "focus": "USBメモリ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 467,
@@ -6284,7 +7682,10 @@
     "forbidden_examples": [
       "拉麺を食べる"
     ],
-    "focus": "ラーメン"
+    "focus": "ラーメン",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 468,
@@ -6300,7 +7701,10 @@
     "forbidden_examples": [
       "古飛を飲む"
     ],
-    "focus": "コーヒー"
+    "focus": "コーヒー",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 469,
@@ -6314,7 +7718,10 @@
     "forbidden_examples": [
       "波底を起動する"
     ],
-    "focus": "パソコン"
+    "focus": "パソコン",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 470,
@@ -6330,7 +7737,10 @@
     "forbidden_examples": [
       "巣魔法を充電する"
     ],
-    "focus": "スマホ"
+    "focus": "スマホ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 471,
@@ -6346,7 +7756,10 @@
     "forbidden_examples": [
       "今日は言い転機だ"
     ],
-    "focus": "今日はいい天気だ"
+    "focus": "今日はいい天気だ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 472,
@@ -6362,7 +7775,10 @@
     "forbidden_examples": [
       "明日は安みだ"
     ],
-    "focus": "明日は休みだ"
+    "focus": "明日は休みだ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 473,
@@ -6378,7 +7794,10 @@
     "forbidden_examples": [
       "御馳走さまでした"
     ],
-    "focus": "ごちそうさまでした"
+    "focus": "ごちそうさまでした",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 474,
@@ -6394,7 +7813,10 @@
     "forbidden_examples": [
       "お安いなさい"
     ],
-    "focus": "おやすみなさい"
+    "focus": "おやすみなさい",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 475,
@@ -6409,7 +7831,10 @@
       "今日はは",
       "今日は"
     ],
-    "focus": "こんにちは"
+    "focus": "こんにちは",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 476,
@@ -6426,7 +7851,10 @@
     "forbidden_examples": [
       "十喜怒走る"
     ],
-    "focus": "10キロ"
+    "focus": "10キロ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 477,
@@ -6442,7 +7870,10 @@
     "forbidden_examples": [
       "一月一日"
     ],
-    "focus": "1月1日"
+    "focus": "1月1日",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 478,
@@ -6459,7 +7890,10 @@
     "forbidden_examples": [
       "五十パーセントの確率"
     ],
-    "focus": "50%"
+    "focus": "50%",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 479,
@@ -6475,7 +7909,10 @@
     "forbidden_examples": [
       "絵曲せるの表"
     ],
-    "focus": "Excel"
+    "focus": "Excel",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   },
   {
     "id": 480,
@@ -6491,6 +7928,9 @@
     "forbidden_examples": [
       "部等座を開く"
     ],
-    "focus": "ブラウザ"
+    "focus": "ブラウザ",
+    "origin": "data/kana_kanji_hard_context_testset.jsonl",
+    "input_mode": "kana",
+    "expected_action": "convert"
   }
 ]

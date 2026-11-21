@@ -969,46 +969,30 @@ fn evaluate_output(
     acceptable: &[String],
     forbidden: &[String],
 ) -> (bool, String) {
-    let out = output.trim().replace('\r', "").replace('\n', "");
-    let exp = expected.trim();
-
-    for fb in forbidden {
-        let fb_trim = fb.trim();
-        if !fb_trim.is_empty() && out.contains(fb_trim) {
-            return (false, format!("NG (forbidden: {fb_trim})"));
-        }
-    }
-
-    if out == exp || acceptable.iter().any(|a| a.trim() == out) {
-        return (true, "OK (Perfect)".to_string());
-    }
-
-    let normalize = |s: &str| -> String {
-        s.chars()
-            .filter(|c| !c.is_whitespace() && *c != '　')
-            .collect()
+    // 共通エンジン（benchmarks/common）と同一判定。表示は従来の互換文字列へ写像する。
+    let score = azookey_server::ai_assist::benchmark::score_conversion(
+        output,
+        expected,
+        acceptable,
+        forbidden,
+    );
+    let reason = match score.reason {
+        "exact" => "OK (Perfect)",
+        "whitespace" => "OK (Whitespace variant)",
+        "kana" => "OK (Kana variant)",
+        "whitespace_acceptable" => "OK (Whitespace variant - acceptable)",
+        "kana_acceptable" => "OK (Kana variant - acceptable)",
+        "forbidden" => "NG (forbidden)",
+        _ => "NG",
     };
-    if normalize(&out) == normalize(exp) {
-        return (true, "OK (Whitespace variant)".to_string());
-    }
-
-    let hira_out = to_hiragana(&out);
-    let hira_exp = to_hiragana(exp);
-    if hira_out == hira_exp {
-        return (true, "OK (Kana variant)".to_string());
-    }
-
-    for acc in acceptable {
-        let acc_trim = acc.trim();
-        if normalize(&out) == normalize(acc_trim) {
-            return (true, "OK (Whitespace variant - acceptable)".to_string());
-        }
-        if hira_out == to_hiragana(acc_trim) {
-            return (true, "OK (Kana variant - acceptable)".to_string());
-        }
-    }
-
-    (false, format!("NG (out=[{out}] vs exp=[{exp}])"))
+    (
+        score.is_correct,
+        if score.is_correct {
+            reason.to_string()
+        } else {
+            format!("NG (out=[{output}] vs exp=[{expected}])")
+        },
+    )
 }
 
 #[tauri::command]
@@ -1261,6 +1245,63 @@ async fn run_ai_assist_benchmark_item(
     })
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PredictiveItemResult {
+    pub id: u32,
+    pub prediction: Option<String>,
+    pub is_match: bool,
+    pub latency_ms: f64,
+}
+
+#[tauri::command]
+async fn run_predictive_benchmark_item(
+    state: tauri::State<'_, AppState>,
+    id: u32,
+    context: String,
+    partial_input: String,
+    full_sentence: String,
+    expected_continuation: String,
+    acceptable_continuations: Option<Vec<String>>,
+) -> Result<PredictiveItemResult, String> {
+    let _run_guard = benchmark_run_lock().lock().await;
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    ensure_benchmark_server(&config).await?;
+    let effective_context = if context == "なし" { String::new() } else { context.trim().to_string() };
+    let partial = partial_input.trim().to_string();
+    let reading = azookey_server::ai_assist::reading_check::reading_for_surface(&partial)
+        .unwrap_or_else(|| azookey_server::ai_assist::katakana_to_hiragana(&partial));
+    let t0 = std::time::Instant::now();
+    let prediction = tauri::async_runtime::spawn_blocking(move || {
+        azookey_server::ai_assist::prediction::clear_cache();
+        azookey_server::ai_assist::prediction::suggest(
+            &effective_context,
+            &reading,
+            &partial,
+            &azookey_server::ai_assist::AiAssistConfig {
+                enabled: true,
+                prediction_port: 8090,
+                ..Default::default()
+            },
+        )
+        .map(|p| format!("{}{}", partial, p.continuation))
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let is_match = azookey_server::ai_assist::benchmark::score_predictive(
+        prediction.as_deref(),
+        &full_sentence,
+        &expected_continuation,
+        &acceptable_continuations.unwrap_or_default(),
+    );
+    Ok(PredictiveItemResult {
+        id,
+        prediction,
+        is_match,
+        latency_ms,
+    })
+}
+
 #[derive(Debug, Serialize, Clone)]
 struct QuickBackendResult {
     backend: String,
@@ -1424,6 +1465,7 @@ pub fn run() {
             dictionary_cancel,
             setup_assets_status,
             run_ai_assist_benchmark_item,
+            run_predictive_benchmark_item,
             get_active_model,
             switch_model
         ])

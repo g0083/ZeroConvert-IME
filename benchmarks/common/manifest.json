@@ -1,0 +1,35 @@
+{
+  "schema": "zerocon-common-benchmark/v1",
+  "conversion": {
+    "count": 740,
+    "by_subset": {
+      "basic": 230,
+      "hard": 250,
+      "realistic": 160,
+      "colloquial": 100
+    }
+  },
+  "typo": {
+    "count": 450,
+    "clean": 195,
+    "repair": 255,
+    "by_input_mode": {
+      "kana": 350,
+      "qwerty": 60,
+      "flick": 40
+    },
+    "by_type": {
+      "missing_vowel": 50,
+      "nasal": 25,
+      "adjacent": 60,
+      "prolonged": 15,
+      "geminate": 25,
+      "transposition": 40,
+      "clean": 195,
+      "flick": 40
+    }
+  },
+  "predictive": {
+    "count": 30
+  }
+}

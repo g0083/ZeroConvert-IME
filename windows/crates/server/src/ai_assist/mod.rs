@@ -17,13 +17,14 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+pub mod benchmark;
 pub mod corrector;
 pub mod dynamic_macro;
 pub mod english_learning;
 pub mod keyboard_hybrid;
 pub mod learning;
 pub mod prediction;
-mod reading_check;
+pub mod reading_check;
 pub mod romaji_decoder;
 pub mod runtime;
 pub mod translation;

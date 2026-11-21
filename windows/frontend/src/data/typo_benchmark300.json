@@ -8,7 +8,14 @@
     "context": "お忙しいところ恐れ入りますが、",
     "input_reading": "ゴカクニンクダサ",
     "target_reading": "ごかくにんください",
-    "expected": "ご確認ください"
+    "expected": "ご確認ください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴカクニンクダサ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 2,
@@ -19,7 +26,14 @@
     "context": "打ち合わせの日程について、",
     "input_reading": "ゴツゴンウハイカガデショウカ",
     "target_reading": "ごつごうはいかがでしょうか",
-    "expected": "ご都合はいかがでしょうか"
+    "expected": "ご都合はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴツゴンウハイカガデショウカ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 3,
@@ -30,7 +44,14 @@
     "context": "取り急ぎ、",
     "input_reading": "ゴラサンラクマデ",
     "target_reading": "ごれんらくまで",
-    "expected": "ご連絡まで"
+    "expected": "ご連絡まで",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴラサンラクマデ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 4,
@@ -41,7 +62,14 @@
     "context": "添付のファイルについて、",
     "input_reading": "パスワーダヲオクリシマス",
     "target_reading": "ぱすわーどをおくりします",
-    "expected": "パスワードをお送りします"
+    "expected": "パスワードをお送りします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスワーダヲオクリシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 5,
@@ -52,7 +80,14 @@
     "context": "今後の進め方について、",
     "input_reading": "ギソウダンサセテクダサイ",
     "target_reading": "ごそうだんさせてください",
-    "expected": "ご相談させてください"
+    "expected": "ご相談させてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギソウダンサセテクダサイ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 6,
@@ -63,7 +98,14 @@
     "context": "先ほどお送りした資料の、",
     "input_reading": "サシカエヲアネガイシマス",
     "target_reading": "さしかえをおねがいします",
-    "expected": "差し替えをお願いします"
+    "expected": "差し替えをお願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サシカエヲアネガイシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 7,
@@ -74,7 +116,14 @@
     "context": "大変お手数をおかけしますが、",
     "input_reading": "ゴッタイオウオネガイシマス",
     "target_reading": "ごたいおうおねがいします",
-    "expected": "ご対応お願いします"
+    "expected": "ご対応お願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴッタイオウオネガイシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 8,
@@ -85,7 +134,14 @@
     "context": "本日の会議の、",
     "input_reading": "ギジロクヲオクリアマス",
     "target_reading": "ぎじろくをおくります",
-    "expected": "議事録を送ります"
+    "expected": "議事録を送ります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギジロクヲオクリアマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 9,
@@ -96,7 +152,14 @@
     "context": "契約書の内容に、",
     "input_reading": "ドウイイタサlマス",
     "target_reading": "どういいたします",
-    "expected": "同意いたします"
+    "expected": "同意いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ドウイイタサlマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 10,
@@ -107,7 +170,14 @@
     "context": "お見積もり書を、",
     "input_reading": "サイハンッコウイタシマス",
     "target_reading": "さいはっこういたします",
-    "expected": "再発行いたします"
+    "expected": "再発行いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハンッコウイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 11,
@@ -118,7 +188,14 @@
     "context": "プロジェクトの、",
     "input_reading": "サlンチョクハイカガデショウカ",
     "target_reading": "しんちょくはいかがでしょうか",
-    "expected": "進捗はいかがでしょうか"
+    "expected": "進捗はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サlンチョクハイカガデショウカ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 12,
@@ -129,7 +206,14 @@
     "context": "ご要望の機能について、",
     "input_reading": "ケントウイタシマス",
     "target_reading": "けんとういたします",
-    "expected": "検討いたします"
+    "expected": "検討いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケントウイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 13,
@@ -140,7 +224,14 @@
     "context": "突然のご連絡、",
     "input_reading": "シタレイイタシマス",
     "target_reading": "しつれいいたします",
-    "expected": "失礼いたします"
+    "expected": "失礼いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シタレイイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 14,
@@ -151,7 +242,14 @@
     "context": "こちらの件、",
     "input_reading": "ショウンチイタシマシタ",
     "target_reading": "しょうちいたしました",
-    "expected": "承知いたしました"
+    "expected": "承知いたしました",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ショウンチイタシマシタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 15,
@@ -162,7 +260,14 @@
     "context": "お電話口で、",
     "input_reading": "タンットウニカワリマス",
     "target_reading": "たんとうにかわります",
-    "expected": "担当に代わります"
+    "expected": "担当に代わります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タンットウニカワリマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 16,
@@ -173,7 +278,14 @@
     "context": "社内調整のうえ、",
     "input_reading": "アラタメテゴレンラクシマス",
     "target_reading": "あらためてごれんらくします",
-    "expected": "改めてご連絡します"
+    "expected": "改めてご連絡します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アラタメテゴレンラクシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 17,
@@ -184,7 +296,14 @@
     "context": "ご配慮いただき、",
     "input_reading": "カンシャイタシマス",
     "target_reading": "かんしゃいたします",
-    "expected": "感謝いたします"
+    "expected": "感謝いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンシャイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 18,
@@ -195,7 +314,14 @@
     "context": "お時間をいただき、",
     "input_reading": "マコトニアリガトウゴザqイマス",
     "target_reading": "まことにありがとうございます",
-    "expected": "誠にありがとうございます"
+    "expected": "誠にありがとうございます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "マコトニアリガトウゴザqイマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 19,
@@ -206,7 +332,14 @@
     "context": "恐れながら、",
     "input_reading": "ジタイサソテイタダキマス",
     "target_reading": "じたいさせていただきます",
-    "expected": "辞退させていただきます"
+    "expected": "辞退させていただきます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジタイサソテイタダキマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 20,
@@ -217,7 +350,14 @@
     "context": "本件の優先度を、",
     "input_reading": "タアクセッテイシマス",
     "target_reading": "たかくせっていします",
-    "expected": "高く設定します"
+    "expected": "高く設定します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タアクセッテイシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 21,
@@ -228,7 +368,14 @@
     "context": "次回の打ち合わせは、",
     "input_reading": "ライシュクノスイヨウビデス",
     "target_reading": "らいしゅうのすいようびです",
-    "expected": "来週の水曜日です"
+    "expected": "来週の水曜日です",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ライシュクノスイヨウビデス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 22,
@@ -239,7 +386,14 @@
     "context": "本日の予定を、",
     "input_reading": "ラlマインドイタシマス",
     "target_reading": "りまいんどいたします",
-    "expected": "リマインドいたします"
+    "expected": "リマインドいたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ラlマインドイタシマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 23,
@@ -250,7 +404,14 @@
     "context": "社内規定を、",
     "input_reading": "ジュシュシテクダサイ",
     "target_reading": "じゅんしゅしてください",
-    "expected": "遵守してください"
+    "expected": "遵守してください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジュシュシテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 24,
@@ -261,7 +422,14 @@
     "context": "取引先への、",
     "input_reading": "プレゼン資料ン作成スル",
     "target_reading": "プレゼン資料を作成する",
-    "expected": "プレゼン資料を作成する"
+    "expected": "プレゼン資料を作成する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "プレゼン資料ン作成スル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 25,
@@ -272,7 +440,14 @@
     "context": "請求金額を、",
     "input_reading": "オフリコミカヅアサイ",
     "target_reading": "おふりこみください",
-    "expected": "お振込みください"
+    "expected": "お振込みください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オフリコミカヅアサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 26,
@@ -283,7 +458,14 @@
     "context": "朝のメッセージで、",
     "input_reading": "オハヨウ！キョウモガンバラオウ",
     "target_reading": "おはよう！きょうもがんばろう",
-    "expected": "おはよう！今日も頑張ろう"
+    "expected": "おはよう！今日も頑張ろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オハヨウ！キョウモガンバラオウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 27,
@@ -294,7 +476,14 @@
     "context": "お昼休みに、",
     "input_reading": "ナニタベニエク？",
     "target_reading": "なにたべにいく？",
-    "expected": "何食べに行く？"
+    "expected": "何食べに行く？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニタベニエク？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 28,
@@ -305,7 +494,14 @@
     "context": "帰り道で、",
     "input_reading": "イマカッラカエルネ",
     "target_reading": "いまからかえるね",
-    "expected": "今から帰るね"
+    "expected": "今から帰るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イマカッラカエルネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 29,
@@ -316,7 +512,14 @@
     "context": "駅の改札で、",
     "input_reading": "ツイタロシエテ",
     "target_reading": "ついたらおしえて",
-    "expected": "着いたら教えて"
+    "expected": "着いたら教えて",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツイタロシエテ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 30,
@@ -327,7 +530,14 @@
     "context": "待ち合わせで、",
     "input_reading": "チョットオクラッソウ",
     "target_reading": "ちょっとおくれそう",
-    "expected": "ちょっと遅れそう"
+    "expected": "ちょっと遅れそう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "チョットオクラッソウ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 31,
@@ -338,7 +548,14 @@
     "context": "友達の吉報に、",
     "input_reading": "オメデトウ！ヨカッタネ",
     "target_reading": "おめでとう！よかったね",
-    "expected": "おめでとう！良かったね"
+    "expected": "おめでとう！良かったね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オメデトウ！ヨカッタネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 32,
@@ -349,7 +566,14 @@
     "context": "体調を崩した人に、",
     "input_reading": "オダイジナシイテクダサイ",
     "target_reading": "おだいじにしてください",
-    "expected": "お大事にしてください"
+    "expected": "お大事にしてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オダイジナシイテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 33,
@@ -360,7 +584,14 @@
     "context": "旅行のお土産を、",
     "input_reading": "カテキタヨ",
     "target_reading": "かってきたよ",
-    "expected": "買ってきたよ"
+    "expected": "買ってきたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カテキタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 34,
@@ -371,7 +602,14 @@
     "context": "新しいカフェで、",
     "input_reading": "ケーキソタベタヨ",
     "target_reading": "けーきをたべたよ",
-    "expected": "ケーキを食べたよ"
+    "expected": "ケーキを食べたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケーキソタベタヨ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 35,
@@ -382,7 +620,14 @@
     "context": "週末の映画、",
     "input_reading": "ナジカラダッケ？",
     "target_reading": "なんじからだっけ？",
-    "expected": "何時からだっけ？"
+    "expected": "何時からだっけ？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナジカラダッケ？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 36,
@@ -393,7 +638,14 @@
     "context": "宿題が終わらなくて、",
     "input_reading": "タツケテホシイ",
     "target_reading": "たすけてほしい",
-    "expected": "助けてほしい"
+    "expected": "助けてほしい",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タツケテホシイ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 37,
@@ -404,7 +656,14 @@
     "context": "写真の共有で、",
     "input_reading": "アルバムニトイカシタヨ",
     "target_reading": "あるばむについかしたよ",
-    "expected": "アルバムに追加したよ"
+    "expected": "アルバムに追加したよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アルバムニトイカシタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 38,
@@ -415,7 +674,14 @@
     "context": "買い物の途中で、",
     "input_reading": "ナニカカウマノアル？",
     "target_reading": "なにかかうものある？",
-    "expected": "何か買うものある？"
+    "expected": "何か買うものある？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニカカウマノアル？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 39,
@@ -426,7 +692,14 @@
     "context": "夜更かしして、",
     "input_reading": "ソロソロネルエナ",
     "target_reading": "そろそろねるね",
-    "expected": "そろそろ寝るね"
+    "expected": "そろそろ寝るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ソロソロネルエナ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 40,
@@ -437,7 +710,14 @@
     "context": "部屋の模様替えで、",
     "input_reading": "ツクエヲイドウシタq",
     "target_reading": "つくえをいどうした",
-    "expected": "机を移動した"
+    "expected": "机を移動した",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツクエヲイドウシタq",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 41,
@@ -448,7 +728,14 @@
     "context": "雨降りの日に、",
     "input_reading": "ソンタクモノヲイレヨウ",
     "target_reading": "せんたくものをいれよう",
-    "expected": "洗濯物を入れよう"
+    "expected": "洗濯物を入れよう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ソンタクモノヲイレヨウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 42,
@@ -459,7 +746,14 @@
     "context": "美味しいご飯を食べて、",
     "input_reading": "オニカイッパイニナッタ",
     "target_reading": "おなかいっぱいになった",
-    "expected": "お腹いっぱいになった"
+    "expected": "お腹いっぱいになった",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オニカイッパイニナッタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 43,
@@ -470,7 +764,14 @@
     "context": "誕生日のプレゼントを、",
     "input_reading": "エランデイルトコロ",
     "target_reading": "えらんでいるところ",
-    "expected": "選んでいるところ"
+    "expected": "選んでいるところ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エランデイルトコロ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 44,
@@ -481,7 +782,14 @@
     "context": "急な雨に降られて、",
     "input_reading": "カカヲカッタ",
     "target_reading": "かさをかった",
-    "expected": "傘を買った"
+    "expected": "傘を買った",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カカヲカッタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 45,
@@ -492,7 +800,14 @@
     "context": "ゲームの対戦で、",
     "input_reading": "モウイッカイヤロウ",
     "target_reading": "もういっかいやろう",
-    "expected": "もう一回やろう"
+    "expected": "もう一回やろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "モウイッカイヤロウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 46,
@@ -503,7 +818,14 @@
     "context": "ローカルブランチを、",
     "input_reading": "サイシンノミンヘマージ",
     "target_reading": "さいしんのめいんへまーじ",
-    "expected": "最新のメインへマージ"
+    "expected": "最新のメインへマージ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイシンノミンヘマージ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 47,
@@ -514,7 +836,14 @@
     "context": "データベースの、",
     "input_reading": "インデックスヲサイコウチク",
     "target_reading": "いんでっくすをさいこうちく",
-    "expected": "インデックスを再構築"
+    "expected": "インデックスを再構築",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "インデックスヲサイコウチク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 48,
@@ -525,7 +854,14 @@
     "context": "キャッシュを、",
     "input_reading": "クリエシテサイヨミコミ",
     "target_reading": "くりあしてさいよみこみ",
-    "expected": "クリアして再読み込み"
+    "expected": "クリアして再読み込み",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "クリエシテサイヨミコミ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 49,
@@ -536,7 +872,14 @@
     "context": "セキュリティの警告で、",
     "input_reading": "パスッワードヲ変更スル",
     "target_reading": "パスワードを変更する",
-    "expected": "パスワードを変更する"
+    "expected": "パスワードを変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスッワードヲ変更スル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 50,
@@ -547,7 +890,14 @@
     "context": "サーバー負荷を、",
     "input_reading": "カンシタハールデチェック",
     "target_reading": "かんしつーるでちぇっく",
-    "expected": "監視ツールでチェック"
+    "expected": "監視ツールでチェック",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンシタハールデチェック",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 51,
@@ -558,7 +908,14 @@
     "context": "エラーログから、",
     "input_reading": "スタックトテースヲカクニン",
     "target_reading": "すたっくとれーすをかくにん",
-    "expected": "スタックトレースを確認"
+    "expected": "スタックトレースを確認",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スタックトテースヲカクニン",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 52,
@@ -569,7 +926,14 @@
     "context": "コンテナを、",
     "input_reading": "ビルドシテ起動スル",
     "target_reading": "びるどして起動する",
-    "expected": "ビルドして起動する"
+    "expected": "ビルドして起動する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ビルドシテ起動スル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 53,
@@ -580,7 +944,14 @@
     "context": "新しいライブラリの、",
     "input_reading": "イゾンカンケイヲマイケツ",
     "target_reading": "いぞんかんけいをかいけつ",
-    "expected": "依存関係を解決"
+    "expected": "依存関係を解決",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イゾンカンケイヲマイケツ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 54,
@@ -591,7 +962,14 @@
     "context": "設定ファイルの、",
     "input_reading": "カキョウヘンスウヲヘンコウ",
     "target_reading": "かんきょうへんすうをへんこう",
-    "expected": "環境変数を変更"
+    "expected": "環境変数を変更",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カキョウヘンスウヲヘンコウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 55,
@@ -602,7 +980,14 @@
     "context": "コードフォーマッタを、",
     "input_reading": "ホゾンジナジイドウジッコウ",
     "target_reading": "ほぞんじにじどうじっこう",
-    "expected": "保存時に自動実行"
+    "expected": "保存時に自動実行",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホゾンジナジイドウジッコウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 56,
@@ -613,7 +998,14 @@
     "context": "ユニットテストが、",
     "input_reading": "スベテパッスイタ",
     "target_reading": "すべてぱすした",
-    "expected": "すべてパスした"
+    "expected": "すべてパスした",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スベテパッスイタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 57,
@@ -624,7 +1016,14 @@
     "context": "メモリリークの、",
     "input_reading": "ゲンインヲトクテイサル",
     "target_reading": "げんいんをとくていする",
-    "expected": "原因を特定する"
+    "expected": "原因を特定する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゲンインヲトクテイサル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 58,
@@ -635,7 +1034,14 @@
     "context": "APIのレスポンスを、",
     "input_reading": "ジェイソンケイシキデウケタル",
     "target_reading": "じぇいそんけいしきでうけとる",
-    "expected": "JSON形式で受け取る"
+    "expected": "JSON形式で受け取る",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジェイソンケイシキデウケタル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 59,
@@ -646,7 +1052,14 @@
     "context": "アクセストークンを、",
     "input_reading": "サイハッコウスル",
     "target_reading": "さいはっこうする",
-    "expected": "再発行する"
+    "expected": "再発行する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハッコウスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 60,
@@ -657,7 +1070,14 @@
     "context": "ネットワークの、",
     "input_reading": "タイエキハバヲカクダエ",
     "target_reading": "たいえきはばをかくだい",
-    "expected": "帯域幅を拡大"
+    "expected": "帯域幅を拡大",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タイエキハバヲカクダエ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 61,
@@ -668,7 +1088,14 @@
     "context": "クラウドアカウントの、",
     "input_reading": "ニショウジョウホウヲコウシン",
     "target_reading": "にんしょうじょうほうをこうしん",
-    "expected": "認証情報を更新"
+    "expected": "認証情報を更新",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ニショウジョウホウヲコウシン",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 62,
@@ -679,7 +1106,14 @@
     "context": "バッチ処理の、",
     "input_reading": "スケジュルヲセッテイ",
     "target_reading": "すけじゅーるをせってい",
-    "expected": "スケジュールを設定"
+    "expected": "スケジュールを設定",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スケジュルヲセッテイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 63,
@@ -690,7 +1124,14 @@
     "context": "リリースタグを、",
     "input_reading": "ギチョハブニプッシュ",
     "target_reading": "ぎっとはぶにぷっしゅ",
-    "expected": "GitHubにプッシュ"
+    "expected": "GitHubにプッシュ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギチョハブニプッシュ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 64,
@@ -701,7 +1142,14 @@
     "context": "パフォーマンスの、",
     "input_reading": "ボトルネックヲカイショウ",
     "target_reading": "ぼとるねっくをかいしょう",
-    "expected": "ボトルネックを解消"
+    "expected": "ボトルネックを解消",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ボトルネックヲカイショウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 65,
@@ -712,7 +1160,14 @@
     "context": "クライアント側の、",
     "input_reading": "カキナオシンヲオコナウ",
     "target_reading": "かきなおしをおこなう",
-    "expected": "書き直しを行う"
+    "expected": "書き直しを行う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カキナオシンヲオコナウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 66,
@@ -723,7 +1178,14 @@
     "context": "天気予報によると、",
     "input_reading": "アスンハハレルミコミデス",
     "target_reading": "あすははれるみこみです",
-    "expected": "明日は晴れる見込みです"
+    "expected": "明日は晴れる見込みです",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アスンハハレルミコミデス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 67,
@@ -734,7 +1196,14 @@
     "context": "駅前の交差点で、",
     "input_reading": "シゴウヲマツ",
     "target_reading": "しんごうをまつ",
-    "expected": "信号を待つ"
+    "expected": "信号を待つ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シゴウヲマツ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 68,
@@ -745,7 +1214,14 @@
     "context": "公園のベンチで、",
     "input_reading": "カーオヒーヲノム",
     "target_reading": "こーひーをのむ",
-    "expected": "コーヒーを飲む"
+    "expected": "コーヒーを飲む",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カーオヒーヲノム",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 69,
@@ -756,7 +1232,14 @@
     "context": "図書館で借りた、",
     "input_reading": "ホンヲヘンキャクサル",
     "target_reading": "ほんをへんきゃくする",
-    "expected": "本を返却する"
+    "expected": "本を返却する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホンヲヘンキャクサル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 70,
@@ -767,7 +1250,14 @@
     "context": "健康診断の、",
     "input_reading": "ケカヲトドケル",
     "target_reading": "けっかをとどける",
-    "expected": "結果を届ける"
+    "expected": "結果を届ける",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケカヲトドケル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 71,
@@ -778,7 +1268,14 @@
     "context": "新しいスマートフォンに、",
     "input_reading": "キサヤッヘンコウスル",
     "target_reading": "きしゅへんこうする",
-    "expected": "機種変更する"
+    "expected": "機種変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "キサヤッヘンコウスル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 72,
@@ -789,7 +1286,14 @@
     "context": "近所のスーパーで、",
     "input_reading": "ヤサイトクアダモノヲカウ",
     "target_reading": "やさいとくだものをかう",
-    "expected": "野菜と果物を買う"
+    "expected": "野菜と果物を買う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ヤサイトクアダモノヲカウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 73,
@@ -800,7 +1304,14 @@
     "context": "ジョギングをして、",
     "input_reading": "キモチノイイアセヲカク",
     "target_reading": "きもちのいいあせをかく",
-    "expected": "気持ちのいい汗をかく"
+    "expected": "気持ちのいい汗をかく",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "キモチノイイアセヲカク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 74,
@@ -811,7 +1322,14 @@
     "context": "窓を開けて、",
     "input_reading": "ヘヤノカンキヲオコナウ",
     "target_reading": "へやのかんきをおこなう",
-    "expected": "部屋の換気を行う"
+    "expected": "部屋の換気を行う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ヘヤノカンキヲオコナウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 75,
@@ -822,7 +1340,14 @@
     "context": "車検の時期なので、",
     "input_reading": "ディーラーニレラクスル",
     "target_reading": "でぃーらーにれんらくする",
-    "expected": "ディーラーに連絡する"
+    "expected": "ディーラーに連絡する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ディーラーニレラクスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 76,
@@ -833,7 +1358,14 @@
     "context": "旅行の荷物を、",
     "input_reading": "スーツケーズニツメル",
     "target_reading": "すーつけーすにつめる",
-    "expected": "スーツケースに詰める"
+    "expected": "スーツケースに詰める",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スーツケーズニツメル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 77,
@@ -844,7 +1376,14 @@
     "context": "部屋の照明を、",
     "input_reading": "エルイーエダィーニカエル",
     "target_reading": "えるいーでぃーにかえる",
-    "expected": "LEDに変える"
+    "expected": "LEDに変える",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エルイーエダィーニカエル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 78,
@@ -855,7 +1394,14 @@
     "context": "新しい趣味として、",
     "input_reading": "ギターヲパジメル",
     "target_reading": "ぎたーをはじめる",
-    "expected": "ギターを始める"
+    "expected": "ギターを始める",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギターヲパジメル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 79,
@@ -866,7 +1412,14 @@
     "context": "秋の紅葉を、",
     "input_reading": "ミニイク",
     "target_reading": "みにいく",
-    "expected": "見に行く"
+    "expected": "見に行く",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ミニイク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 80,
@@ -877,7 +1430,14 @@
     "context": "毎朝の習慣で、",
     "input_reading": "ラジオタイサウヲスル",
     "target_reading": "らじおたいそうをする",
-    "expected": "ラジオ体操をする"
+    "expected": "ラジオ体操をする",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ラジオタイサウヲスル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 81,
@@ -888,7 +1448,14 @@
     "context": "お忙しいところ恐れ入りますが、",
     "input_reading": "ゴカクニンクダサイ",
     "target_reading": "ごかくにんください",
-    "expected": "ご確認ください"
+    "expected": "ご確認ください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴカクニンクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 82,
@@ -899,7 +1466,14 @@
     "context": "打ち合わせの日程について、",
     "input_reading": "ゴツゴオハイカガデショウカ",
     "target_reading": "ごつごうはいかがでしょうか",
-    "expected": "ご都合はいかがでしょうか"
+    "expected": "ご都合はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴツゴオハイカガデショウカ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 83,
@@ -910,7 +1484,14 @@
     "context": "取り急ぎ、",
     "input_reading": "ゴレンリクマデ",
     "target_reading": "ごれんらくまで",
-    "expected": "ご連絡まで"
+    "expected": "ご連絡まで",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴレンリクマデ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 84,
@@ -921,7 +1502,14 @@
     "context": "添付のファイルについて、",
     "input_reading": "パンスワードヲオクリシマス",
     "target_reading": "ぱすわーどをおくりします",
-    "expected": "パスワードをお送りします"
+    "expected": "パスワードをお送りします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パンスワードヲオクリシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 85,
@@ -932,7 +1520,14 @@
     "context": "今後の進め方について、",
     "input_reading": "ゴソウダンッサエテクダサイ",
     "target_reading": "ごそうだんさせてください",
-    "expected": "ご相談させてください"
+    "expected": "ご相談させてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴソウダンッサエテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 86,
@@ -943,7 +1538,14 @@
     "context": "先ほどお送りした資料の、",
     "input_reading": "サシカエッヲオネガイシマス",
     "target_reading": "さしかえをおねがいします",
-    "expected": "差し替えをお願いします"
+    "expected": "差し替えをお願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サシカエッヲオネガイシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 87,
@@ -954,7 +1556,14 @@
     "context": "大変お手数をおかけしますが、",
     "input_reading": "ゴタイオウオヘガイシマス",
     "target_reading": "ごたいおうおねがいします",
-    "expected": "ご対応お願いします"
+    "expected": "ご対応お願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴタイオウオヘガイシマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 88,
@@ -965,7 +1574,14 @@
     "context": "本日の会議の、",
     "input_reading": "ギジロクヲオクリマス",
     "target_reading": "ぎじろくをおくります",
-    "expected": "議事録を送ります"
+    "expected": "議事録を送ります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギジロクヲオクリマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 89,
@@ -976,7 +1592,14 @@
     "context": "契約書の内容に、",
     "input_reading": "ドウイイタシマス",
     "target_reading": "どういいたします",
-    "expected": "同意いたします"
+    "expected": "同意いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ドウイイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 90,
@@ -987,7 +1610,14 @@
     "context": "お見積もり書を、",
     "input_reading": "サイハッコウイタサマス",
     "target_reading": "さいはっこういたします",
-    "expected": "再発行いたします"
+    "expected": "再発行いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハッコウイタサマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 91,
@@ -998,7 +1628,14 @@
     "context": "プロジェクトの、",
     "input_reading": "シンチョクハイカガデショオカ",
     "target_reading": "しんちょくはいかがでしょうか",
-    "expected": "進捗はいかがでしょうか"
+    "expected": "進捗はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シンチョクハイカガデショオカ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 92,
@@ -1009,7 +1646,14 @@
     "context": "ご要望の機能について、",
     "input_reading": "ケントウイタシマス",
     "target_reading": "けんとういたします",
-    "expected": "検討いたします"
+    "expected": "検討いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケントウイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 93,
@@ -1020,7 +1664,14 @@
     "context": "突然のご連絡、",
     "input_reading": "シツレイイタシッマス",
     "target_reading": "しつれいいたします",
-    "expected": "失礼いたします"
+    "expected": "失礼いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シツレイイタシッマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 94,
@@ -1031,7 +1682,14 @@
     "context": "こちらの件、",
     "input_reading": "シュチイタシマシタ",
     "target_reading": "しょうちいたしました",
-    "expected": "承知いたしました"
+    "expected": "承知いたしました",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シュチイタシマシタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 95,
@@ -1042,7 +1700,14 @@
     "context": "お電話口で、",
     "input_reading": "タナバトウニカワリマス",
     "target_reading": "たんとうにかわります",
-    "expected": "担当に代わります"
+    "expected": "担当に代わります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タナバトウニカワリマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 96,
@@ -1053,7 +1718,14 @@
     "context": "社内調整のうえ、",
     "input_reading": "アラタメテゴレンラクシマサウ",
     "target_reading": "あらためてごれんらくします",
-    "expected": "改めてご連絡します"
+    "expected": "改めてご連絡します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アラタメテゴレンラクシマサウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 97,
@@ -1064,7 +1736,14 @@
     "context": "ご配慮いただき、",
     "input_reading": "カンサヤイタシマス",
     "target_reading": "かんしゃいたします",
-    "expected": "感謝いたします"
+    "expected": "感謝いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンサヤイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 98,
@@ -1075,7 +1754,14 @@
     "context": "お時間をいただき、",
     "input_reading": "マコトニアリガトウゴザアマス",
     "target_reading": "まことにありがとうございます",
-    "expected": "誠にありがとうございます"
+    "expected": "誠にありがとうございます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "マコトニアリガトウゴザアマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 99,
@@ -1086,7 +1772,14 @@
     "context": "恐れながら、",
     "input_reading": "ジタイサセチタダキマス",
     "target_reading": "じたいさせていただきます",
-    "expected": "辞退させていただきます"
+    "expected": "辞退させていただきます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジタイサセチタダキマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 100,
@@ -1097,7 +1790,14 @@
     "context": "本件の優先度を、",
     "input_reading": "タカクセッテイシマシ",
     "target_reading": "たかくせっていします",
-    "expected": "高く設定します"
+    "expected": "高く設定します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タカクセッテイシマシ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 101,
@@ -1108,7 +1808,14 @@
     "context": "次回の打ち合わせは、",
     "input_reading": "ライシュウノスヨウビデス",
     "target_reading": "らいしゅうのすいようびです",
-    "expected": "来週の水曜日です"
+    "expected": "来週の水曜日です",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ライシュウノスヨウビデス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 102,
@@ -1119,7 +1826,14 @@
     "context": "本日の予定を、",
     "input_reading": "リマイドイタシマス",
     "target_reading": "りまいんどいたします",
-    "expected": "リマインドいたします"
+    "expected": "リマインドいたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "リマイドイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 103,
@@ -1130,7 +1844,14 @@
     "context": "社内規定を、",
     "input_reading": "ジュンシッュシテクダサイ",
     "target_reading": "じゅんしゅしてください",
-    "expected": "遵守してください"
+    "expected": "遵守してください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジュンシッュシテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 104,
@@ -1141,7 +1862,14 @@
     "context": "取引先への、",
     "input_reading": "プッレゼン資料ヲ作成スル",
     "target_reading": "プレゼン資料を作成する",
-    "expected": "プレゼン資料を作成する"
+    "expected": "プレゼン資料を作成する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "プッレゼン資料ヲ作成スル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 105,
@@ -1152,7 +1880,14 @@
     "context": "請求金額を、",
     "input_reading": "オフリコミカダサイ",
     "target_reading": "おふりこみください",
-    "expected": "お振込みください"
+    "expected": "お振込みください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オフリコミカダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 106,
@@ -1163,7 +1898,14 @@
     "context": "朝のメッセージで、",
     "input_reading": "オハヨウ！キョウオマガンバロウ",
     "target_reading": "おはよう！きょうもがんばろう",
-    "expected": "おはよう！今日も頑張ろう"
+    "expected": "おはよう！今日も頑張ろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オハヨウ！キョウオマガンバロウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 107,
@@ -1174,7 +1916,14 @@
     "context": "お昼休みに、",
     "input_reading": "ナニタベニイカヤ？",
     "target_reading": "なにたべにいく？",
-    "expected": "何食べに行く？"
+    "expected": "何食べに行く？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニタベニイカヤ？",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 108,
@@ -1185,7 +1934,14 @@
     "context": "帰り道で、",
     "input_reading": "イマカタカエルネ",
     "target_reading": "いまからかえるね",
-    "expected": "今から帰るね"
+    "expected": "今から帰るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イマカタカエルネ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 109,
@@ -1196,7 +1952,14 @@
     "context": "駅の改札で、",
     "input_reading": "ツイタロシエテ",
     "target_reading": "ついたらおしえて",
-    "expected": "着いたら教えて"
+    "expected": "着いたら教えて",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツイタロシエテ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 110,
@@ -1207,7 +1970,14 @@
     "context": "待ち合わせで、",
     "input_reading": "チョットオクレス",
     "target_reading": "ちょっとおくれそう",
-    "expected": "ちょっと遅れそう"
+    "expected": "ちょっと遅れそう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "チョットオクレス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 111,
@@ -1218,7 +1988,14 @@
     "context": "友達の吉報に、",
     "input_reading": "オメダトウ！ヨカッタネ",
     "target_reading": "おめでとう！よかったね",
-    "expected": "おめでとう！良かったね"
+    "expected": "おめでとう！良かったね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オメダトウ！ヨカッタネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 112,
@@ -1229,7 +2006,14 @@
     "context": "体調を崩した人に、",
     "input_reading": "オダイジニシタケウダサイ",
     "target_reading": "おだいじにしてください",
-    "expected": "お大事にしてください"
+    "expected": "お大事にしてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オダイジニシタケウダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 113,
@@ -1240,7 +2024,14 @@
     "context": "旅行のお土産を、",
     "input_reading": "カッテキタンヨ",
     "target_reading": "かってきたよ",
-    "expected": "買ってきたよ"
+    "expected": "買ってきたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カッテキタンヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 114,
@@ -1251,7 +2042,14 @@
     "context": "新しいカフェで、",
     "input_reading": "ケーキヲタッベタヨ",
     "target_reading": "けーきをたべたよ",
-    "expected": "ケーキを食べたよ"
+    "expected": "ケーキを食べたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケーキヲタッベタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 115,
@@ -1262,7 +2060,14 @@
     "context": "週末の映画、",
     "input_reading": "ナンジカラダッセ？",
     "target_reading": "なんじからだっけ？",
-    "expected": "何時からだっけ？"
+    "expected": "何時からだっけ？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナンジカラダッセ？",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 116,
@@ -1273,7 +2078,14 @@
     "context": "宿題が終わらなくて、",
     "input_reading": "タスケテホシイ",
     "target_reading": "たすけてほしい",
-    "expected": "助けてほしい"
+    "expected": "助けてほしい",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タスケテホシイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 117,
@@ -1284,7 +2096,14 @@
     "context": "写真の共有で、",
     "input_reading": "アルバッムニツイカシタヨ",
     "target_reading": "あるばむについかしたよ",
-    "expected": "アルバムに追加したよ"
+    "expected": "アルバムに追加したよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アルバッムニツイカシタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 118,
@@ -1295,7 +2114,14 @@
     "context": "買い物の途中で、",
     "input_reading": "ナニカクモノアル？",
     "target_reading": "なにかかうものある？",
-    "expected": "何か買うものある？"
+    "expected": "何か買うものある？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニカクモノアル？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 119,
@@ -1306,7 +2132,14 @@
     "context": "夜更かしして、",
     "input_reading": "ソロンソロネルネ",
     "target_reading": "そろそろねるね",
-    "expected": "そろそろ寝るね"
+    "expected": "そろそろ寝るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ソロンソロネルネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 120,
@@ -1317,7 +2150,14 @@
     "context": "部屋の模様替えで、",
     "input_reading": "ツクエヲイドウシタ",
     "target_reading": "つくえをいどうした",
-    "expected": "机を移動した"
+    "expected": "机を移動した",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツクエヲイドウシタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 121,
@@ -1328,7 +2168,14 @@
     "context": "雨降りの日に、",
     "input_reading": "センタカウモノヲイレヨウ",
     "target_reading": "せんたくものをいれよう",
-    "expected": "洗濯物を入れよう"
+    "expected": "洗濯物を入れよう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "センタカウモノヲイレヨウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 122,
@@ -1339,7 +2186,14 @@
     "context": "美味しいご飯を食べて、",
     "input_reading": "オナカイッパイニナqッタ",
     "target_reading": "おなかいっぱいになった",
-    "expected": "お腹いっぱいになった"
+    "expected": "お腹いっぱいになった",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オナカイッパイニナqッタ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 123,
@@ -1350,7 +2204,14 @@
     "context": "誕生日のプレゼントを、",
     "input_reading": "エラナナデイルトコロ",
     "target_reading": "えらんでいるところ",
-    "expected": "選んでいるところ"
+    "expected": "選んでいるところ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エラナナデイルトコロ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 124,
@@ -1361,7 +2222,14 @@
     "context": "急な雨に降られて、",
     "input_reading": "カサワカッタ",
     "target_reading": "かさをかった",
-    "expected": "傘を買った"
+    "expected": "傘を買った",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カサワカッタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 125,
@@ -1372,7 +2240,14 @@
     "context": "ゲームの対戦で、",
     "input_reading": "モウイッカイヤロウ",
     "target_reading": "もういっかいやろう",
-    "expected": "もう一回やろう"
+    "expected": "もう一回やろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "モウイッカイヤロウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 126,
@@ -1383,7 +2258,14 @@
     "context": "ローカルブランチを、",
     "input_reading": "サイシンノメイナッヘマージ",
     "target_reading": "さいしんのめいんへまーじ",
-    "expected": "最新のメインへマージ"
+    "expected": "最新のメインへマージ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイシンノメイナッヘマージ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 127,
@@ -1394,7 +2276,14 @@
     "context": "データベースの、",
     "input_reading": "インデックワウヲサイコウチク",
     "target_reading": "いんでっくすをさいこうちく",
-    "expected": "インデックスを再構築"
+    "expected": "インデックスを再構築",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "インデックワウヲサイコウチク",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 128,
@@ -1405,7 +2294,14 @@
     "context": "キャッシュを、",
     "input_reading": "クラシテサイヨミコミ",
     "target_reading": "くりあしてさいよみこみ",
-    "expected": "クリアして再読み込み"
+    "expected": "クリアして再読み込み",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "クラシテサイヨミコミ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 129,
@@ -1416,7 +2312,14 @@
     "context": "セキュリティの警告で、",
     "input_reading": "パスワードヲ変更サル",
     "target_reading": "パスワードを変更する",
-    "expected": "パスワードを変更する"
+    "expected": "パスワードを変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスワードヲ変更サル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 130,
@@ -1427,7 +2330,14 @@
     "context": "サーバー負荷を、",
     "input_reading": "カンシツールデチェッカ",
     "target_reading": "かんしつーるでちぇっく",
-    "expected": "監視ツールでチェック"
+    "expected": "監視ツールでチェック",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンシツールデチェッカ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 131,
@@ -1438,7 +2348,14 @@
     "context": "エラーログから、",
     "input_reading": "スタックトレースヲカクニ",
     "target_reading": "すたっくとれーすをかくにん",
-    "expected": "スタックトレースを確認"
+    "expected": "スタックトレースを確認",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スタックトレースヲカクニ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 132,
@@ -1449,7 +2366,14 @@
     "context": "コンテナを、",
     "input_reading": "ビルドシテ起動スラジ",
     "target_reading": "びるどして起動する",
-    "expected": "ビルドして起動する"
+    "expected": "ビルドして起動する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ビルドシテ起動スラジ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 133,
@@ -1460,7 +2384,14 @@
     "context": "新しいライブラリの、",
     "input_reading": "イゾンカンケイヲカイケツ",
     "target_reading": "いぞんかんけいをかいけつ",
-    "expected": "依存関係を解決"
+    "expected": "依存関係を解決",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イゾンカンケイヲカイケツ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 134,
@@ -1471,7 +2402,14 @@
     "context": "設定ファイルの、",
     "input_reading": "カンキョウハンスウヲヘンコウ",
     "target_reading": "かんきょうへんすうをへんこう",
-    "expected": "環境変数を変更"
+    "expected": "環境変数を変更",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンキョウハンスウヲヘンコウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 135,
@@ -1482,7 +2420,14 @@
     "context": "コードフォーマッタを、",
     "input_reading": "ホゾヲジニジドウジッコウ",
     "target_reading": "ほぞんじにじどうじっこう",
-    "expected": "保存時に自動実行"
+    "expected": "保存時に自動実行",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホゾヲジニジドウジッコウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 136,
@@ -1493,7 +2438,14 @@
     "context": "ユニットテストが、",
     "input_reading": "スベテパセシタ",
     "target_reading": "すべてぱすした",
-    "expected": "すべてパスした"
+    "expected": "すべてパスした",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スベテパセシタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 137,
@@ -1504,7 +2456,14 @@
     "context": "メモリリークの、",
     "input_reading": "ゲンインワトクテイスル",
     "target_reading": "げんいんをとくていする",
-    "expected": "原因を特定する"
+    "expected": "原因を特定する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゲンインワトクテイスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 138,
@@ -1515,7 +2474,14 @@
     "context": "APIのレスポンスを、",
     "input_reading": "ザェイソンケイシキデウケトル",
     "target_reading": "じぇいそんけいしきでうけとる",
-    "expected": "JSON形式で受け取る"
+    "expected": "JSON形式で受け取る",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ザェイソンケイシキデウケトル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 139,
@@ -1526,7 +2492,14 @@
     "context": "アクセストークンを、",
     "input_reading": "サイハッコウシル",
     "target_reading": "さいはっこうする",
-    "expected": "再発行する"
+    "expected": "再発行する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハッコウシル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 140,
@@ -1537,7 +2510,14 @@
     "context": "ネットワークの、",
     "input_reading": "タイエキハバヲオアクダイ",
     "target_reading": "たいえきはばをかくだい",
-    "expected": "帯域幅を拡大"
+    "expected": "帯域幅を拡大",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タイエキハバヲオアクダイ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 141,
@@ -1548,7 +2528,14 @@
     "context": "クラウドアカウントの、",
     "input_reading": "ニンショウジョウホウヲコウシン",
     "target_reading": "にんしょうじょうほうをこうしん",
-    "expected": "認証情報を更新"
+    "expected": "認証情報を更新",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ニンショウジョウホウヲコウシン",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 142,
@@ -1559,7 +2546,14 @@
     "context": "バッチ処理の、",
     "input_reading": "スケジュールワセッテイ",
     "target_reading": "すけじゅーるをせってい",
-    "expected": "スケジュールを設定"
+    "expected": "スケジュールを設定",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スケジュールワセッテイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 143,
@@ -1570,7 +2564,14 @@
     "context": "リリースタグを、",
     "input_reading": "ギfトハブニプッシュ",
     "target_reading": "ぎっとはぶにぷっしゅ",
-    "expected": "GitHubにプッシュ"
+    "expected": "GitHubにプッシュ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギfトハブニプッシュ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 144,
@@ -1581,7 +2582,14 @@
     "context": "パフォーマンスの、",
     "input_reading": "ボトルネックオワカイショウ",
     "target_reading": "ぼとるねっくをかいしょう",
-    "expected": "ボトルネックを解消"
+    "expected": "ボトルネックを解消",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ボトルネックオワカイショウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 145,
@@ -1592,7 +2600,14 @@
     "context": "クライアント側の、",
     "input_reading": "カキナオシヲオコナジ",
     "target_reading": "かきなおしをおこなう",
-    "expected": "書き直しを行う"
+    "expected": "書き直しを行う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カキナオシヲオコナジ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 146,
@@ -1603,7 +2618,14 @@
     "context": "天気予報によると、",
     "input_reading": "アスハハレルミコミエダス",
     "target_reading": "あすははれるみこみです",
-    "expected": "明日は晴れる見込みです"
+    "expected": "明日は晴れる見込みです",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アスハハレルミコミエダス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 147,
@@ -1614,7 +2636,14 @@
     "context": "駅前の交差点で、",
     "input_reading": "シンゴアヲマツ",
     "target_reading": "しんごうをまつ",
-    "expected": "信号を待つ"
+    "expected": "信号を待つ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シンゴアヲマツ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 148,
@@ -1625,7 +2654,14 @@
     "context": "公園のベンチで、",
     "input_reading": "ッカーヒーヲノム",
     "target_reading": "こーひーをのむ",
-    "expected": "コーヒーを飲む"
+    "expected": "コーヒーを飲む",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ッカーヒーヲノム",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 149,
@@ -1636,7 +2672,14 @@
     "context": "図書館で借りた、",
     "input_reading": "ホヲヘンキャクスル",
     "target_reading": "ほんをへんきゃくする",
-    "expected": "本を返却する"
+    "expected": "本を返却する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホヲヘンキャクスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 150,
@@ -1647,7 +2690,14 @@
     "context": "健康診断の、",
     "input_reading": "ケッアヲトドケル",
     "target_reading": "けっかをとどける",
-    "expected": "結果を届ける"
+    "expected": "結果を届ける",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケッアヲトドケル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 151,
@@ -1658,7 +2708,14 @@
     "context": "新しいスマートフォンに、",
     "input_reading": "キシュヘンコウスル",
     "target_reading": "きしゅへんこうする",
-    "expected": "機種変更する"
+    "expected": "機種変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "キシュヘンコウスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 152,
@@ -1669,7 +2726,14 @@
     "context": "近所のスーパーで、",
     "input_reading": "ヤサイトカダモノヲカウ",
     "target_reading": "やさいとくだものをかう",
-    "expected": "野菜と果物を買う"
+    "expected": "野菜と果物を買う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ヤサイトカダモノヲカウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 153,
@@ -1680,7 +2744,14 @@
     "context": "ジョギングをして、",
     "input_reading": "キンモチノイイアセヲカク",
     "target_reading": "きもちのいいあせをかく",
-    "expected": "気持ちのいい汗をかく"
+    "expected": "気持ちのいい汗をかく",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "キンモチノイイアセヲカク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 154,
@@ -1691,7 +2762,14 @@
     "context": "窓を開けて、",
     "input_reading": "ヘヤノカンキヲオコノウ",
     "target_reading": "へやのかんきをおこなう",
-    "expected": "部屋の換気を行う"
+    "expected": "部屋の換気を行う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ヘヤノカンキヲオコノウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 155,
@@ -1702,7 +2780,14 @@
     "context": "車検の時期なので、",
     "input_reading": "ディーラーニレンラックスル",
     "target_reading": "でぃーらーにれんらくする",
-    "expected": "ディーラーに連絡する"
+    "expected": "ディーラーに連絡する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ディーラーニレンラックスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 156,
@@ -1713,7 +2798,14 @@
     "context": "旅行の荷物を、",
     "input_reading": "スーツケースニトメル",
     "target_reading": "すーつけーすにつめる",
-    "expected": "スーツケースに詰める"
+    "expected": "スーツケースに詰める",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スーツケースニトメル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 157,
@@ -1724,7 +2816,14 @@
     "context": "部屋の照明を、",
     "input_reading": "エルイーディーニカqエル",
     "target_reading": "えるいーでぃーにかえる",
-    "expected": "LEDに変える"
+    "expected": "LEDに変える",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エルイーディーニカqエル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 158,
@@ -1735,7 +2834,14 @@
     "context": "新しい趣味として、",
     "input_reading": "ギターヲナジメル",
     "target_reading": "ぎたーをはじめる",
-    "expected": "ギターを始める"
+    "expected": "ギターを始める",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギターヲナジメル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 159,
@@ -1746,7 +2852,14 @@
     "context": "秋の紅葉を、",
     "input_reading": "マニイイク",
     "target_reading": "みにいく",
-    "expected": "見に行く"
+    "expected": "見に行く",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "マニイイク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 160,
@@ -1757,7 +2870,14 @@
     "context": "毎朝の習慣で、",
     "input_reading": "ラジオタソウヲスル",
     "target_reading": "らじおたいそうをする",
-    "expected": "ラジオ体操をする"
+    "expected": "ラジオ体操をする",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ラジオタソウヲスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 161,
@@ -1768,7 +2888,14 @@
     "context": "お忙しいところ恐れ入りますが、",
     "input_reading": "ゴカクニンクダサイ",
     "target_reading": "ごかくにんください",
-    "expected": "ご確認ください"
+    "expected": "ご確認ください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴカクニンクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 162,
@@ -1779,7 +2906,14 @@
     "context": "打ち合わせの日程について、",
     "input_reading": "ゴツゴウハイカガデショウカ",
     "target_reading": "ごつごうはいかがでしょうか",
-    "expected": "ご都合はいかがでしょうか"
+    "expected": "ご都合はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴツゴウハイカガデショウカ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 163,
@@ -1790,7 +2924,14 @@
     "context": "取り急ぎ、",
     "input_reading": "ゴロンラクマデ",
     "target_reading": "ごれんらくまで",
-    "expected": "ご連絡まで"
+    "expected": "ご連絡まで",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴロンラクマデ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 164,
@@ -1801,7 +2942,14 @@
     "context": "添付のファイルについて、",
     "input_reading": "パスワードヲオクリシマス",
     "target_reading": "ぱすわーどをおくりします",
-    "expected": "パスワードをお送りします"
+    "expected": "パスワードをお送りします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスワードヲオクリシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 165,
@@ -1812,7 +2960,14 @@
     "context": "今後の進め方について、",
     "input_reading": "ガソウダンサセテクダサイ",
     "target_reading": "ごそうだんさせてください",
-    "expected": "ご相談させてください"
+    "expected": "ご相談させてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ガソウダンサセテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 166,
@@ -1823,7 +2978,14 @@
     "context": "先ほどお送りした資料の、",
     "input_reading": "サシカエヲオッネガイシマス",
     "target_reading": "さしかえをおねがいします",
-    "expected": "差し替えをお願いします"
+    "expected": "差し替えをお願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サシカエヲオッネガイシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 167,
@@ -1834,7 +2996,14 @@
     "context": "大変お手数をおかけしますが、",
     "input_reading": "ゴタイオウオノガイシマス",
     "target_reading": "ごたいおうおねがいします",
-    "expected": "ご対応お願いします"
+    "expected": "ご対応お願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴタイオウオノガイシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 168,
@@ -1845,7 +3014,14 @@
     "context": "本日の会議の、",
     "input_reading": "ギザロクヲオクリマス",
     "target_reading": "ぎじろくをおくります",
-    "expected": "議事録を送ります"
+    "expected": "議事録を送ります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギザロクヲオクリマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 169,
@@ -1856,7 +3032,14 @@
     "context": "契約書の内容に、",
     "input_reading": "ドウイイタシマス",
     "target_reading": "どういいたします",
-    "expected": "同意いたします"
+    "expected": "同意いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ドウイイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 170,
@@ -1867,7 +3050,14 @@
     "context": "お見積もり書を、",
     "input_reading": "サイハッコウエタシマス",
     "target_reading": "さいはっこういたします",
-    "expected": "再発行いたします"
+    "expected": "再発行いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハッコウエタシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 171,
@@ -1878,7 +3068,14 @@
     "context": "プロジェクトの、",
     "input_reading": "シンチョクハイカガデショヤカ",
     "target_reading": "しんちょくはいかがでしょうか",
-    "expected": "進捗はいかがでしょうか"
+    "expected": "進捗はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シンチョクハイカガデショヤカ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 172,
@@ -1889,7 +3086,14 @@
     "context": "ご要望の機能について、",
     "input_reading": "ケントウイタッシマス",
     "target_reading": "けんとういたします",
-    "expected": "検討いたします"
+    "expected": "検討いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケントウイタッシマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 173,
@@ -1900,7 +3104,14 @@
     "context": "突然のご連絡、",
     "input_reading": "シツレイイタシマス",
     "target_reading": "しつれいいたします",
-    "expected": "失礼いたします"
+    "expected": "失礼いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シツレイイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 174,
@@ -1911,7 +3122,14 @@
     "context": "こちらの件、",
     "input_reading": "ショウチイタシマエイタ",
     "target_reading": "しょうちいたしました",
-    "expected": "承知いたしました"
+    "expected": "承知いたしました",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ショウチイタシマエイタ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 175,
@@ -1922,7 +3140,14 @@
     "context": "お電話口で、",
     "input_reading": "タントウニカワライマス",
     "target_reading": "たんとうにかわります",
-    "expected": "担当に代わります"
+    "expected": "担当に代わります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タントウニカワライマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 176,
@@ -1933,7 +3158,14 @@
     "context": "社内調整のうえ、",
     "input_reading": "アラタメテゴレンラクシマサウ",
     "target_reading": "あらためてごれんらくします",
-    "expected": "改めてご連絡します"
+    "expected": "改めてご連絡します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アラタメテゴレンラクシマサウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 177,
@@ -1944,7 +3176,14 @@
     "context": "ご配慮いただき、",
     "input_reading": "カンシャイサシマス",
     "target_reading": "かんしゃいたします",
-    "expected": "感謝いたします"
+    "expected": "感謝いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンシャイサシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 178,
@@ -1955,7 +3194,14 @@
     "context": "お時間をいただき、",
     "input_reading": "マコトッニアリガトウゴザイマス",
     "target_reading": "まことにありがとうございます",
-    "expected": "誠にありがとうございます"
+    "expected": "誠にありがとうございます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "マコトッニアリガトウゴザイマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 179,
@@ -1966,7 +3212,14 @@
     "context": "恐れながら、",
     "input_reading": "ジタイッセテイタダキマス",
     "target_reading": "じたいさせていただきます",
-    "expected": "辞退させていただきます"
+    "expected": "辞退させていただきます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジタイッセテイタダキマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 180,
@@ -1977,7 +3230,14 @@
     "context": "本件の優先度を、",
     "input_reading": "タカクセテイシマス",
     "target_reading": "たかくせっていします",
-    "expected": "高く設定します"
+    "expected": "高く設定します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タカクセテイシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 181,
@@ -1988,7 +3248,14 @@
     "context": "次回の打ち合わせは、",
     "input_reading": "ライシュウノスキヨウビデス",
     "target_reading": "らいしゅうのすいようびです",
-    "expected": "来週の水曜日です"
+    "expected": "来週の水曜日です",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ライシュウノスキヨウビデス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 182,
@@ -1999,7 +3266,14 @@
     "context": "本日の予定を、",
     "input_reading": "リマンドイタシマス",
     "target_reading": "りまいんどいたします",
-    "expected": "リマインドいたします"
+    "expected": "リマインドいたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "リマンドイタシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 183,
@@ -2010,7 +3284,14 @@
     "context": "社内規定を、",
     "input_reading": "ジュンシュシエタクダサイ",
     "target_reading": "じゅんしゅしてください",
-    "expected": "遵守してください"
+    "expected": "遵守してください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジュンシュシエタクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 184,
@@ -2021,7 +3302,14 @@
     "context": "取引先への、",
     "input_reading": "プレゼン資料ヲ作成クル",
     "target_reading": "プレゼン資料を作成する",
-    "expected": "プレゼン資料を作成する"
+    "expected": "プレゼン資料を作成する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "プレゼン資料ヲ作成クル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 185,
@@ -2032,7 +3320,14 @@
     "context": "請求金額を、",
     "input_reading": "オフリコミクダアシ",
     "target_reading": "おふりこみください",
-    "expected": "お振込みください"
+    "expected": "お振込みください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オフリコミクダアシ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 186,
@@ -2043,7 +3338,14 @@
     "context": "朝のメッセージで、",
     "input_reading": "ホアヨウ！キョウモガンバロウ",
     "target_reading": "おはよう！きょうもがんばろう",
-    "expected": "おはよう！今日も頑張ろう"
+    "expected": "おはよう！今日も頑張ろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホアヨウ！キョウモガンバロウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 187,
@@ -2054,7 +3356,14 @@
     "context": "お昼休みに、",
     "input_reading": "ナニタベニイク？",
     "target_reading": "なにたべにいく？",
-    "expected": "何食べに行く？"
+    "expected": "何食べに行く？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニタベニイク？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 188,
@@ -2065,7 +3374,14 @@
     "context": "帰り道で、",
     "input_reading": "イマカサラカエルネ",
     "target_reading": "いまからかえるね",
-    "expected": "今から帰るね"
+    "expected": "今から帰るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イマカサラカエルネ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 189,
@@ -2076,7 +3392,14 @@
     "context": "駅の改札で、",
     "input_reading": "ツイタロシエテ",
     "target_reading": "ついたらおしえて",
-    "expected": "着いたら教えて"
+    "expected": "着いたら教えて",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツイタロシエテ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 190,
@@ -2087,7 +3410,14 @@
     "context": "待ち合わせで、",
     "input_reading": "チョットックレソウ",
     "target_reading": "ちょっとおくれそう",
-    "expected": "ちょっと遅れそう"
+    "expected": "ちょっと遅れそう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "チョットックレソウ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 191,
@@ -2098,7 +3428,14 @@
     "context": "友達の吉報に、",
     "input_reading": "オメデトウ！ヨカタタネ",
     "target_reading": "おめでとう！よかったね",
-    "expected": "おめでとう！良かったね"
+    "expected": "おめでとう！良かったね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オメデトウ！ヨカタタネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 192,
@@ -2109,7 +3446,14 @@
     "context": "体調を崩した人に、",
     "input_reading": "オダイジニシテクダサキ",
     "target_reading": "おだいじにしてください",
-    "expected": "お大事にしてください"
+    "expected": "お大事にしてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オダイジニシテクダサキ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 193,
@@ -2120,7 +3464,14 @@
     "context": "旅行のお土産を、",
     "input_reading": "カッテキタヨ",
     "target_reading": "かってきたよ",
-    "expected": "買ってきたよ"
+    "expected": "買ってきたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カッテキタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 194,
@@ -2131,7 +3482,14 @@
     "context": "新しいカフェで、",
     "input_reading": "ケーキヲタバテアヨ",
     "target_reading": "けーきをたべたよ",
-    "expected": "ケーキを食べたよ"
+    "expected": "ケーキを食べたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケーキヲタバテアヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 195,
@@ -2142,7 +3500,14 @@
     "context": "週末の映画、",
     "input_reading": "ナヲジカラダッケ？",
     "target_reading": "なんじからだっけ？",
-    "expected": "何時からだっけ？"
+    "expected": "何時からだっけ？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナヲジカラダッケ？",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 196,
@@ -2153,7 +3518,14 @@
     "context": "宿題が終わらなくて、",
     "input_reading": "タスッケテホシイ",
     "target_reading": "たすけてほしい",
-    "expected": "助けてほしい"
+    "expected": "助けてほしい",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タスッケテホシイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 197,
@@ -2164,7 +3536,14 @@
     "context": "写真の共有で、",
     "input_reading": "アルッバムニツイカシタヨ",
     "target_reading": "あるばむについかしたよ",
-    "expected": "アルバムに追加したよ"
+    "expected": "アルバムに追加したよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アルッバムニツイカシタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 198,
@@ -2175,7 +3554,14 @@
     "context": "買い物の途中で、",
     "input_reading": "ナニカカウモノアル？",
     "target_reading": "なにかかうものある？",
-    "expected": "何か買うものある？"
+    "expected": "何か買うものある？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニカカウモノアル？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 199,
@@ -2186,7 +3572,14 @@
     "context": "夜更かしして、",
     "input_reading": "ソロオサロネルネ",
     "target_reading": "そろそろねるね",
-    "expected": "そろそろ寝るね"
+    "expected": "そろそろ寝るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ソロオサロネルネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 200,
@@ -2197,7 +3590,14 @@
     "context": "部屋の模様替えで、",
     "input_reading": "ツクエヲイxオウシタ",
     "target_reading": "つくえをいどうした",
-    "expected": "机を移動した"
+    "expected": "机を移動した",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツクエヲイxオウシタ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 201,
@@ -2208,7 +3608,14 @@
     "context": "雨降りの日に、",
     "input_reading": "センタクモノヲイレヨウ",
     "target_reading": "せんたくものをいれよう",
-    "expected": "洗濯物を入れよう"
+    "expected": "洗濯物を入れよう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "センタクモノヲイレヨウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 202,
@@ -2219,7 +3626,14 @@
     "context": "美味しいご飯を食べて、",
     "input_reading": "オナカイッパイニナッタ",
     "target_reading": "おなかいっぱいになった",
-    "expected": "お腹いっぱいになった"
+    "expected": "お腹いっぱいになった",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オナカイッパイニナッタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 203,
@@ -2230,7 +3644,14 @@
     "context": "誕生日のプレゼントを、",
     "input_reading": "エランデイルトカロ",
     "target_reading": "えらんでいるところ",
-    "expected": "選んでいるところ"
+    "expected": "選んでいるところ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エランデイルトカロ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 204,
@@ -2241,7 +3662,14 @@
     "context": "急な雨に降られて、",
     "input_reading": "カサワカッタ",
     "target_reading": "かさをかった",
-    "expected": "傘を買った"
+    "expected": "傘を買った",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カサワカッタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 205,
@@ -2252,7 +3680,14 @@
     "context": "ゲームの対戦で、",
     "input_reading": "モウイッカイヤロイ",
     "target_reading": "もういっかいやろう",
-    "expected": "もう一回やろう"
+    "expected": "もう一回やろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "モウイッカイヤロイ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 206,
@@ -2263,7 +3698,14 @@
     "context": "ローカルブランチを、",
     "input_reading": "サイシンノメインヘマジ",
     "target_reading": "さいしんのめいんへまーじ",
-    "expected": "最新のメインへマージ"
+    "expected": "最新のメインへマージ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイシンノメインヘマジ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 207,
@@ -2274,7 +3716,14 @@
     "context": "データベースの、",
     "input_reading": "インデックスヲサイコウチカハ",
     "target_reading": "いんでっくすをさいこうちく",
-    "expected": "インデックスを再構築"
+    "expected": "インデックスを再構築",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "インデックスヲサイコウチカハ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 208,
@@ -2285,7 +3734,14 @@
     "context": "キャッシュを、",
     "input_reading": "クリアシテッサイヨミコミ",
     "target_reading": "くりあしてさいよみこみ",
-    "expected": "クリアして再読み込み"
+    "expected": "クリアして再読み込み",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "クリアシテッサイヨミコミ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 209,
@@ -2296,7 +3752,14 @@
     "context": "セキュリティの警告で、",
     "input_reading": "パスワードッヲ変更スル",
     "target_reading": "パスワードを変更する",
-    "expected": "パスワードを変更する"
+    "expected": "パスワードを変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスワードッヲ変更スル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 210,
@@ -2307,7 +3770,14 @@
     "context": "サーバー負荷を、",
     "input_reading": "カンサツールデチェック",
     "target_reading": "かんしつーるでちぇっく",
-    "expected": "監視ツールでチェック"
+    "expected": "監視ツールでチェック",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンサツールデチェック",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 211,
@@ -2318,7 +3788,14 @@
     "context": "エラーログから、",
     "input_reading": "サタックトレースヲカクニン",
     "target_reading": "すたっくとれーすをかくにん",
-    "expected": "スタックトレースを確認"
+    "expected": "スタックトレースを確認",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サタックトレースヲカクニン",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 212,
@@ -2329,7 +3806,14 @@
     "context": "コンテナを、",
     "input_reading": "ビラジドシテ起動スル",
     "target_reading": "びるどして起動する",
-    "expected": "ビルドして起動する"
+    "expected": "ビルドして起動する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ビラジドシテ起動スル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 213,
@@ -2340,7 +3824,14 @@
     "context": "新しいライブラリの、",
     "input_reading": "イゾンカンケイヲカイケツ",
     "target_reading": "いぞんかんけいをかいけつ",
-    "expected": "依存関係を解決"
+    "expected": "依存関係を解決",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イゾンカンケイヲカイケツ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 214,
@@ -2351,7 +3842,14 @@
     "context": "設定ファイルの、",
     "input_reading": "カンキョウヘンスウヲヘンコウ",
     "target_reading": "かんきょうへんすうをへんこう",
-    "expected": "環境変数を変更"
+    "expected": "環境変数を変更",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンキョウヘンスウヲヘンコウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 215,
@@ -2362,7 +3860,14 @@
     "context": "コードフォーマッタを、",
     "input_reading": "ホゾンジニジドウジッカウ",
     "target_reading": "ほぞんじにじどうじっこう",
-    "expected": "保存時に自動実行"
+    "expected": "保存時に自動実行",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホゾンジニジドウジッカウ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 216,
@@ -2373,7 +3878,14 @@
     "context": "ユニットテストが、",
     "input_reading": "スベテパスチタ",
     "target_reading": "すべてぱすした",
-    "expected": "すべてパスした"
+    "expected": "すべてパスした",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スベテパスチタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 217,
@@ -2384,7 +3896,14 @@
     "context": "メモリリークの、",
     "input_reading": "ゲンインオトクテイスル",
     "target_reading": "げんいんをとくていする",
-    "expected": "原因を特定する"
+    "expected": "原因を特定する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゲンインオトクテイスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 218,
@@ -2395,7 +3914,14 @@
     "context": "APIのレスポンスを、",
     "input_reading": "ジェイソンケイシキデウケトウラ",
     "target_reading": "じぇいそんけいしきでうけとる",
-    "expected": "JSON形式で受け取る"
+    "expected": "JSON形式で受け取る",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジェイソンケイシキデウケトウラ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 219,
@@ -2406,7 +3932,14 @@
     "context": "アクセストークンを、",
     "input_reading": "サイハッンコウスル",
     "target_reading": "さいはっこうする",
-    "expected": "再発行する"
+    "expected": "再発行する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハッンコウスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 220,
@@ -2417,7 +3950,14 @@
     "context": "ネットワークの、",
     "input_reading": "タイエキハバヲックダイ",
     "target_reading": "たいえきはばをかくだい",
-    "expected": "帯域幅を拡大"
+    "expected": "帯域幅を拡大",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タイエキハバヲックダイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 221,
@@ -2428,7 +3968,14 @@
     "context": "クラウドアカウントの、",
     "input_reading": "ニンショウジョウホイヲコウシン",
     "target_reading": "にんしょうじょうほうをこうしん",
-    "expected": "認証情報を更新"
+    "expected": "認証情報を更新",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ニンショウジョウホイヲコウシン",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 222,
@@ -2439,7 +3986,14 @@
     "context": "バッチ処理の、",
     "input_reading": "スケウジールヲセッテイ",
     "target_reading": "すけじゅーるをせってい",
-    "expected": "スケジュールを設定"
+    "expected": "スケジュールを設定",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スケウジールヲセッテイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 223,
@@ -2450,7 +4004,14 @@
     "context": "リリースタグを、",
     "input_reading": "fイットハブニプッシュ",
     "target_reading": "ぎっとはぶにぷっしゅ",
-    "expected": "GitHubにプッシュ"
+    "expected": "GitHubにプッシュ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "fイットハブニプッシュ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 224,
@@ -2461,7 +4022,14 @@
     "context": "パフォーマンスの、",
     "input_reading": "ボトルネックヲンカイショウ",
     "target_reading": "ぼとるねっくをかいしょう",
-    "expected": "ボトルネックを解消"
+    "expected": "ボトルネックを解消",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ボトルネックヲンカイショウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 225,
@@ -2472,7 +4040,14 @@
     "context": "クライアント側の、",
     "input_reading": "カキナウシヲオコナウ",
     "target_reading": "かきなおしをおこなう",
-    "expected": "書き直しを行う"
+    "expected": "書き直しを行う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カキナウシヲオコナウ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 226,
@@ -2483,7 +4058,14 @@
     "context": "天気予報によると、",
     "input_reading": "アスハハレルミコマカデス",
     "target_reading": "あすははれるみこみです",
-    "expected": "明日は晴れる見込みです"
+    "expected": "明日は晴れる見込みです",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アスハハレルミコマカデス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 227,
@@ -2494,7 +4076,14 @@
     "context": "駅前の交差点で、",
     "input_reading": "チンゴウヲマツ",
     "target_reading": "しんごうをまつ",
-    "expected": "信号を待つ"
+    "expected": "信号を待つ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "チンゴウヲマツ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 228,
@@ -2505,7 +4094,14 @@
     "context": "公園のベンチで、",
     "input_reading": "コーヒーヲノム",
     "target_reading": "こーひーをのむ",
-    "expected": "コーヒーを飲む"
+    "expected": "コーヒーを飲む",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "コーヒーヲノム",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 229,
@@ -2516,7 +4112,14 @@
     "context": "図書館で借りた、",
     "input_reading": "ホンヲヒンキャクスル",
     "target_reading": "ほんをへんきゃくする",
-    "expected": "本を返却する"
+    "expected": "本を返却する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホンヲヒンキャクスル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 230,
@@ -2527,7 +4130,14 @@
     "context": "健康診断の、",
     "input_reading": "ケッカヲタドケル",
     "target_reading": "けっかをとどける",
-    "expected": "結果を届ける"
+    "expected": "結果を届ける",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケッカヲタドケル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 231,
@@ -2538,7 +4148,14 @@
     "context": "新しいスマートフォンに、",
     "input_reading": "キシュペンコウスル",
     "target_reading": "きしゅへんこうする",
-    "expected": "機種変更する"
+    "expected": "機種変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "キシュペンコウスル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 232,
@@ -2549,7 +4166,14 @@
     "context": "近所のスーパーで、",
     "input_reading": "ヤサイトクダモノワッカウ",
     "target_reading": "やさいとくだものをかう",
-    "expected": "野菜と果物を買う"
+    "expected": "野菜と果物を買う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ヤサイトクダモノワッカウ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 233,
@@ -2560,7 +4184,14 @@
     "context": "ジョギングをして、",
     "input_reading": "キモチノイイアサヲカク",
     "target_reading": "きもちのいいあせをかく",
-    "expected": "気持ちのいい汗をかく"
+    "expected": "気持ちのいい汗をかく",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "キモチノイイアサヲカク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 234,
@@ -2571,7 +4202,14 @@
     "context": "窓を開けて、",
     "input_reading": "ヘヤノカンキヲオコナ",
     "target_reading": "へやのかんきをおこなう",
-    "expected": "部屋の換気を行う"
+    "expected": "部屋の換気を行う",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ヘヤノカンキヲオコナ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 235,
@@ -2582,7 +4220,14 @@
     "context": "車検の時期なので、",
     "input_reading": "ディーラーニレンラクスフ",
     "target_reading": "でぃーらーにれんらくする",
-    "expected": "ディーラーに連絡する"
+    "expected": "ディーラーに連絡する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ディーラーニレンラクスフ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 236,
@@ -2593,7 +4238,14 @@
     "context": "旅行の荷物を、",
     "input_reading": "スーツケースニツメラ",
     "target_reading": "すーつけーすにつめる",
-    "expected": "スーツケースに詰める"
+    "expected": "スーツケースに詰める",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スーツケースニツメラ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 237,
@@ -2604,7 +4256,14 @@
     "context": "部屋の照明を、",
     "input_reading": "エルイーッディーニカエル",
     "target_reading": "えるいーでぃーにかえる",
-    "expected": "LEDに変える"
+    "expected": "LEDに変える",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エルイーッディーニカエル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 238,
@@ -2615,7 +4274,14 @@
     "context": "新しい趣味として、",
     "input_reading": "ギターヲハジモル",
     "target_reading": "ぎたーをはじめる",
-    "expected": "ギターを始める"
+    "expected": "ギターを始める",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギターヲハジモル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 239,
@@ -2626,7 +4292,14 @@
     "context": "秋の紅葉を、",
     "input_reading": "ミイニク",
     "target_reading": "みにいく",
-    "expected": "見に行く"
+    "expected": "見に行く",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ミイニク",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 240,
@@ -2637,7 +4310,14 @@
     "context": "毎朝の習慣で、",
     "input_reading": "ラジオタイソウヲスル",
     "target_reading": "らじおたいそうをする",
-    "expected": "ラジオ体操をする"
+    "expected": "ラジオ体操をする",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ラジオタイソウヲスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 241,
@@ -2648,7 +4328,14 @@
     "context": "お忙しいところ恐れ入りますが、",
     "input_reading": "ゴカクンナクダサイ",
     "target_reading": "ごかくにんください",
-    "expected": "ご確認ください"
+    "expected": "ご確認ください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴカクンナクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 242,
@@ -2659,7 +4346,14 @@
     "context": "打ち合わせの日程について、",
     "input_reading": "ゴツゴウハイカガデショウオア",
     "target_reading": "ごつごうはいかがでしょうか",
-    "expected": "ご都合はいかがでしょうか"
+    "expected": "ご都合はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴツゴウハイカガデショウオア",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 243,
@@ -2670,7 +4364,14 @@
     "context": "取り急ぎ、",
     "input_reading": "ゴレラクマデ",
     "target_reading": "ごれんらくまで",
-    "expected": "ご連絡まで"
+    "expected": "ご連絡まで",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴレラクマデ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 244,
@@ -2681,7 +4382,14 @@
     "context": "添付のファイルについて、",
     "input_reading": "パスワードヲオクリサカマス",
     "target_reading": "ぱすわーどをおくりします",
-    "expected": "パスワードをお送りします"
+    "expected": "パスワードをお送りします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスワードヲオクリサカマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 245,
@@ -2692,7 +4400,14 @@
     "context": "今後の進め方について、",
     "input_reading": "ゴソウダサセテクダサイ",
     "target_reading": "ごそうだんさせてください",
-    "expected": "ご相談させてください"
+    "expected": "ご相談させてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴソウダサセテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 246,
@@ -2703,7 +4418,14 @@
     "context": "先ほどお送りした資料の、",
     "input_reading": "サシカエヲオネガイシマシ",
     "target_reading": "さしかえをおねがいします",
-    "expected": "差し替えをお願いします"
+    "expected": "差し替えをお願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サシカエヲオネガイシマシ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 247,
@@ -2714,7 +4436,14 @@
     "context": "大変お手数をおかけしますが、",
     "input_reading": "ゴタイオオネガイシマス",
     "target_reading": "ごたいおうおねがいします",
-    "expected": "ご対応お願いします"
+    "expected": "ご対応お願いします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゴタイオオネガイシマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 248,
@@ -2725,7 +4454,14 @@
     "context": "本日の会議の、",
     "input_reading": "ギジロクヲオクリマッス",
     "target_reading": "ぎじろくをおくります",
-    "expected": "議事録を送ります"
+    "expected": "議事録を送ります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ギジロクヲオクリマッス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 249,
@@ -2736,7 +4472,14 @@
     "context": "契約書の内容に、",
     "input_reading": "ダクイイタシマス",
     "target_reading": "どういいたします",
-    "expected": "同意いたします"
+    "expected": "同意いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ダクイイタシマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 250,
@@ -2747,7 +4490,14 @@
     "context": "お見積もり書を、",
     "input_reading": "サイハッケウイタシマス",
     "target_reading": "さいはっこういたします",
-    "expected": "再発行いたします"
+    "expected": "再発行いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハッケウイタシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 251,
@@ -2758,7 +4508,14 @@
     "context": "プロジェクトの、",
     "input_reading": "シンチョクハシカガデショウカ",
     "target_reading": "しんちょくはいかがでしょうか",
-    "expected": "進捗はいかがでしょうか"
+    "expected": "進捗はいかがでしょうか",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シンチョクハシカガデショウカ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 252,
@@ -2769,7 +4526,14 @@
     "context": "ご要望の機能について、",
     "input_reading": "ケハナトウイタシマス",
     "target_reading": "けんとういたします",
-    "expected": "検討いたします"
+    "expected": "検討いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケハナトウイタシマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 253,
@@ -2780,7 +4544,14 @@
     "context": "突然のご連絡、",
     "input_reading": "シツリイイタシマス",
     "target_reading": "しつれいいたします",
-    "expected": "失礼いたします"
+    "expected": "失礼いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "シツリイイタシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 254,
@@ -2791,7 +4562,14 @@
     "context": "こちらの件、",
     "input_reading": "ショウチイタシマシタ",
     "target_reading": "しょうちいたしました",
-    "expected": "承知いたしました"
+    "expected": "承知いたしました",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ショウチイタシマシタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 255,
@@ -2802,7 +4580,14 @@
     "context": "お電話口で、",
     "input_reading": "タントウニカワライマス",
     "target_reading": "たんとうにかわります",
-    "expected": "担当に代わります"
+    "expected": "担当に代わります",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タントウニカワライマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 256,
@@ -2813,7 +4598,14 @@
     "context": "社内調整のうえ、",
     "input_reading": "アラタメテゴレンラクシマシ",
     "target_reading": "あらためてごれんらくします",
-    "expected": "改めてご連絡します"
+    "expected": "改めてご連絡します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "アラタメテゴレンラクシマシ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 257,
@@ -2824,7 +4616,14 @@
     "context": "ご配慮いただき、",
     "input_reading": "カンシャアタシマス",
     "target_reading": "かんしゃいたします",
-    "expected": "感謝いたします"
+    "expected": "感謝いたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンシャアタシマス",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 258,
@@ -2835,7 +4634,14 @@
     "context": "お時間をいただき、",
     "input_reading": "マコトニアリガゴウゴザイマス",
     "target_reading": "まことにありがとうございます",
-    "expected": "誠にありがとうございます"
+    "expected": "誠にありがとうございます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "マコトニアリガゴウゴザイマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 259,
@@ -2846,7 +4652,14 @@
     "context": "恐れながら、",
     "input_reading": "ジタイサセテイタッダキマス",
     "target_reading": "じたいさせていただきます",
-    "expected": "辞退させていただきます"
+    "expected": "辞退させていただきます",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジタイサセテイタッダキマス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 260,
@@ -2857,7 +4670,14 @@
     "context": "本件の優先度を、",
     "input_reading": "タカクセッテイシマサ",
     "target_reading": "たかくせっていします",
-    "expected": "高く設定します"
+    "expected": "高く設定します",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タカクセッテイシマサ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 261,
@@ -2868,7 +4688,14 @@
     "context": "次回の打ち合わせは、",
     "input_reading": "ライシュウノスインヨウビデス",
     "target_reading": "らいしゅうのすいようびです",
-    "expected": "来週の水曜日です"
+    "expected": "来週の水曜日です",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ライシュウノスインヨウビデス",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 262,
@@ -2879,7 +4706,14 @@
     "context": "本日の予定を、",
     "input_reading": "リマインドイタスマス",
     "target_reading": "りまいんどいたします",
-    "expected": "リマインドいたします"
+    "expected": "リマインドいたします",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "リマインドイタスマス",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 263,
@@ -2890,7 +4724,14 @@
     "context": "社内規定を、",
     "input_reading": "ジュンサヤスイテクダサイ",
     "target_reading": "じゅんしゅしてください",
-    "expected": "遵守してください"
+    "expected": "遵守してください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジュンサヤスイテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 264,
@@ -2901,7 +4742,14 @@
     "context": "取引先への、",
     "input_reading": "プレゼン資料ヲ作成ソル",
     "target_reading": "プレゼン資料を作成する",
-    "expected": "プレゼン資料を作成する"
+    "expected": "プレゼン資料を作成する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "プレゼン資料ヲ作成ソル",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 265,
@@ -2912,7 +4760,14 @@
     "context": "請求金額を、",
     "input_reading": "コフリコミクダサイ",
     "target_reading": "おふりこみください",
-    "expected": "お振込みください"
+    "expected": "お振込みください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "コフリコミクダサイ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 266,
@@ -2923,7 +4778,14 @@
     "context": "朝のメッセージで、",
     "input_reading": "オハヨウ！キョウモガナッバロウ",
     "target_reading": "おはよう！きょうもがんばろう",
-    "expected": "おはよう！今日も頑張ろう"
+    "expected": "おはよう！今日も頑張ろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オハヨウ！キョウモガナッバロウ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 267,
@@ -2934,7 +4796,14 @@
     "context": "お昼休みに、",
     "input_reading": "ナニタッベニイク？",
     "target_reading": "なにたべにいく？",
-    "expected": "何食べに行く？"
+    "expected": "何食べに行く？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニタッベニイク？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 268,
@@ -2945,7 +4814,14 @@
     "context": "帰り道で、",
     "input_reading": "イマカラカエルネ",
     "target_reading": "いまからかえるね",
-    "expected": "今から帰るね"
+    "expected": "今から帰るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イマカラカエルネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 269,
@@ -2956,7 +4832,14 @@
     "context": "駅の改札で、",
     "input_reading": "ツイタラオシエテ",
     "target_reading": "ついたらおしえて",
-    "expected": "着いたら教えて"
+    "expected": "着いたら教えて",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツイタラオシエテ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 270,
@@ -2967,7 +4850,14 @@
     "context": "待ち合わせで、",
     "input_reading": "チョットコクレソウ",
     "target_reading": "ちょっとおくれそう",
-    "expected": "ちょっと遅れそう"
+    "expected": "ちょっと遅れそう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "チョットコクレソウ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 271,
@@ -2978,7 +4868,14 @@
     "context": "友達の吉報に、",
     "input_reading": "オメデトオ！ヨカッタネ",
     "target_reading": "おめでとう！よかったね",
-    "expected": "おめでとう！良かったね"
+    "expected": "おめでとう！良かったね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オメデトオ！ヨカッタネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 272,
@@ -2989,7 +4886,14 @@
     "context": "体調を崩した人に、",
     "input_reading": "オダイジナシテクダサイ",
     "target_reading": "おだいじにしてください",
-    "expected": "お大事にしてください"
+    "expected": "お大事にしてください",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オダイジナシテクダサイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 273,
@@ -3000,7 +4904,14 @@
     "context": "旅行のお土産を、",
     "input_reading": "カッテキタヨ",
     "target_reading": "かってきたよ",
-    "expected": "買ってきたよ"
+    "expected": "買ってきたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カッテキタヨ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 274,
@@ -3011,7 +4922,14 @@
     "context": "新しいカフェで、",
     "input_reading": "ケーキンタベタヨ",
     "target_reading": "けーきをたべたよ",
-    "expected": "ケーキを食べたよ"
+    "expected": "ケーキを食べたよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ケーキンタベタヨ",
+    "input_mode": "flick",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 275,
@@ -3022,7 +4940,14 @@
     "context": "週末の映画、",
     "input_reading": "ナンジカラダッケ？",
     "target_reading": "なんじからだっけ？",
-    "expected": "何時からだっけ？"
+    "expected": "何時からだっけ？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナンジカラダッケ？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 276,
@@ -3033,7 +4958,14 @@
     "context": "宿題が終わらなくて、",
     "input_reading": "タスケタホシイ",
     "target_reading": "たすけてほしい",
-    "expected": "助けてほしい"
+    "expected": "助けてほしい",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タスケタホシイ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 277,
@@ -3044,7 +4976,14 @@
     "context": "写真の共有で、",
     "input_reading": "ザルバムニツイカシタヨ",
     "target_reading": "あるばむについかしたよ",
-    "expected": "アルバムに追加したよ"
+    "expected": "アルバムに追加したよ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ザルバムニツイカシタヨ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 278,
@@ -3055,7 +4994,14 @@
     "context": "買い物の途中で、",
     "input_reading": "ナニカカウマノオアル？",
     "target_reading": "なにかかうものある？",
-    "expected": "何か買うものある？"
+    "expected": "何か買うものある？",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ナニカカウマノオアル？",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 279,
@@ -3066,7 +5012,14 @@
     "context": "夜更かしして、",
     "input_reading": "ソロソロネルンネ",
     "target_reading": "そろそろねるね",
-    "expected": "そろそろ寝るね"
+    "expected": "そろそろ寝るね",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ソロソロネルンネ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 280,
@@ -3077,7 +5030,14 @@
     "context": "部屋の模様替えで、",
     "input_reading": "ツクエヲイドスイタ",
     "target_reading": "つくえをいどうした",
-    "expected": "机を移動した"
+    "expected": "机を移動した",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ツクエヲイドスイタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 281,
@@ -3088,7 +5048,14 @@
     "context": "雨降りの日に、",
     "input_reading": "センタクモノヲイレッヨウ",
     "target_reading": "せんたくものをいれよう",
-    "expected": "洗濯物を入れよう"
+    "expected": "洗濯物を入れよう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "センタクモノヲイレッヨウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 282,
@@ -3099,7 +5066,14 @@
     "context": "美味しいご飯を食べて、",
     "input_reading": "オナカイッパイニナッタ",
     "target_reading": "おなかいっぱいになった",
-    "expected": "お腹いっぱいになった"
+    "expected": "お腹いっぱいになった",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "オナカイッパイニナッタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 283,
@@ -3110,7 +5084,14 @@
     "context": "誕生日のプレゼントを、",
     "input_reading": "エランデイラトコロ",
     "target_reading": "えらんでいるところ",
-    "expected": "選んでいるところ"
+    "expected": "選んでいるところ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "エランデイラトコロ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 284,
@@ -3121,7 +5102,14 @@
     "context": "急な雨に降られて、",
     "input_reading": "カダヲカッタ",
     "target_reading": "かさをかった",
-    "expected": "傘を買った"
+    "expected": "傘を買った",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カダヲカッタ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 285,
@@ -3132,7 +5120,14 @@
     "context": "ゲームの対戦で、",
     "input_reading": "モウイッカイヤロウ",
     "target_reading": "もういっかいやろう",
-    "expected": "もう一回やろう"
+    "expected": "もう一回やろう",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "モウイッカイヤロウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 286,
@@ -3143,7 +5138,14 @@
     "context": "ローカルブランチを、",
     "input_reading": "サイサニンオメインヘマージ",
     "target_reading": "さいしんのめいんへまーじ",
-    "expected": "最新のメインへマージ"
+    "expected": "最新のメインへマージ",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイサニンオメインヘマージ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 287,
@@ -3154,7 +5156,14 @@
     "context": "データベースの、",
     "input_reading": "インデックスヲサイコウタキウ",
     "target_reading": "いんでっくすをさいこうちく",
-    "expected": "インデックスを再構築"
+    "expected": "インデックスを再構築",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "インデックスヲサイコウタキウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 288,
@@ -3165,7 +5174,14 @@
     "context": "キャッシュを、",
     "input_reading": "クリアシテサイヨミキミ",
     "target_reading": "くりあしてさいよみこみ",
-    "expected": "クリアして再読み込み"
+    "expected": "クリアして再読み込み",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "クリアシテサイヨミキミ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 289,
@@ -3176,7 +5192,14 @@
     "context": "セキュリティの警告で、",
     "input_reading": "パスワードヲ変更サカル",
     "target_reading": "パスワードを変更する",
-    "expected": "パスワードを変更する"
+    "expected": "パスワードを変更する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "パスワードヲ変更サカル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 290,
@@ -3187,7 +5210,14 @@
     "context": "サーバー負荷を、",
     "input_reading": "ジャンシツールデチェック",
     "target_reading": "かんしつーるでちぇっく",
-    "expected": "監視ツールでチェック"
+    "expected": "監視ツールでチェック",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジャンシツールデチェック",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 291,
@@ -3198,7 +5228,14 @@
     "context": "エラーログから、",
     "input_reading": "スタックトレースヲカクニ",
     "target_reading": "すたっくとれーすをかくにん",
-    "expected": "スタックトレースを確認"
+    "expected": "スタックトレースを確認",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "スタックトレースヲカクニ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 292,
@@ -3209,7 +5246,14 @@
     "context": "コンテナを、",
     "input_reading": "ビルドシテ起動ヅル",
     "target_reading": "びるどして起動する",
-    "expected": "ビルドして起動する"
+    "expected": "ビルドして起動する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ビルドシテ起動ヅル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 293,
@@ -3220,7 +5264,14 @@
     "context": "新しいライブラリの、",
     "input_reading": "イゾンカンケイヲカイケツ",
     "target_reading": "いぞんかんけいをかいけつ",
-    "expected": "依存関係を解決"
+    "expected": "依存関係を解決",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "イゾンカンケイヲカイケツ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "preserve",
+    "source_subset": ""
   },
   {
     "id": 294,
@@ -3231,7 +5282,14 @@
     "context": "設定ファイルの、",
     "input_reading": "カンlヨウヘンスウヲヘンコウ",
     "target_reading": "かんきょうへんすうをへんこう",
-    "expected": "環境変数を変更"
+    "expected": "環境変数を変更",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "カンlヨウヘンスウヲヘンコウ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 295,
@@ -3242,7 +5300,14 @@
     "context": "コードフォーマッタを、",
     "input_reading": "ホゾンザニジドウジッコウ",
     "target_reading": "ほぞんじにじどうじっこう",
-    "expected": "保存時に自動実行"
+    "expected": "保存時に自動実行",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ホゾンザニジドウジッコウ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 296,
@@ -3253,7 +5318,14 @@
     "context": "ユニットテストが、",
     "input_reading": "ウサベテパスシタ",
     "target_reading": "すべてぱすした",
-    "expected": "すべてパスした"
+    "expected": "すべてパスした",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ウサベテパスシタ",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 297,
@@ -3264,7 +5336,14 @@
     "context": "メモリリークの、",
     "input_reading": "ゲンインワトオクテイスル",
     "target_reading": "げんいんをとくていする",
-    "expected": "原因を特定する"
+    "expected": "原因を特定する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ゲンインワトオクテイスル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 298,
@@ -3275,7 +5354,14 @@
     "context": "APIのレスポンスを、",
     "input_reading": "ジェイソンケイサキイデウケトル",
     "target_reading": "じぇいそんけいしきでうけとる",
-    "expected": "JSON形式で受け取る"
+    "expected": "JSON形式で受け取る",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "ジェイソンケイサキイデウケトル",
+    "input_mode": "kana",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 299,
@@ -3286,7 +5372,14 @@
     "context": "アクセストークンを、",
     "input_reading": "サイハイコウスル",
     "target_reading": "さいはっこうする",
-    "expected": "再発行する"
+    "expected": "再発行する",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "サイハイコウスル",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   },
   {
     "id": 300,
@@ -3297,6 +5390,13 @@
     "context": "ネットワークの、",
     "input_reading": "タイエキハバヲカオウダイ",
     "target_reading": "たいえきはばをかくだい",
-    "expected": "帯域幅を拡大"
+    "expected": "帯域幅を拡大",
+    "acceptable": [],
+    "raw_romaji": "",
+    "raw_input": "タイエキハバヲカオウダイ",
+    "input_mode": "qwerty",
+    "origin": "legacy300",
+    "expected_action": "repair",
+    "source_subset": ""
   }
 ]
