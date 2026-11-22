@@ -30,6 +30,11 @@ ZENZ_CONTEXT = '''        model_params.use_mmap = true
         ctx_params.n_ctx = 512
         ctx_params.n_batch = 512
         llama_backend_init()
+        var params = ctx_params
+        #if ZenzaiCPU
+        // CPU 専用: KV / KQV 等の GPU オフロードを完全に無効化
+        params.offload_kqv = false
+        #endif
     func resetContext() throws {
         llama_free(self.context)
         var params = Self.ctx_params
@@ -101,7 +106,9 @@ class ExactKeyboardLookupTests(unittest.TestCase):
         self.assertIn('public final class ReusableFullInputLattice', patched)
         self.assertIn('public func exportReusableFullInputLattice(for inputData: ComposingText)', patched)
         self.assertIn('public func adoptReusableFullInputLattice(_ reusable: ReusableFullInputLattice?)', patched)
-        self.assertIn('reusableLatticeSeed: reusableLatticeSeed', patched)
+        self.assertIn('reusableLatticeSeed: reusablePair?.seed', patched)
+        self.assertIn('reusableUnconstrainedResult: reusablePair?.unconstrainedResult', patched)
+        self.assertIn('unconstrainedResult: state.lastUnconstrainedResult', patched)
 
     def test_rejects_a_changed_converter_api_anchor(self):
         with self.assertRaises(ValueError):
@@ -136,6 +143,7 @@ class ZenzContextTests(unittest.TestCase):
     def test_applies_every_replacement(self):
         patched = converter_patch.patch_zenz_context(ZENZ_CONTEXT)
         self.assertIn('model_params.load_mode = LLAMA_LOAD_MODE_MMAP', patched)
+        self.assertIn('params.offload_kqv = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount > 0', patched)
         self.assertIn('ctx_params.n_ctx = 1024', patched)
         self.assertIn('ctx_params.n_seq_max = 2', patched)
         self.assertIn('ctx_params.kv_unified = true', patched)
@@ -407,6 +415,12 @@ class ZenzEvaluatorTests(unittest.TestCase):
         self.assertIn('ZenzDigitMasking.mask(input)', patched)
         self.assertIn('ZenzDigitMasking.mask(candidate.text, maxRuns: inputMask.rawDigits.count)', patched)
         self.assertIn('func restoreConstraintBytes', patched)
+        self.assertIn('if prevPrompt == promptTokens, !prefixConstraint.constraint.isEmpty', patched)
+        self.assertIn('addressedTokens = Array(candidateTokens.prefix(matchedPrefixCount))', patched)
+        self.assertIn('func canDirectContinue(from index: Int) -> Bool', patched)
+        self.assertIn('func shouldDirectContinue(at index: Int, maxToken: llama_token) -> Bool', patched)
+        self.assertIn('func greedyContinueToWholeResult(from index: Int, firstToken: llama_token, maxSteps: Int? = nil) -> String?', patched)
+        self.assertIn('if trailingMaxToken != context.eosToken', patched)
         self.assertIn('i < isLearnedToken.count ? isLearnedToken[i] : (isLearned: false, priority: Float(0))', patched)
         self.assertLess(patched.rindex('return .fixRequired'), patched.rindex('let logsumexp = stabilizedLogSumExp'))
         self.assertNotIn('tokenHeap.insertIfPossible(TokenAndLogprob(token: llama_token(index - startIndex), logprob: logp))', patched)
@@ -502,6 +516,8 @@ class ConversionPerformancePatchTests(unittest.TestCase):
                 'activeNodesByIndex',
                 'filterRemoved: Bool = true',
                 'nextnode.prevs[nBest - 1].totalValue >= newValue',
+                'if N_best <= 2, result.prevs.count > 24 {',
+                'self.boundedZenzaiResultPrevs(result.prevs)',
             ],
         )
 
@@ -532,7 +548,14 @@ class ConversionPerformancePatchTests(unittest.TestCase):
         self._assert_round_trip(
             converter_patch.patch_zenzai,
             converter_patch.ZENZAI_REPLACEMENTS,
-            ['reusableLatticeSeed: FullInputLatticeSeed? = nil', 'reusableLatticeSeed.makeLattice()'],
+            [
+                'reusableLatticeSeed: FullInputLatticeSeed? = nil',
+                'reusableUnconstrainedResult: LatticeNode? = nil',
+                'reusableLatticeSeed.makeLattice()',
+                'func boundedZenzaiResultPrevs(',
+                'private func acceptWholeResultCandidate(',
+                'private func materializeWholeResultCandidate(',
+            ],
         )
 
 

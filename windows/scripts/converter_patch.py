@@ -425,6 +425,7 @@ CONVERTER_API_REPLACEMENTS = (
         '            self.updateCurrentSessionState {\n'
         '                $0.previousInputData = inputData\n'
         '                $0.lattice = result.lattice\n'
+        '                $0.lastUnconstrainedResult = nil\n'
         '            }\n'
         '            return result\n'
         '        }',
@@ -559,6 +560,21 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '        ctx_params.n_outputs_max = 256\n'
         '        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED\n'
         '        ctx_params.no_perf = true',
+    ),
+    (
+        '        var params = ctx_params\n'
+        '        #if ZenzaiCPU\n'
+        '        // CPU 専用: KV / KQV 等の GPU オフロードを完全に無効化\n'
+        '        params.offload_kqv = false\n'
+        '        #endif',
+        '        var params = ctx_params\n'
+        '        #if Zenzai\n'
+        '        params.offload_kqv = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount > 0\n'
+        '        #endif\n'
+        '        #if ZenzaiCPU\n'
+        '        // CPU 専用: KV / KQV 等の GPU オフロードを完全に無効化\n'
+        '        params.offload_kqv = false\n'
+        '        #endif',
     ),
     (
         '    func resetContext() throws {\n'
@@ -1332,6 +1348,7 @@ public final class KanaKanjiConverter {''',
     let learningEnabled: Bool
     let memoryURL: URL?
     let seed: FullInputLatticeSeed
+    let unconstrainedResult: LatticeNode?
 
     init(
         inputData: ComposingText,
@@ -1341,7 +1358,8 @@ public final class KanaKanjiConverter {''',
         userDictionaryURL: URL?,
         learningEnabled: Bool,
         memoryURL: URL?,
-        seed: FullInputLatticeSeed
+        seed: FullInputLatticeSeed,
+        unconstrainedResult: LatticeNode?
     ) {
         self.inputData = inputData
         self.experimentalKeyboardTypoCorrection = experimentalKeyboardTypoCorrection
@@ -1351,6 +1369,7 @@ public final class KanaKanjiConverter {''',
         self.learningEnabled = learningEnabled
         self.memoryURL = memoryURL
         self.seed = seed
+        self.unconstrainedResult = unconstrainedResult
     }
 }
 
@@ -1365,6 +1384,7 @@ public final class KanaKanjiConverter {''',
         var experimentalKeyboardTypoCorrection: Bool?
         var latticeBuiltAfterComplete: Bool = false
         var pendingReusableLattice: ReusableFullInputLattice?
+        var lastUnconstrainedResult: LatticeNode?
     }''',
     ),
     (
@@ -1395,7 +1415,7 @@ public final class KanaKanjiConverter {''',
 
         // FIXME: enable cache based zenzai
         if zenzaiMode.enabled, let model = self.getModel(modelURL: zenzaiMode.weightURL) {
-            let reusableLatticeSeed: FullInputLatticeSeed? = if let pendingReusableLattice,
+            let reusablePair: (seed: FullInputLatticeSeed, unconstrainedResult: LatticeNode?)? = if let pendingReusableLattice,
                 !needTypoCorrection,
                 pendingReusableLattice.inputData == inputData,
                 pendingReusableLattice.experimentalKeyboardTypoCorrection == self.currentSessionState.experimentalKeyboardTypoCorrection,
@@ -1405,7 +1425,7 @@ public final class KanaKanjiConverter {''',
                 pendingReusableLattice.learningEnabled == self.dicdataStoreState.learningMemoryManager.enabled,
                 pendingReusableLattice.memoryURL == self.dicdataStoreState.memoryURL,
                 !self.dicdataStoreState.learningMemoryManager.hasTemporaryEntries {
-                pendingReusableLattice.seed
+                (pendingReusableLattice.seed, pendingReusableLattice.unconstrainedResult)
             } else {
                 nil
             }
@@ -1418,12 +1438,14 @@ public final class KanaKanjiConverter {''',
                 personalizationMode: self.getZenzaiPersonalization(mode: zenzaiMode.personalizationMode),
                 versionDependentConfig: zenzaiMode.versionDependentMode,
                 dicdataStoreState: self.dicdataStoreState,
-                reusableLatticeSeed: reusableLatticeSeed
+                reusableLatticeSeed: reusablePair?.seed,
+                reusableUnconstrainedResult: reusablePair?.unconstrainedResult
             )
             self.updateCurrentSessionState {
                 $0.previousInputData = inputData
                 $0.zenzaiCache = cache
                 $0.latticeBuiltAfterComplete = false
+                $0.lastUnconstrainedResult = nil
             }
             return (result, nodes)
         }''',
@@ -1439,11 +1461,32 @@ public final class KanaKanjiConverter {''',
         '''            self.updateCurrentSessionState {
                 $0.previousInputData = inputData
                 $0.latticeBuiltAfterComplete = false
+                $0.lastUnconstrainedResult = needTypoCorrection ? nil : result.result
             }
             return result
         }
 
         debug("\\(#function): before \\(previousInputData) after \\(inputData)")''',
+    ),
+    (
+        '''        // 完全一致の場合
+        if previousInputData == inputData {
+            let result = converter.kana2lattice_no_change(N_best: N_best, previousResult: (inputData: previousInputData, lattice: self.currentSessionState.lattice))
+            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+            }
+            return result
+        }''',
+        '''        // 完全一致の場合
+        if previousInputData == inputData {
+            let result = converter.kana2lattice_no_change(N_best: N_best, previousResult: (inputData: previousInputData, lattice: self.currentSessionState.lattice))
+            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.latticeBuiltAfterComplete = false
+                $0.lastUnconstrainedResult = needTypoCorrection ? nil : result.result
+            }
+            return result
+        }''',
     ),
     (
         '''            self.updateCurrentSessionState {
@@ -1456,9 +1499,40 @@ public final class KanaKanjiConverter {''',
                 $0.previousInputData = inputData
                 $0.completedData = nil
                 $0.latticeBuiltAfterComplete = true
+                $0.lastUnconstrainedResult = nil
             }
             return result
         }''',
+    ),
+    (
+        '''        let result = converter.kana2lattice_changed(
+            inputData,
+            N_best: N_best,
+            counts: diff,
+            previousResult: (inputData: previousInputData, lattice: self.currentSessionState.lattice),
+            needTypoCorrection: needTypoCorrection,
+            dicdataStoreState: self.dicdataStoreState
+        )
+        self.updateCurrentSessionState {
+            $0.previousInputData = inputData
+        }
+
+        return result''',
+        '''        let result = converter.kana2lattice_changed(
+            inputData,
+            N_best: N_best,
+            counts: diff,
+            previousResult: (inputData: previousInputData, lattice: self.currentSessionState.lattice),
+            needTypoCorrection: needTypoCorrection,
+            dicdataStoreState: self.dicdataStoreState
+        )
+        self.updateCurrentSessionState {
+            $0.previousInputData = inputData
+            $0.latticeBuiltAfterComplete = false
+            $0.lastUnconstrainedResult = needTypoCorrection ? nil : result.result
+        }
+
+        return result''',
     ),
 )
 
@@ -1478,7 +1552,8 @@ REUSABLE_LATTICE_PUBLIC_API = '''    public func exportReusableFullInputLattice(
             userDictionaryURL: self.dicdataStoreState.userDictionaryURL,
             learningEnabled: self.dicdataStoreState.learningMemoryManager.enabled,
             memoryURL: self.dicdataStoreState.memoryURL,
-            seed: FullInputLatticeSeed(inputData: inputData, lattice: state.lattice)
+            seed: FullInputLatticeSeed(inputData: inputData, lattice: state.lattice),
+            unconstrainedResult: state.lastUnconstrainedResult
         )
     }
 
@@ -1590,7 +1665,7 @@ ZENZ_EVALUATOR_SETUP_REPLACEMENT = r'''        let inputMask = ZenzDigitMasking.
 
         let candidateTokens = context.encode(evaluationCandidateText, addBOS: false, addEOS: false)
         let addressedTokens: [llama_token]
-        if prevPrompt == promptTokens, !requestRichCandidates {
+        if prevPrompt == promptTokens, !prefixConstraint.constraint.isEmpty {
             var prefix = ""
             var nextIndex = candidate.text.startIndex
             for character in candidate.text {
@@ -1610,7 +1685,14 @@ ZENZ_EVALUATOR_SETUP_REPLACEMENT = r'''        let inputMask = ZenzDigitMasking.
                 }
             }
             let maskedPrefix = hasInputDigits ? ZenzDigitMasking.mask(prefix, maxRuns: inputMask.rawDigits.count).text : prefix
-            addressedTokens = context.encode(maskedPrefix, addBOS: false, addEOS: false)
+            let maskedPrefixTokens = context.encode(maskedPrefix, addBOS: false, addEOS: false)
+            var matchedPrefixCount = 0
+            while matchedPrefixCount < candidateTokens.count,
+                  matchedPrefixCount < maskedPrefixTokens.count,
+                  candidateTokens[matchedPrefixCount] == maskedPrefixTokens[matchedPrefixCount] {
+                matchedPrefixCount += 1
+            }
+            addressedTokens = Array(candidateTokens.prefix(matchedPrefixCount))
         } else {
             addressedTokens = []
         }
@@ -1772,6 +1854,117 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
             )
         }
 
+        @inline(__always)
+        func isStopScalar(_ scalar: Unicode.Scalar) -> Bool {
+            (scalar.value >= 0xEE00 && scalar.value <= 0xEE0F) || scalar.value == 0x0A || scalar.value == 0x0D
+        }
+
+        @inline(__always)
+        func isPureStopPiece(_ bytes: [UInt8]) -> Bool {
+            String(decoding: bytes, as: UTF8.self).unicodeScalars.first.map(isStopScalar) ?? false
+        }
+
+        @inline(__always)
+        func containsStopScalar(_ bytes: [UInt8]) -> Bool {
+            String(decoding: bytes, as: UTF8.self).unicodeScalars.contains(where: isStopScalar)
+        }
+
+        @inline(__always)
+        func canDirectContinue(from index: Int) -> Bool {
+            guard personalizationMode == nil else {
+                return false
+            }
+            if !prefixConstraint.ignoreMemoryAndUserDictionary, index < tokens.count {
+                let guardStart = max(promptTokens.count, index - 1)
+                if guardStart < tokenProtection.count, tokenProtection[guardStart...].contains(where: \\.isUserDict) {
+                    return false
+                }
+                if guardStart < isLearnedToken.count, isLearnedToken[guardStart...].contains(where: \\.isLearned) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        @inline(__always)
+        func shouldDirectContinue(at index: Int, maxToken: llama_token) -> Bool {
+            guard canDirectContinue(from: index) else {
+                return false
+            }
+            if tokens.count - index <= 2 {
+                return true
+            }
+            let pieceBytes = context.tokenToPiece(token: maxToken).map { UInt8(bitPattern: $0) }
+            if pieceBytes.contains(where: { $0 >= 0x21 && $0 <= 0x7E }) {
+                return true
+            }
+            if !prefixConstraint.constraint.isEmpty,
+               index <= promptTokens.count + addressedTokens.count {
+                return true
+            }
+            return false
+        }
+
+        func greedyContinueToWholeResult(from index: Int, firstToken: llama_token, maxSteps: Int? = nil) -> String? {
+            let firstBytes = context.tokenToPiece(token: firstToken).map { UInt8(bitPattern: $0) }
+            if isPureStopPiece(firstBytes) {
+                let whole = decodeWholeResult(upTo: index)
+                return !whole.isEmpty && whole != candidate.text ? whole : nil
+            }
+            var genTokens = Array(tokens.prefix(index)) + [firstToken]
+            var reachedStop = containsStopScalar(firstBytes)
+            let limitSteps = maxSteps ?? min(48, max(8, input.count + 8))
+            var step = 0
+            while !reachedStop, step < limitSteps, genTokens.count < 1020 {
+                step += 1
+                guard let stepLogits = context.evaluationLogits(tokens: genTokens, startOffset: genTokens.count - 1) else {
+                    return nil
+                }
+                var nextToken: llama_token = 0
+                var nextMaxLogit = stepLogits[0]
+                for v in 1 ..< Int(n_vocab) {
+                    let value = stepLogits[v]
+                    if value > nextMaxLogit {
+                        nextMaxLogit = value
+                        nextToken = llama_token(v)
+                    }
+                }
+                if nextToken == context.eosToken {
+                    reachedStop = true
+                    break
+                }
+                let nextBytes = context.tokenToPiece(token: nextToken).map { UInt8(bitPattern: $0) }
+                if isPureStopPiece(nextBytes) {
+                    reachedStop = true
+                    break
+                }
+                genTokens.append(nextToken)
+                if containsStopScalar(nextBytes) {
+                    reachedStop = true
+                    break
+                }
+            }
+            guard reachedStop else {
+                return nil
+            }
+            var bytes: [UInt8] = []
+            for token in genTokens.dropFirst(promptTokens.count) {
+                bytes.append(contentsOf: context.tokenToPiece(token: token).map { UInt8(bitPattern: $0) })
+            }
+            var decoded = String(decoding: bytes, as: UTF8.self)
+            if let stopIndex = decoded.unicodeScalars.firstIndex(where: isStopScalar) {
+                decoded = String(decoded[..<stopIndex])
+            }
+            let restoreDigits = (candidateMask != nil && candidateMask!.rawDigits.count < inputMask.rawDigits.count)
+                ? inputMask.rawDigits
+                : evaluationDigits
+            let whole = ZenzDigitMasking.restore(decoded, digits: restoreDigits)
+            guard !whole.isEmpty, whole != candidate.text else {
+                return nil
+            }
+            return whole
+        }
+
         var altTokens = FixedSizeHeap<AlternativeHighProbToken>(size: requestRichCandidates ? 5 : 0)
         for (i, tokenID) in tokens.indexed().dropFirst(startOffset + 1) {
             let startIndex = (i - 1 - startOffset) * Int(n_vocab)
@@ -1878,6 +2071,10 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                         let learned = i < isLearnedToken.count ? isLearnedToken[i] : (isLearned: false, priority: Float(0))
                         let preferLearnedToken = learned.isLearned && logits[startIndex + Int(tokenID)] + learned.priority > maxRawLogit
                         if !preferLearnedToken {
+                            if shouldDirectContinue(at: i, maxToken: maxToken),
+                               let wholeText = greedyContinueToWholeResult(from: i, firstToken: maxToken) {
+                                return .wholeResult(wholeText)
+                            }
                             let constraint = restoreConstraintBytes(
                                 decodePrefixBytes(upTo: i) + context.tokenToPiece(token: maxToken).map(UInt8.init),
                                 completePartialTrailingNam: true
@@ -1904,6 +2101,29 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
 
                 let logsumexp = stabilizedLogSumExp(startIndex: startIndex, endIndex: endIndex, maxRawLogit: maxRawLogit)
                 score += maxRawLogit - logsumexp
+            }
+        }
+        if personalizationMode == nil,
+           !candidateTokens.isEmpty,
+           tokens.count >= startOffset + 1,
+           canDirectContinue(from: tokens.count) {
+            let trailingStart = (tokens.count - 1 - startOffset) * Int(n_vocab)
+            let trailingEnd = (tokens.count - startOffset) * Int(n_vocab)
+            var trailingMaxLogit: Float = logits[trailingStart]
+            var trailingMaxToken: llama_token = 0
+            for index in (trailingStart + 1) ..< trailingEnd {
+                let value = logits[index]
+                if value > trailingMaxLogit {
+                    trailingMaxLogit = value
+                    trailingMaxToken = llama_token(index - trailingStart)
+                }
+            }
+            if trailingMaxToken != context.eosToken {
+                let trailingBytes = context.tokenToPiece(token: trailingMaxToken).map { UInt8(bitPattern: $0) }
+                if !isPureStopPiece(trailingBytes),
+                   let wholeText = greedyContinueToWholeResult(from: tokens.count, firstToken: trailingMaxToken, maxSteps: 4) {
+                    return .wholeResult(wholeText)
+                }
             }
         }'''
 
@@ -2670,6 +2890,9 @@ FULL_INPUT_PROCESSING_REPLACEMENTS = (
                 }
             }
         }
+        if N_best <= 2, result.prevs.count > 24 {
+            result.prevs = self.boundedZenzaiResultPrevs(result.prevs)
+        }
         return result''',
     ),
     (
@@ -3009,7 +3232,8 @@ ZENZAI_REPLACEMENTS = (
     ) -> (result: LatticeNode, lattice: Lattice, cache: ZenzaiCache) {''',
         '''        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode,
         dicdataStoreState: DicdataStoreState,
-        reusableLatticeSeed: FullInputLatticeSeed? = nil
+        reusableLatticeSeed: FullInputLatticeSeed? = nil,
+        reusableUnconstrainedResult: LatticeNode? = nil
     ) -> (result: LatticeNode, lattice: Lattice, cache: ZenzaiCache) {''',
     ),
     (
@@ -3027,7 +3251,19 @@ ZENZAI_REPLACEMENTS = (
                         (seed, seedLattice) = self.makeFullInputLatticeSeedAndLattice(inputData, needTypoCorrection: false, dicdataStoreState: dicdataStoreState)
                     }
                     latticeSeed = seed
-                    draftResult = self.kana2lattice_all_from_seed(seed, lattice: seedLattice, N_best: 2)''',
+                    if let reusableUnconstrainedResult, !reusableUnconstrainedResult.prevs.isEmpty {
+                        let draftNode: LatticeNode
+                        if reusableUnconstrainedResult.prevs.count > 24 {
+                            let bounded = LatticeNode.EOSNode
+                            bounded.prevs = self.boundedZenzaiResultPrevs(reusableUnconstrainedResult.prevs)
+                            draftNode = bounded
+                        } else {
+                            draftNode = reusableUnconstrainedResult
+                        }
+                        draftResult = (result: draftNode, lattice: seedLattice)
+                    } else {
+                        draftResult = self.kana2lattice_all_from_seed(seed, lattice: seedLattice, N_best: 2)
+                    }''',
     ),
     (
         '''                } else if preprocessedLattice == nil {
@@ -3047,6 +3283,67 @@ ZENZAI_REPLACEMENTS = (
                     draftResult = self.kana2lattice_all_with_prefix_constraint_from_seed(seed, lattice: seedLattice, N_best: 3, constraint: constraint)''',
     ),
     (
+        '''            guard var (index, candidate) = best else {
+                debug("best was not found!")
+                // Emptyの場合
+                // 制約が満たせない場合は無視する
+                return (eosNode, lattice, ZenzaiCache(inputData, constraint: PrefixConstraint([]), satisfyingCandidate: nil, lattice: lattice))
+            }''',
+        '''            guard var (index, candidate) = best else {
+                if !constraint.isEmpty, inferenceLimit > 0, let fallback = insertedCandidates.first {
+                    let fallbackReview = zenz.candidateEvaluate(
+                        convertTarget: inputData.convertTarget,
+                        candidates: [fallback.1],
+                        requestRichCandidates: requestRichCandidates,
+                        prefixConstraint: constraint,
+                        personalizationMode: personalizationMode,
+                        versionDependentConfig: versionDependentConfig
+                    )
+                    inferenceLimit -= 1
+                    if let resolved = self.acceptWholeResultCandidate(
+                        fallbackReview,
+                        inputData: inputData,
+                        baseCandidate: fallback.1,
+                        baseNode: fallback.0,
+                        candidates: [fallback.1],
+                        draftPrevs: [fallback.0],
+                        constraint: constraint,
+                        lattice: lattice
+                    ) {
+                        if resolved.chosen.1.text != fallback.1.text {
+                            insertedCandidates.insert(resolved.chosen, at: 0)
+                        }
+                        return (eosNode, lattice, resolved.cache)
+                    }
+                }
+                debug("best was not found!")
+                // Emptyの場合
+                // 制約が満たせない場合は無視する
+                return (eosNode, lattice, ZenzaiCache(inputData, constraint: PrefixConstraint([]), satisfyingCandidate: nil, lattice: lattice))
+            }''',
+    ),
+    (
+        '''                inferenceLimit -= 1
+                let nextAction = self.review(''',
+        '''                inferenceLimit -= 1
+                if let resolved = self.acceptWholeResultCandidate(
+                    reviewResult,
+                    inputData: inputData,
+                    baseCandidate: candidate,
+                    baseNode: draftResult.result.prevs[index],
+                    candidates: candidates,
+                    draftPrevs: draftResult.result.prevs,
+                    constraint: constraint,
+                    lattice: lattice
+                ) {
+                    if resolved.chosen.1.text != candidate.text {
+                        insertedCandidates.insert(resolved.chosen, at: 0)
+                    }
+                    return (eosNode, lattice, resolved.cache)
+                }
+                let nextAction = self.review(''',
+    ),
+    (
         '''                case .retry(let candidateIndex):
                     index = candidateIndex
                     candidate = candidates[candidateIndex]''',
@@ -3058,6 +3355,408 @@ ZENZAI_REPLACEMENTS = (
                     }
                     index = candidateIndex
                     candidate = candidates[candidateIndex]''',
+    ),
+    (
+        '''    /// リトライの候補に対して恣意的なバリデーションを実施する
+    private func heuristicRetryValidation(_ text: String) -> Bool {''',
+        '''    func boundedZenzaiResultPrevs(_ prevs: [RegisteredNode], baseLimit: Int = 24, specialLimit: Int = 16) -> [RegisteredNode] {
+        guard prevs.count > baseLimit else {
+            return prevs
+        }
+        let sorted = prevs.sorted { $0.totalValue > $1.totalValue }
+        var kept = Array(sorted.prefix(baseLimit))
+        for node in sorted.dropFirst(baseLimit) {
+            var cursor: RegisteredNode? = node
+            var hasSpecial = false
+            while let current = cursor {
+                if !current.data.metadata.isDisjoint(with: [.isFromUserDictionary, .isLearned]) {
+                    hasSpecial = true
+                    break
+                }
+                cursor = current.prev
+            }
+            if hasSpecial {
+                kept.append(node)
+                if kept.count >= baseLimit + specialLimit {
+                    break
+                }
+            }
+        }
+        return kept
+    }
+
+    private func acceptWholeResultCandidate(
+        _ reviewResult: CandidateEvaluationResult,
+        inputData: ComposingText,
+        baseCandidate: Candidate,
+        baseNode: RegisteredNode,
+        candidates: [Candidate],
+        draftPrevs: [RegisteredNode],
+        constraint: Kana2Kanji.PrefixConstraint,
+        lattice: Lattice
+    ) -> (chosen: (RegisteredNode, Candidate), cache: ZenzaiCache)? {
+        guard case .wholeResult(let wholeText) = reviewResult,
+              self.heuristicRetryValidation(wholeText),
+              constraint.ignoreMemoryAndUserDictionary || !baseCandidate.data.contains(where: {
+                  ZenzUserDictionaryProtection.isProtectedUserDictionaryElement($0) && !wholeText.contains($0.word)
+              }) else {
+            return nil
+        }
+        let chosen: (RegisteredNode, Candidate)
+        if let exactIndex = candidates.firstIndex(where: { $0.text == wholeText && self.heuristicRetryValidation($0.text) }) {
+            chosen = (draftPrevs[exactIndex], candidates[exactIndex])
+        } else {
+            chosen = self.materializeWholeResultCandidate(
+                wholeText: wholeText,
+                inputData: inputData,
+                baseCandidate: baseCandidate,
+                baseNode: baseNode,
+                lattice: lattice,
+                additionalNodes: draftPrevs
+            )
+        }
+        let finalConstraint = PrefixConstraint(
+            Array(wholeText.utf8),
+            hasEOS: true,
+            ignoreMemoryAndUserDictionary: constraint.ignoreMemoryAndUserDictionary
+        )
+        let cache = ZenzaiCache(inputData, constraint: finalConstraint, satisfyingCandidate: chosen.1, lattice: lattice)
+        return (chosen, cache)
+    }
+
+    private func materializeWholeResultCandidate(
+        wholeText: String,
+        inputData: ComposingText,
+        baseCandidate: Candidate,
+        baseNode: RegisteredNode,
+        lattice: Lattice,
+        additionalNodes: [RegisteredNode]
+    ) -> (RegisteredNode, Candidate) {
+        let R = Array(inputData.convertTarget.toKatakana())
+        let S = Array(wholeText)
+        let surfaceCount = inputData.convertTarget.count
+        var rootNode = baseNode
+        while let prev = rootNode.prev {
+            rootNode = prev
+        }
+        let n = R.count
+        let m = S.count
+        if n == 0 || m == 0 || n > 128 || m > 128 {
+            let fallbackElement = DicdataElement(
+                word: wholeText,
+                ruby: String(R),
+                cid: CIDData.一般名詞.cid,
+                mid: MIDData.一般.mid,
+                value: baseCandidate.value
+            )
+            let reg = RegisteredNode(
+                data: fallbackElement,
+                registered: rootNode,
+                totalValue: baseCandidate.value,
+                range: .surface(from: 0, to: surfaceCount)
+            )
+            return (reg, self.processClauseCandidate(reg.getCandidateData()))
+        }
+
+        let inputToSurface = inputData.inputIndexToSurfaceIndexMap()
+        func mapSurfaceRange(_ range: Lattice.LatticeRange) -> (Int, Int)? {
+            let rawStart: Int
+            let rawEnd: Int
+            switch range {
+            case .surface(let from, let to):
+                rawStart = from
+                rawEnd = to
+            case .input(let from, let to):
+                guard let mappedStart = inputToSurface[from], let mappedEnd = inputToSurface[to] else {
+                    return nil
+                }
+                rawStart = mappedStart
+                rawEnd = mappedEnd
+            }
+            let r1 = (n == surfaceCount) ? rawStart : min(n, max(0, rawStart))
+            let r2 = (n == surfaceCount) ? rawEnd : min(n, max(0, rawEnd))
+            guard r1 >= 0, r2 > r1, r2 <= n else {
+                return nil
+            }
+            return (r1, r2)
+        }
+
+        var sStarts: [Character: [Int]] = [:]
+        sStarts.reserveCapacity(m)
+        for (idx, ch) in S.enumerated() {
+            sStarts[ch, default: []].append(idx)
+        }
+
+        struct MatchKey: Hashable {
+            let r1: Int
+            let r2: Int
+            let s1: Int
+            let s2: Int
+        }
+        struct MatchEdge {
+            let r1: Int
+            let s1: Int
+            let elem: DicdataElement
+            let score: Float
+        }
+
+        let stride = m + 1
+        var edgesByEnd = [[MatchEdge]](repeating: [], count: (n + 1) * stride)
+        var bestEdgeIndex: [MatchKey: Int] = [:]
+
+        func recordElement(_ elem: DicdataElement, range: Lattice.LatticeRange) {
+            guard !elem.word.isEmpty, let (r1, r2) = mapSurfaceRange(range) else {
+                return
+            }
+            let w = Array(elem.word)
+            guard let first = w.first, let starts = sStarts[first] else {
+                return
+            }
+            var score = Float(elem.value())
+            if !elem.metadata.isDisjoint(with: [.isFromUserDictionary, .isLearned]) {
+                score += 20.0
+            }
+            for s1 in starts {
+                let s2 = s1 + w.count
+                guard s2 <= m, S[s1 ..< s2].elementsEqual(w) else {
+                    continue
+                }
+                let bucket = r2 * stride + s2
+                let key = MatchKey(r1: r1, r2: r2, s1: s1, s2: s2)
+                if let existingIdx = bestEdgeIndex[key] {
+                    if score > edgesByEnd[bucket][existingIdx].score {
+                        edgesByEnd[bucket][existingIdx] = MatchEdge(r1: r1, s1: s1, elem: elem, score: score)
+                    }
+                } else {
+                    bestEdgeIndex[key] = edgesByEnd[bucket].count
+                    edgesByEnd[bucket].append(MatchEdge(r1: r1, s1: s1, elem: elem, score: score))
+                }
+            }
+        }
+
+        for nodeArray in lattice {
+            for node in nodeArray {
+                if !self.dicdataStore.shouldBeRemoved(data: node.data) {
+                    recordElement(node.data, range: node.range)
+                }
+            }
+        }
+        var walk: RegisteredNode? = baseNode
+        while let cur = walk {
+            recordElement(cur.data, range: cur.range)
+            walk = cur.prev
+        }
+        for altNode in additionalNodes.prefix(8) {
+            var cur: RegisteredNode? = altNode
+            while let item = cur {
+                recordElement(item.data, range: item.range)
+                cur = item.prev
+            }
+        }
+        for r in 0 ..< n {
+            for s in 0 ..< m where R[r] == S[s].toKatakana() {
+                let key = MatchKey(r1: r, r2: r + 1, s1: s, s2: s + 1)
+                let bucket = (r + 1) * stride + (s + 1)
+                let kanaElem = DicdataElement(
+                    word: String(S[s]),
+                    ruby: String(R[r]),
+                    cid: CIDData.一般名詞.cid,
+                    mid: MIDData.一般.mid,
+                    value: -12.0
+                )
+                let kanaScore: Float = -12.0
+                if let existingIdx = bestEdgeIndex[key] {
+                    if kanaScore > edgesByEnd[bucket][existingIdx].score {
+                        edgesByEnd[bucket][existingIdx] = MatchEdge(r1: r, s1: s, elem: kanaElem, score: kanaScore)
+                    }
+                } else {
+                    bestEdgeIndex[key] = edgesByEnd[bucket].count
+                    edgesByEnd[bucket].append(MatchEdge(r1: r, s1: s, elem: kanaElem, score: kanaScore))
+                }
+            }
+        }
+
+        let negInf: Float = -1e30
+        let totalCells = (n + 1) * stride
+        var closedScore = [Float](repeating: negInf, count: totalCells)
+        var closedPrevR = [Int](repeating: -1, count: totalCells)
+        var closedPrevS = [Int](repeating: -1, count: totalCells)
+        var closedElem = [DicdataElement?](repeating: nil, count: totalCells)
+
+        var gapRScore = [Float](repeating: negInf, count: totalCells)
+        var gapRStartR = [Int](repeating: -1, count: totalCells)
+        var gapRStartS = [Int](repeating: -1, count: totalCells)
+
+        var gapSScore = [Float](repeating: negInf, count: totalCells)
+        var gapSStartR = [Int](repeating: -1, count: totalCells)
+        var gapSStartS = [Int](repeating: -1, count: totalCells)
+
+        var gapBothScore = [Float](repeating: negInf, count: totalCells)
+        var gapBothStartR = [Int](repeating: -1, count: totalCells)
+        var gapBothStartS = [Int](repeating: -1, count: totalCells)
+
+        closedScore[0] = 0
+        for r in 0 ... n {
+            for s in 0 ... m {
+                let idx = r * stride + s
+                if r > 0 {
+                    let up = (r - 1) * stride + s
+                    if closedScore[up] > -1e29 {
+                        let cand = closedScore[up] - 24.0
+                        if cand > gapRScore[idx] {
+                            gapRScore[idx] = cand
+                            gapRStartR[idx] = r - 1
+                            gapRStartS[idx] = s
+                        }
+                    }
+                    if gapRScore[up] > -1e29 {
+                        let cand = gapRScore[up] - 2.0
+                        if cand > gapRScore[idx] {
+                            gapRScore[idx] = cand
+                            gapRStartR[idx] = gapRStartR[up]
+                            gapRStartS[idx] = gapRStartS[up]
+                        }
+                    }
+                    if gapSScore[up] > -1e29 {
+                        let cand = gapSScore[up] - 2.0
+                        if cand > gapBothScore[idx] {
+                            gapBothScore[idx] = cand
+                            gapBothStartR[idx] = gapSStartR[up]
+                            gapBothStartS[idx] = gapSStartS[up]
+                        }
+                    }
+                    if gapBothScore[up] > -1e29 {
+                        let cand = gapBothScore[up] - 2.0
+                        if cand > gapBothScore[idx] {
+                            gapBothScore[idx] = cand
+                            gapBothStartR[idx] = gapBothStartR[up]
+                            gapBothStartS[idx] = gapBothStartS[up]
+                        }
+                    }
+                }
+                if s > 0 {
+                    let left = r * stride + (s - 1)
+                    if closedScore[left] > -1e29 {
+                        let cand = closedScore[left] - 24.0
+                        if cand > gapSScore[idx] {
+                            gapSScore[idx] = cand
+                            gapSStartR[idx] = r
+                            gapSStartS[idx] = s - 1
+                        }
+                    }
+                    if gapSScore[left] > -1e29 {
+                        let cand = gapSScore[left] - 2.0
+                        if cand > gapSScore[idx] {
+                            gapSScore[idx] = cand
+                            gapSStartR[idx] = gapSStartR[left]
+                            gapSStartS[idx] = gapSStartS[left]
+                        }
+                    }
+                    if gapRScore[left] > -1e29 {
+                        let cand = gapRScore[left] - 2.0
+                        if cand > gapBothScore[idx] {
+                            gapBothScore[idx] = cand
+                            gapBothStartR[idx] = gapRStartR[left]
+                            gapBothStartS[idx] = gapRStartS[left]
+                        }
+                    }
+                    if gapBothScore[left] > -1e29 {
+                        let cand = gapBothScore[left] - 2.0
+                        if cand > gapBothScore[idx] {
+                            gapBothScore[idx] = cand
+                            gapBothStartR[idx] = gapBothStartR[left]
+                            gapBothStartS[idx] = gapBothStartS[left]
+                        }
+                    }
+                }
+                if gapBothScore[idx] > closedScore[idx] {
+                    closedScore[idx] = gapBothScore[idx]
+                    closedPrevR[idx] = gapBothStartR[idx]
+                    closedPrevS[idx] = gapBothStartS[idx]
+                    closedElem[idx] = nil
+                }
+                for edge in edgesByEnd[idx] {
+                    let prevIdx = edge.r1 * stride + edge.s1
+                    guard closedScore[prevIdx] > -1e29 else {
+                        continue
+                    }
+                    let cand = closedScore[prevIdx] + edge.score
+                    if cand > closedScore[idx] {
+                        closedScore[idx] = cand
+                        closedPrevR[idx] = edge.r1
+                        closedPrevS[idx] = edge.s1
+                        closedElem[idx] = edge.elem
+                    }
+                }
+            }
+        }
+
+        struct Piece {
+            var r1: Int
+            var r2: Int
+            var s1: Int
+            var s2: Int
+            var elem: DicdataElement?
+        }
+        var reversedPieces: [Piece] = []
+        var curR = n
+        var curS = m
+        while curR > 0 || curS > 0 {
+            let idx = curR * stride + curS
+            let pr = closedPrevR[idx]
+            let ps = closedPrevS[idx]
+            guard pr >= 0, ps >= 0 else {
+                reversedPieces = [Piece(r1: 0, r2: n, s1: 0, s2: m, elem: nil)]
+                break
+            }
+            reversedPieces.append(Piece(r1: pr, r2: curR, s1: ps, s2: curS, elem: closedElem[idx]))
+            curR = pr
+            curS = ps
+        }
+        var merged: [Piece] = []
+        for piece in reversedPieces.reversed() {
+            if piece.elem == nil, var last = merged.last, last.elem == nil {
+                last.r2 = piece.r2
+                last.s2 = piece.s2
+                merged[merged.count - 1] = last
+            } else {
+                merged.append(piece)
+            }
+        }
+        var reg = rootNode
+        for piece in merged {
+            let elem: DicdataElement
+            if let existing = piece.elem {
+                elem = existing
+            } else {
+                let word = String(S[piece.s1 ..< piece.s2])
+                let ruby = String(R[piece.r1 ..< piece.r2])
+                let penalty: PValue = -22.0 - 2.0 * PValue((piece.r2 - piece.r1) + (piece.s2 - piece.s1))
+                elem = DicdataElement(
+                    word: word,
+                    ruby: ruby,
+                    cid: CIDData.一般名詞.cid,
+                    mid: MIDData.一般.mid,
+                    value: penalty
+                )
+            }
+            let sStart = piece.r1 == 0 ? 0 : min(surfaceCount, piece.r1)
+            let sEndRaw = piece.r2 == n ? surfaceCount : min(surfaceCount, piece.r2)
+            let sEnd = max(sStart, sEndRaw)
+            let cc = self.dicdataStore.getCCValue(reg.data.rcid, elem.lcid)
+            let totalVal = reg.totalValue + elem.value() + cc
+            reg = RegisteredNode(
+                data: elem,
+                registered: reg,
+                totalValue: totalVal,
+                range: .surface(from: sStart, to: sEnd)
+            )
+        }
+        return (reg, self.processClauseCandidate(reg.getCandidateData()))
+    }
+
+    /// リトライの候補に対して恣意的なバリデーションを実施する
+    private func heuristicRetryValidation(_ text: String) -> Bool {''',
     ),
 )
 
