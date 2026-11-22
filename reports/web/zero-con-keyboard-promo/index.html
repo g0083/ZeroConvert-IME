@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZeroConvert IME — Keyboard Promo Film</title>
+<style>
+:root{
+  --bg:#101722; --surface:#182334; --selection:#24344b; --text:#edf3fc; --muted:#a5b6cc;
+  --accent:#74b5ff; --accent2:#7ef0c9; --accent3:#d6a0ed; --accent4:#80d5a5;
+  --border:#344760; --amber:#ffc46b; --danger:#f87171; --success:#34d399;
+  --font: "Noto Sans JP","Hiragino Sans","Yu Gothic UI",Meiryo,system-ui,sans-serif;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#05080f;color:var(--text);font-family:var(--font);overflow:hidden}
+body{display:flex;align-items:center;justify-content:center}
+/* ---------- 16:9 stage ---------- */
+#viewport{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#0d1420 0%,#05080f 70%)}
+#stage{position:relative;width:min(100vw,177.78vh);height:min(100vh,56.25vw);aspect-ratio:16/9;overflow:hidden;background:var(--bg);isolation:isolate;box-shadow:0 0 0 1px #1e2e47, 0 30px 120px #000c}
+/* background layers */
+.bg-mesh{position:absolute;inset:-20%;z-index:0;background:
+  radial-gradient(38% 52% at 18% 18%, rgba(116,181,255,.28), transparent 70%),
+  radial-gradient(42% 55% at 82% 22%, rgba(214,160,237,.20), transparent 70%),
+  radial-gradient(55% 60% at 50% 95%, rgba(126,240,201,.16), transparent 70%),
+  radial-gradient(30% 40% at 70% 78%, rgba(128,213,165,.13), transparent 70%);
+  filter:blur(2px)}
+.bg-grid{position:absolute;inset:0;z-index:0;opacity:.16;background-image:linear-gradient(rgba(116,181,255,.5) 1px,transparent 1px),linear-gradient(90deg,rgba(116,181,255,.5) 1px,transparent 1px);background-size:72px 72px;mask-image:radial-gradient(80% 80% at 50% 45%,black,transparent 75%)}
+#particles{position:absolute;inset:0;z-index:1;width:100%;height:100%;opacity:.85}
+.vignette{position:absolute;inset:0;z-index:2;pointer-events:none;background:radial-gradient(120% 105% at 50% 42%,transparent 55%,rgba(0,0,0,.42) 100%)}
+/* ---------- chrome ---------- */
+.chrome-top{position:absolute;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;gap:14px;padding:18px 28px 10px}
+.brand-mini{display:flex;align-items:center;gap:10px;font-weight:850;letter-spacing:.02em;font-size:15px}
+.brand-mark{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#2b6bff 60%,var(--accent3));display:grid;place-items:center;font-size:17px;box-shadow:0 6px 18px rgba(116,181,255,.45)}
+.brand-mini small{font-weight:650;color:var(--muted);font-size:10px;letter-spacing:.18em;text-transform:uppercase}
+.chrome-top .spacer{flex:1}
+.pills{display:flex;gap:7px}
+.pill{font-size:10.5px;font-weight:750;letter-spacing:.06em;padding:5px 10px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:rgba(24,35,52,.65)}
+.pill.on{color:#0f1f3a;background:var(--accent);border-color:var(--accent)}
+.live-badge{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;letter-spacing:.14em;color:var(--muted)}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);box-shadow:0 0 12px var(--danger)}
+/* ---------- scenes ---------- */
+.scene{position:absolute;inset:0;z-index:10;opacity:0;pointer-events:none;transform:translateY(14px) scale(.995)}
+.scene.on{opacity:1;pointer-events:auto;transform:none}
+.scene-wrap{position:absolute;inset:0;padding:84px 60px 182px;display:flex;flex-direction:column}
+body.clean .player{display:none!important}
+body.clean .chrome-top{opacity:.92}
+body.clean #viewport{background:#0b111e}
+.eyebrow{display:flex;align-items:center;gap:10px;color:var(--accent);font-weight:800;font-size:12px;letter-spacing:.22em;text-transform:uppercase}
+.eyebrow::before{content:"";width:26px;height:2px;background:var(--accent);border-radius:2px}
+h1{font-size:clamp(28px,5.2vw,84px);line-height:1.06;letter-spacing:-.045em;margin:12px 0 0;font-weight:850}
+h1 .grad{background:linear-gradient(100deg,#fff 10%,var(--accent) 45%,var(--accent2) 78%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:var(--muted);font-size:clamp(13px,1.45vw,22px);line-height:1.65;margin:14px 0 0;max-width:920px;font-weight:500}
+.sub strong{color:var(--text)}
+/* caption lower third */
+.caption{position:absolute;left:64px;bottom:92px;z-index:25;max-width:980px;background:rgba(10,15,26,.72);border:1px solid rgba(255,255,255,.10);backdrop-filter:blur(14px);border-radius:14px;padding:12px 18px 12px 16px;display:flex;gap:14px;align-items:flex-start}
+.caption .cap-no{flex:none;width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#2b6bff);display:grid;place-items:center;font-weight:900;font-size:14px;color:#081426}
+.caption p{margin:0;font-size:clamp(12px,1.3vw,19px);line-height:1.55;font-weight:650}
+.caption p span{color:var(--muted);font-weight:550;display:block;font-size:.82em;margin-top:2px}
+.caption .hl{color:var(--accent)}
+/* bottom player */
+.player{position:absolute;left:0;right:0;bottom:0;z-index:40;padding:12px 28px 14px;background:linear-gradient(transparent,rgba(5,8,15,.88) 30%,rgba(5,8,15,.96))}
+.player-row{display:flex;align-items:center;gap:12px}
+.btn{width:38px;height:38px;border-radius:50%;border:1px solid var(--border);background:rgba(24,35,52,.9);color:var(--text);font-size:15px;display:grid;place-items:center;cursor:pointer;flex:none}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:#0f1f3a;border-color:var(--accent);font-weight:900}
+.track{position:relative;flex:1;height:26px;display:flex;align-items:center}
+.track::before{content:"";position:absolute;left:0;right:0;height:6px;border-radius:99px;background:rgba(255,255,255,.12)}
+.fill{position:absolute;left:0;height:6px;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0%}
+.thumb{position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;border:4px solid var(--accent);transform:translateX(-50%);left:0%;box-shadow:0 2px 10px rgba(0,0,0,.5)}
+.time{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:92px;text-align:right;font-variant-numeric:tabular-nums}
+.scenes-bar{display:flex;gap:6px;margin-top:6px}
+.scenes-bar button{flex:1;height:22px;border-radius:6px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:var(--muted);font-size:10px;font-weight:750;letter-spacing:.04em;cursor:pointer;padding:0 4px;white-space:nowrap;overflow:hidden}
+.scenes-bar button.on{background:rgba(116,181,255,.18);border-color:rgba(116,181,255,.5);color:var(--text)}
+.scenes-bar button.done{background:rgba(126,240,201,.12);color:#a8f5d3}
+/* generic glass card */
+.glass{background:linear-gradient(160deg,rgba(255,255,255,.09),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(16px);border-radius:20px;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.06em;padding:6px 11px;border-radius:999px;border:1px solid var(--border);background:rgba(16,23,34,.75);color:var(--muted)}
+.chip b{color:var(--accent)}
+/* ---------- INTRO ---------- */
+.intro-center{flex:1;display:flex;flex-direction:column;justify-content:center}
+.zero-logo{display:flex;align-items:center;gap:22px}
+.zero-big{width:120px;height:120px;border-radius:28px;background:linear-gradient(135deg,var(--accent),#2b6bff 55%,var(--accent3));display:grid;place-items:center;font-size:64px;font-weight:900;color:#071326;box-shadow:0 20px 60px rgba(116,181,255,.5),inset 0 1px 0 rgba(255,255,255,.7);position:relative}
+.zero-big::after{content:"";position:absolute;inset:-14px;border-radius:36px;border:1.5px dashed rgba(116,181,255,.55);animation:spin 14s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hero-word{font-size:clamp(34px,5.6vw,88px);font-weight:900;letter-spacing:-.05em;line-height:.95}
+.hero-word .thin{display:block;font-size:.42em;font-weight:800;letter-spacing:.28em;color:var(--accent);margin-bottom:8px}
+.badge-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}
+.stat-row{display:flex;gap:14px;margin-top:18px}
+.stat{flex:1;padding:16px 18px;border-radius:16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09)}
+.stat b{display:block;font-size:26px;letter-spacing:-.03em}
+.stat span{font-size:11px;color:var(--muted);font-weight:650;letter-spacing:.05em}
+/* ---------- mock windows ---------- */
+.mock{border-radius:18px;overflow:hidden;border:1px solid rgba(255,255,255,.13);background:#0c1220;box-shadow:0 28px 70px rgba(0,0,0,.55)}
+.mock-head{display:flex;align-items:center;gap:8px;padding:11px 14px;background:rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.07);font-size:11px;color:var(--muted);font-weight:750}
+.dot{width:10px;height:10px;border-radius:50%}
+.mock-body{padding:22px 22px 20px;position:relative}
+.reading-line{font-family:var(--mono);font-size:15px;color:var(--muted);letter-spacing:.04em;min-height:26px}
+.reading-line b{color:var(--accent)}
+.converted{font-size:clamp(30px,3.6vw,58px);font-weight:850;letter-spacing:-.035em;margin-top:8px;line-height:1.15}
+.converted rt{font-size:.34em;color:var(--accent);font-weight:750;letter-spacing:.06em}
+.caret{display:inline-block;width:3px;height:1em;background:var(--accent);vertical-align:-.12em;margin-left:5px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+.cand-bar{display:flex;gap:8px;margin-top:16px}
+.cand{flex:1;display:flex;align-items:center;gap:9px;padding:10px 13px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:14px;font-weight:700}
+.cand.hot{background:linear-gradient(100deg,rgba(116,181,255,.20),rgba(126,240,201,.14));border-color:rgba(116,181,255,.55)}
+.cand kbd{font-family:var(--mono);font-size:10px;font-weight:900;background:var(--accent);color:#081426;border-radius:6px;padding:2px 7px}
+.cand small{margin-left:auto;color:var(--muted);font-weight:650;font-size:10px}
+.commit-line{margin-top:16px;height:8px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+.commit-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:99px;transition:width .2s linear}
+.auto-tag{display:inline-flex;align-items:center;gap:7px;margin-top:10px;font-size:11px;font-weight:800;color:var(--accent2);letter-spacing:.06em}
+/* typo scene */
+.split2{display:grid;grid-template-columns:1.15fr .85fr;gap:22px;flex:1;align-items:center}
+.diff-box{margin-top:14px;padding:16px 20px;border-radius:16px;background:rgba(255,196,107,.08);border:1px solid rgba(255,196,107,.35)}
+.diff-box .from{font-family:var(--mono);font-size:20px;color:var(--muted);text-decoration:line-through;text-decoration-color:rgba(248,113,113,.8);text-decoration-thickness:2px}
+.diff-box .to{font-size:34px;font-weight:900;margin-top:6px}
+.diff-box .to ins{text-decoration:none;color:var(--amber);background:rgba(255,196,107,.16);padding:0 6px;border-radius:7px}
+.adj-map{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.adj{padding:12px 10px;text-align:center;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09)}
+.adj b{display:block;font-size:22px}
+.adj span{font-size:10px;color:var(--muted);font-weight:750;letter-spacing:.06em}
+.adj.hit{border-color:rgba(255,196,107,.6);background:rgba(255,196,107,.12)}
+.kbd-key{display:inline-grid;place-items:center;min-width:38px;height:38px;padding:0 10px;border-radius:10px;background:linear-gradient(#2a3a56,#1a2740);border:1px solid rgba(255,255,255,.16);border-bottom-width:4px;font-family:var(--mono);font-weight:900;font-size:15px}
+.kbd-key.press{background:linear-gradient(#3b82f6,#2563eb);border-color:#93c5fd;transform:translateY(2px)}
+.tab-key{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#2b6bff);color:#071326;font-weight:900;font-size:14px;box-shadow:0 10px 30px rgba(59,130,246,.5)}
+/* prediction */
+.predict-line{margin-top:14px;font-size:clamp(24px,2.8vw,44px);font-weight:800;letter-spacing:-.02em}
+.predict-line .future{color:var(--accent2);background:linear-gradient(transparent 62%,rgba(52,211,153,.28) 62%);padding:0 3px}
+.ghost{color:rgba(165,182,204,.45);font-weight:650}
+.flow-arrow{display:flex;align-items:center;gap:10px;color:var(--accent);font-weight:900;font-size:20px;margin:10px 0}
+/* keyboard scene */
+.kb-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:22px;flex:1;align-items:stretch}
+.phone-col{display:flex;flex-direction:column;gap:14px}
+.phone{flex:1;border-radius:26px;border:1px solid rgba(255,255,255,.16);background:#0b111e;padding:14px;display:flex;flex-direction:column;gap:10px;box-shadow:0 28px 70px rgba(0,0,0,.55)}
+.phone-top{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--muted);font-weight:800;letter-spacing:.10em}
+.ai-bar{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:11px;background:linear-gradient(100deg,rgba(214,160,237,.18),rgba(116,181,255,.14));border:1px solid rgba(214,160,237,.35);font-size:12px;font-weight:800}
+.ai-bar .z{flex:none;width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent3));display:grid;place-items:center;font-size:11px;color:#081426}
+.cand-mini{display:flex;gap:6px}
+.cand-mini i{font-style:normal;flex:1;text-align:center;padding:7px 4px;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);font-size:12px;font-weight:800}
+.cand-mini i.hot{background:rgba(116,181,255,.20);border-color:rgba(116,181,255,.6)}
+.kb12{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.kb-qwerty{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.kb12 button,.kb-qwerty button{border:1px solid rgba(255,255,255,.10);background:linear-gradient(#22335a,#16233e);color:var(--text);border-radius:11px;padding:13px 4px 10px;font-weight:800;font-size:15px;display:flex;flex-direction:column;align-items:center;gap:1px}
+.kb12 button small,.kb-qwerty button small{font-size:9px;color:var(--muted);font-weight:700}
+.kb12 button.active,.kb-qwerty button.active{background:linear-gradient(#3b82f6,#2563eb);border-color:#93c5fd;box-shadow:0 0 18px rgba(59,130,246,.55)}
+.kb12 button.warn{border-color:rgba(255,196,107,.65);background:rgba(255,196,107,.14)}
+.flick-hint{font-size:10px;color:var(--muted);font-weight:700;text-align:center}
+.place-row{display:flex;gap:8px}
+.place{flex:1;padding:12px 10px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);text-align:center}
+.place b{display:block;font-size:12px;margin-top:6px}
+.place span{font-size:10px;color:var(--muted)}
+.place .ic{font-size:22px}
+.palette{display:flex;gap:8px;margin-top:10px}
+.sw{flex:1;height:44px;border-radius:11px;border:2px solid rgba(255,255,255,.18);display:grid;place-items:center;font-size:10px;font-weight:900;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.7)}
+/* privacy */
+.privacy-flow{display:flex;align-items:stretch;gap:12px;margin-top:20px}
+.pstep{flex:1;padding:18px 16px;border-radius:18px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);text-align:center}
+.pstep .ic{font-size:30px}
+.pstep b{display:block;margin-top:8px;font-size:15px}
+.pstep span{font-size:11px;color:var(--muted);line-height:1.5;display:block;margin-top:5px}
+.parrow{align-self:center;font-size:24px;color:var(--accent);font-weight:900}
+.shield-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+/* outro */
+.outro-center{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+.outro-logo{width:104px;height:104px;border-radius:26px;background:linear-gradient(135deg,var(--accent),#2b6bff 55%,var(--accent3));display:grid;place-items:center;font-size:52px;font-weight:900;color:#071326;box-shadow:0 20px 60px rgba(116,181,255,.55)}
+.dl-row{display:flex;gap:14px;margin-top:28px;justify-content:center}
+.dl{padding:16px 26px;border-radius:16px;background:linear-gradient(135deg,var(--accent),#2b6bff);color:#071326;font-weight:900;font-size:16px;display:flex;align-items:center;gap:10px;box-shadow:0 16px 40px rgba(59,130,246,.45)}
+.dl.ghost{background:rgba(255,255,255,.06);color:var(--text);border:1px solid rgba(255,255,255,.16);box-shadow:none}
+.progress-dots{display:flex;gap:8px;margin-top:22px}
+.progress-dots i{width:34px;height:6px;border-radius:99px;background:rgba(255,255,255,.14)}
+.progress-dots i.on{background:var(--accent)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media (max-width:900px){
+  .scene-wrap{padding:84px 22px 110px}
+  .caption{left:22px;right:22px;bottom:96px}
+  .split2,.kb-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div id="viewport">
+<div id="stage" role="img" aria-label="ZeroConvert IME キーボード紹介動画">
+  <div class="bg-mesh"></div><div class="bg-grid"></div>
+  <canvas id="particles"></canvas><div class="vignette"></div>
+
+  <div class="chrome-top">
+    <div class="brand-mini"><span class="brand-mark">Z</span><span>ZeroConvert IME<small>Keyboard Film</small></span></div>
+    <div class="spacer"></div>
+    <div class="pills"><span class="pill" id="pill0">INTRO</span><span class="pill" id="pill1">ライブ変換</span><span class="pill" id="pill2">タイポ補正</span><span class="pill" id="pill3">先読み</span><span class="pill" id="pill4">キーボード</span><span class="pill" id="pill5">オンデバイス</span></div>
+    <div class="live-badge"><span class="live-dot"></span> ON-DEVICE AI</div>
+  </div>
+
+  <!-- SCENE 0 INTRO -->
+  <section class="scene" id="s0">
+    <div class="scene-wrap">
+      <div class="intro-center">
+        <div class="eyebrow">ZeroCon Model 搭載 · azooKey 基盤の日本語IME</div>
+        <div class="zero-logo" style="margin-top:16px">
+          <div class="zero-big">Z</div>
+          <h1 class="hero-word"><span class="thin">ZEROCONVERT IME</span><span class="grad">変換操作をなくす、<br>新しいキーボード</span></h1>
+        </div>
+        <p class="sub">打つたびに進む <strong>ライブ変換</strong>、間違いを拾う <strong>タイポ補正</strong>、次を先回りする <strong>先読み</strong>。<br>すべて端末の中で、ZeroCon Model が動かす。</p>
+        <div class="badge-row">
+          <span class="chip">● <b>オンデバイス</b> AI</span><span class="chip">Windows <b>10 / 11</b></span><span class="chip">Android <b>12キー / QWERTY</b></span><span class="chip"><b>Open Source</b></span>
+        </div>
+        <div class="stat-row">
+          <div class="stat"><b>16字<span style="font-size:14px;color:var(--muted)">〜</span></b><span>安定で自動確定（ライブ変換）</span></div>
+          <div class="stat"><b>Tab</b><span>補正・先読みをそのまま採用</span></div>
+          <div class="stat"><b>0送信</b><span>クラウドに送らない変換</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 1 LIVE -->
+  <section class="scene" id="s1">
+    <div class="scene-wrap">
+      <div class="eyebrow">01 — 入力中にライブ変換</div>
+      <h1>打っている間、<span class="grad">変換が進む</span></h1>
+      <p class="sub">ローマ字を打ち続けるだけで候補が更新され、安定した先頭から <strong>自動で確定</strong>。変換キーを押す回数が減ります。</p>
+      <div style="display:grid;grid-template-columns:1.12fr .88fr;gap:22px;flex:1;align-items:center;margin-top:10px">
+        <div class="mock">
+          <div class="mock-head"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#34d399"></span><span style="margin-left:8px">ZeroConvert IME — akane / Space / Enter</span></div>
+          <div class="mock-body">
+            <div class="reading-line">reading ▸ <b id="liveRomaji">ashitanokaigi</b></div>
+            <div class="converted"><ruby id="liveRuby">明日の会議<rt>あしたのかいぎ</rt></ruby><span class="caret"></span></div>
+            <div class="cand-bar">
+              <div class="cand hot"><kbd>1</kbd> 明日の会議 <small>変換候補</small></div>
+              <div class="cand">明日の <small>区切り</small></div>
+              <div class="cand">会議 <small>確定後予測</small></div>
+            </div>
+            <div class="commit-line"><div class="commit-fill" id="commitFill"></div></div>
+            <div class="auto-tag">● AUTO-COMMIT : 安定プレフィックスを自動確定中</div>
+          </div>
+        </div>
+        <div class="glass" style="padding:20px">
+          <div style="font-weight:900;font-size:13px;letter-spacing:.08em;color:var(--accent2)">HOW IT READS</div>
+          <div style="margin-top:12px;display:grid;gap:10px">
+            <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex:none;width:28px;height:28px;border-radius:8px;background:rgba(116,181,255,.18);display:grid;place-items:center;font-weight:900">1</span><p style="margin:0;font-size:13px;line-height:1.6;color:var(--muted)"><strong style="color:var(--text)">読み全体 16 字以上</strong>、残り 7 字は未確定で残す安全設計</p></div>
+            <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex:none;width:28px;height:28px;border-radius:8px;background:rgba(126,240,201,.16);display:grid;place-items:center;font-weight:900">2</span><p style="margin:0;font-size:13px;line-height:1.6;color:var(--muted)"><strong style="color:var(--text)">5 段階の安定性</strong>で先頭部分だけを確定。続きは文脈を引き継ぐ</p></div>
+            <div style="display:flex;gap:12px;align-items:flex-start"><span style="flex:none;width:28px;height:28px;border-radius:8px;background:rgba(214,160,237,.16);display:grid;place-items:center;font-weight:900">3</span><p style="margin:0;font-size:13px;line-height:1.6;color:var(--muted)"><strong style="color:var(--text)">Backspace で巻き戻し</strong>。自動確定しても、取り消して打ち直せます</p></div>
+          </div>
+          <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:rgba(116,181,255,.10);font-size:11px;color:var(--muted);line-height:1.5">※ 辞書＋ Zenzai ＋ 確定後予測が通常変換側で動作。設定でオン/オフできます。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 2 TYPO -->
+  <section class="scene" id="s2">
+    <div class="scene-wrap">
+      <div class="eyebrow">02 — タイポ補正 · keyboard-prior</div>
+      <h1>間違いを、<span class="grad">やさしく拾う</span></h1>
+      <p class="sub">隣りキーの打ち間違いや「浮いた子音」を、<strong>メイン変換モデル</strong>が提案。合わなければ取り消せます。学習が 3 回で自動反映に育ちます。</p>
+      <div class="split2">
+        <div class="mock">
+          <div class="mock-head"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#34d399"></span><span style="margin-left:8px">Tab で補正 — Esc で原文へ</span></div>
+          <div class="mock-body">
+            <div class="reading-line">romaji ▸ <b style="color:var(--amber)">okseri</b> &nbsp;→&nbsp; <b>おかえり</b></div>
+            <div class="diff-box">
+              <div class="from">okseri → おかせり</div>
+              <div class="to">おか<ins>え</ins>り</div>
+              <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <span class="chip"><b>s / e</b> 隣接キー</span><span class="chip">確定せず <b>そのまま入力継続</b></span>
+              </div>
+            </div>
+            <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
+              <span class="kbd-key" id="keyO">o</span><span class="kbd-key" id="keyK">k</span><span class="kbd-key press" id="keyS">s</span><span class="kbd-key" id="keyE">e</span><span class="kbd-key" id="keyR">r</span><span class="kbd-key">i</span>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+              <span class="tab-key">⇥ Tab — 補正を採用</span>
+              <span style="font-size:11px;color:var(--muted)">候補 ID 999901 / 確定しない提案</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="glass" style="padding:18px">
+            <div style="font-weight:900;font-size:12px;letter-spacing:.08em;color:var(--amber)">QWERTY ゆらぎマップ</div>
+            <div class="adj-map">
+              <div class="adj"><b>s</b><span>↔ e / w</span></div>
+              <div class="adj hit"><b>e</b><span>本命の隣接</span></div>
+              <div class="adj"><b>r</b><span>↔ e</span></div>
+            </div>
+            <div style="margin-top:12px;font-size:11px;line-height:1.6;color:var(--muted)">12 キーフリック行にも対応。正常な読みは <strong style="color:var(--text)">AssistVocabulary</strong> が守り、誤補正を抑止します。</div>
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div style="padding:10px;border-radius:10px;background:rgba(255,196,107,.10);border:1px solid rgba(255,196,107,.30);font-size:11px"><strong>学習 0〜2 回</strong><br><span style="color:var(--muted)">提案表示。Tab で採用</span></div>
+              <div style="padding:10px;border-radius:10px;background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.35);font-size:11px"><strong>学習 3 回以上</strong><br><span style="color:var(--muted)">一意な辞書語なら自動反映</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 3 PREDICT -->
+  <section class="scene" id="s3">
+    <div class="scene-wrap">
+      <div class="eyebrow">03 — 文の先読み · 予測変換</div>
+      <h1>次の言葉が、<span class="grad">先に浮かぶ</span></h1>
+      <p class="sub">変換結果と文脈から続きを提案する <strong>2 段生成</strong>。使いたいときだけ Tab で採用。先読みは改善中の試験機能です。</p>
+      <div style="display:grid;grid-template-columns:1.1fr .9fr;gap:22px;flex:1;align-items:center;margin-top:10px">
+        <div class="mock">
+          <div class="mock-head"><span class="dot" style="background:#f87171"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#34d399"></span><span style="margin-left:8px">先読み候補 999902</span></div>
+          <div class="mock-body">
+            <div class="reading-line">confirmed ▸ <b>よろしくお願いし</b> <span style="color:var(--muted)">(未確定の続き)</span></div>
+            <div class="predict-line">よろしくお願いし<span class="future">ます。</span><span class="caret"></span></div>
+            <div style="margin-top:14px;display:flex;gap:8px">
+              <span class="chip" style="border-color:rgba(52,211,153,.5)"><b>✓ ます。</b> 文末に自然</span><span class="chip">確定後予測と接続</span>
+            </div>
+            <div class="cand-bar">
+              <div class="cand hot"><kbd>Tab</kbd> ます。で採用 <small>確定OK</small></div>
+              <div class="cand">ください <small>代替</small></div>
+            </div>
+          </div>
+        </div>
+        <div class="glass" style="padding:20px">
+          <div style="font-weight:900;letter-spacing:.08em;font-size:12px;color:var(--accent2)">CONTEXT FLOW</div>
+          <div style="margin-top:14px;display:grid;gap:0">
+            <div style="padding:13px 15px;border-radius:13px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09)"><strong>① 変換結果 + 読み</strong><br><span style="font-size:11px;color:var(--muted)">補正後の読みを基準に生成。nam 数値マスキング対応</span></div>
+            <div class="flow-arrow">↓</div>
+            <div style="padding:13px 15px;border-radius:13px;background:rgba(116,181,255,.10);border:1px solid rgba(116,181,255,.35)"><strong>② ZeroCon 先読み生成</strong><br><span style="font-size:11px;color:var(--muted)">メイン変換モデル（18091）で続きを予測・検査</span></div>
+            <div class="flow-arrow">↓</div>
+            <div style="padding:13px 15px;border-radius:13px;background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.35)"><strong>③ Tab で採用・確定</strong><br><span style="font-size:11px;color:var(--muted)">履歴キャッシュ最大 300 件で次を速く</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 4 KEYBOARD -->
+  <section class="scene" id="s4">
+    <div class="scene-wrap">
+      <div class="eyebrow">04 — キーボード、そのものが主役</div>
+      <h1>指に合わせる、<span class="grad">3 つの置き方</span></h1>
+      <p class="sub"><strong>12 キーフリック</strong>と <strong>QWERTY</strong> の切替、<strong>フローティング / 片手 / 分割</strong>配置、ZeroCon AI の候補バーまで。触感と視認性も作り込みました。</p>
+      <div class="kb-grid" style="margin-top:10px">
+        <div class="phone-col">
+          <div class="phone">
+            <div class="phone-top"><span>● ZeroCon AI</span><span style="margin-left:auto">あ ・ 12キー</span></div>
+            <div class="ai-bar"><span class="z">Z</span><span>ZeroCon AI ： <span style="color:var(--amber)">おかえり</span> を提案</span><span style="margin-left:auto;background:rgba(255,196,107,.28);padding:3px 8px;border-radius:6px;font-size:10px">↶ 戻す</span></div>
+            <div class="cand-mini"><i class="hot">明日の会議</i><i>明日の</i><i>会議</i><i>↻ QWERTY</i></div>
+            <div class="kb12" id="kb12">
+              <button data-k="1">あ <small>か た な</small></button><button data-k="2">ら <small>り る</small></button><button data-k="3">や <small>ゆ よ</small></button>
+              <button data-k="4">わ <small>を ん</small></button><button data-k="5">は <small>ひ ふ</small></button><button data-k="6">ま <small>み む</small></button>
+              <button data-k="7">さ <small>し す</small></button><button data-k="8">た <small>ち つ</small></button><button data-k="9">な <small>に ぬ</small></button>
+            </div>
+            <div class="flick-hint">フリックで連続かな入力 — 長押し＆スライドでも確実に</div>
+            <div style="margin-top:auto;display:flex;gap:8px;height:44px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);align-items:center;padding:0 14px;font-size:12px;color:var(--muted);font-weight:700"><span>😀</span><span>123</span><span style="flex:1;text-align:center;color:var(--text)">ふりっく で「おかえり」</span><span style="color:var(--accent);font-weight:900">確定 ↵</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="glass" style="padding:16px">
+            <div style="display:flex;align-items:center;gap:10px;font-weight:900;font-size:13px"><span style="color:var(--accent)">⌨ QWERTY</span><span style="color:var(--muted);font-size:11px;font-weight:650">ローマ字 → かな変換表を共有</span></div>
+            <div class="kb-qwerty" id="kbQ" style="margin-top:12px">
+              <button>q <small>s</small></button><button>w <small>e</small></button><button class="active">e <small>o</small></button><button>r <small>u</small></button><button>t <small>a</small></button>
+              <button>a <small>ka</small></button><button class="active">s <small>ki</small></button><button>d <small>ku</small></button><button>f <small>ke</small></button><button>g <small>ko</small></button>
+            </div>
+            <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5">シフト記号は即時確定。数字・句読点は composition に統合し、正規化して変換します。</div>
+          </div>
+          <div class="glass" style="padding:16px">
+            <div style="font-weight:900;font-size:13px">置き方 <span style="color:var(--muted);font-weight:650;font-size:11px">— キーボード配置モード</span></div>
+            <div class="place-row" style="margin-top:12px">
+              <div class="place"><div class="ic">▭</div><b>標準</b><span>フルサイズ</span></div>
+              <div class="place" style="border-color:rgba(116,181,255,.6);background:rgba(116,181,255,.10)"><div class="ic">🖐</div><b>フローティング</b><span>任意位置ドラッグ</span></div>
+              <div class="place"><div class="ic">◧</div><b>片手</b><span>親指リーチ</span></div>
+              <div class="place"><div class="ic">◫</div><b>分割</b><span>タブレット対応</span></div>
+            </div>
+          </div>
+          <div class="glass" style="padding:16px">
+            <div style="font-weight:900;font-size:13px">色と触感 <span style="color:var(--muted);font-weight:650;font-size:11px">— テーマ 6 種・振動</span></div>
+            <div class="palette">
+              <div class="sw" style="background:linear-gradient(135deg,#101722,#24344b)">ダークブルー</div>
+              <div class="sw" style="background:linear-gradient(135deg,#101e19,#254234)">フォレスト</div>
+              <div class="sw" style="background:linear-gradient(135deg,#211727,#47314f)">プラム</div>
+              <div class="sw" style="background:linear-gradient(135deg,#fff5f7,#f9e4eb);color:#442631">サクラ</div>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><span class="chip">≋ <b>振動</b> フィードバック</span><span class="chip">🎛 <b>キー高さ</b> 調整</span><span class="chip">#️⃣ <b>数字行</b> (QWERTY)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 5 PRIVACY -->
+  <section class="scene" id="s5">
+    <div class="scene-wrap">
+      <div class="eyebrow">05 — オンデバイス · プライベート</div>
+      <h1>クラウドに、<span class="grad">送らない</span></h1>
+      <p class="sub">変換・補正・先読みは端末内。パスワード欄では自動で <strong>プライベートモード</strong> に切り替わり、学習も補正も止まります。</p>
+      <div class="privacy-flow">
+        <div class="pstep"><div class="ic">⌨</div><b>キーボード</b><span>打鍵 → 読み</span></div><div class="parrow">→</div>
+        <div class="pstep" style="border-color:rgba(116,181,255,.55)"><div class="ic">⚡</div><b>ZeroCon Model</b><span>Nano v4.1 / Standard<br>端末内推論</span></div><div class="parrow">→</div>
+        <div class="pstep"><div class="ic">✓</div><b>変換・確定・学習</b><span>辞書 + 学習メモリ</span></div><div class="parrow">→</div>
+        <div class="pstep" style="border-color:rgba(248,113,113,.5)"><div class="ic">☁</div><b>クラウドなし</b><span>送信ではなく<br>完結する</span></div>
+      </div>
+      <div class="shield-row">
+        <span class="chip">🔒 <b>プライベートモード</b> — IS_PRIVATE / PIN 検知</span>
+        <span class="chip">🎓 <b>英字補完＋学習</b> — english-learning.json</span>
+        <span class="chip">🌐 <b>翻訳入力</b> — PLaMo 3（任意）</span>
+        <span class="chip">📋 <b>クリップボード</b> — Ctrl+B</span>
+      </div>
+      <div class="glass" style="margin-top:18px;padding:16px 20px;display:flex;gap:14px;align-items:center">
+        <div style="font-size:28px">🛡</div>
+        <p style="margin:0;font-size:13px;line-height:1.6;color:var(--muted)"><strong style="color:var(--text)">プライベート入力では</strong>周辺テキスト取得・学習参照/保存・タイポ補正・先読み・翻訳・英字学習を停止し、基本のかな漢字変換だけを使います。設定やモデル名も端末で確認できます。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 6 OUTRO -->
+  <section class="scene" id="s6">
+    <div class="scene-wrap">
+      <div class="outro-center">
+        <div class="outro-logo">Z</div>
+        <h1 style="text-align:center;margin-top:18px">ZeroConvert IME を、<span class="grad">試してみる</span></h1>
+        <p class="sub" style="text-align:center;margin-left:auto;margin-right:auto">ブラウザで試して、そのまま普段使いに。Windows・Android で動くオープンソースの日本語 IME です。</p>
+        <div class="dl-row">
+          <span class="dl">↓ Windows 版をダウンロード</span>
+          <span class="dl ghost">↓ Android APK</span>
+        </div>
+        <div class="progress-dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div>
+        <p style="margin-top:14px;font-size:11px;color:var(--muted);letter-spacing:.06em;font-weight:700">github.com/g0083/ZeroConvert-IME · azooKey を基盤とするオープンソースプロジェクト</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="caption" id="caption">
+    <div class="cap-no" id="capNo">0</div>
+    <p><span id="capMain">ZeroConvert IME — 変換操作をなくすキーボード</span><span id="capSub">音声なし・字幕付きのプロモーション映像</span></p>
+  </div>
+
+  <div class="player">
+    <div class="player-row">
+      <button class="btn primary" id="playBtn" aria-label="再生/一時停止">▶</button>
+      <button class="btn" id="restartBtn" aria-label="最初から">↺</button>
+      <div class="track" id="track"><div class="fill" id="fill"></div><div class="thumb" id="thumb"></div></div>
+      <div class="time" id="timeLabel">00:00 / 00:52</div>
+    </div>
+    <div class="scenes-bar" id="scenesBar">
+      <button data-t="0">0 INTRO</button><button data-t="7">1 ライブ</button><button data-t="15">2 補正</button><button data-t="23">3 先読み</button><button data-t="31">4 キーボード</button><button data-t="42">5 オンデバイス</button><button data-t="46">6 OUTRO</button>
+    </div>
+  </div>
+</div>
+</div>
+<p class="sr-only" id="srLive" aria-live="polite"></p>
+<script>
+const DUR = 52;
+const SCENES = [
+  {id:'s0', start:0, end:7, no:'0', main:'ZeroConvert IME — 変換操作をなくす、新しいキーボード', sub:'オンデバイス AI が入力を支える。Windows・Android 対応'},
+  {id:'s1', start:7, end:15, no:'1', main:'打っている間、変換が進む — ライブ変換 ＋ 自動確定', sub:'16字以上の安定で先頭を自動確定。Backspace で巻き戻し可能'},
+  {id:'s2', start:15, end:23, no:'2', main:'間違いを、やさしく拾う — タイポ補正（okseri → おかえり）', sub:'隣りキーを拾い、Tab で採用。学習3回で自動反映へ'},
+  {id:'s3', start:23, end:31, no:'3', main:'次の言葉が、先に浮かぶ — 文の先読み', sub:'よろしくお願いし → ます。Tab で採用。文脈で予測'},
+  {id:'s4', start:31, end:42, no:'4', main:'指に合わせる、3つの置き方 — 12キー / QWERTY / フローティング', sub:'ZeroCon AI 候補バー、テーマ6種、振動、キー高さ調整'},
+  {id:'s5', start:42, end:46, no:'5', main:'クラウドに、送らない — オンデバイス ＋ プライベートモード', sub:'パスワード欄では学習・補正・先読みを自動停止'},
+  {id:'s6', start:46, end:52, no:'6', main:'ZeroConvert IME を、試してみる — Windows / Android', sub:'ブラウザ試用から普段使いへ。オープンソース'},
+];
+const stage=document.getElementById('stage');
+const qs=new URLSearchParams(location.search);
+if(qs.has('clean')) document.body.classList.add('clean');
+let t = qs.has('t') ? parseFloat(qs.get('t'))||0 : 0;
+let playing = !qs.has('t') && !qs.has('paused');
+let lastTs=null, raf=null;
+const fill=document.getElementById('fill'), thumb=document.getElementById('thumb'),
+  timeLabel=document.getElementById('timeLabel'), playBtn=document.getElementById('playBtn'),
+  capNo=document.getElementById('capNo'), capMain=document.getElementById('capMain'), capSub=document.getElementById('capSub'),
+  srLive=document.getElementById('srLive');
+const sceneEls=SCENES.map(s=>document.getElementById(s.id));
+const pillEls=[0,1,2,3,4,5].map(i=>document.getElementById('pill'+i));
+const barBtns=[...document.querySelectorAll('#scenesBar button')];
+function fmt(s){s=Math.max(0,Math.floor(s));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+// seeded particles (deterministic in t)
+const cvs=document.getElementById('particles'), ctx=cvs.getContext('2d');
+function sizeCv(){const r=stage.getBoundingClientRect();cvs.width=Math.round(r.width*devicePixelRatio);cvs.height=Math.round(r.height*devicePixelRatio);ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)}
+function drawParticles(tt){
+  const w=cvs.width/devicePixelRatio,h=cvs.height/devicePixelRatio;
+  ctx.clearRect(0,0,w,h);
+  for(let i=0;i<70;i++){
+    const seed=i*137.5, speed=.012+ (i%5)*.006;
+    const x=((seed*911.7 + tt*8*speed*(i%3+1))%(w+40))-20;
+    const y=((seed*631.9 + tt*5*speed)%(h+40))-20;
+    const r=1+ (i%3)*.8, a=.10+.28*Math.abs(Math.sin(tt*.9+i));
+    ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.fillStyle=`rgba(${140+(i%4)*30},${190+(i%3)*25},255,${a.toFixed(3)})`;ctx.fill();
+  }
+  // mouse-follow glow (visual only, deterministic at center when paused)
+  const gx=w*(0.5+0.22*Math.cos(tt*0.22)), gy=h*(0.42+0.20*Math.sin(tt*0.30));
+  const g=ctx.createRadialGradient(gx,gy,0,gx,gy,340);
+  g.addColorStop(0,'rgba(116,181,255,0.16)');g.addColorStop(1,'rgba(116,181,255,0)');
+  ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+}
+function typeTowards(full, upto){
+  // progressive typing reveal
+  return full.slice(0, Math.max(0, Math.min(upto, full.length)));
+}
+function render(){
+  t=Math.max(0,Math.min(DUR,t));
+  let idx=SCENES.findIndex(s=>t>=s.start&&t<s.end); if(idx<0) idx=SCENES.length-1;
+  const sc=SCENES[idx];
+  sceneEls.forEach((el,i)=>el.classList.toggle('on',i===idx));
+  pillEls.forEach((p,i)=>p.classList.toggle('on', i===Math.min(idx,5)));
+  barBtns.forEach((b,i)=>{b.classList.toggle('on',i===idx);b.classList.toggle('done',SCENES[i].end<=t)});
+  capNo.textContent=sc.no; capMain.textContent=sc.main; capSub.textContent=sc.sub; srLive.textContent=sc.main;
+  fill.style.width=(t/DUR*100)+'%'; thumb.style.left=(t/DUR*100)+'%';
+  timeLabel.textContent=fmt(t)+' / '+fmt(DUR);
+  // scene-specific micro animations (pure functions of t)
+  const lt=t-sc.start, dur=sc.end-sc.start, prog=lt/dur;
+  if(idx===1){
+    const romaji='ashitanokaigi';
+    const chars=Math.floor(lt*2.2);
+    document.getElementById('liveRomaji').textContent=romaji.slice(0,Math.min(chars,romaji.length));
+    document.getElementById('liveRuby').innerHTML=['あ','あし','あした','あしたの','あしたのか','あしたのかい','あしたのかいぎ'].reduce((a,c)=>Math.abs(c.length*2-chars)<3?c:a,'あしたのかいぎ');
+    // stagger commit fill
+    document.getElementById('commitFill').style.width=Math.min(100,prog*130)+'%';
+    document.getElementById('liveRuby').style.opacity=.55+.45*Math.min(1,prog*1.5);
+  }
+  if(idx===2){
+    const blink=Math.sin(lt*6)>0;
+    document.getElementById('keyS').classList.toggle('press',blink);
+    document.getElementById('keyE').classList.toggle('press',!blink);
+  }
+  if(idx===3){
+    const fut=['','ま','ます','ます。','ます。'];
+    const fi=Math.min(fut.length-1,Math.floor(lt*1.4));
+    document.querySelector('.predict-line').innerHTML='よろしくお願いし<span class="future">'+fut[fi]+'</span><span class="caret"></span>';
+  }
+  if(idx===4){
+    const kb=[...document.querySelectorAll('#kb12 button')];
+    const order=[6,0,3,1,4,7,2,5,8,0];
+    const active=order[Math.floor(lt*2)%order.length];
+    kb.forEach((b,i)=>b.classList.toggle('active',i===active));
+  }
+  if(idx===0){
+    document.querySelector('.zero-big').style.transform=`scale(${1+0.04*Math.sin(lt*2)})`;
+  }
+  drawParticles(t);
+}
+function loop(ts){
+  if(!playing){raf=requestAnimationFrame(loop);return}
+  if(lastTs==null) lastTs=ts;
+  const dt=(ts-lastTs)/1000; lastTs=ts;
+  t+=dt;
+  if(t>=DUR){t=DUR; setPlaying(false)}
+  render();
+  raf=requestAnimationFrame(loop);
+}
+function setPlaying(p){playing=p; playBtn.textContent=p?'❚❚':'▶'; lastTs=null}
+playBtn.addEventListener('click',()=>{ if(t>=DUR) t=0; setPlaying(!playing)});
+document.getElementById('restartBtn').addEventListener('click',()=>{t=0; setPlaying(true)});
+barBtns.forEach(b=>b.addEventListener('click',()=>{t=parseFloat(b.dataset.t); setPlaying(true)}));
+document.getElementById('track').addEventListener('click',e=>{const r=e.currentTarget.getBoundingClientRect();t=Math.max(0,Math.min(DUR,(e.clientX-r.left)/r.width*DUR)); setPlaying(false); render()});
+addEventListener('resize',()=>{sizeCv();render()});
+sizeCv();
+// capture hooks
+window.ZEROCON_VIDEO={get duration(){return DUR},get time(){return t},seek(tt,pause=true){t=tt; if(pause) setPlaying(false); render()},render};
+if(qs.has('t')){setPlaying(false)}
+render(); raf=requestAnimationFrame(loop);
+</script>
+</body>
+</html>
