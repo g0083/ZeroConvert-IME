@@ -34,6 +34,7 @@ use std::{
 };
 
 mod ai_assist;
+mod conversion_benchmark_worker;
 use ai_assist::AiAssistConfig;
 
 const USE_ZENZAI: bool = true;
@@ -4342,6 +4343,9 @@ impl Drop for MainFfiShutdownGuard {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os().nth(1).as_deref() == Some(OsStr::new("--conversion-benchmark")) {
+        return conversion_benchmark_worker::serve();
+    }
     ai_assist::runtime::configure_settings_resolver(|| AppConfig::settings_path().ok());
     ai_assist::runtime::configure_read_learning_resolver(|| {
         !PRIVATE_INPUT.load(Ordering::Relaxed) && server_learning_capability().read

@@ -82,7 +82,14 @@ export type ItemResult = {
     candidates: string[];
     is_correct: boolean;
     latency_ms: number;
+    nbest_ms?: number;
 };
+
+const CONVERSION_SCOPES = [
+    { id: "model", label: "モデル推論", description: "読みからモデルで直接生成" },
+    { id: "candidates", label: "共通候補生成", description: "標準辞書の N-best 追加と候補の順位付けを含む" },
+] as const;
+type ConversionScope = typeof CONVERSION_SCOPES[number]["id"];
 
 export type TypoBenchmarkItem = {
     id: number;
@@ -104,7 +111,6 @@ export type TypoItemResult = {
     id: number;
     main_output: string;
     moshikashite_output?: string | null;
-    predictive_output?: string | null;
     status: "exact_match" | "variant_match" | "clean_preserved" | "false_positive" | "missed";
     latency_ms: number;
 };
@@ -146,51 +152,10 @@ const BENCHMARK_ITEMS: BenchmarkItem[] = rawBenchmarkData as BenchmarkItem[];
 const TYPO_ITEMS: TypoBenchmarkItem[] = rawTypoData as TypoBenchmarkItem[];
 const PREDICTIVE_ITEMS: PredictiveBenchmarkItem[] = rawPredictiveData as PredictiveBenchmarkItem[];
 
-// --- 共通ベンチマーク採点ミラー (Rust benchmark.rs と同一契約、parity_cases で照合) ---
-// TS 側は表示用に複写する。結果（status）の正本は Rust の score_typo。
-function normalizeWhitespace(s: string): string {
-    return s.replace(/[\s\u3000]+/g, "");
+function formatExecutionTime(ms: number): string {
+    return `${(ms / 1000).toFixed(2)} 秒`;
 }
-function cleanScoringInput(s: string): string {
-    return s.trim().replace(/\r/g, "").replace(/\n/g, "");
-}
-function matchesExact(candidate: string, expected: string, acceptable: string[] = []): boolean {
-    const cand = cleanScoringInput(candidate);
-    const exp = expected.trim();
-    if (cand === exp || acceptable.some((a) => a.trim() === cand)) return true;
-    const normCand = normalizeWhitespace(cand);
-    if (normCand === normalizeWhitespace(exp)) return true;
-    return acceptable.some((a) => normCand === normalizeWhitespace(a.trim()));
-}
-function matchesVariant(candidate: string, expected: string): boolean {
-    const cand = cleanScoringInput(candidate);
-    const exp = expected.trim();
-    if (!cand || !exp) return false;
-    return cand.includes(exp) || exp.includes(cand);
-}
-function scoreTypoCommon(
-    item: TypoBenchmarkItem,
-    mainOutput: string,
-    suggestion: string | null | undefined,
-): TypoItemResult["status"] {
-    const acceptable = item.acceptable ?? [];
-    if (item.is_clean) {
-        if (suggestion == null) return "clean_preserved";
-        const sugg = cleanScoringInput(suggestion);
-        if (matchesExact(sugg, item.expected, acceptable)) return "clean_preserved";
-        if (sugg === cleanScoringInput(mainOutput)) return "clean_preserved";
-        if (normalizeWhitespace(sugg) === normalizeWhitespace(item.input_reading)) return "clean_preserved";
-        return "false_positive";
-    }
-    const suggExact = suggestion != null ? matchesExact(suggestion, item.expected, acceptable) : false;
-    const mainExact = matchesExact(mainOutput, item.expected, acceptable);
-    if (suggExact || mainExact) return "exact_match";
-    let variant = false;
-    if (suggestion != null) variant = variant || matchesVariant(suggestion, item.expected);
-    variant = variant || matchesVariant(mainOutput, item.expected);
-    if (variant) return "variant_match";
-    return "missed";
-}
+
 /** 最近傍順位の分位数 (Rust latency_percentiles と同一)。 */
 function latencyPercentiles(latencies: number[]): { p50: number; p95: number; p99: number } {
     if (latencies.length === 0) return { p50: 0, p95: 0, p99: 0 };
@@ -350,7 +315,9 @@ export function Benchmark() {
     const [benchmarkTab, setBenchmarkTab] = useState<"zenzai" | "typo" | "predictive">("zenzai");
 
     // --- かな漢字変換 (740問) State ---
-    const [results, setResults] = useState<Record<number, ItemResult>>({});
+    const [conversionScope, setConversionScope] = useState<ConversionScope>("model");
+    const [conversionResults, setConversionResults] = useState<Record<ConversionScope, Record<number, ItemResult>>>({ model: {}, candidates: {} });
+    const results = conversionResults[conversionScope];
     const [isRunning, setIsRunning] = useState(false);
     const [selectedSubset, setSelectedSubset] = useState<string>("all");
     const [selectedCategory, setSelectedCategory] = useState("すべて");
@@ -402,7 +369,8 @@ export function Benchmark() {
         try {
             await invoke("switch_model", { modelId: newModelId });
             setActiveModelId(newModelId);
-            setResults({});
+            setConversionResults({ model: {}, candidates: {} });
+            setWallMs({});
             setTypoResults({});
             toast.success(`モデルを ${models.find((model) => model.id === newModelId)?.name ?? newModelId} に切り替えました`, { id: toastId });
         } catch (err) {
@@ -463,41 +431,48 @@ export function Benchmark() {
         [evaluatedList],
     );
 
-    const runItem = async (item: BenchmarkItem): Promise<ItemResult> => {
+    const [wallMs, setWallMs] = useState<Partial<Record<ConversionScope | "typo" | "predictive", number>>>({});
+    const busyRef = useRef(false);
+
+    const runCases = async <Row extends { id: number }>(
+        kind: "conversion" | "typo" | "predictive",
+        items: { id: number }[],
+        stopped: () => boolean,
+        receive: (rows: Record<number, Row>) => void,
+        scope: ConversionScope = "model",
+    ) => {
+        const wallKey = kind === "conversion" ? scope : kind;
+        setWallMs((previous) => ({ ...previous, [wallKey]: undefined }));
+        const session = await invoke<{ id: number; batch_size: number }>("start_benchmark", { scope });
         try {
-            const effectiveContext = item.left_context === "なし" ? "" : item.left_context;
-            const res = await invoke<ItemResult>("run_benchmark_item", {
-                id: item.id,
-                context: effectiveContext,
-                target: item.target,
-                expected: item.expected,
-                acceptable: item.acceptable || [],
-                forbiddenExamples: item.forbidden_examples || []
-            });
-            return res;
-        } catch (err) {
-            return {
-                id: item.id,
-                top1: `(エラー: ${err})`,
-                candidates: [],
-                is_correct: false,
-                latency_ms: 0
-            };
+            for (let offset = 0; offset < items.length && !stopped(); offset += session.batch_size) {
+                const cases = items.slice(offset, offset + session.batch_size).map((item) => ({ ...item, kind }));
+                const rows = await invoke<Row[]>("run_benchmark_batch", { id: session.id, cases });
+                receive(Object.fromEntries(rows.map((row) => [row.id, row])));
+            }
+        } finally {
+            const elapsed = await invoke<number>("finish_benchmark", { id: session.id });
+            setWallMs((previous) => ({ ...previous, [wallKey]: elapsed }));
         }
     };
 
     const handleRunBenchmark = async (itemsToRun: BenchmarkItem[]) => {
-        if (isRunning) return;
+        if (busyRef.current || itemsToRun.length === 0) return;
+        busyRef.current = true;
+        setConversionResults((previous) => ({ ...previous, [conversionScope]: {} }));
         setIsRunning(true);
         stopSignalRef.current = false;
-
-        for (const item of itemsToRun) {
-            if (stopSignalRef.current) break;
-            const res = await runItem(item);
-            setResults((prev) => ({ ...prev, [item.id]: res }));
+        try {
+            await runCases<ItemResult>("conversion", itemsToRun, () => stopSignalRef.current, (rows) =>
+                setConversionResults((previous) => ({
+                    ...previous, [conversionScope]: { ...previous[conversionScope], ...rows },
+                })), conversionScope);
+        } catch (error) {
+            toast.error(`実行エラー: ${error}`);
+        } finally {
+            busyRef.current = false;
+            setIsRunning(false);
         }
-
-        setIsRunning(false);
     };
 
     // --- タイポ補正: フィルタリング & 判定 ---
@@ -561,49 +536,18 @@ export function Benchmark() {
     );
 
     const handleRunTypoBenchmark = async (itemsToRun: TypoBenchmarkItem[]) => {
-        if (isTypoRunning) return;
+        if (busyRef.current || itemsToRun.length === 0) return;
+        busyRef.current = true;
+        setTypoResults({});
         setIsTypoRunning(true);
         stopTypoSignalRef.current = false;
-
-        const toastId = toast.loading(`メインモデル統合タイポ補正ベンチマーク実行中...`);
         try {
-            for (const item of itemsToRun) {
-                if (stopTypoSignalRef.current) break;
-                
-                const res = await invoke<{
-                    id: number;
-                    input: string;
-                    main_output: string;
-                    moshikashite_output?: string | null;
-                    predictive_output?: string | null;
-                    main_latency_ms: number;
-                    assist_latency_ms: number;
-                    total_latency_ms: number;
-                }>("run_ai_assist_benchmark_item", {
-                    id: item.id,
-                    context: item.context,
-                    input: item.input_reading,
-                });
-
-                // 判定ロジックは共通エンジン (benchmark.rs) と同一契約のミラー。
-                const status = scoreTypoCommon(item, res.main_output, res.moshikashite_output ?? null);
-
-                setTypoResults((prev) => ({
-                    ...prev,
-                    [item.id]: {
-                        id: item.id,
-                        main_output: res.main_output,
-                        moshikashite_output: res.moshikashite_output,
-                        predictive_output: res.predictive_output,
-                        status,
-                        latency_ms: res.total_latency_ms,
-                    }
-                }));
-            }
-            toast.success("タイポ補正ベンチマーク完了！", { id: toastId });
-        } catch (err) {
-            toast.error(`実行エラー: ${err}`, { id: toastId });
+            await runCases<TypoItemResult>("typo", itemsToRun, () => stopTypoSignalRef.current, (rows) =>
+                setTypoResults((previous) => ({ ...previous, ...rows })));
+        } catch (error) {
+            toast.error(`実行エラー: ${error}`);
         } finally {
+            busyRef.current = false;
             setIsTypoRunning(false);
         }
     };
@@ -619,43 +563,24 @@ export function Benchmark() {
     );
 
     const handleRunPredictiveBenchmark = async (itemsToRun: PredictiveBenchmarkItem[]) => {
-        if (isPredictiveRunning) return;
+        if (busyRef.current || itemsToRun.length === 0) return;
+        busyRef.current = true;
+        setPredictiveResults({});
         setIsPredictiveRunning(true);
         stopPredictiveSignalRef.current = false;
-        const toastId = toast.loading("先読みベンチマーク実行中...");
         try {
-            for (const item of itemsToRun) {
-                if (stopPredictiveSignalRef.current) break;
-                const res = await invoke<{ id: number; prediction: string | null; is_match: boolean; latency_ms: number }>(
-                    "run_predictive_benchmark_item",
-                    {
-                        id: item.id,
-                        context: item.context,
-                        partialInput: item.partial_input,
-                        fullSentence: item.full_sentence,
-                        expectedContinuation: item.expected_continuation,
-                        acceptableContinuations: item.acceptable_continuations ?? [],
-                    },
-                );
-                setPredictiveResults((prev) => ({
-                    ...prev,
-                    [item.id]: {
-                        id: item.id,
-                        prediction: res.prediction,
-                        is_match: res.is_match,
-                        latency_ms: res.latency_ms,
-                    },
-                }));
-            }
-            toast.success("先読みベンチマーク完了！", { id: toastId });
-        } catch (err) {
-            toast.error(`実行エラー: ${err}`, { id: toastId });
+            await runCases<PredictiveItemResult>("predictive", itemsToRun, () => stopPredictiveSignalRef.current, (rows) =>
+                setPredictiveResults((previous) => ({ ...previous, ...rows })));
+        } catch (error) {
+            toast.error(`実行エラー: ${error}`);
         } finally {
+            busyRef.current = false;
             setIsPredictiveRunning(false);
         }
     };
 
     const anyRunning = isRunning || isTypoRunning || isPredictiveRunning;
+    const lastRunMs = wallMs[benchmarkTab === "zenzai" ? conversionScope : benchmarkTab];
     const tabDefs = [
         { id: "zenzai" as const, icon: Zap, label: "かな漢字変換", meta: "740問" },
         { id: "typo" as const, icon: Layers, label: "タイポ補正", meta: "450問" },
@@ -665,6 +590,9 @@ export function Benchmark() {
     return (
         <div className="mx-auto max-w-7xl space-y-6 pb-12">
             <BenchmarkDepartureGuard running={anyRunning} />
+            {lastRunMs !== undefined && (
+                <p className="text-sm text-muted-foreground">前回の実行時間 {formatExecutionTime(lastRunMs)}</p>
+            )}
             {/* Tab Selector */}
             <div role="tablist" aria-label="ベンチマーク種別" className="flex flex-wrap items-center gap-2 border-b border-border/60 pb-3">
                 {tabDefs.map(({ id, icon: TabIcon, label, meta }) => {
@@ -743,6 +671,19 @@ export function Benchmark() {
             {/* TAB 1: かな漢字変換 (740問) */}
             {benchmarkTab === "zenzai" && (
                 <div role="tabpanel" aria-label="かな漢字変換ベンチマーク" className="space-y-6">
+                    <fieldset disabled={anyRunning || isSwitchingModel} className="space-y-2">
+                        <legend className="text-sm font-medium">かな漢字変換の計測範囲</legend>
+                        <div className="flex flex-wrap gap-x-4 gap-y-2">
+                            {CONVERSION_SCOPES.map((scope) => (
+                                <label key={scope.id} className="inline-flex items-center gap-2 text-sm">
+                                    <input type="radio" name="conversion-benchmark-scope" value={scope.id}
+                                        checked={conversionScope === scope.id} onChange={() => setConversionScope(scope.id)} />
+                                    {scope.label}
+                                </label>
+                            ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground">{CONVERSION_SCOPES.find((scope) => scope.id === conversionScope)?.description}</p>
+                    </fieldset>
                     {/* Metric KPI Cards */}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
                         <KpiCard label="正解率 (Top 1)" value={evaluatedCount > 0 ? `${overallAccuracy}%` : "—"} sub={evaluatedCount > 0 ? `${correctCount} / ${evaluatedCount} 問 正解` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
@@ -750,6 +691,9 @@ export function Benchmark() {
                         <KpiCard label={`評価進捗（${SUBSETS.find((s) => s.id === selectedSubset)?.label ?? ""}）`} value={`${evaluatedCount} / ${subsetItems.length}`} sub={evaluatedCount === subsetItems.length ? "対象セット検証完了" : "テスト準備完了"} icon={Layers} />
                         <KpiCard label="選択モデル" value={activeModel?.name ?? "未選択"} sub={activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "モデルを選択してください"} icon={SlidersHorizontal} valueClassName="text-base" />
                     </div>
+                    {conversionScope === "candidates" && evaluatedCount > 0 && (
+                        <p className="text-sm text-muted-foreground">N-best 追加 平均 {(evaluatedList.reduce((sum, row) => sum + (row.nbest_ms ?? 0), 0) / evaluatedCount).toFixed(1)} ms/問</p>
+                    )}
 
                     {/* Action Bar / Controls */}
                     <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-border/60 bg-muted/30">
@@ -776,7 +720,7 @@ export function Benchmark() {
                             ) : (
                                 <button
                                     type="button"
-                                    onClick={() => { stopSignalRef.current = true; setIsRunning(false); }}
+                                    onClick={() => { stopSignalRef.current = true; }}
                                     className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 text-white shadow-xs hover:bg-rose-700 transition-colors cursor-pointer"
                                 >
                                     <Square className="size-3.5 fill-current" />
@@ -787,7 +731,10 @@ export function Benchmark() {
                             {evaluatedCount > 0 && !isRunning && (
                                 <button
                                     type="button"
-                                    onClick={() => setResults({})}
+                                    onClick={() => {
+                                        setConversionResults((previous) => ({ ...previous, [conversionScope]: {} }));
+                                        setWallMs((previous) => ({ ...previous, [conversionScope]: undefined }));
+                                    }}
                                     className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                                 >
                                     <RotateCcw className="size-3.5" />
@@ -953,7 +900,7 @@ export function Benchmark() {
                             ) : (
                                 <button
                                     type="button"
-                                    onClick={() => { stopTypoSignalRef.current = true; setIsTypoRunning(false); }}
+                                    onClick={() => { stopTypoSignalRef.current = true; }}
                                     className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 text-white shadow-xs hover:bg-rose-700 transition-colors cursor-pointer"
                                 >
                                     <Square className="size-3.5 fill-current" />

@@ -10,6 +10,9 @@
 extern "C" {
 char *zerocon_swift_request(const char *);
 void zerocon_swift_free(char *);
+void *ZeroConOpenConversionBenchmark(const char *, const char *, int32_t);
+char *ZeroConRunConversionBenchmark(void *, const char *, const char *);
+void ZeroConCloseConversionBenchmark(void *);
 using Complete = char *(*)(void *, bool, const char *, unsigned long long);
 using Release = void (*)(void *, char *);
 char *zerocon_assist_request(const char *, Complete, Release, void *);
@@ -90,8 +93,7 @@ Java_com_zeroconvert_ime_engine_WindowsEngine_nativePreloadAssistDictionary(JNIE
     keyboard_assist_preload_dictionary(dictionary_path.c_str());
 }
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_zeroconvert_ime_engine_WindowsEngine_nativeAssist(JNIEnv *env, jobject, jstring input, jobject inference) {
+static jstring assist_request(JNIEnv *env, jstring input, jobject inference) {
     auto cls = env->GetObjectClass(inference);
     auto method = env->GetMethodID(cls, "complete", "(ZLjava/lang/String;J)Ljava/lang/String;");
     env->DeleteLocalRef(cls);
@@ -103,4 +105,40 @@ Java_com_zeroconvert_ime_engine_WindowsEngine_nativeAssist(JNIEnv *env, jobject,
     auto output = assist_to_java(env, result ? result : "null");
     zerocon_engine_free(result);
     return output;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_zeroconvert_ime_engine_WindowsEngine_nativeAssist(JNIEnv *env, jobject, jstring input, jobject inference) {
+    return assist_request(env, input, inference);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeRun(JNIEnv *env, jobject session, jstring input) {
+    return assist_request(env, input, session);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeOpenCandidates(
+        JNIEnv *env, jobject, jstring model, jstring dictionary, jstring library_dir) {
+    const auto directory = assist_from_java(env, library_dir);
+    ggml_backend_load_all_from_path(directory.c_str());
+    const auto model_path = assist_from_java(env, model);
+    const auto dictionary_path = assist_from_java(env, dictionary);
+    return reinterpret_cast<jlong>(ZeroConOpenConversionBenchmark(model_path.c_str(), dictionary_path.c_str(), 0));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeCandidates(
+        JNIEnv *env, jobject, jlong handle, jstring reading, jstring context) {
+    const auto input = assist_from_java(env, reading);
+    const auto left_context = assist_from_java(env, context);
+    auto *result = ZeroConRunConversionBenchmark(reinterpret_cast<void *>(handle), input.c_str(), left_context.c_str());
+    auto output = assist_to_java(env, result ? result : "null");
+    zerocon_swift_free(result);
+    return output;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeCloseCandidates(JNIEnv *, jobject, jlong handle) {
+    ZeroConCloseConversionBenchmark(reinterpret_cast<void *>(handle));
 }

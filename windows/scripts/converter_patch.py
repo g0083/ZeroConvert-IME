@@ -28,6 +28,16 @@ ZENZ_INPUT_GENERATOR_PATH = (
     'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Zenzai/Zenz/ZenzInputTextGenerator.swift'
 )
 ZENZ_PATH = 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Zenzai/Zenz/Zenz.swift'
+ZENZAI_PATH = 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Zenzai/zenzai.swift'
+FULL_INPUT_PROCESSING_PATH = (
+    'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Core/FullInputProcessing.swift'
+)
+FULL_INPUT_PROCESSING_WITH_PREFIX_CONSTRAINT_PATH = (
+    'Sources/KanaKanjiConverterModule/ConversionAlgorithms/Core/'
+    'FullInputProcessingWithPrefixConstraint.swift'
+)
+REGISTERED_NODE_PATH = 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/RegisteredNode.swift'
+LATTICE_NODE_PATH = 'Sources/KanaKanjiConverterModule/ConversionAlgorithms/LatticeNode.swift'
 
 EXACT_KEYBOARD_LOOKUP_ANCHOR = '    public func requestCandidates(_ inputData: ComposingText, options: ConvertRequestOptions) -> ConversionResult {'
 EXACT_KEYBOARD_LOOKUP = '''    /// Returns syntax connection score between `formerRcid` and `latterLcid`.
@@ -188,6 +198,49 @@ EXACT_KEYBOARD_LOOKUP = '''    /// Returns syntax connection score between `form
             }
         }
         return Array(self.getUniqueCandidate(diversified + unique).prefix(8))
+    }
+
+    /// Looks up whole-reading prefix completions for completed kana input so
+    /// multi-clause tail predictions cannot evict whole-word completions.
+    public func requestWholeReadingCompletions(
+        _ inputData: ComposingText,
+        options: ConvertRequestOptions
+    ) -> [Candidate] {
+        guard options.requireJapanesePrediction.isEnabled else { return [] }
+        let convertTarget = inputData.convertTarget
+        guard (2...24).contains(convertTarget.count),
+              let lastChar = convertTarget.last,
+              !(lastChar.isASCII && lastChar.isLetter) else {
+            return []
+        }
+        let ruby = convertTarget.toKatakana()
+        guard !ruby.isEmpty else { return [] }
+        self.dicdataStoreState.updateIfRequired(options: options)
+        let store = self.converter.dicdataStore
+        let inputLength = convertTarget.count
+        let cc = store.getCCLatter(CIDData.BOS.cid)
+        let entries = store.getPredictionLOUDSDicdata(
+            key: ruby, state: self.dicdataStoreState, includeExactMatch: false
+        )
+        let dynamicEntries = store.getPrefixMatchDynamicUserDict(ruby, state: self.dicdataStoreState)
+        var candidates: [Candidate] = []
+        for entry in (entries + dynamicEntries) where entry.ruby.hasPrefix(ruby) && entry.ruby != ruby {
+            let usesMeaning = DicdataStore.includeMMValueCalculation(entry)
+            let meaningScore = usesMeaning ? store.getMMValue(MIDData.EOS.mid, entry.mid) : .zero
+            candidates.append(Candidate(
+                text: entry.word,
+                value: entry.value() + cc.get(entry.lcid) + meaningScore - PValue(max(0, entry.ruby.count - inputLength)),
+                composingCount: .surfaceCount(inputLength),
+                lastMid: usesMeaning ? entry.mid : MIDData.EOS.mid,
+                data: [entry]
+            ))
+        }
+        let ranked = candidates.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            if $0.text != $1.text { return $0.text < $1.text }
+            return $0.data[0].ruby < $1.data[0].ruby
+        }
+        return Array(self.getUniqueCandidate(ranked).prefix(6))
     }
 
     /// Requests conversion candidates on an isolated named session, optionally reusing cached
@@ -1015,7 +1068,17 @@ def patch_learning_memory(text):
         text = text.replace(anchor, replacement)
     _require(text, LEARNING_FLUSH_MANAGER_ANCHOR)
     _require(text, LEARNING_FLUSH_MANAGER_BODY)
-    text = text.replace(LEARNING_FLUSH_MANAGER_ANCHOR, LEARNING_FLUSH_MANAGER_ANCHOR.replace('func save() {', 'func save() -> Bool {'), 1)
+    text = text.replace(
+        LEARNING_FLUSH_MANAGER_ANCHOR,
+        LEARNING_FLUSH_MANAGER_ANCHOR.replace(
+            '    func save() {',
+            '    var hasTemporaryEntries: Bool {\n'
+            '        !self.temporaryMemory.dicdata.isEmpty\n'
+            '    }\n\n'
+            '    func save() -> Bool {',
+        ),
+        1,
+    )
     text = text.replace(LEARNING_FLUSH_MANAGER_BODY, LEARNING_FLUSH_MANAGER_REPLACEMENT, 1)
     return text
 
@@ -1060,6 +1123,7 @@ def patch_dynamic_dictionary_builder(text):
 
 DYNAMIC_DICTIONARY_PREPARED = """/// Immutable snapshot prepared outside the conversion executor.
 public struct PreparedDynamicUserDictionary: Sendable {
+    let snapshotID = UUID()
     private let trie: LOUDS?
     private let entriesByNode: [Int: [DicdataElement]]
     private let sortedEntries: [DicdataElement]
@@ -1255,11 +1319,185 @@ DYNAMIC_DICTIONARY_RESULT_REPLACEMENTS = (
         result.append(contentsOf: consume firstClauseCandidates)"""),
 )
 
+REUSABLE_LATTICE_CONVERTER_API_REPLACEMENTS = (
+    (
+        '''/// かな漢字変換の管理を受け持つクラス
+public final class KanaKanjiConverter {''',
+        '''public final class ReusableFullInputLattice {
+    let inputData: ComposingText
+    let experimentalKeyboardTypoCorrection: Bool?
+    let keyboardLanguage: KeyboardLanguage
+    let userDictionarySnapshotID: UUID
+    let userDictionaryURL: URL?
+    let learningEnabled: Bool
+    let memoryURL: URL?
+    let seed: FullInputLatticeSeed
+
+    init(
+        inputData: ComposingText,
+        experimentalKeyboardTypoCorrection: Bool?,
+        keyboardLanguage: KeyboardLanguage,
+        userDictionarySnapshotID: UUID,
+        userDictionaryURL: URL?,
+        learningEnabled: Bool,
+        memoryURL: URL?,
+        seed: FullInputLatticeSeed
+    ) {
+        self.inputData = inputData
+        self.experimentalKeyboardTypoCorrection = experimentalKeyboardTypoCorrection
+        self.keyboardLanguage = keyboardLanguage
+        self.userDictionarySnapshotID = userDictionarySnapshotID
+        self.userDictionaryURL = userDictionaryURL
+        self.learningEnabled = learningEnabled
+        self.memoryURL = memoryURL
+        self.seed = seed
+    }
+}
+
+/// かな漢字変換の管理を受け持つクラス
+public final class KanaKanjiConverter {''',
+    ),
+    (
+        '''        var stablePredictionCandidateCache: StablePredictionCandidateCacheEntry?
+        var experimentalKeyboardTypoCorrection: Bool?
+    }''',
+        '''        var stablePredictionCandidateCache: StablePredictionCandidateCacheEntry?
+        var experimentalKeyboardTypoCorrection: Bool?
+        var latticeBuiltAfterComplete: Bool = false
+        var pendingReusableLattice: ReusableFullInputLattice?
+    }''',
+    ),
+    (
+        '''        // FIXME: enable cache based zenzai
+        if zenzaiMode.enabled, let model = self.getModel(modelURL: zenzaiMode.weightURL) {
+            let (result, nodes, cache) = self.converter.all_zenzai(
+                inputData,
+                zenz: model,
+                zenzaiCache: self.currentSessionState.zenzaiCache,
+                inferenceLimit: zenzaiMode.inferenceLimit,
+                requestRichCandidates: zenzaiMode.requestRichCandidates,
+                personalizationMode: self.getZenzaiPersonalization(mode: zenzaiMode.personalizationMode),
+                versionDependentConfig: zenzaiMode.versionDependentMode,
+                dicdataStoreState: self.dicdataStoreState
+            )
+            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.zenzaiCache = cache
+            }
+            return (result, nodes)
+        }''',
+        '''        let pendingReusableLattice = self.currentSessionState.pendingReusableLattice
+        if pendingReusableLattice != nil {
+            self.updateCurrentSessionState {
+                $0.pendingReusableLattice = nil
+            }
+        }
+
+        // FIXME: enable cache based zenzai
+        if zenzaiMode.enabled, let model = self.getModel(modelURL: zenzaiMode.weightURL) {
+            let reusableLatticeSeed: FullInputLatticeSeed? = if let pendingReusableLattice,
+                !needTypoCorrection,
+                pendingReusableLattice.inputData == inputData,
+                pendingReusableLattice.experimentalKeyboardTypoCorrection == self.currentSessionState.experimentalKeyboardTypoCorrection,
+                pendingReusableLattice.keyboardLanguage == self.dicdataStoreState.keyboardLanguage,
+                pendingReusableLattice.userDictionarySnapshotID == self.dicdataStoreState.dynamicUserDictionary.snapshotID,
+                pendingReusableLattice.userDictionaryURL == self.dicdataStoreState.userDictionaryURL,
+                pendingReusableLattice.learningEnabled == self.dicdataStoreState.learningMemoryManager.enabled,
+                pendingReusableLattice.memoryURL == self.dicdataStoreState.memoryURL,
+                !self.dicdataStoreState.learningMemoryManager.hasTemporaryEntries {
+                pendingReusableLattice.seed
+            } else {
+                nil
+            }
+            let (result, nodes, cache) = self.converter.all_zenzai(
+                inputData,
+                zenz: model,
+                zenzaiCache: self.currentSessionState.zenzaiCache,
+                inferenceLimit: zenzaiMode.inferenceLimit,
+                requestRichCandidates: zenzaiMode.requestRichCandidates,
+                personalizationMode: self.getZenzaiPersonalization(mode: zenzaiMode.personalizationMode),
+                versionDependentConfig: zenzaiMode.versionDependentMode,
+                dicdataStoreState: self.dicdataStoreState,
+                reusableLatticeSeed: reusableLatticeSeed
+            )
+            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.zenzaiCache = cache
+                $0.latticeBuiltAfterComplete = false
+            }
+            return (result, nodes)
+        }''',
+    ),
+    (
+        '''            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+            }
+            return result
+        }
+
+        debug("\\(#function): before \\(previousInputData) after \\(inputData)")''',
+        '''            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.latticeBuiltAfterComplete = false
+            }
+            return result
+        }
+
+        debug("\\(#function): before \\(previousInputData) after \\(inputData)")''',
+    ),
+    (
+        '''            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.completedData = nil
+            }
+            return result
+        }''',
+        '''            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.completedData = nil
+                $0.latticeBuiltAfterComplete = true
+            }
+            return result
+        }''',
+    ),
+)
+
+REUSABLE_LATTICE_PUBLIC_API = '''    public func exportReusableFullInputLattice(for inputData: ComposingText) -> ReusableFullInputLattice? {
+        let state = self.currentSessionState
+        guard !state.latticeBuiltAfterComplete,
+              state.previousInputData == inputData,
+              !state.lattice.isEmpty,
+              !self.dicdataStoreState.learningMemoryManager.hasTemporaryEntries else {
+            return nil
+        }
+        return ReusableFullInputLattice(
+            inputData: inputData,
+            experimentalKeyboardTypoCorrection: state.experimentalKeyboardTypoCorrection,
+            keyboardLanguage: self.dicdataStoreState.keyboardLanguage,
+            userDictionarySnapshotID: self.dicdataStoreState.dynamicUserDictionary.snapshotID,
+            userDictionaryURL: self.dicdataStoreState.userDictionaryURL,
+            learningEnabled: self.dicdataStoreState.learningMemoryManager.enabled,
+            memoryURL: self.dicdataStoreState.memoryURL,
+            seed: FullInputLatticeSeed(inputData: inputData, lattice: state.lattice)
+        )
+    }
+
+    public func adoptReusableFullInputLattice(_ reusable: ReusableFullInputLattice?) {
+        self.updateCurrentSessionState {
+            $0.pendingReusableLattice = reusable
+        }
+    }
+
+'''
+
 def patch_converter_api(text):
     """Extend KanaKanjiConverter API with session-scoped prediction, cache sync, and exact lookup."""
     _require(text, EXACT_KEYBOARD_LOOKUP_ANCHOR)
-    text = text.replace(EXACT_KEYBOARD_LOOKUP_ANCHOR, EXACT_KEYBOARD_LOOKUP + EXACT_KEYBOARD_LOOKUP_ANCHOR, 1)
+    text = text.replace(EXACT_KEYBOARD_LOOKUP_ANCHOR, REUSABLE_LATTICE_PUBLIC_API + EXACT_KEYBOARD_LOOKUP + EXACT_KEYBOARD_LOOKUP_ANCHOR, 1)
     for anchor, replacement in CONVERTER_API_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    for anchor, replacement in REUSABLE_LATTICE_CONVERTER_API_REPLACEMENTS:
         _require(text, anchor)
         text = text.replace(anchor, replacement, 1)
     _require(text, DYNAMIC_DICTIONARY_API_ANCHOR)
@@ -1731,8 +1969,305 @@ DICDATA_PREDICTION_LIMIT_REPLACEMENTS = (
 )
 
 
+DICDATA_STORE_PERFORMANCE_REPLACEMENTS = (
+    (
+        '    private var ccLines: [Int: [PValue]] = [:]',
+        '    private var ccLines: [[PValue]?] = .init(repeating: nil, count: 1319)',
+    ),
+    (
+        '    private var charsID: [Character: UInt8] = [:]',
+        '    private var charsID: [Character: UInt8] = [:]\n'
+        '    private var defaultIdentifiers: [String: String] = [:]\n'
+        '    private var missingLoudstxts: Set<String> = []',
+    ),
+    (
+        '''    private func defaultDictionaryIdentifier(for query: String) -> String {
+        let escaped = DictionaryBuilder.escapedIdentifier(query)
+        let escapedURL = self.dictionaryURL.appendingPathComponent("louds/\\(escaped).louds", isDirectory: false)
+        if FileManager.default.fileExists(atPath: escapedURL.path) {
+            return escaped
+        }
+        let legacyURL = self.dictionaryURL.appendingPathComponent("louds/\\(query).louds", isDirectory: false)
+        if FileManager.default.fileExists(atPath: legacyURL.path) {
+            return query
+        }
+        return escaped
+    }''',
+        '''    private func defaultDictionaryIdentifier(for query: String) -> String {
+        if let cached = self.defaultIdentifiers[query] {
+            return cached
+        }
+        let escaped = DictionaryBuilder.escapedIdentifier(query)
+        let escapedURL = self.dictionaryURL.appendingPathComponent("louds/\\(escaped).louds", isDirectory: false)
+        if FileManager.default.fileExists(atPath: escapedURL.path) {
+            self.defaultIdentifiers[query] = escaped
+            return escaped
+        }
+        let legacyURL = self.dictionaryURL.appendingPathComponent("louds/\\(query).louds", isDirectory: false)
+        let resolved = FileManager.default.fileExists(atPath: legacyURL.path) ? query : escaped
+        self.defaultIdentifiers[query] = resolved
+        return resolved
+    }''',
+    ),
+    (
+        '''    package func getDicdataFromLoudstxt3(identifier: String, indices: some Sequence<Int>, state: DicdataStoreState) -> [DicdataElement] {
+        // Group indices by shard
+        let dict = [Int: [Int]].init(grouping: indices, by: { $0 >> DictionaryBuilder.shardShift })
+        var data: [DicdataElement] = []
+        if identifier == "user", let userDictionaryURL = state.userDictionaryURL {
+            for (key, value) in dict {
+                let fileID = "\\(identifier)\\(key)"
+                data.append(contentsOf: LOUDS.getUserDictionaryDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[fileID],
+                    userDictionaryURL: userDictionaryURL
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isFromUserDictionary
+            }
+        }
+        if identifier == "user_shortcuts", let userDictionaryURL = state.userDictionaryURL {
+            for (key, value) in dict {
+                let fileID = "\\(identifier)\\(key)"
+                data.append(contentsOf: LOUDS.getUserShortcutsDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[fileID],
+                    userDictionaryURL: userDictionaryURL
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isFromUserDictionary
+            }
+        }
+        if identifier == "memory", let memoryURL = state.memoryURL {
+            for (key, value) in dict {
+                let fileID = "\\(identifier)\\(key)"
+                data.append(contentsOf: LOUDS.getMemoryDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[fileID],
+                    memoryURL: memoryURL
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isLearned
+            }
+        }
+        let defaultIdentifier = self.defaultDictionaryIdentifier(for: identifier)
+        for (key, value) in dict {
+            let fileID = "\\(defaultIdentifier)\\(key)"
+            data.append(contentsOf: LOUDS.getDataForLoudstxt3(
+                fileID,
+                indices: value.map { $0 & DictionaryBuilder.localMask },
+                cache: self.loudstxts[fileID],
+                dictionaryURL: self.dictionaryURL
+            ))
+        }
+        return data
+    }''',
+        '''    package func getDicdataFromLoudstxt3(identifier: String, indices: some Sequence<Int>, state: DicdataStoreState) -> [DicdataElement] {
+        // Group indices by shard
+        let dict = [Int: [Int]].init(grouping: indices, by: { $0 >> DictionaryBuilder.shardShift })
+        guard !dict.isEmpty else {
+            return []
+        }
+        var data: [DicdataElement] = []
+        if identifier == "user", let userDictionaryURL = state.userDictionaryURL {
+            for (key, value) in dict {
+                let fileID = "\\(identifier)\\(key)"
+                data.append(contentsOf: LOUDS.getUserDictionaryDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[fileID],
+                    userDictionaryURL: userDictionaryURL
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isFromUserDictionary
+            }
+            return data
+        }
+        if identifier == "user_shortcuts", let userDictionaryURL = state.userDictionaryURL {
+            for (key, value) in dict {
+                let fileID = "\\(identifier)\\(key)"
+                data.append(contentsOf: LOUDS.getUserShortcutsDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[fileID],
+                    userDictionaryURL: userDictionaryURL
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isFromUserDictionary
+            }
+            return data
+        }
+        if identifier == "memory", let memoryURL = state.memoryURL {
+            for (key, value) in dict {
+                let fileID = "\\(identifier)\\(key)"
+                data.append(contentsOf: LOUDS.getMemoryDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[fileID],
+                    memoryURL: memoryURL
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isLearned
+            }
+            return data
+        }
+        let defaultIdentifier = self.defaultDictionaryIdentifier(for: identifier)
+        for (key, value) in dict {
+            let fileID = "\\(defaultIdentifier)\\(key)"
+            let cachedData: Data
+            if let existing = self.loudstxts[fileID] {
+                cachedData = existing
+            } else if self.missingLoudstxts.contains(fileID) {
+                continue
+            } else {
+                let url = self.dictionaryURL.appendingPathComponent("louds/\\(fileID).loudstxt3", isDirectory: false)
+                if let loaded = try? Data(contentsOf: url, options: [.mappedIfSafe]) {
+                    self.loudstxts[fileID] = loaded
+                    cachedData = loaded
+                } else {
+                    self.missingLoudstxts.insert(fileID)
+                    continue
+                }
+            }
+            data.append(contentsOf: LOUDS.getDataForLoudstxt3(
+                fileID,
+                indices: value.map { $0 & DictionaryBuilder.localMask },
+                cache: cachedData,
+                dictionaryURL: self.dictionaryURL
+            ))
+        }
+        return data
+    }''',
+    ),
+    (
+        '''        latticeNodes.reserveCapacity(latticeNodes.count + additionalDicdata.count)
+        for element in consume additionalDicdata {
+            let rubyArray = Array(element.ruby)
+            guard let info = stringToInfo[rubyArray] else {
+                continue
+            }
+            if let element = penaltizedElementIfFeasible(consume element, rubyCount: rubyArray.count, penalty: info.penalty) {
+                appendNode(
+                    element,
+                    endIndex: info.endIndex,
+                    keyboardTypoCorrection: info.keyboardTypoCorrection
+                )
+            }
+        }
+
+        // MARK: 検索によって得たindicesから辞書データを実際に取り出していく
+        for (identifier, value) in consume indices {
+            let items = self.getDicdataFromLoudstxt3(identifier: identifier, indices: value, state: state)
+            latticeNodes.reserveCapacity(latticeNodes.count + items.count)
+            for element in consume items {
+                let rubyArray = Array(element.ruby)
+                guard let info = stringToInfo[rubyArray] else {
+                    continue
+                }
+                if let element = penaltizedElementIfFeasible(consume element, rubyCount: rubyArray.count, penalty: info.penalty) {
+                    appendNode(
+                        element,
+                        endIndex: info.endIndex,
+                        keyboardTypoCorrection: info.keyboardTypoCorrection
+                    )
+                }
+            }
+        }''',
+        '''        var lastRuby: String?
+        var lastRubyCount = 0
+        var lastInfo: (endIndex: Lattice.LatticeIndex, penalty: PValue, keyboardTypoCorrection: KeyboardTypoCorrectionProvenance?)?
+
+        latticeNodes.reserveCapacity(latticeNodes.count + additionalDicdata.count)
+        for element in consume additionalDicdata {
+            let info: (endIndex: Lattice.LatticeIndex, penalty: PValue, keyboardTypoCorrection: KeyboardTypoCorrectionProvenance?)
+            let rubyCount: Int
+            if element.ruby == lastRuby {
+                guard let cachedInfo = lastInfo else {
+                    continue
+                }
+                info = cachedInfo
+                rubyCount = lastRubyCount
+            } else {
+                lastRuby = element.ruby
+                let rubyArray = Array(element.ruby)
+                lastRubyCount = rubyArray.count
+                lastInfo = stringToInfo[rubyArray]
+                guard let resolvedInfo = lastInfo else {
+                    continue
+                }
+                info = resolvedInfo
+                rubyCount = lastRubyCount
+            }
+            if let element = penaltizedElementIfFeasible(consume element, rubyCount: rubyCount, penalty: info.penalty) {
+                appendNode(
+                    element,
+                    endIndex: info.endIndex,
+                    keyboardTypoCorrection: info.keyboardTypoCorrection
+                )
+            }
+        }
+
+        // MARK: 検索によって得たindicesから辞書データを実際に取り出していく
+        for (identifier, value) in consume indices {
+            let items = self.getDicdataFromLoudstxt3(identifier: identifier, indices: value, state: state)
+            latticeNodes.reserveCapacity(latticeNodes.count + items.count)
+            for element in consume items {
+                let info: (endIndex: Lattice.LatticeIndex, penalty: PValue, keyboardTypoCorrection: KeyboardTypoCorrectionProvenance?)
+                let rubyCount: Int
+                if element.ruby == lastRuby {
+                    guard let cachedInfo = lastInfo else {
+                        continue
+                    }
+                    info = cachedInfo
+                    rubyCount = lastRubyCount
+                } else {
+                    lastRuby = element.ruby
+                    let rubyArray = Array(element.ruby)
+                    lastRubyCount = rubyArray.count
+                    lastInfo = stringToInfo[rubyArray]
+                    guard let resolvedInfo = lastInfo else {
+                        continue
+                    }
+                    info = resolvedInfo
+                    rubyCount = lastRubyCount
+                }
+                if let element = penaltizedElementIfFeasible(consume element, rubyCount: rubyCount, penalty: info.penalty) {
+                    appendNode(
+                        element,
+                        endIndex: info.endIndex,
+                        keyboardTypoCorrection: info.keyboardTypoCorrection
+                    )
+                }
+            }
+        }''',
+    ),
+)
+
+
+DICDATA_MINUTE_COUNTER_ANCHOR = '''            let prevIsNumber = i >= 0 && fullText[i].isNumber
+            let j = surfaceRange.upperBound'''
+DICDATA_MINUTE_COUNTER_REPLACEMENT = '''            let prevIsNumber = i >= 0 && fullText[i].isNumber
+            if convertTarget == "プン", prevIsNumber {
+                let previous = fullText[i].unicodeScalars
+                if previous.count == 1, let scalar = previous.first, ZenzDigitMasking.isDigitScalar(scalar) {
+                    // Use the same dictionary classes and cost as the フン → 分 entry.
+                    result.append(DicdataElement(word: "分", ruby: convertTarget, cid: 1300, mid: 163, value: -6.9856))
+                }
+            }
+            let j = surfaceRange.upperBound'''
+
+
 def patch_dicdata_store(text):
-    """Handle zero-hint CSV newlines and expose smaller prediction lookup budgets."""
+    """Patch dictionary lookup, prediction data, and number-counter candidates."""
     _require(text, DICDATA_ZERO_HINT_CRLF_ANCHOR)
     text = text.replace(DICDATA_ZERO_HINT_CRLF_ANCHOR, DICDATA_ZERO_HINT_CRLF_REPLACEMENT, 1)
     for anchor, replacement in DICDATA_PREDICTION_LIMIT_REPLACEMENTS:
@@ -1741,6 +2276,11 @@ def patch_dicdata_store(text):
     for anchor, replacement in DYNAMIC_DICTIONARY_LOOKUPS:
         _require(text, anchor)
         text = text.replace(anchor, replacement, 1)
+    for anchor, replacement in DICDATA_STORE_PERFORMANCE_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    _require(text, DICDATA_MINUTE_COUNTER_ANCHOR)
+    text = text.replace(DICDATA_MINUTE_COUNTER_ANCHOR, DICDATA_MINUTE_COUNTER_REPLACEMENT, 1)
     return text
 
 
@@ -2022,3 +2562,509 @@ def patch_zenz(text):
     """Forward contextual next-word reading generation through Zenz."""
     _require(text, ZENZ_CONTEXTUAL_ANCHOR)
     return text.replace(ZENZ_CONTEXTUAL_ANCHOR, ZENZ_CONTEXTUAL_REPLACEMENT, 1)
+
+
+FULL_INPUT_PROCESSING_REPLACEMENTS = (
+    (
+        '''    func makeRawNodes() -> [[LatticeNode]] {''',
+        '''    init(inputData: ComposingText, lattice: Lattice) {
+        let inputCount = inputData.input.count
+        let surfaceCount = inputData.convertTarget.count
+        let indexMap = LatticeDualIndexMap(inputData)
+        let latticeIndices = indexMap.indices(inputCount: inputCount, surfaceCount: surfaceCount)
+        var rawNodes: [[LatticeNode]] = []
+        rawNodes.reserveCapacity(latticeIndices.count)
+        for index in latticeIndices {
+            let cell = lattice[index: index]
+            if !cell.inputIndexedNodes.isEmpty {
+                rawNodes.append(cell.inputIndexedNodes)
+            }
+            if !cell.surfaceIndexedNodes.isEmpty {
+                rawNodes.append(cell.surfaceIndexedNodes)
+            }
+        }
+        self.init(
+            inputCount: inputCount,
+            surfaceCount: surfaceCount,
+            indexMap: indexMap,
+            latticeIndices: latticeIndices,
+            rawNodes: rawNodes
+        )
+    }
+
+    func makeRawNodes() -> [[LatticeNode]] {''',
+    ),
+    (
+        '''        let result: LatticeNode = LatticeNode.EOSNode
+        for (isHead, nodeArray) in lattice.indexedNodes(indices: latticeIndices) {
+            // それぞれのnodeに対して
+            for node in nodeArray {
+                if node.prevs.isEmpty {
+                    continue
+                }
+                if self.dicdataStore.shouldBeRemoved(data: node.data) {
+                    continue
+                }
+                // 生起確率を取得する。
+                let wValue: PValue = node.data.value()
+                if isHead {
+                    // valuesを更新する
+                    node.values = node.prevs.map {$0.totalValue + wValue + self.dicdataStore.getCCValue($0.data.rcid, node.data.lcid)}
+                } else {
+                    // valuesを更新する
+                    node.values = node.prevs.map {$0.totalValue + wValue}
+                }
+                // 後続ノードのindex（正規化する）
+                let nextIndex = indexMap.dualIndex(for: node.range.endIndex)
+                // 文字数がcountと等しい場合登録する
+                if nextIndex.surfaceIndex == surfaceCount {
+                    self.updateResultNode(with: node, resultNode: result)
+                } else {
+                    self.updateNextNodes(with: node, nextNodes: lattice[index: nextIndex], nBest: N_best)
+                }
+            }
+        }
+        return result''',
+        '''        let result: LatticeNode = LatticeNode.EOSNode
+        var activeNodesByIndex: [LatticeDualIndexMap.DualIndex: [LatticeNode]] = [:]
+        activeNodesByIndex.reserveCapacity(latticeIndices.count)
+        func activeNodes(at index: LatticeDualIndexMap.DualIndex) -> [LatticeNode] {
+            if let cached = activeNodesByIndex[index] {
+                return cached
+            }
+            let filtered = lattice[index: index].filter {
+                !self.dicdataStore.shouldBeRemoved(data: $0.data)
+            }
+            activeNodesByIndex[index] = filtered
+            return filtered
+        }
+        for index in latticeIndices {
+            let isHead = index.inputIndex == 0 && index.surfaceIndex == 0
+            let nodeArray = activeNodes(at: index)
+            // それぞれのnodeに対して
+            for node in nodeArray {
+                if node.prevs.isEmpty {
+                    continue
+                }
+                // 生起確率を取得する。
+                let wValue: PValue = node.data.value()
+                if isHead {
+                    // valuesを更新する
+                    node.values = node.prevs.map {$0.totalValue + wValue + self.dicdataStore.getCCValue($0.data.rcid, node.data.lcid)}
+                } else {
+                    // valuesを更新する
+                    node.values = node.prevs.map {$0.totalValue + wValue}
+                }
+                // 後続ノードのindex（正規化する）
+                let nextIndex = indexMap.dualIndex(for: node.range.endIndex)
+                // 文字数がcountと等しい場合登録する
+                if nextIndex.surfaceIndex == surfaceCount {
+                    self.updateResultNode(with: node, resultNode: result)
+                } else {
+                    self.updateNextNodes(
+                        with: node,
+                        nextNodes: activeNodes(at: nextIndex),
+                        nBest: N_best,
+                        filterRemoved: false
+                    )
+                }
+            }
+        }
+        return result''',
+    ),
+    (
+        '''    func updateNextNodes(with node: LatticeNode, nextNodes: some Sequence<LatticeNode>, nBest: Int) {
+        let ccLatter = self.dicdataStore.getCCLatter(node.data.rcid)
+        for nextnode in nextNodes {
+            if self.dicdataStore.shouldBeRemoved(data: nextnode.data) {
+                continue
+            }
+            // クラスの連続確率を計算する。
+            let ccValue: PValue = ccLatter.get(nextnode.data.lcid)
+            // nodeの持っている全てのprevnodeに対して
+            for (index, value) in node.values.enumerated() {
+                let newValue: PValue = ccValue + value
+                // 追加すべきindexを取得する
+                let lastindex: Int = (nextnode.prevs.lastIndex(where: {$0.totalValue >= newValue}) ?? -1) + 1
+                if lastindex == nBest {
+                    continue
+                }''',
+        '''    func updateNextNodes(
+        with node: LatticeNode,
+        nextNodes: some Sequence<LatticeNode>,
+        nBest: Int,
+        filterRemoved: Bool = true
+    ) {
+        guard nBest > 0 else {
+            return
+        }
+        let ccLatter = self.dicdataStore.getCCLatter(node.data.rcid)
+        for nextnode in nextNodes {
+            if filterRemoved && self.dicdataStore.shouldBeRemoved(data: nextnode.data) {
+                continue
+            }
+            // クラスの連続確率を計算する。
+            let ccValue: PValue = ccLatter.get(nextnode.data.lcid)
+            // nodeの持っている全てのprevnodeに対して
+            for (index, value) in node.values.enumerated() {
+                let newValue: PValue = ccValue + value
+                if nextnode.prevs.count >= nBest, nextnode.prevs[nBest - 1].totalValue >= newValue {
+                    break
+                }
+                // 追加すべきindexを取得する
+                let lastindex: Int = (nextnode.prevs.lastIndex(where: {$0.totalValue >= newValue}) ?? -1) + 1
+                if lastindex == nBest {
+                    break
+                }''',
+    ),
+)
+
+
+def patch_full_input_processing(text):
+    """Add reusable lattice seed init, pre-filtered traversal, and N-best early break."""
+    for anchor, replacement in FULL_INPUT_PROCESSING_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    return text
+
+
+REGISTERED_NODE_REPLACEMENTS = (
+    (
+        '''    case node(data: DicdataElement, prev: RegisteredNode?, totalValue: PValue, range: Lattice.LatticeRange)
+
+    /// このノードが保持する辞書データ
+    var data: DicdataElement {
+        _read {
+            switch self {
+            case .node(let data, _, _, _):
+                yield data
+            }
+        }
+    }
+
+    /// 1つ前のノードのデータ
+    var prev: RegisteredNode? {
+        _read {
+            switch self {
+            case .node(_, let prev, _, _):
+                yield prev
+            }
+        }
+    }
+
+    /// 始点からこのノードまでのコスト
+    var totalValue: PValue {
+        switch self {
+        case .node(_, _, let totalValue, _):
+            return totalValue
+        }
+    }
+
+    /// `composingText`の`input`で対応する範囲
+    var range: Lattice.LatticeRange {
+        switch self {
+        case .node(_, _, _, let range):
+            return range
+        }
+    }
+
+    init(data: DicdataElement, registered: RegisteredNode?, totalValue: PValue, range: Lattice.LatticeRange) {
+        self = .node(data: data, prev: registered, totalValue: totalValue, range: range)
+    }''',
+        '''    case node(
+        data: DicdataElement,
+        prev: RegisteredNode?,
+        totalValue: PValue,
+        range: Lattice.LatticeRange,
+        candidateUTF8Count: UInt16,
+        constraintMatchedUTF8Count: UInt16
+    )
+
+    /// このノードが保持する辞書データ
+    var data: DicdataElement {
+        _read {
+            switch self {
+            case .node(let data, _, _, _, _, _):
+                yield data
+            }
+        }
+    }
+
+    /// 1つ前のノードのデータ
+    var prev: RegisteredNode? {
+        _read {
+            switch self {
+            case .node(_, let prev, _, _, _, _):
+                yield prev
+            }
+        }
+    }
+
+    /// 始点からこのノードまでのコスト
+    var totalValue: PValue {
+        switch self {
+        case .node(_, _, let totalValue, _, _, _):
+            return totalValue
+        }
+    }
+
+    /// `composingText`の`input`で対応する範囲
+    var range: Lattice.LatticeRange {
+        switch self {
+        case .node(_, _, _, let range, _, _):
+            return range
+        }
+    }
+
+    var candidateUTF8Count: UInt16 {
+        switch self {
+        case .node(_, _, _, _, let candidateUTF8Count, _):
+            return candidateUTF8Count
+        }
+    }
+
+    var constraintMatchedUTF8Count: UInt16 {
+        switch self {
+        case .node(_, _, _, _, _, let constraintMatchedUTF8Count):
+            return constraintMatchedUTF8Count
+        }
+    }
+
+    init(
+        data: DicdataElement,
+        registered: RegisteredNode?,
+        totalValue: PValue,
+        range: Lattice.LatticeRange,
+        constraintState: (matched: Int, total: Int)? = nil
+    ) {
+        let candidateUTF8Count = constraintState?.total
+            ?? ((registered.map { Int($0.candidateUTF8Count) } ?? 0) + data.word.utf8.count)
+        self = .node(
+            data: data,
+            prev: registered,
+            totalValue: totalValue,
+            range: range,
+            candidateUTF8Count: UInt16(clamping: candidateUTF8Count),
+            constraintMatchedUTF8Count: UInt16(clamping: constraintState?.matched ?? 0)
+        )
+    }''',
+    ),
+)
+
+
+def patch_registered_node(text):
+    """Store cumulative UTF-8 length and constraint match length on RegisteredNode."""
+    for anchor, replacement in REGISTERED_NODE_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    return text
+
+
+LATTICE_NODE_REPLACEMENT = (
+    '''    func getRegisteredNode(_ index: Int, value: PValue) -> RegisteredNode {
+        RegisteredNode(data: self.data, registered: self.prevs[index], totalValue: value, range: self.range)
+    }''',
+    '''    func getRegisteredNode(
+        _ index: Int,
+        value: PValue,
+        constraintState: (matched: Int, total: Int)? = nil
+    ) -> RegisteredNode {
+        RegisteredNode(
+            data: self.data,
+            registered: self.prevs[index],
+            totalValue: value,
+            range: self.range,
+            constraintState: constraintState
+        )
+    }''',
+)
+
+
+def patch_lattice_node(text):
+    """Forward optional prefix-constraint match state through LatticeNode.getRegisteredNode."""
+    _require(text, LATTICE_NODE_REPLACEMENT[0])
+    return text.replace(LATTICE_NODE_REPLACEMENT[0], LATTICE_NODE_REPLACEMENT[1], 1)
+
+
+FULL_INPUT_PROCESSING_WITH_PREFIX_CONSTRAINT_REPLACEMENTS = (
+    (
+        '''    private func computeMatchedAndTotalLength(prev: RegisteredNode?, currentWord: String, constraintBytes: [UInt8]) -> (matched: Int, total: Int) {
+        // collect words from prev chain in forward order
+        var words: [String] = []
+        var p = prev
+        while let node = p {
+            if !node.data.word.isEmpty {
+                words.append(node.data.word)
+            }
+            p = node.prev
+        }
+        words.reverse()
+        words.append(currentWord)
+
+        // total = sum of utf8 counts (cheap per word)
+        let total = words.reduce(0) { $0 + $1.utf8.count }
+
+        // matched = compare up to first mismatch or until constraint end
+        var ci = 0
+        if !constraintBytes.isEmpty {
+            outer: for w in words {
+                if ci >= constraintBytes.count {
+                    break
+                }
+                for b in w.utf8 {
+                    if ci >= constraintBytes.count {
+                        break outer
+                    }
+                    if b != constraintBytes[ci] {
+                        break outer
+                    }
+                    ci += 1
+                }
+            }
+        }
+        // このprevのutf8カウントはtotalで、そのうちconstraintBytesと一致する部分がci
+        return (matched: ci, total: total)
+    }''',
+        '''    private func computeMatchedAndTotalLength(prev: RegisteredNode?, currentWord: String, constraintBytes: [UInt8]) -> (matched: Int, total: Int) {
+        let previousTotal = prev.map { Int($0.candidateUTF8Count) } ?? 0
+        var matched = prev.map { Int($0.constraintMatchedUTF8Count) } ?? 0
+        let total = previousTotal + currentWord.utf8.count
+
+        // 直前までに不一致がなければ、今回追加する単語だけを照合する。
+        guard matched == min(previousTotal, constraintBytes.count) else {
+            return (matched, total)
+        }
+        for byte in currentWord.utf8 {
+            guard matched < constraintBytes.count, byte == constraintBytes[matched] else {
+                break
+            }
+            matched += 1
+        }
+        return (matched, total)
+    }''',
+    ),
+    (
+        '''        let result: LatticeNode = LatticeNode.EOSNode
+        for (isHead, nodeArray) in lattice.indexedNodes(indices: latticeIndices) {''',
+        '''        let result: LatticeNode = LatticeNode.EOSNode
+        guard N_best > 0 else {
+            return result
+        }
+        for (isHead, nodeArray) in lattice.indexedNodes(indices: latticeIndices) {''',
+    ),
+    (
+        '''                        let newnode: RegisteredNode = node.getRegisteredNode(index, value: node.values[index])
+                        result.prevs.append(newnode)''',
+        '''                        let newnode: RegisteredNode = node.getRegisteredNode(
+                            index,
+                            value: node.values[index],
+                            constraintState: mtPerPrev[index]
+                        )
+                        result.prevs.append(newnode)''',
+    ),
+    (
+        '''                        for (index, value) in node.values.enumerated() {
+                            let newValue: PValue = ccValue + value
+                            // 追加すべきindexを取得する
+                            let lastindex: Int = (nextnode.prevs.lastIndex(where: {$0.totalValue >= newValue}) ?? -1) + 1
+                            if lastindex == N_best {
+                                continue
+                            }''',
+        '''                        for (index, value) in node.values.enumerated() {
+                            let newValue: PValue = ccValue + value
+                            if nextnode.prevs.count >= N_best, nextnode.prevs[N_best - 1].totalValue >= newValue {
+                                break
+                            }
+                            // 追加すべきindexを取得する
+                            let lastindex: Int = (nextnode.prevs.lastIndex(where: {$0.totalValue >= newValue}) ?? -1) + 1
+                            if lastindex == N_best {
+                                break
+                            }''',
+    ),
+    (
+        '''                            let newnode: RegisteredNode = node.getRegisteredNode(index, value: newValue)
+                            // removeしてからinsertした方が速い (insertはO(N)なので)''',
+        '''                            let newnode: RegisteredNode = node.getRegisteredNode(
+                                index,
+                                value: newValue,
+                                constraintState: mtPerPrev[index]
+                            )
+                            // removeしてからinsertした方が速い (insertはO(N)なので)''',
+    ),
+)
+
+
+def patch_full_input_processing_with_prefix_constraint(text):
+    """Avoid O(path) constraint scans and add N-best early break in constrained lattice search."""
+    for anchor, replacement in FULL_INPUT_PROCESSING_WITH_PREFIX_CONSTRAINT_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    return text
+
+
+ZENZAI_REPLACEMENTS = (
+    (
+        '''        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode,
+        dicdataStoreState: DicdataStoreState
+    ) -> (result: LatticeNode, lattice: Lattice, cache: ZenzaiCache) {''',
+        '''        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode,
+        dicdataStoreState: DicdataStoreState,
+        reusableLatticeSeed: FullInputLatticeSeed? = nil
+    ) -> (result: LatticeNode, lattice: Lattice, cache: ZenzaiCache) {''',
+    ),
+    (
+        '''                } else if preprocessedLattice == nil {
+                    let (seed, seedLattice) = self.makeFullInputLatticeSeedAndLattice(inputData, needTypoCorrection: false, dicdataStoreState: dicdataStoreState)
+                    latticeSeed = seed
+                    draftResult = self.kana2lattice_all_from_seed(seed, lattice: seedLattice, N_best: 2)''',
+        '''                } else if preprocessedLattice == nil {
+                    let seed: FullInputLatticeSeed
+                    let seedLattice: Lattice
+                    if let reusableLatticeSeed {
+                        seed = reusableLatticeSeed
+                        seedLattice = reusableLatticeSeed.makeLattice()
+                    } else {
+                        (seed, seedLattice) = self.makeFullInputLatticeSeedAndLattice(inputData, needTypoCorrection: false, dicdataStoreState: dicdataStoreState)
+                    }
+                    latticeSeed = seed
+                    draftResult = self.kana2lattice_all_from_seed(seed, lattice: seedLattice, N_best: 2)''',
+    ),
+    (
+        '''                } else if preprocessedLattice == nil {
+                    let (seed, seedLattice) = self.makeFullInputLatticeSeedAndLattice(inputData, needTypoCorrection: false, dicdataStoreState: dicdataStoreState)
+                    latticeSeed = seed
+                    draftResult = self.kana2lattice_all_with_prefix_constraint_from_seed(seed, lattice: seedLattice, N_best: 3, constraint: constraint)''',
+        '''                } else if preprocessedLattice == nil {
+                    let seed: FullInputLatticeSeed
+                    let seedLattice: Lattice
+                    if let reusableLatticeSeed {
+                        seed = reusableLatticeSeed
+                        seedLattice = reusableLatticeSeed.makeLattice()
+                    } else {
+                        (seed, seedLattice) = self.makeFullInputLatticeSeedAndLattice(inputData, needTypoCorrection: false, dicdataStoreState: dicdataStoreState)
+                    }
+                    latticeSeed = seed
+                    draftResult = self.kana2lattice_all_with_prefix_constraint_from_seed(seed, lattice: seedLattice, N_best: 3, constraint: constraint)''',
+    ),
+    (
+        '''                case .retry(let candidateIndex):
+                    index = candidateIndex
+                    candidate = candidates[candidateIndex]''',
+        '''                case .retry(let candidateIndex):
+                    if inferenceLimit == 0, !constraint.hasEOS {
+                        // Rank the free suffix against the new prefix before returning.
+                        // This uses the existing lattice and runs no further inference.
+                        break reviewLoop
+                    }
+                    index = candidateIndex
+                    candidate = candidates[candidateIndex]''',
+    ),
+)
+
+
+def patch_zenzai(text):
+    """Reuse the dictionary lattice and rank the last partially constrained draft."""
+    for anchor, replacement in ZENZAI_REPLACEMENTS:
+        _require(text, anchor)
+        text = text.replace(anchor, replacement, 1)
+    return text

@@ -47,6 +47,9 @@ pub trait CompletionBackend {
     fn read_learning(&self) -> bool {
         true
     }
+    fn cache_results(&self) -> bool {
+        true
+    }
     fn allow_native_worker(&self) -> bool {
         false
     }
@@ -143,6 +146,14 @@ pub(super) fn backend_revision() -> u64 {
         slot.borrow()
             .as_ref()
             .map_or(0, |backend| backend.revision())
+    })
+}
+
+pub(super) fn cache_results() -> bool {
+    BACKEND.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_none_or(|backend| backend.cache_results())
     })
 }
 

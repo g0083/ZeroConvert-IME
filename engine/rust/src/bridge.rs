@@ -301,13 +301,22 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         let expected = envelope["expected"].as_str().ok_or("missing expected")?;
         let acceptable: Vec<String> = envelope["acceptable"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let forbidden: Vec<String> = envelope["forbidden"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
-        let score = ai_assist::benchmark::score_conversion(output, expected, &acceptable, &forbidden);
+        let score =
+            ai_assist::benchmark::score_conversion(output, expected, &acceptable, &forbidden);
         return Ok(json!({ "isCorrect": score.is_correct, "reason": score.reason }));
     }
     if envelope["op"] == "benchmarkScoreTypo" {
@@ -315,23 +324,42 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         let expected = envelope["expected"].as_str().ok_or("missing expected")?;
         let acceptable: Vec<String> = envelope["acceptable"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let input_reading = envelope["inputReading"].as_str().unwrap_or("");
         let main_output = envelope["mainOutput"].as_str().unwrap_or("");
         let suggestion = envelope["suggestion"].as_str();
-        let score =
-            ai_assist::benchmark::score_typo(is_clean, expected, &acceptable, input_reading, main_output, suggestion);
-        return Ok(json!({ "status": score.status.as_str(), "suggestionExact": score.suggestion_exact }));
+        let score = ai_assist::benchmark::score_typo(
+            is_clean,
+            expected,
+            &acceptable,
+            input_reading,
+            main_output,
+            suggestion,
+        );
+        return Ok(
+            json!({ "status": score.status.as_str(), "suggestionExact": score.suggestion_exact }),
+        );
     }
     if envelope["op"] == "benchmarkScorePredictive" {
         let prediction = envelope["prediction"].as_str();
-        let full_sentence = envelope["fullSentence"].as_str().ok_or("missing fullSentence")?;
-        let expected_continuation =
-            envelope["expectedContinuation"].as_str().ok_or("missing expectedContinuation")?;
+        let full_sentence = envelope["fullSentence"]
+            .as_str()
+            .ok_or("missing fullSentence")?;
+        let expected_continuation = envelope["expectedContinuation"]
+            .as_str()
+            .ok_or("missing expectedContinuation")?;
         let acceptable: Vec<String> = envelope["acceptableContinuations"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let ok = ai_assist::benchmark::score_predictive(
             prediction,
@@ -499,6 +527,58 @@ pub unsafe extern "C" fn zerocon_assist_request(
                 .map_err(|e| e.to_string())?
         };
         let envelope = serde_json::from_str::<Value>(request).map_err(|e| e.to_string())?;
+        if envelope["op"] == "benchmark_info" {
+            ai_assist::benchmark::reset_session();
+            return Ok(json!({"batch_size": ai_assist::benchmark::BATCH_SIZE}));
+        }
+        if envelope["op"] == "benchmark" {
+            let cases = serde_json::from_value::<Vec<ai_assist::benchmark::Case>>(
+                envelope["cases"].clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            let host = Host {
+                complete,
+                release,
+                context,
+                revision: 0,
+                read_learning: false,
+            };
+            let scope: ai_assist::benchmark::ConversionScope = envelope
+                .get("scope")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
+            if scope == ai_assist::benchmark::ConversionScope::Candidates {
+                return ai_assist::benchmark::run_candidate_batch(
+                    &cases,
+                    move |reading, context| {
+                        use runtime::CompletionBackend;
+                        let reply = host.complete(
+                            0,
+                            "",
+                            &json!({"reading": reading, "context": context}),
+                            0,
+                        )?;
+                        serde_json::from_value(reply).ok()
+                    },
+                )
+                .map(|rows| json!({"rows": rows}));
+            }
+            let dictionary = std::path::Path::new(envelope["dictionary"].as_str().unwrap_or(""));
+            return ai_assist::benchmark::run_batch(
+                &cases,
+                dictionary,
+                move |prompt, tokens, timeout| {
+                    use runtime::CompletionBackend;
+                    let request = json!({"prompt": prompt, "n_predict": tokens});
+                    let reply = host.complete(0, "", &request, timeout)?;
+                    serde_json::from_value(reply).ok()
+                },
+            )
+            .map(|rows| json!({"rows": rows}));
+        }
         let revision = envelope["revision"].as_u64().unwrap_or(0);
         let read_learning = envelope["readLearning"].as_bool().unwrap_or(false);
         runtime::with_backend(

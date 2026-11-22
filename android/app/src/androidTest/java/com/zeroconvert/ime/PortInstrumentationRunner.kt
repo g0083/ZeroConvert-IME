@@ -168,7 +168,9 @@ class PortInstrumentationRunner : Instrumentation() {
         pendingRomajiOnly = arguments?.getString("pendingRomajiOnly") == "true"
         learningDeletionOnly = arguments?.getString("learningDeletionOnly") == "true"
         privateModeOnly = arguments?.getString("privateModeOnly") == "true"
-        performanceArguments = arguments?.takeIf { it.getString("enginePerformance") == "true" }
+        performanceArguments = arguments?.takeIf {
+            it.getString("enginePerformance") == "true" || it.getString("sharedBenchmarks") == "true"
+        }
         start()
     }
     override fun onStart() {
@@ -184,6 +186,12 @@ class PortInstrumentationRunner : Instrumentation() {
             return
         }
         performanceArguments?.let {
+            if (it.getString("sharedBenchmarks") == "true") {
+                val limit = it.getString("benchmarkLimit")?.toIntOrNull()?.takeIf { count -> count > 0 }
+                val result = SharedBenchmarkRegression(this).run(limit)
+                finish(result.first, result.second)
+                return
+            }
             val result = SharedEnginePerformanceRunner(this).run(it)
             finish(result.first, result.second)
             return

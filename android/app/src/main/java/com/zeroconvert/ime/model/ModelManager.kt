@@ -119,6 +119,13 @@ object ModelManager {
         return BUILT_IN_MODELS.find { it.fileName == replacement }
     }
 
+    internal fun selectedModelFile(context: Context): File? {
+        val path = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_PATH, null)
+        val managed = selectedBuiltInSpec(context, path)
+        return if (managed != null) cachedFile(context, managed)
+        else path?.let(::File)?.takeIf { it.isFile } ?: cachedFile(context, DEFAULT_MODEL_SPEC)
+    }
+
     fun getAvailableModels(context: Context): List<ModelInfo> {
         val list = mutableListOf<ModelInfo>()
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

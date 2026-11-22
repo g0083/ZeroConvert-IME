@@ -1,4 +1,5 @@
 mod benchmark_runtime;
+mod benchmark_worker;
 mod conversion_model;
 mod dictionary;
 mod english_dictionary;
@@ -803,32 +804,6 @@ fn setup_assets_status() -> Result<SetupAssets, String> {
     })
 }
 
-fn to_hiragana(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            let code = c as u32;
-            if (0x30A1..=0x30F6).contains(&code) {
-                char::from_u32(code - 96).unwrap_or(c)
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-fn to_katakana(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            let code = c as u32;
-            if (0x3041..=0x3096).contains(&code) {
-                char::from_u32(code + 96).unwrap_or(c)
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
 static BENCHMARK_SERVER: std::sync::Mutex<Option<std::process::Child>> =
     std::sync::Mutex::new(None);
 static CURRENT_BENCHMARK_MODEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -849,21 +824,7 @@ fn stop_benchmark_server() {
     *model_guard = None;
 }
 
-fn find_llama_server_exe(backend: &str) -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            roots.push(parent.to_path_buf());
-        }
-    }
-    if let Some(root) = get_workspace_root() {
-        roots.push(root.join("ZeroConvertIME-windows"));
-    }
-    roots.push(get_appdata_azookey_dir());
-    benchmark_runtime::find_server(&roots, backend)
-}
-
-fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
+fn benchmark_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -875,14 +836,18 @@ fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
     }
     roots.push(get_appdata_azookey_dir());
     roots
+}
+
+fn find_llama_server_exe(backend: &str) -> Option<PathBuf> {
+    benchmark_runtime::find_server(&benchmark_roots(), backend)
+}
+
+fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
+    benchmark_roots()
         .iter()
         .map(|root| shared::runtime_assets::converter_model(root, &config.zenzai.model))
         .find(|p| p.is_file())
         .ok_or_else(|| "ZeroCon model not found".to_string())
-}
-
-async fn ensure_benchmark_server(config: &AppConfig) -> Result<(), String> {
-    ensure_benchmark_server_with_backend(config, config.zenzai.backend.as_str()).await
 }
 
 async fn ensure_benchmark_server_with_backend(
@@ -963,38 +928,6 @@ async fn ensure_benchmark_server_with_backend(
     }
 }
 
-fn evaluate_output(
-    output: &str,
-    expected: &str,
-    acceptable: &[String],
-    forbidden: &[String],
-) -> (bool, String) {
-    // 共通エンジン（benchmarks/common）と同一判定。表示は従来の互換文字列へ写像する。
-    let score = azookey_server::ai_assist::benchmark::score_conversion(
-        output,
-        expected,
-        acceptable,
-        forbidden,
-    );
-    let reason = match score.reason {
-        "exact" => "OK (Perfect)",
-        "whitespace" => "OK (Whitespace variant)",
-        "kana" => "OK (Kana variant)",
-        "whitespace_acceptable" => "OK (Whitespace variant - acceptable)",
-        "kana_acceptable" => "OK (Kana variant - acceptable)",
-        "forbidden" => "NG (forbidden)",
-        _ => "NG",
-    };
-    (
-        score.is_correct,
-        if score.is_correct {
-            reason.to_string()
-        } else {
-            format!("NG (out=[{output}] vs exp=[{expected}])")
-        },
-    )
-}
-
 #[tauri::command]
 fn switch_model(state: tauri::State<AppState>, model_id: String) -> Result<String, String> {
     model_catalog::source_for(&model_id, &get_models_search_dirs())?;
@@ -1013,293 +946,58 @@ fn switch_model(state: tauri::State<AppState>, model_id: String) -> Result<Strin
     Ok(format!("Switched to {model_id}"))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BenchmarkItemResult {
-    pub id: u32,
-    pub top1: String,
-    pub candidates: Vec<String>,
-    pub is_correct: bool,
-    pub latency_ms: f64,
+#[tauri::command]
+async fn start_benchmark(
+    state: tauri::State<'_, AppState>,
+    scope: Option<azookey_server::ai_assist::benchmark::ConversionScope>,
+) -> Result<Value, String> {
+    use azookey_server::ai_assist::benchmark::ConversionScope;
+    let scope = scope.unwrap_or_default();
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let model = get_benchmark_model_path(&config)?;
+        let (worker, runtime, dictionary) = benchmark_roots()
+            .into_iter()
+            .find_map(|root| {
+                let runtime = shared::runtime_assets::backend(&root, &config.zenzai.backend);
+                let worker = root.join(match scope {
+                    ConversionScope::Model => "keyboard-prior.exe",
+                    ConversionScope::Candidates => "azookey-server.exe",
+                });
+                (worker.is_file() && runtime.join("llama.dll").is_file()).then(|| {
+                    let dictionary = shared::runtime_assets::dictionary_dir(&root);
+                    (worker, runtime, dictionary)
+                })
+            })
+            .ok_or("ベンチマーク用の実行ファイルが見つかりません。")?;
+        benchmark_worker::start(
+            worker,
+            runtime,
+            model,
+            dictionary,
+            config.zenzai.effective_gpu_layers(),
+            scope,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn run_benchmark_item(
-    state: tauri::State<'_, AppState>,
-    id: u32,
-    context: String,
-    target: String,
-    expected: String,
-    acceptable: Option<Vec<String>>,
-    forbidden_examples: Option<Vec<String>>,
-) -> Result<BenchmarkItemResult, String> {
-    // クイックベンチマークと並行してサーバーを組み替えない。
-    let _run_guard = benchmark_run_lock().lock().await;
-    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
-    ensure_benchmark_server(&config).await?;
-
-    let effective_context = if context == "なし" {
-        ""
-    } else {
-        context.trim()
-    };
-    // Android と同様に空白によるトークナイザー文字化け（[UNK]化）を防ぐためスペースを詰めて推論
-    let clean_target = target.replace(' ', "").replace('　', "");
-    let target_katakana = to_katakana(&clean_target);
-    let (masked_context, _) =
-        azookey_server::ai_assist::corrector::mask_digits_with_nam(effective_context);
-    let (masked_katakana, target_digits) =
-        azookey_server::ai_assist::corrector::mask_digits_with_nam(&target_katakana);
-    let prompt = format!(
-        "\u{EE02}{}\u{EE00}{}\u{EE01}",
-        masked_context, masked_katakana
-    );
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let t0 = std::time::Instant::now();
-    let resp = client
-        .post("http://127.0.0.1:8090/completion")
-        .json(&serde_json::json!({
-            "prompt": prompt,
-            "n_predict": 80,
-            "temperature": 0.0,
-            "samplers": ["temperature"],
-            "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-        }))
-        .send()
+async fn run_benchmark_batch(
+    id: u64,
+    cases: Vec<azookey_server::ai_assist::benchmark::Case>,
+) -> Result<Vec<Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || benchmark_worker::run(id, cases))
         .await
-        .map_err(|e| format!("Infill request failed: {e}"))?;
-
-    let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let raw_out = body["content"].as_str().unwrap_or("").to_string();
-
-    // Android zenz_jni.cpp と同等の厳密なストップ処理とサニタイズ
-    let mut cleaned = raw_out;
-    for stop in &[
-        "\n", "\r", "<s>", "</s>", "\u{EE00}", "\u{EE01}", "\u{EE02}",
-    ] {
-        if let Some(pos) = cleaned.find(stop) {
-            cleaned.truncate(pos);
-        }
-    }
-    cleaned = cleaned
-        .trim_end_matches(|c: char| ('\u{E000}'..='\u{F8FF}').contains(&c))
-        .trim()
-        .to_string();
-    cleaned = azookey_server::ai_assist::corrector::restore_nam_digits(&cleaned, &target_digits);
-
-    if cleaned.is_empty() {
-        cleaned = target_katakana;
-    }
-
-    let (is_correct, _reason) = evaluate_output(
-        &cleaned,
-        &expected,
-        &acceptable.unwrap_or_default(),
-        &forbidden_examples.unwrap_or_default(),
-    );
-
-    Ok(BenchmarkItemResult {
-        id,
-        top1: cleaned.clone(),
-        candidates: vec![cleaned],
-        is_correct,
-        latency_ms,
-    })
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct AiAssistItemResult {
-    pub id: u32,
-    pub input: String,
-    pub main_output: String,
-    pub moshikashite_output: Option<String>,
-    pub predictive_output: Option<String>,
-    pub main_latency_ms: f64,
-    pub assist_latency_ms: f64,
-    pub total_latency_ms: f64,
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn run_ai_assist_benchmark_item(
-    state: tauri::State<'_, AppState>,
-    id: u32,
-    context: String,
-    input: String,
-) -> Result<AiAssistItemResult, String> {
-    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
-    ensure_benchmark_server(&config).await?;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(1500))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    // 1. メイン変換 (漢字変換設定と同じバックエンド)
-    let effective_context = if context == "なし" {
-        ""
-    } else {
-        context.trim()
-    };
-    let clean_target = input.replace(' ', "").replace('　', "");
-    let target_katakana = to_katakana(&clean_target);
-    let (masked_context, _) =
-        azookey_server::ai_assist::corrector::mask_digits_with_nam(effective_context);
-    let (masked_katakana, target_digits) =
-        azookey_server::ai_assist::corrector::mask_digits_with_nam(&target_katakana);
-    let prompt = format!(
-        "\u{EE02}{}\u{EE00}{}\u{EE01}",
-        masked_context, masked_katakana
-    );
-
-    let t0 = std::time::Instant::now();
-    let resp = client
-        .post("http://127.0.0.1:8090/completion")
-        .json(&serde_json::json!({
-            "prompt": prompt,
-            "n_predict": 16,
-            "temperature": 0.0,
-            "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-        }))
-        .send()
-        .await;
-
-    let main_latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    let main_output = match resp {
-        Ok(r) => {
-            if let Ok(json) = r.json::<serde_json::Value>().await {
-                let raw = json
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or(&input)
-                    .trim();
-                azookey_server::ai_assist::corrector::restore_nam_digits(raw, &target_digits)
-            } else {
-                input.clone()
-            }
-        }
-        Err(_) => input.clone(),
-    };
-
-    // 2. 💡 もしかして (誤字補正: 実IMEと同じ corrector::suggest_composition、ベンチマーク中は port 8090 の選択中メインモデルを使用)
-    let t_assist = std::time::Instant::now();
-    let corrector_port = if config.general.experimental_ai_engine == "lm_studio" {
-        1234
-    } else {
-        8090
-    };
-    let assist_config = azookey_server::ai_assist::AiAssistConfig {
-        enabled: true,
-        engine: config.general.experimental_ai_engine.clone(),
-        corrector_port,
-        prediction_port: 8090,
-    };
-    let moshikashite_output = azookey_server::ai_assist::corrector::suggest_composition(
-        effective_context,
-        &clean_target,
-        &main_output,
-        &assist_config,
-    )
-    .map(|suggestion| suggestion.surface);
-
-    // 3. ZeroCon only: use the same bounded reading -> surface path as the IME.
-    // Benchmark owns port 8090 cleanly using bounded assist inference.
-    let prediction_context = effective_context.to_owned();
-    let prediction_reading = clean_target.clone();
-    let prediction_surface = main_output.clone();
-    let predictive_output = tauri::async_runtime::spawn_blocking(move || {
-        // Each benchmark must measure inference, including after backend/model changes.
-        azookey_server::ai_assist::prediction::clear_cache();
-        azookey_server::ai_assist::prediction::suggest(
-            &prediction_context,
-            &prediction_reading,
-            &prediction_surface,
-            &azookey_server::ai_assist::AiAssistConfig {
-                enabled: true,
-                prediction_port: 8090,
-                ..Default::default()
-            },
-        )
-        .map(|prediction| prediction.continuation)
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-
-    let assist_latency_ms = t_assist.elapsed().as_secs_f64() * 1000.0;
-    let total_latency_ms = main_latency_ms + assist_latency_ms;
-
-    Ok(AiAssistItemResult {
-        id,
-        input,
-        main_output,
-        moshikashite_output,
-        predictive_output,
-        main_latency_ms,
-        assist_latency_ms,
-        total_latency_ms,
-    })
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PredictiveItemResult {
-    pub id: u32,
-    pub prediction: Option<String>,
-    pub is_match: bool,
-    pub latency_ms: f64,
-}
-
-#[tauri::command]
-async fn run_predictive_benchmark_item(
-    state: tauri::State<'_, AppState>,
-    id: u32,
-    context: String,
-    partial_input: String,
-    full_sentence: String,
-    expected_continuation: String,
-    acceptable_continuations: Option<Vec<String>>,
-) -> Result<PredictiveItemResult, String> {
-    let _run_guard = benchmark_run_lock().lock().await;
-    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
-    ensure_benchmark_server(&config).await?;
-    let effective_context = if context == "なし" { String::new() } else { context.trim().to_string() };
-    let partial = partial_input.trim().to_string();
-    let reading = azookey_server::ai_assist::reading_check::reading_for_surface(&partial)
-        .unwrap_or_else(|| azookey_server::ai_assist::katakana_to_hiragana(&partial));
-    let t0 = std::time::Instant::now();
-    let prediction = tauri::async_runtime::spawn_blocking(move || {
-        azookey_server::ai_assist::prediction::clear_cache();
-        azookey_server::ai_assist::prediction::suggest(
-            &effective_context,
-            &reading,
-            &partial,
-            &azookey_server::ai_assist::AiAssistConfig {
-                enabled: true,
-                prediction_port: 8090,
-                ..Default::default()
-            },
-        )
-        .map(|p| format!("{}{}", partial, p.continuation))
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-    let latency_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    let is_match = azookey_server::ai_assist::benchmark::score_predictive(
-        prediction.as_deref(),
-        &full_sentence,
-        &expected_continuation,
-        &acceptable_continuations.unwrap_or_default(),
-    );
-    Ok(PredictiveItemResult {
-        id,
-        prediction,
-        is_match,
-        latency_ms,
-    })
+async fn finish_benchmark(id: u64) -> Result<f64, String> {
+    tauri::async_runtime::spawn_blocking(move || benchmark_worker::finish(id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1430,6 +1128,7 @@ pub fn run() {
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 stop_benchmark_server();
+                tauri::async_runtime::spawn_blocking(benchmark_worker::close);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1450,7 +1149,9 @@ pub fn run() {
             reset_learning_history,
             get_learning_stats,
             forget_learning_candidate,
-            run_benchmark_item,
+            start_benchmark,
+            run_benchmark_batch,
+            finish_benchmark,
             run_quick_benchmark,
             translation_model_status,
             translation_model_download,
@@ -1464,8 +1165,6 @@ pub fn run() {
             dictionary_download,
             dictionary_cancel,
             setup_assets_status,
-            run_ai_assist_benchmark_item,
-            run_predictive_benchmark_item,
             get_active_model,
             switch_model
         ])

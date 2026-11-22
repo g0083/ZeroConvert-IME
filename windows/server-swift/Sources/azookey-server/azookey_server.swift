@@ -3052,7 +3052,8 @@ func mergePredictiveSupplementCandidates(
     predictionResults: [Candidate],
     hiragana: String,
     maxPredictions: Int = 3,
-    preferPredictionsAfterTopCandidate: Bool = false
+    preferPredictionsAfterTopCandidate: Bool = false,
+    maxExactBeforePredictions: Int? = 3
 ) -> [Candidate] {
     guard maxPredictions > 0, !predictionResults.isEmpty else {
         return exactMerged
@@ -3084,10 +3085,16 @@ func mergePredictiveSupplementCandidates(
     }
     // With a pending syllable the other full-span entries often differ only in
     // how they display the raw consonant. Leave room for completions near Top 1.
-    let splitIndex = preferPredictionsAfterTopCandidate
-        ? min(1, exactMerged.count)
-        : (exactMerged.indices.dropFirst().first { exactMerged[$0].rubyCount < hiragana.count }
-            ?? exactMerged.endIndex)
+    let firstPartialIndex = exactMerged.indices.dropFirst().first { exactMerged[$0].rubyCount < hiragana.count }
+        ?? exactMerged.endIndex
+    let splitIndex: Int
+    if preferPredictionsAfterTopCandidate {
+        splitIndex = min(1, exactMerged.count)
+    } else if let maxExactBeforePredictions {
+        splitIndex = min(firstPartialIndex, min(maxExactBeforePredictions, exactMerged.count))
+    } else {
+        splitIndex = firstPartialIndex
+    }
     var combined: [Candidate] = []
     combined.reserveCapacity(exactMerged.count + filteredPredictions.count)
     combined.append(contentsOf: exactMerged[..<splitIndex])
@@ -4343,6 +4350,11 @@ func get_composed_text_impl(
             operation: "get_composed_text",
             diagnosticDetails: diagnosticDetails
         )
+        if requestComposingText == previewComposingText {
+            converter.adoptReusableFullInputLattice(
+                normalNBestSupplementConverter.exportReusableFullInputLattice(for: requestComposingText)
+            )
+        }
     } else {
         normalNBestConverted = nil
     }
@@ -4444,9 +4456,22 @@ func get_composed_text_impl(
     } else {
         pendingRomanCompletions = []
     }
+    let completeWholeReading = isCursorAtEnd && suffixAfterCursor.isEmpty && !hasTrailingRoman && japanesePredictionEnabled
+    let wholeReadingCompletions: [Candidate]
+    if completeWholeReading {
+        let start = performanceEnabled ? performanceNow() : 0
+        wholeReadingCompletions = (useZenzai ? normalNBestSupplementConverter : converter)
+            .requestWholeReadingCompletions(previewComposingText, options: options)
+        if performanceEnabled {
+            performanceLog(operation: "get_composed_text", stage: "whole_reading_predictions",
+                           elapsedMs: elapsedPerformanceMilliseconds(since: start))
+        }
+    } else {
+        wholeReadingCompletions = []
+    }
     let effectivePredictionResults: [Candidate]?
     if suffixAfterCursor.isEmpty, japanesePredictionEnabled {
-        let basePredictions = normalNBestConverted?.predictionResults
+        let rawBasePredictions = normalNBestConverted?.predictionResults
             ?? (continuationRequest.map { request in
                 converted.predictionResults.compactMap {
                     slicePredictiveContinuationCandidate(
@@ -4456,6 +4481,13 @@ func get_composed_text_impl(
                     )
                 }
             } ?? converted.predictionResults)
+        let basePredictions = wholeReadingCompletions.isEmpty
+            ? rawBasePredictions
+            : mergeDistinctPredictionCandidates(
+                primary: wholeReadingCompletions,
+                fallback: rawBasePredictions,
+                hiragana: previewHiragana
+            )
         if let predictiveContinuationRequest, useZenzai || continuationRequest == nil {
             let predictionConverter = useZenzai ? normalNBestSupplementConverter : converter
             let contPredOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
@@ -4481,7 +4513,7 @@ func get_composed_text_impl(
                 fallback: basePredictions,
                 hiragana: previewHiragana
             )
-        } else if useZenzai || continuationRequest != nil || completePendingRoman {
+        } else if useZenzai || continuationRequest != nil || completePendingRoman || !wholeReadingCompletions.isEmpty {
             effectivePredictionResults = basePredictions
         } else {
             effectivePredictionResults = nil
@@ -4752,6 +4784,9 @@ public func get_composed_text_for_cursor_prefix(
             options: cursorPrefixSupplementOptions,
             operation: "get_composed_text_for_cursor_prefix",
             diagnosticDetails: "suffix_len=\(suffixAfterCursor.count);\(diagnosticDetails)"
+        )
+        converter.adoptReusableFullInputLattice(
+            normalNBestSupplementConverter.exportReusableFullInputLattice(for: previewPrefixComposingText)
         )
     } else {
         normalNBestConverted = nil

@@ -74,6 +74,9 @@ CONVERTER_API += "\n" + converter_patch.LEARNING_FLUSH_API_ANCHOR
 
 
 CONVERTER_API += "\n" + "\n".join(anchor for anchor, _ in converter_patch.DYNAMIC_DICTIONARY_RESULT_REPLACEMENTS)
+CONVERTER_API += "\n" + "\n".join(
+    anchor for anchor, _ in converter_patch.REUSABLE_LATTICE_CONVERTER_API_REPLACEMENTS
+)
 
 
 class ExactKeyboardLookupTests(unittest.TestCase):
@@ -95,11 +98,18 @@ class ExactKeyboardLookupTests(unittest.TestCase):
         self.assertIn('cacheOnlyJapanesePrediction: Bool = false', patched)
         self.assertIn('prefixConstraintSurface: String? = nil', patched)
         self.assertIn('kana2lattice_all_with_prefix_constraint(', patched)
+        self.assertIn('public final class ReusableFullInputLattice', patched)
+        self.assertIn('public func exportReusableFullInputLattice(for inputData: ComposingText)', patched)
+        self.assertIn('public func adoptReusableFullInputLattice(_ reusable: ReusableFullInputLattice?)', patched)
+        self.assertIn('reusableLatticeSeed: reusableLatticeSeed', patched)
 
     def test_rejects_a_changed_converter_api_anchor(self):
         with self.assertRaises(ValueError):
             converter_patch.patch_converter_api('changed converter API')
-        for anchor, _ in converter_patch.CONVERTER_API_REPLACEMENTS:
+        for anchor, _ in (
+            converter_patch.CONVERTER_API_REPLACEMENTS
+            + converter_patch.REUSABLE_LATTICE_CONVERTER_API_REPLACEMENTS
+        ):
             broken = CONVERTER_API.replace(anchor, 'removed_by_upstream')
             with self.assertRaises(ValueError):
                 converter_patch.patch_converter_api(broken)
@@ -438,9 +448,15 @@ class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
             + [anchor for anchor, _ in converter_patch.DICDATA_PREDICTION_LIMIT_REPLACEMENTS]
         )
         source += "\n" + "\n".join(anchor for anchor, _ in converter_patch.DYNAMIC_DICTIONARY_LOOKUPS)
+        source += "\n" + "\n".join(anchor for anchor, _ in converter_patch.DICDATA_STORE_PERFORMANCE_REPLACEMENTS)
+        source += "\n" + converter_patch.DICDATA_MINUTE_COUNTER_ANCHOR
         patched = converter_patch.patch_dicdata_store(source)
         self.assertIn('split(whereSeparator: \\.isNewline)', patched)
         self.assertNotIn('split(separator: "\\n")', patched)
+        self.assertIn('private var ccLines: [[PValue]?] = .init(repeating: nil, count: 1319)', patched)
+        self.assertIn('self.defaultIdentifiers[query]', patched)
+        self.assertIn('self.missingLoudstxts.contains(fileID)', patched)
+        self.assertIn('if element.ruby == lastRuby', patched)
         with self.assertRaises(ValueError):
             converter_patch.patch_dicdata_store(patched)
 
@@ -459,6 +475,65 @@ class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
 
         patched_zenz = converter_patch.patch_zenz(converter_patch.ZENZ_CONTEXTUAL_ANCHOR)
         self.assertIn('func contextualNextWordReadings(', patched_zenz)
+
+
+class ConversionPerformancePatchTests(unittest.TestCase):
+    @staticmethod
+    def _fixture(replacements):
+        return '\n'.join(anchor for anchor, _ in replacements)
+
+    def _assert_round_trip(self, patch_fn, replacements, expected_snippets):
+        fixture = self._fixture(replacements)
+        patched = patch_fn(fixture)
+        for snippet in expected_snippets:
+            self.assertIn(snippet, patched)
+        with self.assertRaises(ValueError):
+            patch_fn(patched)
+        for anchor, _ in replacements:
+            with self.assertRaises(ValueError):
+                patch_fn(fixture.replace(anchor, 'removed_by_upstream'))
+
+    def test_full_input_processing_patch(self):
+        self._assert_round_trip(
+            converter_patch.patch_full_input_processing,
+            converter_patch.FULL_INPUT_PROCESSING_REPLACEMENTS,
+            [
+                'init(inputData: ComposingText, lattice: Lattice)',
+                'activeNodesByIndex',
+                'filterRemoved: Bool = true',
+                'nextnode.prevs[nBest - 1].totalValue >= newValue',
+            ],
+        )
+
+    def test_registered_node_and_lattice_node_patches(self):
+        self._assert_round_trip(
+            converter_patch.patch_registered_node,
+            converter_patch.REGISTERED_NODE_REPLACEMENTS,
+            ['candidateUTF8Count: UInt16', 'constraintMatchedUTF8Count: UInt16'],
+        )
+        self._assert_round_trip(
+            converter_patch.patch_lattice_node,
+            [converter_patch.LATTICE_NODE_REPLACEMENT],
+            ['constraintState: (matched: Int, total: Int)? = nil'],
+        )
+
+    def test_full_input_processing_with_prefix_constraint_patch(self):
+        self._assert_round_trip(
+            converter_patch.patch_full_input_processing_with_prefix_constraint,
+            converter_patch.FULL_INPUT_PROCESSING_WITH_PREFIX_CONSTRAINT_REPLACEMENTS,
+            [
+                'prev.map { Int($0.candidateUTF8Count) }',
+                'nextnode.prevs[N_best - 1].totalValue >= newValue',
+                'constraintState: mtPerPrev[index]',
+            ],
+        )
+
+    def test_zenzai_patch(self):
+        self._assert_round_trip(
+            converter_patch.patch_zenzai,
+            converter_patch.ZENZAI_REPLACEMENTS,
+            ['reusableLatticeSeed: FullInputLatticeSeed? = nil', 'reusableLatticeSeed.makeLattice()'],
+        )
 
 
 if __name__ == '__main__':

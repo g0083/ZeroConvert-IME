@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -44,6 +46,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -68,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -83,6 +87,7 @@ import com.zeroconvert.ime.assist.AutoTypoCorrectionStrength
 import com.zeroconvert.ime.benchmark.BenchmarkKind
 import com.zeroconvert.ime.benchmark.BenchmarkProgress
 import com.zeroconvert.ime.benchmark.BenchmarkRunner
+import com.zeroconvert.ime.benchmark.ConversionBenchmarkScope
 import com.zeroconvert.ime.model.ConversionModelDownloadManager
 import com.zeroconvert.ime.model.DictionaryDownloadManager
 import com.zeroconvert.ime.model.ModelInfo
@@ -438,6 +443,7 @@ fun MainScreen(
     var benchmarkProgress by remember {
         mutableStateOf<BenchmarkProgress?>(null)
     }
+    var conversionBenchmarkScope by rememberSaveable { mutableStateOf(ConversionBenchmarkScope.MODEL) }
 
     var availableModels by remember {
         mutableStateOf<List<ModelInfo>>(emptyList())
@@ -2308,12 +2314,39 @@ fun MainScreen(
                     SettingsBadge("最新", palette)
                 }
                 Text(
-                    text = "${BenchmarkRunner.CONVERSION_DATASET_NAME}（基本230・高難度250） / " +
-                        "${BenchmarkRunner.TYPO_DATASET_NAME}（タイポ255・正常入力45） / " +
+                    text = "${BenchmarkRunner.CONVERSION_DATASET_NAME} / " +
+                        "${BenchmarkRunner.TYPO_DATASET_NAME} / " +
                         BenchmarkRunner.PREDICTIVE_DATASET_NAME,
                     color = palette.textSecondary,
                     fontSize = 12.sp,
                     lineHeight = 17.sp
+                )
+                Text("かな漢字変換の計測範囲", color = palette.textPrimary, fontSize = 13.sp)
+                Column(Modifier.selectableGroup()) {
+                    ConversionBenchmarkScope.entries.forEach { scope ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().selectable(
+                                selected = conversionBenchmarkScope == scope,
+                                enabled = benchmarkProgress?.isRunning != true,
+                                role = Role.RadioButton,
+                                onClick = { conversionBenchmarkScope = scope },
+                            ),
+                        ) {
+                            RadioButton(
+                                selected = conversionBenchmarkScope == scope,
+                                onClick = null,
+                                enabled = benchmarkProgress?.isRunning != true,
+                                modifier = Modifier.padding(10.dp),
+                            )
+                            Text(scope.label, color = palette.textPrimary, fontSize = 13.sp)
+                        }
+                    }
+                }
+                Text(
+                    if (conversionBenchmarkScope == ConversionBenchmarkScope.MODEL) "読みからモデルで直接生成"
+                    else "標準辞書の N-best 追加と候補の順位付けを含む",
+                    color = palette.textSecondary, fontSize = 12.sp,
                 )
                 SettingsPrimaryButton(
                     text = if (benchmarkProgress?.isRunning == true) {
@@ -2326,7 +2359,7 @@ fun MainScreen(
                     enabled = benchmarkProgress?.isRunning != true,
                     onClick = {
                         coroutineScope.launch {
-                            BenchmarkRunner.runBenchmark(context) { progress ->
+                            BenchmarkRunner.runBenchmark(context, conversionBenchmarkScope) { progress ->
                                 benchmarkProgress = progress
                             }
                         }
@@ -2375,6 +2408,9 @@ fun MainScreen(
                         0f
                     }
                     SettingsDivider(palette)
+                    if (progress.kind == BenchmarkKind.CONVERSION) {
+                        Text(progress.conversionScope.label, color = palette.textPrimary, fontSize = 13.sp)
+                    }
                     LinearProgressIndicator(
                         progress = { fraction },
                         modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -2429,6 +2465,17 @@ fun MainScreen(
                             color = palette.textSecondary,
                             fontSize = 12.sp
                         )
+                    }
+                    if (progress.wallTimeMs > 0.0) {
+                        Text(
+                            text = "実行時間 ${String.format("%.2f", progress.wallTimeMs / 1000.0)} 秒",
+                            color = palette.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    progress.avgNBestMs?.let { average ->
+                        Text("N-best 追加 平均 ${String.format("%.1f", average)} ms/問",
+                            color = palette.textSecondary, fontSize = 12.sp)
                     }
                     SettingsInnerCard(palette) {
                         Text(

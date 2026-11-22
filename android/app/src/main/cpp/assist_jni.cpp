@@ -10,6 +10,9 @@
 #include "assist_inference_turn.h"
 #include "assist_jni.h"
 #include "keyboard_assist.h"
+#include "benchmark_model.hpp"
+#include "ggml-backend.h"
+#include <memory>
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -195,74 +198,10 @@ Java_com_zeroconvert_ime_ZenzNative_nativeGenerate(JNIEnv * env, jobject, jint k
         return response(env, cancelled_reason());
     }
     if (!run.context || !run.model || !prompt) return response(env, "cancelled");
-    const auto text = utf8(env, prompt);
-    if (text.empty() || text.size() > 8192) {
-        return response(env, "error");
-    }
     run.request_epoch = expected_epoch;
     run.deadline = deadline;
-    const auto * vocab = llama_model_get_vocab(run.model);
-    std::vector<llama_token> tokens(text.size() + 16);
-    int n = llama_tokenize(vocab, text.data(), static_cast<int>(text.size()), tokens.data(), static_cast<int>(tokens.size()), false, true);
-    if (n <= 0 || n + max_tokens > static_cast<int>(llama_n_ctx(run.context))) return response(env, "error");
-    tokens.resize(n);
-    auto *mem = llama_get_memory(run.context);
-    auto invalidate_cache = [&]() {
-        llama_memory_clear(mem, true);
-        run.cached_tokens.clear();
-    };
-    int common_len = 0;
-    const int common_limit = std::min(static_cast<int>(run.cached_tokens.size()), std::max(0, n - 1));
-    while (common_len < common_limit && run.cached_tokens[common_len] == tokens[common_len]) {
-        ++common_len;
-    }
-    if (common_len > 0) {
-        if (!llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(common_len), -1) ||
-            llama_memory_seq_pos_max(mem, 0) != static_cast<llama_pos>(common_len - 1)) {
-            invalidate_cache();
-            common_len = 0;
-        }
-    } else {
-        invalidate_cache();
-    }
-    llama_sampler_reset(run.sampler);
-    const int prompt_delta = n - common_len;
-    llama_set_n_threads(run.context, run.decode_threads, prompt_delta <= 4 ? run.decode_threads : run.batch_threads);
-    run.cached_tokens.resize(common_len);
-    for (int start = common_len; start < n;) {
-        if (run.cancelled()) return response(env, cancelled_reason());
-        int size = std::min(n - start, static_cast<int>(llama_n_batch(run.context)));
-        auto batch = llama_batch_get_one(tokens.data() + start, size);
-        if (llama_decode(run.context, batch) != 0) { invalidate_cache(); return response(env, run.cancelled() ? cancelled_reason() : "error"); }
-        run.cached_tokens.insert(run.cached_tokens.end(), tokens.begin() + start, tokens.begin() + start + size);
-        start += size;
-    }
-    llama_set_n_threads(run.context, run.decode_threads, run.decode_threads);
-    std::string output;
-    for (int i = 0; i < max_tokens; ++i) {
-        if (run.cancelled()) return response(env, cancelled_reason());
-        auto token = llama_sampler_sample(run.sampler, run.context, -1);
-        if (llama_vocab_is_eog(vocab, token)) return response(env, "eos", output);
-        llama_sampler_accept(run.sampler, token);
-        std::vector<char> piece(256);
-        int length = llama_token_to_piece(vocab, token, piece.data(), static_cast<int>(piece.size()), 0, false);
-        if (length < 0 && length >= -8192) {
-            piece.resize(-length);
-            length = llama_token_to_piece(vocab, token, piece.data(), static_cast<int>(piece.size()), 0, false);
-        }
-        if (length < 0) return response(env, "error");
-        output.append(piece.data(), length);
-        size_t stop = std::string::npos;
-        for (const auto * marker : {"</s>", "<s>", "\n", "\r", "\xEE\xB8\x80", "\xEE\xB8\x81", "\xEE\xB8\x82", "\xEE\xB8\x83"}) {
-            stop = std::min(stop, output.find(marker));
-        }
-        if (stop != std::string::npos) return response(env, "stop", output.substr(0, stop));
-        if (output.size() > 8192) return response(env, "error");
-        auto batch = llama_batch_get_one(&token, 1);
-        if (llama_decode(run.context, batch) != 0) { invalidate_cache(); return response(env, run.cancelled() ? cancelled_reason() : "error"); }
-        run.cached_tokens.push_back(token);
-    }
-    return response(env, "limit", output);
+    const auto result = generate_greedy(run, utf8(env, prompt), max_tokens, cancelled_reason);
+    return response(env, result.reason, result.text);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -360,4 +299,38 @@ Java_com_zeroconvert_ime_ZenzNative_nativeTranslate(JNIEnv * env, jobject, jstri
         }
     }
     return response(env, "limit", output);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeOpen(
+        JNIEnv *env, jobject, jstring path, jstring library_dir) {
+    const auto directory = utf8(env, library_dir);
+    ggml_backend_load_all_from_path(directory.c_str());
+    llama_backend_init();
+    auto model = std::make_unique<BenchmarkModel>();
+    if (!model->load(utf8(env, path).c_str(), 0) || !model->warm_up()) return 0;
+    return reinterpret_cast<jlong>(model.release());
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeComplete(
+        JNIEnv *env, jobject, jlong handle, jstring prompt, jint tokens, jint timeout) {
+    auto *model = reinterpret_cast<BenchmarkModel *>(handle);
+    const auto text = utf8(env, prompt);
+    const auto start = BenchmarkModel::Clock::now();
+    const auto result = model->complete(text, tokens, timeout);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        BenchmarkModel::Clock::now() - start).count();
+    auto cls = env->FindClass("java/lang/String");
+    auto values = env->NewObjectArray(3, cls, nullptr);
+    env->SetObjectArrayElement(values, 0, env->NewStringUTF(result.reason.c_str()));
+    env->SetObjectArrayElement(values, 1, utf16(env, result.text));
+    env->SetObjectArrayElement(values, 2, env->NewStringUTF(std::to_string(elapsed).c_str()));
+    env->DeleteLocalRef(cls);
+    return values;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeClose(JNIEnv *, jobject, jlong handle) {
+    delete reinterpret_cast<BenchmarkModel *>(handle);
 }

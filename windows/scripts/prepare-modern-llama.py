@@ -250,6 +250,13 @@ def check_converter():
         dicdata_store = package.read(prefix + converter_patch.DICDATA_STORE_PATH).decode('utf-8')
         zenz_input_generator = package.read(prefix + converter_patch.ZENZ_INPUT_GENERATOR_PATH).decode('utf-8')
         zenz = package.read(prefix + converter_patch.ZENZ_PATH).decode('utf-8')
+        zenzai = package.read(prefix + converter_patch.ZENZAI_PATH).decode('utf-8')
+        full_input_processing = package.read(prefix + converter_patch.FULL_INPUT_PROCESSING_PATH).decode('utf-8')
+        full_input_with_constraint = package.read(
+            prefix + converter_patch.FULL_INPUT_PROCESSING_WITH_PREFIX_CONSTRAINT_PATH
+        ).decode('utf-8')
+        registered_node = package.read(prefix + converter_patch.REGISTERED_NODE_PATH).decode('utf-8')
+        lattice_node = package.read(prefix + converter_patch.LATTICE_NODE_PATH).decode('utf-8')
         dictionary_builder = package.read(prefix + converter_patch.DYNAMIC_DICTIONARY_BUILDER_PATH).decode('utf-8')
         dictionary_state = package.read(prefix + converter_patch.DYNAMIC_DICTIONARY_STATE_PATH).decode('utf-8')
     converter_patch.patch_modulemap(modulemap)
@@ -262,6 +269,11 @@ def check_converter():
     converter_patch.patch_dicdata_store(dicdata_store)
     converter_patch.patch_zenz_input_generator(zenz_input_generator)
     converter_patch.patch_zenz(zenz)
+    converter_patch.patch_zenzai(zenzai)
+    converter_patch.patch_full_input_processing(full_input_processing)
+    converter_patch.patch_full_input_processing_with_prefix_constraint(full_input_with_constraint)
+    converter_patch.patch_registered_node(registered_node)
+    converter_patch.patch_lattice_node(lattice_node)
     converter_patch.patch_dynamic_dictionary_builder(dictionary_builder)
     converter_patch.patch_dynamic_dictionary_state(dictionary_state)
     print(json.dumps({'converter': CONVERTER, 'anchors': 'ok'}))
@@ -335,6 +347,14 @@ def prepare_converter(converter_root):
     for relative, patch in (
         (converter_patch.DYNAMIC_DICTIONARY_BUILDER_PATH, converter_patch.patch_dynamic_dictionary_builder),
         (converter_patch.DYNAMIC_DICTIONARY_STATE_PATH, converter_patch.patch_dynamic_dictionary_state),
+        (converter_patch.ZENZAI_PATH, converter_patch.patch_zenzai),
+        (converter_patch.FULL_INPUT_PROCESSING_PATH, converter_patch.patch_full_input_processing),
+        (
+            converter_patch.FULL_INPUT_PROCESSING_WITH_PREFIX_CONSTRAINT_PATH,
+            converter_patch.patch_full_input_processing_with_prefix_constraint,
+        ),
+        (converter_patch.REGISTERED_NODE_PATH, converter_patch.patch_registered_node),
+        (converter_patch.LATTICE_NODE_PATH, converter_patch.patch_lattice_node),
     ):
         source = converter / relative
         source.write_text(patch(source.read_text(encoding='utf-8')), encoding='utf-8')

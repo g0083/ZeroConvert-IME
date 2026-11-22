@@ -155,20 +155,27 @@ pub fn suggest(
         surface.to_owned(),
         super::runtime::backend_revision(),
     );
-    if let Some(cached) = CACHE
-        .lock()
-        .ok()
-        .and_then(|c| c.iter().find(|(k, _)| *k == key).map(|(_, p)| p.clone()))
-    {
-        return Some(cached);
+    let cache_results = super::runtime::cache_results();
+    if cache_results {
+        if let Some(cached) = CACHE
+            .lock()
+            .ok()
+            .and_then(|c| c.iter().find(|(k, _)| *k == key).map(|(_, p)| p.clone()))
+        {
+            return Some(cached);
+        }
     }
-    if IN_FLIGHT
-        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        return None;
-    }
-    let _flight = Flight;
+    let _flight = if cache_results {
+        if IN_FLIGHT
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return None;
+        }
+        Some(Flight)
+    } else {
+        None
+    };
     let restored_reading;
     let model_reading = if reading.chars().any(|c| ('一'..='鿿').contains(&c)) {
         restored_reading = super::reading_check::reading_for_surface(surface);
@@ -178,9 +185,11 @@ pub fn suggest(
     };
     let prediction =
         model_reading.and_then(|reading| zerocon(&context, reading, surface, config))?;
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(0, (key, prediction.clone()));
-        cache.truncate(32);
+    if cache_results {
+        if let Ok(mut cache) = CACHE.lock() {
+            cache.insert(0, (key, prediction.clone()));
+            cache.truncate(32);
+        }
     }
     Some(prediction)
 }

@@ -371,6 +371,33 @@ private func testLearningConvertRequestOptions(memoryURL: URL) -> ConvertRequest
     ).mainResults
 }
 
+@MainActor @Test func decimalMinuteCounterKeepsItsReadingInDictionaryCandidates() {
+    let dictionary = packageRootURL().appending(path: "azooKey_dictionary_storage/Dictionary")
+    let converter = KanaKanjiConverter(dictionaryURL: dictionary, preloadDictionary: false)
+    let memory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    let options = testConvertRequestOptions(memoryURL: memory)
+
+    func convert(_ reading: String) -> [Candidate] {
+        var input = ComposingText()
+        input.insertAtCursorPosition(reading, inputStyle: .direct)
+        return converter.requestCandidates(input, options: options).mainResults
+    }
+
+    for (reading, expected) in [
+        ("14じ30ぷんから", "14時30分から"),
+        ("15ぷんいないにまとめる", "15分以内にまとめる"),
+        ("３０ぷん", "３０分"),
+    ] {
+        let matching = convert(reading).filter { $0.text == expected }
+        #expect(matching.contains { candidate in
+            candidate.data.contains { $0.word == "分" && $0.ruby == "プン" }
+        })
+    }
+
+    #expect(!convert("ぷん").contains { $0.text == "分" })
+    #expect(convert("30ふん").contains { $0.text == "30分" })
+}
+
 private func testCandidate(
     word: String,
     ruby: String,
@@ -3668,6 +3695,122 @@ private func testCandidate(
     )
 }
 
+@Test func mergePredictiveSupplementCandidatesKeepsPredictionsOnFirstPageWhenManyFullSpanExactExist() async throws {
+    let hiragana = "しんぎゅら"
+    let fullCandidates = (1...5).map { idx in
+        testCandidate(word: "候補\(idx)", ruby: hiragana, composingCount: .inputCount(8))
+    }
+    let partial = testCandidate(word: "しんぎゅ", ruby: "しんぎゅ", composingCount: .inputCount(6))
+    let pred1 = testCandidate(word: "シンギュラリティ", ruby: "しんぎゅらりてぃ", composingCount: .inputCount(8))
+    let pred2 = testCandidate(word: "シンギュラリティー", ruby: "しんぎゅらりてぃー", composingCount: .inputCount(8))
+
+    let merged = mergePredictiveSupplementCandidates(
+        exactMerged: fullCandidates + [partial],
+        predictionResults: [pred1, pred2],
+        hiragana: hiragana
+    )
+
+    #expect(
+        merged.map(\.text) == [
+            "候補1",
+            "候補2",
+            "候補3",
+            "シンギュラリティ",
+            "シンギュラリティー",
+            "候補4",
+            "候補5",
+            "しんぎゅ",
+        ]
+    )
+}
+
+@MainActor
+@Test func wholeReadingCompletionsKeepPredictionVisibleAcrossCompletedAndPendingRomaji() async throws {
+    let packageRoot = packageRootURL()
+    let dictionaryURL = packageRoot
+        .appending(path: "azooKey_dictionary_storage")
+        .appending(path: "Dictionary")
+
+    let previousConverter = converter
+    let previousSupplement = normalNBestSupplementConverter
+    let previousComposing = composingText
+    let previousSnapshots = composingTextSnapshots
+    let previousInputStyle = currentInputStyle
+    let previousLearningType = currentLearningType
+    let previousZenzaiEnable = config["enable"]
+    let previousPredictive = config["predictiveConversion"]
+    let previousContext = config["context"]
+    let previousContinuation = conversionContinuation
+    let previousCommitted = lastCommittedContinuation
+    let previousCache = learningCandidateCache
+    let previousOverrides = learningSelectionOverrides
+    defer {
+        converter = previousConverter
+        normalNBestSupplementConverter = previousSupplement
+        composingText = previousComposing
+        composingTextSnapshots = previousSnapshots
+        currentInputStyle = previousInputStyle
+        currentLearningType = previousLearningType
+        config["enable"] = previousZenzaiEnable
+        config["predictiveConversion"] = previousPredictive
+        config["context"] = previousContext
+        conversionContinuation = previousContinuation
+        lastCommittedContinuation = previousCommitted
+        learningCandidateCache = previousCache
+        learningSelectionOverrides = previousOverrides
+        invalidateAutomaticConversionContinuationCache()
+    }
+
+    converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: true)
+    normalNBestSupplementConverter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+    currentInputStyle = .roman2kana
+    currentLearningType = .nothing
+    learningCandidateCache.removeAll()
+    learningSelectionOverrides.removeAll()
+    config["enable"] = false
+    config["predictiveConversion"] = true
+    config["context"] = ""
+    conversionContinuation = nil
+    lastCommittedContinuation = nil
+
+    func collectCandidates(allowZenzai: Bool) -> [String] {
+        var length: CInt = 0
+        let ptr = get_composed_text_impl(lengthPtr: &length, allowZenzai: allowZenzai)
+        defer { free_candidate_list(ptr, length) }
+        return (0..<Int(length)).compactMap { idx in
+            ptr[idx]?.pointee.text.map { String(cString: $0) }
+        }
+    }
+
+    // 1. singyur -> singyura -> singyurar -> singyurari must keep シンギュラリティ in top 6
+    composingText = ComposingText()
+    for ch in "singyur" {
+        composingText.insertAtCursorPosition(String(ch), inputStyle: .roman2kana)
+    }
+    let atSingyur = collectCandidates(allowZenzai: false)
+    #expect(atSingyur.prefix(6).contains("シンギュラリティ"), "singyur: \(Array(atSingyur.prefix(9)))")
+
+    for (step, ch) in [("singyura", "a"), ("singyurar", "r"), ("singyurari", "i")] {
+        composingText.insertAtCursorPosition(ch, inputStyle: .roman2kana)
+        let list = collectCandidates(allowZenzai: false)
+        #expect(list.prefix(6).contains("シンギュラリティ"), "\(step): \(Array(list.prefix(9)))")
+    }
+
+    // 2. komyuni -> komyunik -> komyunike must keep コミュニケーション in top 6
+    composingText = ComposingText()
+    for ch in "komyuni" {
+        composingText.insertAtCursorPosition(String(ch), inputStyle: .roman2kana)
+    }
+    let atKomyuni = collectCandidates(allowZenzai: false)
+    #expect(atKomyuni.prefix(6).contains("コミュニケーション"), "komyuni: \(Array(atKomyuni.prefix(9)))")
+
+    for (step, ch) in [("komyunik", "k"), ("komyunike", "e")] {
+        composingText.insertAtCursorPosition(ch, inputStyle: .roman2kana)
+        let list = collectCandidates(allowZenzai: false)
+        #expect(list.prefix(6).contains("コミュニケーション"), "\(step): \(Array(list.prefix(9)))")
+    }
+}
+
 @Test func realConverterManualMixSeparatesPureExactMainResultsFromPredictionsForZenzai11B() async throws {
     let packageRoot = packageRootURL()
     let dictionaryURL = packageRoot
@@ -4433,6 +4576,44 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         #expect(postCompositionBigramStore.count == 0)
         #expect(!FileManager.default.fileExists(atPath: directory.path))
     }
+}
+
+@MainActor @Test func zenzaiRanksDictionarySuffixWhenPrefixReviewExhaustsInference() throws {
+    let package = packageRootURL()
+    let model = package.deletingLastPathComponent().deletingLastPathComponent()
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+    try #require(FileManager.default.fileExists(atPath: model.path))
+    let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
+    let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
+    let store = DicdataStore(dictionaryURL: dictionary, preloadDictionary: false)
+    let main = KanaKanjiConverter(dicdataStore: store)
+    let supplement = KanaKanjiConverter(dicdataStore: store)
+
+    for (reading, context, expected) in [
+        ("ぬるぽんえっくすをきどうする", "架空の名称を含む。", "ぬるぽんえっくすを起動する"),
+        ("ぬるぽんえっくすをきどうする", "", "ぬるぽんえっくすを起動する"),
+        ("あぷりをきどうする", "", "アプリを起動する"),
+    ] {
+        main.stopComposition()
+        supplement.stopComposition()
+        var input = ComposingText()
+        input.insertAtCursorPosition(reading, inputStyle: .direct)
+        let options = optionsForZenzaiConversion(from: makeConvertRequestOptions(
+            context: context, zenzaiEnabled: true, runtimeDirectoryURL: dictionary,
+            emojiDictionaryURL: emoji, zenzaiWeightURL: model, profile: "",
+            learningType: .nothing, experimentalKeyboardTypoCorrection: false
+        ))
+        var normalOptions = optionsForNormalNBestSupplement(from: options)
+        normalOptions.zenzaiMode = .off
+        _ = supplement.requestCandidates(input, options: normalOptions)
+        main.adoptReusableFullInputLattice(supplement.exportReusableFullInputLattice(for: input))
+        #expect(main.requestCandidates(input, options: options).mainResults.first?.text == expected)
+    }
+
+    var suru = ComposingText()
+    suru.insertAtCursorPosition("する", inputStyle: .direct)
+    let normal = testConvertRequestOptions(memoryURL: FileManager.default.temporaryDirectory)
+    #expect(supplement.requestCandidates(suru, options: normal).mainResults.contains { $0.text == "摺る" })
 }
 
 @MainActor @Test func modelFirstAndPreparedUserDictionaryRegressionsWithRealNanoV41() throws {

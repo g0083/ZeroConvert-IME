@@ -1,7 +1,9 @@
 //! Read-only AZR2 dictionary validation. Checks an existing reading, never generates one.
 use super::{katakana_to_hiragana, to_katakana};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::{OnceLock, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 #[derive(Default)]
 struct UserDictionaryVocabulary {
@@ -46,12 +48,18 @@ pub(super) fn set_user_dictionary_vocabulary<'a>(
 }
 
 pub(super) fn user_dictionary_contains_reading(reading: &str) -> bool {
+    if benchmark_active() {
+        return false;
+    }
     user_dictionary().read().is_ok_and(|index| {
         !index.by_reading.is_empty() && index.by_reading.contains_key(&to_katakana(reading))
     })
 }
 
 pub(super) fn user_dictionary_surface(reading: &str) -> Option<String> {
+    if benchmark_active() {
+        return None;
+    }
     let index = user_dictionary().read().ok()?;
     if index.by_reading.is_empty() {
         return None;
@@ -60,6 +68,9 @@ pub(super) fn user_dictionary_surface(reading: &str) -> Option<String> {
 }
 
 fn user_dictionary_readings(surface: &str) -> Option<Vec<String>> {
+    if benchmark_active() {
+        return None;
+    }
     user_dictionary()
         .read()
         .ok()?
@@ -212,14 +223,64 @@ impl ReverseDictionary {
     }
 }
 
-fn dictionary() -> Option<&'static ReverseDictionary> {
+thread_local! {
+    static BENCHMARK: RefCell<Option<Arc<ReverseDictionary>>> = const { RefCell::new(None) };
+}
+
+static BENCHMARK_CACHE: Mutex<Option<(PathBuf, Arc<ReverseDictionary>)>> = Mutex::new(None);
+
+pub(super) fn reset_benchmark_dictionary() {
+    let mut cache = BENCHMARK_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    *cache = None;
+}
+
+fn benchmark_active() -> bool {
+    BENCHMARK.with(|slot| slot.borrow().is_some())
+}
+
+pub(super) fn with_benchmark_dictionary<T>(
+    path: &Path,
+    execute: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let dictionary = {
+        let mut cache = BENCHMARK_CACHE.lock().map_err(|e| e.to_string())?;
+        if let Some((_, dictionary)) = cache.as_ref().filter(|(current, _)| current == path) {
+            Arc::clone(dictionary)
+        } else {
+            let bytes = std::fs::read(path).map_err(|e| format!("benchmark dictionary: {e}"))?;
+            let dictionary = Arc::new(
+                ReverseDictionary::from_bytes(bytes).ok_or("invalid benchmark dictionary")?,
+            );
+            *cache = Some((path.to_owned(), Arc::clone(&dictionary)));
+            dictionary
+        }
+    };
+    struct Restore(Option<Arc<ReverseDictionary>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BENCHMARK.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(BENCHMARK.with(|slot| slot.replace(Some(dictionary))));
+    Ok(execute())
+}
+
+fn with_dictionary<T>(execute: impl FnOnce(Option<&ReverseDictionary>) -> T) -> T {
+    if let Some(dictionary) = BENCHMARK.with(|slot| slot.borrow().clone()) {
+        return execute(Some(&dictionary));
+    }
     static DICTIONARY: OnceLock<Option<ReverseDictionary>> = OnceLock::new();
-    DICTIONARY
+    let dictionary = DICTIONARY
         .get_or_init(|| {
             let path = super::runtime::reverse_dictionary_path()?;
             ReverseDictionary::from_bytes(std::fs::read(path).ok()?)
         })
-        .as_ref()
+        .as_ref();
+    execute(dictionary)
 }
 
 pub fn has_same_reading(surface: &str, reading: &str) -> bool {
@@ -228,8 +289,8 @@ pub fn has_same_reading(surface: &str, reading: &str) -> bool {
     {
         return true;
     }
-    if let Some(d) = dictionary() {
-        return d.matches(surface, reading);
+    if let Some(matches) = with_dictionary(|d| d.map(|d| d.matches(surface, reading))) {
+        return matches;
     }
     // Match min_reading_distance's unconfigured-test fallback when reverse-v2.bin is absent.
     min_reading_distance(surface, reading) == Some(0)
@@ -241,7 +302,7 @@ pub fn reading_for_surface(surface: &str) -> Option<String> {
     if let Some(readings) = user_dictionary_readings(surface) {
         return readings.into_iter().next();
     }
-    dictionary()?.reading_for_surface(surface)
+    with_dictionary(|d| d?.reading_for_surface(surface))
 }
 
 pub fn min_reading_distance(surface: &str, source_reading: &str) -> Option<usize> {
@@ -252,8 +313,10 @@ pub fn min_reading_distance(surface: &str, source_reading: &str) -> Option<usize
             .map(|reading| super::damerau_levenshtein_distance(&source, reading))
             .min();
     }
-    if let Some(d) = dictionary() {
-        return d.min_reading_distance(surface, source_reading);
+    if let Some(distance) =
+        with_dictionary(|d| d.map(|d| d.min_reading_distance(surface, source_reading)))
+    {
+        return distance;
     }
     // When running in an unconfigured unit test process without reverse-v2.bin,
     // reconstruct known vocabulary segments so supported_reading_change works.

@@ -4,6 +4,7 @@
 // Output: one sum log-likelihood per sequence, one line per request.
 // No user settings, model files, or IME processes are modified.
 #include "channel.hpp"
+#include "benchmark_model.hpp"
 #include "llama.h"
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,10 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 namespace {
 int env_int_clamped(const char *name, int fallback, int min_val, int max_val) {
@@ -29,9 +34,44 @@ int env_int_clamped(const char *name, int fallback, int min_val, int max_val) {
     return fallback;
   }
 }
+
+int benchmark_worker() {
+#ifdef _WIN32
+  _setmode(_fileno(stdin), _O_BINARY);
+#endif
+  llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+  if (const char *directory = std::getenv("AZOOKEY_LLAMA_BACKEND_DIR"))
+    ggml_backend_load_all_from_path(directory);
+  llama_backend_init();
+  std::string path;
+  BenchmarkModel model;
+  const int layers = env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_GPU_LAYERS", 0, 0, 99);
+  if (!std::getline(std::cin, path) || !model.load(path.c_str(), layers) || !model.warm_up())
+    return 3;
+  std::cout << "ready" << std::endl;
+  std::string header;
+  while (std::getline(std::cin, header)) {
+    std::istringstream request(header);
+    int tokens, timeout, bytes;
+    if (!(request >> tokens >> timeout >> bytes) || bytes < 1 || bytes > 8192 ||
+        tokens < 1 || tokens > 384 || timeout < 1 || timeout > 2000)
+      return 2;
+    std::string prompt(bytes, '\0');
+    if (!std::cin.read(prompt.data(), bytes)) return 2;
+    const auto start = BenchmarkModel::Clock::now();
+    const auto result = model.complete(prompt, tokens, timeout);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        BenchmarkModel::Clock::now() - start).count();
+    std::cout << "{\"reason\":" << json_string(result.reason)
+              << ",\"text\":" << json_string(result.text)
+              << ",\"elapsed_ns\":" << elapsed << "}" << std::endl;
+  }
+  return 0;
+}
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--benchmark") return benchmark_worker();
   if (argc == 3 && std::string(argv[1]) == "--validate-channel") {
     try {
       const ChannelDictionary dictionary(argv[2]);
