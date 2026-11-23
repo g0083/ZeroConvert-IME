@@ -28,13 +28,38 @@ using Clock = std::chrono::steady_clock;
 #ifndef __wasi__
 std::mutex run_mutex; // guards model/context and serializes scoring
 #endif
-llama_model *model = nullptr;
-llama_context *context = nullptr;
-std::vector<llama_token> cached_prefix_tokens;
-int n_threads_decode = 2;
-int n_threads_batch = 4;
-long long request_epoch = 0;
-Clock::time_point deadline = Clock::time_point::max();
+struct KeyboardScorer {
+  llama_model *model = nullptr;
+  llama_context *context = nullptr;
+  std::vector<llama_token> cached_prefix_tokens;
+  int n_threads_decode = 2;
+  int n_threads_batch = 4;
+  long long request_epoch = 0;
+  Clock::time_point deadline = Clock::time_point::max();
+  bool follow_input_epoch;
+
+  explicit KeyboardScorer(bool follow_input_epoch)
+      : follow_input_epoch(follow_input_epoch) {}
+  ~KeyboardScorer() { attach(nullptr); }
+
+  void attach(llama_model *value);
+  bool ensure_context();
+  bool cancelled() const {
+    return (follow_input_epoch && assist_epoch() != request_epoch) ||
+           Clock::now() >= deadline;
+  }
+  std::vector<double> score_sequences(
+      const llama_vocab *vocab,
+      const std::vector<std::vector<llama_token>> &sequences,
+      const std::vector<int> &prefix_lengths);
+  std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
+                  const std::string &input, const std::string &ctx,
+                  const std::string &touch, const std::string &mode_str);
+  std::string request(const ChannelDictionary &dict, const char *payload,
+                      unsigned long long timeout_ms);
+};
+
+KeyboardScorer live_scorer(true);
 
 std::shared_ptr<ChannelDictionary> dictionary;
 std::string dictionary_path;
@@ -43,10 +68,6 @@ std::mutex dictionary_mutex;
 std::string failed_path;
 bool loading = false;
 #endif
-
-bool cancelled() {
-  return assist_epoch() != request_epoch || Clock::now() >= deadline;
-}
 
 std::string field(const std::string &payload, const char *name) {
   const std::string key = std::string("\"") + name + "\":\"";
@@ -104,7 +125,7 @@ std::shared_ptr<ChannelDictionary> ready_dictionary(const std::string &path) {
 }
 #endif
 
-bool ensure_context() {
+bool KeyboardScorer::ensure_context() {
   if (context)
     return true;
   if (!model)
@@ -132,8 +153,8 @@ bool ensure_context() {
   cp.n_threads = n_threads_decode;
   cp.n_threads_batch = n_threads_batch;
   cp.offload_kqv = false;
-  cp.abort_callback = [](void *) { return cancelled(); };
-  cp.abort_callback_data = nullptr;
+  cp.abort_callback = [](void *data) { return static_cast<KeyboardScorer *>(data)->cancelled(); };
+  cp.abort_callback_data = this;
   cached_prefix_tokens.clear();
   context = llama_init_from_model(model, cp);
   return context != nullptr;
@@ -151,7 +172,7 @@ std::vector<llama_token> tokenize(const llama_vocab *vocab,
 }
 
 std::vector<double>
-score_sequences(const llama_vocab *vocab,
+KeyboardScorer::score_sequences(const llama_vocab *vocab,
                 const std::vector<std::vector<llama_token>> &sequences,
                 const std::vector<int> &prefix_lengths) {
   const int nv = llama_vocab_n_tokens(vocab);
@@ -342,7 +363,7 @@ score_sequences(const llama_vocab *vocab,
   return scores;
 }
 
-std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
+std::string KeyboardScorer::run(const ChannelDictionary &dict, const std::string &raw_keys,
                 const std::string &input_utf8,
                 const std::string &context_utf8,
                 const std::string &touch_hints,
@@ -508,6 +529,29 @@ std::string run(const ChannelDictionary &dict, const std::string &raw_keys,
   out << ",\"gain\":" << std::setprecision(14) << best_delta << "}";
   return out.str();
 }
+
+void KeyboardScorer::attach(llama_model *value) {
+  if (value != model && context) {
+    llama_free(context);
+    context = nullptr;
+    cached_prefix_tokens.clear();
+  }
+  model = value;
+}
+
+std::string KeyboardScorer::request(const ChannelDictionary &dict,
+                                    const char *payload_text,
+                                    unsigned long long timeout_ms) {
+  const std::string payload = payload_text;
+  request_epoch = assist_epoch();
+  deadline = Clock::now() + std::chrono::milliseconds(
+                                std::min<unsigned long long>(timeout_ms, 30000));
+  if (!ensure_context())
+    return "null";
+  return run(dict, field(payload, "raw"), field(payload, "input"),
+             field(payload, "context"), field(payload, "touch"),
+             field(payload, "mode"));
+}
 } // namespace
 
 void keyboard_assist_preload_dictionary(const char *path) {
@@ -524,37 +568,17 @@ void keyboard_assist_attach(llama_model *value) {
 #ifndef __wasi__
   std::lock_guard<std::mutex> lock(run_mutex);
 #endif
-  if (value != model && context) {
-    llama_free(context);
-    context = nullptr;
-    cached_prefix_tokens.clear();
-  }
-  model = value;
+  live_scorer.attach(value);
 }
 
-void keyboard_assist_detach() {
-#ifndef __wasi__
-  std::lock_guard<std::mutex> lock(run_mutex);
-#endif
-  if (context) {
-    llama_free(context);
-    context = nullptr;
-    cached_prefix_tokens.clear();
-  }
-  model = nullptr;
-}
+void keyboard_assist_detach() { keyboard_assist_attach(nullptr); }
 
 std::string keyboard_assist_request(const char *payload_text,
                                     unsigned long long timeout_ms) {
   if (!payload_text)
     return "null";
   const std::string payload = payload_text;
-  const auto raw = field(payload, "raw");
-  const auto input = field(payload, "input");
-  const auto ctx = field(payload, "context");
   const auto path = field(payload, "dictionary");
-  const auto touch = field(payload, "touch");
-  const auto mode_str = field(payload, "mode");
   // Android can defer dictionary loading. The single-threaded WASI host calls
   // this on its separate assistance Worker.
   const auto dict = ready_dictionary(path);
@@ -566,16 +590,48 @@ std::string keyboard_assist_request(const char *payload_text,
     return "null";
   try {
 #endif
-    request_epoch = assist_epoch();
-    deadline =
-        Clock::now() + std::chrono::milliseconds(
-                           std::min<unsigned long long>(timeout_ms, 30000));
-    if (!ensure_context())
-      return "null";
-    return run(*dict, raw, input, ctx, touch, mode_str);
+    return live_scorer.request(*dict, payload_text, timeout_ms);
 #ifndef __wasi__
   } catch (...) {
     return "null";
   }
 #endif
 }
+
+#ifdef __ANDROID__
+struct BenchmarkKeyboardAssist {
+  ChannelDictionary dictionary;
+  KeyboardScorer scorer{false};
+
+  BenchmarkKeyboardAssist(llama_model *model, const char *path) : dictionary(path) {
+    scorer.attach(model);
+  }
+};
+
+BenchmarkKeyboardAssist *keyboard_assist_open_benchmark(llama_model *model,
+                                                       const char *path) {
+  try {
+    auto session = std::make_unique<BenchmarkKeyboardAssist>(model, path);
+    if (session->scorer.ensure_context())
+      return session.release();
+  } catch (...) {
+  }
+  return nullptr;
+}
+
+void keyboard_assist_close_benchmark(BenchmarkKeyboardAssist *session) {
+  delete session;
+}
+
+std::string keyboard_assist_request_benchmark(BenchmarkKeyboardAssist *session,
+                                              const char *payload,
+                                              unsigned long long timeout_ms) {
+  if (!session || !payload)
+    return "null";
+  try {
+    return session->scorer.request(session->dictionary, payload, timeout_ms);
+  } catch (...) {
+    return "null";
+  }
+}
+#endif

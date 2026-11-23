@@ -18,6 +18,11 @@ from benchmark_kana_kanji_models import (
     mask_digits_for_model,
     restore_digits_from_model,
 )
+from build_additional_dict_testset import (
+    OUT_PATH as ADDITIONAL_DICT_TESTSET_PATH,
+    build_cases as build_additional_dict_cases,
+    validate_cases as validate_additional_dict_cases,
+)
 from build_colloquial_testset import (
     OUT_PATH as COLLOQUIAL_TESTSET_PATH,
     build_cases as build_colloquial_cases,
@@ -253,6 +258,11 @@ class StandardV4Tests(unittest.TestCase):
         self.assertTrue(COLLOQUIAL_TESTSET_PATH.exists())
         cases = build_colloquial_cases()
         validate_colloquial_cases(cases)
+
+    def test_additional_dict_testset_validity_and_isolation(self):
+        self.assertTrue(ADDITIONAL_DICT_TESTSET_PATH.exists())
+        cases = build_additional_dict_cases()
+        validate_additional_dict_cases(cases)
 
 
 if __name__ == "__main__":

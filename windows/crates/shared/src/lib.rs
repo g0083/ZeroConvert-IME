@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod assist_policy;
 pub mod conversion_policy;
+pub mod cpu_tuning;
 pub mod english_dictionary;
 pub mod english_learning;
 pub mod learning_policy;
@@ -860,6 +861,19 @@ mod tests {
         assert_eq!(restored.zenzai.effective_gpu_layers(), 99);
         restored.zenzai.backend = "cpu".into();
         assert_eq!(restored.zenzai.effective_gpu_layers(), 0);
+        assert_eq!(restored.zenzai.cpu_runtime_tuning, None);
+
+        restored.zenzai.cpu_runtime_tuning = Some(super::cpu_tuning::CpuRuntimeTuningConfig {
+            tuning_version: super::cpu_tuning::CURRENT_TUNING_VERSION,
+            decode_threads: 4,
+            batch_threads: Some(6),
+            direct_model_first: true,
+            model_id: "nano_v4_2_iq4_emb8".into(),
+            topology_signature: "win32_processor_info:16:8:0=8".into(),
+        });
+        let with_tuning = serde_json::to_string(&restored).unwrap();
+        let reparsed: super::AppConfig = serde_json::from_str(&with_tuning).unwrap();
+        assert_eq!(reparsed.zenzai.cpu_runtime_tuning, restored.zenzai.cpu_runtime_tuning);
     }
 
     #[test]
@@ -1766,6 +1780,8 @@ pub struct ZenzaiConfig {
     pub gpu_layers: u32,
     #[serde(default = "runtime_assets::default_model")]
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_runtime_tuning: Option<cpu_tuning::CpuRuntimeTuningConfig>,
 }
 
 fn default_gpu_layers() -> u32 {
@@ -2060,6 +2076,7 @@ impl Default for AppConfig {
                 backend: "vulkan".to_string(),
                 gpu_layers: default_gpu_layers(),
                 model: runtime_assets::default_model(),
+                cpu_runtime_tuning: None,
             },
             shortcuts: ShortcutConfig::default(),
             general: GeneralConfig::default(),

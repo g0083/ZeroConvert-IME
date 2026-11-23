@@ -70,6 +70,7 @@ enum class BenchmarkKind {
 enum class ConversionBenchmarkScope(val wire: String, val label: String) {
     MODEL("model", "モデル推論"),
     CANDIDATES("candidates", "共通候補生成"),
+    TYPO("typo", "候補生成・タイポ補正"),
 }
 
 data class BenchmarkProgress(
@@ -91,7 +92,7 @@ data class BenchmarkProgress(
 
 object BenchmarkRunner {
 
-    const val CONVERSION_DATASET_NAME = "かな漢字変換 740問"
+    const val CONVERSION_DATASET_NAME = "かな漢字変換 840問"
     const val TYPO_DATASET_NAME = "タイポ補正 450問"
     const val PREDICTIVE_DATASET_NAME = "先読み 30問"
 
@@ -209,7 +210,7 @@ object BenchmarkRunner {
     }
 
     suspend fun runTypoBenchmark(context: Context, onProgress: (BenchmarkProgress) -> Unit) =
-        runDataset(context, "typo_testset.jsonl", BenchmarkKind.TYPO, onProgress)
+        runDataset(context, "typo_testset.jsonl", BenchmarkKind.TYPO, onProgress, ConversionBenchmarkScope.TYPO)
 
     fun loadPredictiveDataset(context: Context): List<PredictiveBenchmarkItem> {
         val list = mutableListOf<PredictiveBenchmarkItem>()

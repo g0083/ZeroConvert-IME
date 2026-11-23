@@ -49,7 +49,7 @@ test("model information and assist settings match the distributed models", async
         await assist.click();
         await page.getByLabel("タイポ補正の実行方法", { exact: true }).waitFor();
         await page.goto(`${base}/about`);
-        await page.getByText("ZeroCon Model Nano v4.1 IQ4_emb8 / Q8", { exact: true }).waitFor();
+        await page.getByText("ZeroCon Model Nano v4.2 IQ4_emb8 / Q8", { exact: true }).waitFor();
         await page.getByText("メインモデル統合タイポ補正 (v0.2.2)", { exact: true }).waitFor();
         await page.getByText("zenz-v3.1-xsmall（corecctor のベースモデル）", { exact: true }).waitFor();
         await page.getByText("CC BY-SA 4.0", { exact: true }).waitFor();

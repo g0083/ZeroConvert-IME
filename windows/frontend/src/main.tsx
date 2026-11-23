@@ -6,7 +6,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AppSidebar, settingsPages } from "@/components/app-sidebar";
 import { UpdateProvider } from "@/components/update-provider";
-import { FirstLaunchQuickBenchmark } from "@/components/first-launch-quick-benchmark";
+import { QuickBenchmarkStatus } from "@/components/quick-benchmark-status";
 import { SetupProvider } from "@/components/setup-provider";
 import { SettingsSearch, openSettingsSearch } from "@/components/settings-search";
 import { consumePendingSettingsTarget, findSettingsRow } from "@/lib/settings-search-target";
@@ -51,7 +51,6 @@ function SettingsLayout() {
             <UpdateProvider>
                 <SetupProvider>
                     <SidebarProvider className="h-dvh min-h-0 overflow-hidden" style={{ "--sidebar-width": "14rem" } as React.CSSProperties}>
-                        <FirstLaunchQuickBenchmark />
                         <SettingsSearch />
                         <AppSidebar />
                         <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -69,6 +68,7 @@ function SettingsLayout() {
                                     <kbd className="rounded border bg-muted px-1.5 py-0.5 font-sans text-[10px]">K</kbd>
                                 </button>
                             </header>
+                            <QuickBenchmarkStatus />
                             <div key={pathname} className={`settings-page min-h-0 flex-1 p-4 sm:p-6 ${pathname === "/dictionary" ? "overflow-hidden" : "overflow-auto"}`}>
                                 <Outlet />
                             </div>

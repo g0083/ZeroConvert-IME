@@ -26,7 +26,36 @@ MODULEMAP = '''module llama [system] {
 }
 '''
 
-ZENZ_CONTEXT = '''        model_params.use_mmap = true
+ZENZ_CONTEXT = '''enum ZenzError: LocalizedError {
+    case couldNotLoadContext
+}
+
+    private var prevInputBySeq: [llama_seq_id: [llama_token]] = [:]
+    private var prevPromptBySeq: [llama_seq_id: [llama_token]] = [:]
+
+    init(model: OpaquePointer, context: OpaquePointer, vocab: OpaquePointer) {
+        self.model = model
+        self.context = context
+        self.vocab = vocab
+    }
+
+    deinit {
+        llama_free(context)
+        llama_model_free(model)
+        llama_backend_free()
+    }
+
+        model_params.use_mmap = true
+        #if Zenzai
+        model_params.n_gpu_layers = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount
+        #endif
+        #if ZenzaiCPU
+        // CPU 専用: GPU へのオフロードを無効化
+        model_params.n_gpu_layers = 0
+        model_params.split_mode = LLAMA_SPLIT_MODE_NONE
+        #endif
+        let model = llama_model_load_from_file(path, model_params)
+        return ZenzContext(model: model, context: context, vocab: vocab)
         ctx_params.n_ctx = 512
         ctx_params.n_batch = 512
         llama_backend_init()
@@ -64,6 +93,12 @@ ZENZ_CONTEXT = '''        model_params.use_mmap = true
             debug("llama_decode() failed")
             return nil
         }
+        } else {
+            let bufferPointer: UnsafeBufferPointer<Int8> = UnsafeBufferPointer(start: result, count: Int(nTokens))
+            return Array(bufferPointer)
+        }
+    }
+}
 '''
 
 
@@ -109,6 +144,11 @@ class ExactKeyboardLookupTests(unittest.TestCase):
         self.assertIn('reusableLatticeSeed: reusablePair?.seed', patched)
         self.assertIn('reusableUnconstrainedResult: reusablePair?.unconstrainedResult', patched)
         self.assertIn('unconstrainedResult: state.lastUnconstrainedResult', patched)
+        self.assertIn('public enum DirectZenzaiGenerationResult: Sendable', patched)
+        self.assertIn('public func disablingZenzaiRichCandidates() -> ConvertRequestOptions', patched)
+        self.assertIn('public func prepareDirectZenzaiGeneration(', patched)
+        self.assertIn('public func runDirectZenzaiGenerationOnly(', patched)
+        self.assertIn('public func finalizeDirectZenzaiResult(', patched)
 
     def test_rejects_a_changed_converter_api_anchor(self):
         with self.assertRaises(ValueError):
@@ -143,7 +183,8 @@ class ZenzContextTests(unittest.TestCase):
     def test_applies_every_replacement(self):
         patched = converter_patch.patch_zenz_context(ZENZ_CONTEXT)
         self.assertIn('model_params.load_mode = LLAMA_LOAD_MODE_MMAP', patched)
-        self.assertIn('params.offload_kqv = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount > 0', patched)
+        self.assertIn('let isGpuParams = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount > 0', patched)
+        self.assertIn('params.offload_kqv = isGpuParams', patched)
         self.assertIn('ctx_params.n_ctx = 1024', patched)
         self.assertIn('ctx_params.n_seq_max = 2', patched)
         self.assertIn('ctx_params.kv_unified = true', patched)
@@ -160,6 +201,15 @@ class ZenzContextTests(unittest.TestCase):
         self.assertIn('llama_memory_seq_cp(llama_get_memory(context),', patched)
         self.assertIn('self.prevInputBySeq[seqId] = Array(effectivePrevInput.prefix(prefixCacheCount))', patched)
         self.assertIn('llama_memory_seq_pos_max(llama_get_memory(self.context),', patched)
+        self.assertIn('ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)', patched)
+        self.assertIn('model_params.split_mode = LLAMA_SPLIT_MODE_NONE', patched)
+        self.assertIn('public enum ZenzaiRuntimeTuning', patched)
+        self.assertIn('resolvedThreads(isGpuOffloaded:', patched)
+        self.assertIn('var prefersDirectModelFirst: Bool', patched)
+        self.assertIn('func generateDirectGreedy(', patched)
+        self.assertIn('func continueDirectGreedy(', patched)
+        self.assertIn('llama_sampler_init_greedy()', patched)
+        self.assertIn('llama_batch_get_one(', patched)
 
     def test_backend_init_is_wrapped_not_removed(self):
         # The pinned converter must still initialize llama; only the backend
@@ -385,6 +435,7 @@ class ZenzPromptBuilderTests(unittest.TestCase):
     def test_masks_digits_in_prompts_and_exposes_shared_masking_helper(self):
         patched = converter_patch.patch_zenz_prompt_builder(ZENZ_PROMPT_BUILDER)
         self.assertIn('public enum ZenzDigitMasking', patched)
+        self.assertIn('asciiDigits: [String]? = nil', patched)
         self.assertIn('ZenzDigitMasking.mask(input).text', patched)
         self.assertIn('ZenzDigitMasking.mask(composingText.toKatakana()).text', patched)
         self.assertIn('ZenzDigitMasking.mask(leftSideContext).text', patched)
@@ -420,9 +471,12 @@ class ZenzEvaluatorTests(unittest.TestCase):
         self.assertIn('func canDirectContinue(from index: Int) -> Bool', patched)
         self.assertIn('func shouldDirectContinue(at index: Int, maxToken: llama_token) -> Bool', patched)
         self.assertIn('func greedyContinueToWholeResult(from index: Int, firstToken: llama_token, maxSteps: Int? = nil) -> String?', patched)
+        self.assertIn('context.continueDirectGreedy(', patched)
+        self.assertIn('asciiDigits: evaluationAsciiDigits', patched)
         self.assertIn('if trailingMaxToken != context.eosToken', patched)
         self.assertIn('i < isLearnedToken.count ? isLearnedToken[i] : (isLearned: false, priority: Float(0))', patched)
-        self.assertLess(patched.rindex('return .fixRequired'), patched.rindex('let logsumexp = stabilizedLogSumExp'))
+        self.assertEqual(patched.count('let logsumexp = stabilizedLogSumExp'), 1)
+        self.assertNotIn('score += maxRawLogit - logsumexp', patched)
         self.assertNotIn('tokenHeap.insertIfPossible(TokenAndLogprob(token: llama_token(index - startIndex), logprob: logp))', patched)
 
     def test_disables_dictionary_prompt_and_protects_tokens_before_either_early_exit(self):
@@ -489,6 +543,9 @@ class DicdataStoreAndContextualGeneratorTests(unittest.TestCase):
 
         patched_zenz = converter_patch.patch_zenz(converter_patch.ZENZ_CONTEXTUAL_ANCHOR)
         self.assertIn('func contextualNextWordReadings(', patched_zenz)
+        self.assertIn('package var prefersDirectModelFirst: Bool', patched_zenz)
+        self.assertIn('package var isGpuOffloaded: Bool', patched_zenz)
+        self.assertIn('package func generateDirectCandidate(', patched_zenz)
 
 
 class ConversionPerformancePatchTests(unittest.TestCase):
@@ -554,7 +611,8 @@ class ConversionPerformancePatchTests(unittest.TestCase):
                 'reusableLatticeSeed.makeLattice()',
                 'func boundedZenzaiResultPrevs(',
                 'private func acceptWholeResultCandidate(',
-                'private func materializeWholeResultCandidate(',
+                'func materializeWholeResultCandidate(',
+                'func heuristicRetryValidation(',
             ],
         )
 

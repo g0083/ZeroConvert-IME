@@ -78,7 +78,7 @@ export const showUpdateInstallResultOnce = async () => {
 };
 
 export const saveConfigWithToast = async (
-    updater: (config: any) => void,
+    updater: (config: any) => void | false,
     failureMessage = "設定の更新に失敗しました",
     onResult?: (result: UpdateConfigResponse) => void,
 ) =>
@@ -86,7 +86,7 @@ export const saveConfigWithToast = async (
         try {
             const baseConfig = await invoke<any>("get_config");
             const data = structuredClone(baseConfig);
-            updater(data);
+            if (updater(data) === false) return baseConfig;
             const result = await invoke<UpdateConfigResponse>("update_config", {
                 baseConfig,
                 newConfig: data,

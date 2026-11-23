@@ -19,11 +19,12 @@ class BenchmarkRunnerTest {
     @Test
     fun latestBenchmarkDatasetsMatchWindowsCountsAndSchema() {
         val conversion = asset("benchmark_dataset.jsonl").readLines().filter { it.isNotBlank() }
-        assertEquals(740, conversion.size)
+        assertEquals(840, conversion.size)
         assertEquals(230, conversion.count { it.contains("\"subset\":\"basic\"") })
         assertEquals(250, conversion.count { it.contains("\"subset\":\"hard\"") })
         assertEquals(160, conversion.count { it.contains("\"subset\":\"realistic\"") })
         assertEquals(100, conversion.count { it.contains("\"subset\":\"colloquial\"") })
+        assertEquals(100, conversion.count { it.contains("\"subset\":\"additional_dict\"") })
         assertTrue(conversion.first().contains("\"subset_label\""))
 
         val typo = asset("typo_testset.jsonl").readLines().filter { it.isNotBlank() }

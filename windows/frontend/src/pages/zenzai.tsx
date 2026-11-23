@@ -7,7 +7,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SettingsRow, SettingsSection } from "@/components/settings-section";
 import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config";
 import { createDebouncedSaver, type ConfigSaveState } from "@/lib/config-save-controller.js";
-import { BACKEND_LABELS, loadQuickBenchmarkRecommendation, runQuickBenchmark, saveQuickBenchmarkResult, type QuickBackendId, type QuickBenchmarkResult } from "@/lib/quick-benchmark";
+import {
+    BACKEND_LABELS, clearPendingQuickBenchmarkRuntime, hasPendingQuickBenchmarkRuntime, loadQuickBenchmarkRecommendation,
+    quickBenchmarkSummary, runQuickBenchmark, subscribeQuickBenchmarkResult, subscribeQuickBenchmarkRuntime, useQuickBenchmarkActivity,
+} from "@/lib/quick-benchmark";
 import { cancelConversionModelDownload, deleteConversionModel, downloadConversionModel } from "@/lib/conversion-model";
 
 const PROFILE_SAVE_DELAY_MS = 500;
@@ -34,20 +37,28 @@ export const Zenzai = () => {
     const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
     const [loadAttempt, setLoadAttempt] = useState(0);
     const [runtimeApplying, setRuntimeApplying] = useState(false);
-    const [runtimePending, setRuntimePending] = useState(false);
+    const [runtimePending, setRuntimePending] = useState(hasPendingQuickBenchmarkRuntime);
     const [profileSaveState, setProfileSaveState] = useState<ConfigSaveState>("saved");
     const [activeModelId, setActiveModelId] = useState<string>("");
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [isSwitchingModel, setIsSwitchingModel] = useState(false);
-    const savedRecommendation = useMemo(() => loadQuickBenchmarkRecommendation(), []);
-    const [quickBenchmark, setQuickBenchmark] = useState<QuickBenchmarkResult | null>(savedRecommendation);
-    const [recommendedBackend, setRecommendedBackend] = useState<QuickBackendId | null>(savedRecommendation?.recommended ?? null);
-    const [quickBenchmarkRunning, setQuickBenchmarkRunning] = useState(false);
+    const [quickBenchmark, setQuickBenchmark] = useState(loadQuickBenchmarkRecommendation);
+    const benchmarkActivity = useQuickBenchmarkActivity();
+    const quickBenchmarkRunning = benchmarkActivity !== "idle";
+    const currentBenchmark = quickBenchmark?.model_id === activeModelId
+        && quickBenchmark.vulkan_gpu_layers === Math.min(value.gpu_layers, 99) ? quickBenchmark : null;
+    const recommendedBackend = currentBenchmark?.recommended;
     const profileEdited = useRef(false);
     const profileSaver = useMemo(() => createDebouncedSaver<string, any>({
         delayMs: PROFILE_SAVE_DELAY_MS,
         onStateChange: setProfileSaveState,
         save: (profile) => saveConfigWithToast((config) => { config.zenzai.profile = profile; }),
+    }), []);
+
+    useEffect(() => subscribeQuickBenchmarkResult(setQuickBenchmark), []);
+    useEffect(() => subscribeQuickBenchmarkRuntime(({ backend, applied }) => {
+        setValue((previous) => ({ ...previous, backend }));
+        setRuntimePending(!applied);
     }), []);
 
     useEffect(() => {
@@ -82,7 +93,7 @@ export const Zenzai = () => {
             if (!cancelled) {
                 setActiveModelId(data.active_id);
                 setModels(data.models);
-                // Nano v4.1 IQ4_emb8 は強制：無ければ表示のたびに未取得である旨を案内する。
+                // Nano v4.2 IQ4_emb8 は強制：無ければ表示のたびに未取得である旨を案内する。
                 // 自動ダウンロードはしない（通信量・テレメトリ等の同意が必要なため）。
             }
         }).catch((err) => {
@@ -108,7 +119,10 @@ export const Zenzai = () => {
                 Object.assign(config.zenzai, update);
             }, "推論設定の更新に失敗しました", (result) => {
                 setRuntimePending(!result.server_applied);
-                if (result.server_applied) toast.success("推論設定を適用しました。補正・先読みは数秒で切り替わります。");
+                if (result.server_applied) {
+                    clearPendingQuickBenchmarkRuntime();
+                    toast.success("推論設定を適用しました。補正・先読みは数秒で切り替わります。");
+                }
             });
             if (data) setValue((previous) => ({ ...previous, backend: data.zenzai.backend, gpu_layers: data.zenzai.gpu_layers ?? 99 }));
         } finally {
@@ -120,6 +134,7 @@ export const Zenzai = () => {
         setRuntimeApplying(true);
         try {
             await invoke("restart_server");
+            clearPendingQuickBenchmarkRuntime();
             setRuntimePending(false);
             toast.success("IMEサーバーを再起動して設定を適用しました");
         } catch (error) {
@@ -138,17 +153,10 @@ export const Zenzai = () => {
 
     const handleQuickBenchmark = async () => {
         if (quickBenchmarkRunning) return;
-        setQuickBenchmarkRunning(true);
-        setQuickBenchmark(null);
         try {
-            const result = await runQuickBenchmark();
-            setQuickBenchmark(result);
-            saveQuickBenchmarkResult(result);
-            setRecommendedBackend(result.recommended);
+            await runQuickBenchmark();
         } catch (error) {
             toast.error(`クイックベンチマークを実行できませんでした: ${error}`);
-        } finally {
-            setQuickBenchmarkRunning(false);
         }
     };
 
@@ -235,7 +243,7 @@ export const Zenzai = () => {
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <p className="text-sm font-medium">{model.name}</p>
                                                 {model.is_active && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">使用中</span>}
-                                                {model.id === "nano_v4_1_iq4_emb8" && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">必須</span>}
+                                                {model.id === "nano_v4_2_iq4_emb8" && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">必須</span>}
                                             </div>
                                             <p className="settings-description">
                                                 {model.available ? `${model.size_mb.toFixed(1)} MB · ${model.description}` : `${model.size_mb.toFixed(1)} MB · 未ダウンロード`}
@@ -245,10 +253,10 @@ export const Zenzai = () => {
                                             {!model.available && <Button id={`download-${model.id}`} variant="outline" size="sm" disabled={downloadingModelId !== null} onClick={() => void handleDownloadModel(model.id)}>
                                                 {downloadingModelId === model.id ? `取得中… ${downloadProgress}%` : "ダウンロード"}
                                             </Button>}
-                                            {model.available && !model.is_active && <Button id={`select-${model.id}`} variant="outline" size="sm" disabled={runtimeApplying || isSwitchingModel || downloadingModelId !== null} onClick={() => void handleModelChange(model.id)}>
+                                            {model.available && !model.is_active && <Button id={`select-${model.id}`} variant="outline" size="sm" disabled={quickBenchmarkRunning || runtimeApplying || isSwitchingModel || downloadingModelId !== null} onClick={() => void handleModelChange(model.id)}>
                                                 {isSwitchingModel ? "切替中…" : "切替"}
                                             </Button>}
-                                            {model.available && model.id !== "nano_v4_1_iq4_emb8" && <Button variant="ghost" size="sm" disabled={downloadingModelId !== null || model.is_active || isSwitchingModel} title={model.is_active ? "使用中のモデルは削除できません" : undefined} onClick={() => void handleDeleteModel(model.id)}>
+                                            {model.available && model.id !== "nano_v4_2_iq4_emb8" && <Button variant="ghost" size="sm" disabled={downloadingModelId !== null || model.is_active || isSwitchingModel} title={model.is_active ? "使用中のモデルは削除できません" : undefined} onClick={() => void handleDeleteModel(model.id)}>
                                                 削除
                                             </Button>}
                                         </div>
@@ -268,7 +276,7 @@ export const Zenzai = () => {
                 </div>
 
                 <SettingsRow label="バックエンド" description="漢字変換・タイポ補正・先読みで共用します。変更時はIMEサーバーを自動で再起動します。Windowsの再起動は不要です。入力中の文字を確定してから変更してください。" htmlFor="zenzai-backend">
-                    <Select value={value.backend} disabled={capabilityError || runtimeApplying || isSwitchingModel} onValueChange={(backend) => void handleBackendChange(backend)}>
+                    <Select value={value.backend} disabled={quickBenchmarkRunning || capabilityError || runtimeApplying || isSwitchingModel} onValueChange={(backend) => void handleBackendChange(backend)}>
                         <SelectTrigger id="zenzai-backend"><SelectValue placeholder="バックエンドを選択" /></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="cpu" disabled={!capability.cpu}>{recommendedBackend === "cpu" ? "CPU (推奨)" : "CPU"}{!capability.cpu && " — AVX 対応 CPU が必要"}</SelectItem>
@@ -277,24 +285,33 @@ export const Zenzai = () => {
                     </Select>
                 </SettingsRow>
                 {capabilityError && <p className="px-4 pb-3 text-xs text-destructive" role="alert">バックエンドの対応状況を取得できませんでした。</p>}
-                <SettingsRow label="クイックベンチマーク" description="CPUとVulkanで同じ推論を実測し、完了まで数十秒かかります。レイテンシが短い方を推奨バックエンドとして表示します。" htmlFor="zenzai-quick-benchmark">
+                <SettingsRow label="クイックベンチマーク" description="共通候補生成の84問で、使用中のモデルをCPUとVulkanで比較します。VulkanにはGPUに載せる層数の設定を使います。完了まで数十秒かかる場合があります。" htmlFor="zenzai-quick-benchmark">
                     <Button id="zenzai-quick-benchmark" variant="outline" disabled={quickBenchmarkRunning || runtimeApplying || isSwitchingModel} onClick={() => void handleQuickBenchmark()}>
-                        {quickBenchmarkRunning ? "測定中…" : "実行"}
+                        {benchmarkActivity === "measuring" ? "測定中…" : benchmarkActivity === "applying" ? "適用中…" : "実行"}
                     </Button>
                 </SettingsRow>
-                {quickBenchmark && !quickBenchmarkRunning && <div className="px-4 pb-4 space-y-1" role="status" aria-live="polite">
-                    {quickBenchmark.results.map((result) => (
+                {currentBenchmark && !quickBenchmarkRunning && <div className="px-4 pb-4 space-y-1" role="status" aria-live="polite">
+                    <p className="settings-description">共通候補生成 {currentBenchmark.case_count}問（各3回の中央値）</p>
+                    {currentBenchmark.results.map((result) => (
                         <p key={result.backend} className="settings-description">
-                            {BACKEND_LABELS[result.backend] ?? result.backend}: {result.ok && result.avg_latency_ms !== null ? `平均 ${result.avg_latency_ms.toFixed(0)} ms` : result.error ?? "測定できませんでした"}
+                            {BACKEND_LABELS[result.backend]}: {result.avg_latency_ms !== null && result.p95_latency_ms !== null
+                                ? `平均 ${result.avg_latency_ms.toFixed(1)} ms / p95 ${result.p95_latency_ms.toFixed(1)} ms`
+                                : result.error ?? "測定できませんでした"}
                         </p>
                     ))}
-                    {quickBenchmark.recommended && <p className="text-xs font-medium text-foreground">推奨: {BACKEND_LABELS[quickBenchmark.recommended] ?? quickBenchmark.recommended}（実測レイテンシが最も短いバックエンド）</p>}
+                    <p className="text-xs font-medium text-foreground">{quickBenchmarkSummary(currentBenchmark)}</p>
+                    {currentBenchmark.cpu_tuning && <p className="settings-description">
+                        CPU自動最適化: decode {currentBenchmark.cpu_tuning.decode_threads} / batch {currentBenchmark.cpu_tuning.batch_threads ?? currentBenchmark.cpu_tuning.decode_threads} / {currentBenchmark.cpu_tuning.direct_model_first ? "モデル先行" : "辞書先行"}
+                    </p>}
+                    {recommendedBackend && recommendedBackend !== value.backend && <Button type="button" variant="outline" size="sm" disabled={runtimeApplying || isSwitchingModel || !capability[recommendedBackend]} onClick={() => void handleBackendChange(recommendedBackend)}>
+                        推奨の{BACKEND_LABELS[recommendedBackend]}を適用
+                    </Button>}
                 </div>}
                 {value.backend === "cpu" && <p className="settings-description px-4 pb-3">
                     CPUバックエンドには AVX 対応 CPU が必要です。未対応の場合は標準変換を使います。
                 </p>}
                 <SettingsRow label="GPUに載せる層数" description="少なくすると残りの層の重みをRAMに置き、その層をCPUで処理します。0層ではCPUで推論するため、CPU負荷が増え、遅くなる場合があります。Vulkanでは0層でも作業領域などにVRAMを使用する場合があります。漢字変換・内蔵タイポ補正・先読みで共用します。" htmlFor="zenzai-gpu-layers">
-                    <Select value={String(value.gpu_layers)} disabled={value.backend === "cpu" || runtimeApplying || isSwitchingModel} onValueChange={(layers) => void saveRuntime({ gpu_layers: Number(layers) })}>
+                    <Select value={String(value.gpu_layers)} disabled={quickBenchmarkRunning || value.backend === "cpu" || runtimeApplying || isSwitchingModel} onValueChange={(layers) => void saveRuntime({ gpu_layers: Number(layers) })}>
                         <SelectTrigger id="zenzai-gpu-layers"><SelectValue /></SelectTrigger>
                         <SelectContent>
                             <SelectItem value="99">全層（速度優先・既定）</SelectItem>

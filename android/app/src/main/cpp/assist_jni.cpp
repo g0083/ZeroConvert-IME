@@ -301,24 +301,42 @@ Java_com_zeroconvert_ime_ZenzNative_nativeTranslate(JNIEnv * env, jobject, jstri
     return response(env, "limit", output);
 }
 
+namespace {
+struct BenchmarkInference {
+    BenchmarkModel model;
+    std::unique_ptr<BenchmarkKeyboardAssist, decltype(&keyboard_assist_close_benchmark)>
+        keyboard{nullptr, keyboard_assist_close_benchmark};
+};
+}
+
+std::string benchmark_keyboard_repair(jlong handle, const char *payload, unsigned long long timeout) {
+    auto *session = reinterpret_cast<BenchmarkInference *>(handle);
+    return keyboard_assist_request_benchmark(session->keyboard.get(), payload, timeout);
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeOpen(
-        JNIEnv *env, jobject, jstring path, jstring library_dir) {
+        JNIEnv *env, jobject, jstring path, jstring library_dir, jstring reverse_dictionary) {
     const auto directory = utf8(env, library_dir);
     ggml_backend_load_all_from_path(directory.c_str());
     llama_backend_init();
-    auto model = std::make_unique<BenchmarkModel>();
-    if (!model->load(utf8(env, path).c_str(), 0) || !model->warm_up()) return 0;
-    return reinterpret_cast<jlong>(model.release());
+    auto session = std::make_unique<BenchmarkInference>();
+    if (!session->model.load(utf8(env, path).c_str(), 0) || !session->model.warm_up()) return 0;
+    const auto dictionary = utf8(env, reverse_dictionary);
+    if (!dictionary.empty()) {
+        session->keyboard.reset(keyboard_assist_open_benchmark(session->model.model, dictionary.c_str()));
+        if (!session->keyboard) return 0;
+    }
+    return reinterpret_cast<jlong>(session.release());
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeComplete(
         JNIEnv *env, jobject, jlong handle, jstring prompt, jint tokens, jint timeout) {
-    auto *model = reinterpret_cast<BenchmarkModel *>(handle);
+    auto &model = reinterpret_cast<BenchmarkInference *>(handle)->model;
     const auto text = utf8(env, prompt);
     const auto start = BenchmarkModel::Clock::now();
-    const auto result = model->complete(text, tokens, timeout);
+    const auto result = model.complete(text, tokens, timeout);
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
         BenchmarkModel::Clock::now() - start).count();
     auto cls = env->FindClass("java/lang/String");
@@ -332,5 +350,5 @@ Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeComplete(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeClose(JNIEnv *, jobject, jlong handle) {
-    delete reinterpret_cast<BenchmarkModel *>(handle);
+    delete reinterpret_cast<BenchmarkInference *>(handle);
 }

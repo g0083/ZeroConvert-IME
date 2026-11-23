@@ -266,12 +266,21 @@ def evaluate_output(output: str, case: dict) -> tuple:
 
 
 class LlamaServerInstance:
-    def __init__(self, model_path: str, port: int, n_gpu_layers: int = 99, backend: str = "vulkan"):
+    def __init__(self, model_path: str, port: int, n_gpu_layers: int = 99, backend: str = "vulkan", server_exe: str | None = None):
         self.model_path = model_path
         self.port = port
         self.n_gpu_layers = n_gpu_layers
         self.proc = None
-        self.server_exe = os.path.join(ROOT, "ZeroConvertIME-windows", f"llama_{backend}", "llama-server.exe")
+        if server_exe is not None:
+            self.server_exe = server_exe
+        else:
+            primary = os.path.join(ROOT, "ZeroConvertIME-windows", f"llama_{backend}", "llama-server.exe")
+            if os.path.exists(primary):
+                self.server_exe = primary
+            else:
+                from pathlib import Path
+                fallbacks = sorted(Path(ROOT, "artifacts/runtime").glob(f"windows-b12125-*/llama_{backend}/llama-server.exe"))
+                self.server_exe = str(fallbacks[-1]) if fallbacks else primary
 
     def start(self):
         cmd = [

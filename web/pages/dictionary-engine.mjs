@@ -4,7 +4,7 @@ import { trackAsset } from './load-progress.mjs';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const modelName = 'zerocon-nano-v4.1-iq4nl-emb8.gguf';
+const modelName = 'zerocon-nano-v4.2-iq4nl-emb8.gguf';
 const reverseName = 'reverse-v2.bin';
 
 async function dictionaryFiles(response) {

@@ -6,6 +6,7 @@
               data/kana_kanji_hard_context_testset.jsonl (hard 250)
               data/kana_kanji_ime_realistic_testset.jsonl (realistic 160)
               data/kana_kanji_colloquial_chat_testset.jsonl (colloquial 100)
+              data/kana_kanji_additional_dict_testset.jsonl (additional_dict 100)
 - typo: data/typo_benchmark_300.jsonl (legacy 300) + derived-clean 150
 - predictive: benchmarks/research/predictive_testset.jsonl (30)
 
@@ -75,6 +76,12 @@ def build_conversion() -> list[dict]:
             "口語 (100問)",
             "data/kana_kanji_colloquial_chat_testset.jsonl",
         ),
+        (
+            "data/kana_kanji_additional_dict_testset.jsonl",
+            "additional_dict",
+            "追加辞書 (100問)",
+            "data/kana_kanji_additional_dict_testset.jsonl",
+        ),
     ]
     rows: list[dict] = []
     next_id = 1
@@ -99,13 +106,14 @@ def build_conversion() -> list[dict]:
                 }
             )
             next_id += 1
-    assert len(rows) == 740, len(rows)
+    assert len(rows) == 840, len(rows)
     # 先頭 480 は従来通り basic 1..230, hard 231..480 になることを検査
     assert rows[0]["id"] == 1 and rows[229]["subset"] == "basic"
     assert rows[230]["id"] == 231 and rows[230]["subset"] == "hard"
     assert rows[479]["id"] == 480
     assert rows[480]["subset"] == "realistic"
     assert rows[640]["subset"] == "colloquial"
+    assert rows[740]["subset"] == "additional_dict"
     return rows
 
 

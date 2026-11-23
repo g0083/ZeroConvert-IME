@@ -7,7 +7,7 @@ Windows (`windows/frontend/src/data/`, `src-tauri`) と Android (`android/app/sr
 
 | ファイル | 内容 | 件数 | 層 |
 | --- | --- | --- | --- |
-| `conversion.jsonl` | かな漢字変換（基本230/高難度250/実IME160/口語100） | 740 | モデル単体＋実IMEの入口 |
+| `conversion.jsonl` | かな漢字変換（基本230/高難度250/実IME160/口語100/追加辞書100） | 840 | モデル単体＋実IMEの入口 |
 | `typo.jsonl` | タイポ補正（従来300＋ clean 増強150） | 450 | 補正ポリシー |
 | `predictive.jsonl` | 先読み継続 | 30 | 補正/先読み |
 | `parity_cases.jsonl` | 採点の共通期待値（Windows/Android/Rust の照合用） | 固定 | 採点契約 |
@@ -19,13 +19,13 @@ Windows (`windows/frontend/src/data/`, `src-tauri`) と Android (`android/app/sr
 
 ### conversion.jsonl
 
-1 行 = 1 問。`id` は 1..740。先頭 480 は従来の `basic/hard` と同じ順序・ID を保持し、
-後段に `realistic`（481..640）、`colloquial`（641..740）を続ける。
+1 行 = 1 問。`id` は 1..840。先頭 480 は従来の `basic/hard` と同じ順序・ID を保持し、
+後段に `realistic`（481..640）、`colloquial`（641..740）、`additional_dict`（741..840）を続ける。
 
 | フィールド | 型 | 説明 |
 | --- | --- | --- |
 | `id` | int | 通し番号 |
-| `subset` | string | `basic`/`hard`/`realistic`/`colloquial` |
+| `subset` | string | `basic`/`hard`/`realistic`/`colloquial`/`additional_dict` |
 | `subset_label` | string | 表示用（件数入り） |
 | `category` | string | 元データのカテゴリ |
 | `left_context` | string | 左文脈。`なし` は文脈なしとして保持 |
@@ -77,7 +77,7 @@ acceptable_continuations, full_sentence}` に `origin` を加える。
 共通 Rust が入力整形、NAM の処理、採点を行い、画面は16問ごとに結果を受け取る。
 
 - かな漢字変換の「モデル推論」は既定の計測範囲で、モデルの直接生成を測る。
-- 「共通候補生成」は同じ740問と採点ルールで、共有の Swift 変換エンジンが標準辞書を検索し、モデル候補に N-best 候補を追加して順位付けするまでを測る。学習・ユーザー辞書・予測は無効で、各問で未確定入力をリセットする。N-best 追加検索の平均時間も表示する。
+- 「共通候補生成」は同じ840問と採点ルールで、共有の Swift 変換エンジンが標準辞書を検索し、モデル候補に N-best 候補を追加して順位付けするまでを測る。学習・ユーザー辞書・予測は無効で、各問で未確定入力をリセットする。N-best 追加検索の平均時間も表示する。
 - タイポ補正は直接生成と共通の辞書・規則による補正を測る。
 - 先読みは事前に取得した標準辞書の逆引きと、読みの延長および延長後の表記への変換を測る。
 - 問題ごとの遅延には共通処理と推論を含む。セッション準備から解放までの実行時間には、画面と推論処理間の転送も含む。
@@ -100,12 +100,12 @@ acceptable_continuations, full_sentence}` に `origin` を加える。
 ## 同期
 
 ```sh
-python scripts/run.py benchmarks/common/build_common_benchmark.py --out-dir benchmarks/common
+python scripts/run.py benchmarks/common/build_common_benchmark.py
 node scripts/sync_benchmarks.mjs --check
 ```
 
-旧 `benchmark480.json` / `typo_benchmark300.json` は互換維持のために
-`benchmark740.json` / `typo_benchmark450.json` と並存させる。UI は新規ファイルを正とする。
+旧 `benchmark480.json` / `benchmark740.json` / `typo_benchmark300.json` は互換維持のために
+`benchmark840.json` / `typo_benchmark450.json` と並存させる。UI は新規ファイルを正とする。
 
 2016 起源の研究ベンチ（`benchmarks/research/`、`benchmarks/keyboard-correction/`）や
 Windows RPC 確認ツールは本正本の対象外。公開精度の代表値としては使わない

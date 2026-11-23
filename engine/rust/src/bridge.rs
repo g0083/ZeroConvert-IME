@@ -3,16 +3,19 @@ use crate::ai_assist::{self, runtime, AiAssistConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::path::PathBuf;
 
 pub type Complete = unsafe extern "C" fn(*mut c_void, bool, *const c_char, u64) -> *mut c_char;
 pub type Release = unsafe extern "C" fn(*mut c_void, *mut c_char);
 
+#[derive(Clone)]
 struct Host {
     complete: Complete,
     release: Release,
     context: *mut c_void,
     revision: u64,
     read_learning: bool,
+    benchmark_dictionary: Option<PathBuf>,
 }
 impl Host {
     fn keyboard_repair_request(
@@ -31,7 +34,10 @@ impl Host {
                 .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
                 .collect()
         };
-        let dictionary = runtime::reverse_dictionary_path()
+        let dictionary = self
+            .benchmark_dictionary
+            .clone()
+            .or_else(runtime::reverse_dictionary_path)
             .map(|p| clean(&p.to_string_lossy()))
             .unwrap_or_default();
         let body = json!({
@@ -61,6 +67,9 @@ impl runtime::CompletionBackend for Host {
     }
     fn read_learning(&self) -> bool {
         self.read_learning
+    }
+    fn cache_results(&self) -> bool {
+        self.benchmark_dictionary.is_none()
     }
     // Repair runs in-process on the loaded model, so the native-worker gate is open.
     fn allow_native_worker(&self) -> bool {
@@ -143,6 +152,36 @@ fn correction_suggestion_json(suggestion: &ai_assist::TypoSuggestion, automatic:
         "autoApply": automatic,
         "relevance": if automatic { 100 } else if suggestion.learned { 70 } else { 30 }
     })
+}
+
+fn assist_config() -> AiAssistConfig {
+    AiAssistConfig {
+        enabled: true,
+        // Android uses the same loaded model for correction and prediction.
+        corrector_port: runtime::PREDICTION_SERVER_PORT,
+        ..AiAssistConfig::default()
+    }
+}
+
+fn initial_correction(
+    context: &str,
+    reading: &str,
+    baseline: &str,
+    raw: &str,
+    touch_hints: &str,
+    input_mode: &str,
+    config: &AiAssistConfig,
+) -> Option<ai_assist::TypoSuggestion> {
+    ai_assist::corrector::suggest_composition_with_input_hints(
+        context,
+        reading,
+        baseline,
+        raw,
+        touch_hints,
+        input_mode,
+        config,
+    )
+    .filter(|suggestion| suggestion.surface != baseline && suggestion.surface != reading)
 }
 
 pub fn dispatch(value: &str) -> Result<Value, String> {
@@ -394,13 +433,7 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
     if !matches!(request.input_mode.as_str(), "" | "qwerty" | "flick") {
         return Err("invalid inputMode".into());
     }
-    let config = AiAssistConfig {
-        enabled: true,
-        // Corrections convert through the same loaded model, as on Windows
-        // (corrector port == main conversion port); the APK has no second model.
-        corrector_port: runtime::PREDICTION_SERVER_PORT,
-        ..AiAssistConfig::default()
-    };
+    let config = assist_config();
     let Some(assist_reading) = crate::assist_policy::assist_reading(
         &request.input,
         &request.baseline_reading,
@@ -452,7 +485,7 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
                     },
                 );
             }
-            Ok(ai_assist::corrector::suggest_composition_with_input_hints(
+            Ok(initial_correction(
                 &request.context,
                 assist_reading,
                 &request.baseline,
@@ -461,7 +494,6 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
                 &request.input_mode,
                 &config,
             )
-            .filter(|s| s.surface != request.baseline && s.surface != request.input)
             .map(|suggestion| {
                 let automatic =
                     ai_assist::corrector::can_auto_apply_composition_suggestion_with_strength(
@@ -536,13 +568,8 @@ pub unsafe extern "C" fn zerocon_assist_request(
                 envelope["cases"].clone(),
             )
             .map_err(|e| e.to_string())?;
-            let host = Host {
-                complete,
-                release,
-                context,
-                revision: 0,
-                read_learning: false,
-            };
+            use ai_assist::benchmark::{self, ConversionScope};
+            use runtime::CompletionBackend;
             let scope: ai_assist::benchmark::ConversionScope = envelope
                 .get("scope")
                 .cloned()
@@ -550,33 +577,61 @@ pub unsafe extern "C" fn zerocon_assist_request(
                 .transpose()
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
-            if scope == ai_assist::benchmark::ConversionScope::Candidates {
-                return ai_assist::benchmark::run_candidate_batch(
-                    &cases,
-                    move |reading, context| {
-                        use runtime::CompletionBackend;
-                        let reply = host.complete(
-                            0,
-                            "",
-                            &json!({"reading": reading, "context": context}),
-                            0,
-                        )?;
-                        serde_json::from_value(reply).ok()
-                    },
-                )
-                .map(|rows| json!({"rows": rows}));
-            }
             let dictionary = std::path::Path::new(envelope["dictionary"].as_str().unwrap_or(""));
-            return ai_assist::benchmark::run_batch(
-                &cases,
-                dictionary,
-                move |prompt, tokens, timeout| {
-                    use runtime::CompletionBackend;
-                    let request = json!({"prompt": prompt, "n_predict": tokens});
-                    let reply = host.complete(0, "", &request, timeout)?;
-                    serde_json::from_value(reply).ok()
-                },
-            )
+            let host = Host {
+                complete,
+                release,
+                context,
+                revision: 0,
+                read_learning: false,
+                benchmark_dictionary: (scope == ConversionScope::Typo)
+                    .then(|| dictionary.to_owned()),
+            };
+            let convert = |reading: &str, context: &str| {
+                let reply =
+                    host.complete(0, "", &json!({"reading": reading, "context": context}), 0)?;
+                serde_json::from_value(reply).ok()
+            };
+            if scope == ConversionScope::Candidates {
+                return benchmark::run_candidate_batch(&cases, convert)
+                    .map(|rows| json!({"rows": rows}));
+            }
+            if scope == ConversionScope::Typo {
+                if cases.is_empty() || cases.len() > benchmark::BATCH_SIZE {
+                    return Err("invalid benchmark batch size".into());
+                }
+                let enabled = envelope["typo_enabled"]
+                    .as_bool()
+                    .ok_or("missing typo_enabled")?;
+                let config = assist_config();
+                return runtime::with_backend(Box::new(host.clone()), || {
+                    let rows = cases
+                        .iter()
+                        .map(|case| {
+                            benchmark::run_typo_case(
+                                case,
+                                dictionary,
+                                convert,
+                                |context, reading, baseline, raw| {
+                                    if enabled {
+                                        initial_correction(
+                                            context, reading, baseline, raw, "", "", &config,
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                },
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(json!({"rows": rows}))
+                });
+            }
+            return benchmark::run_batch(&cases, dictionary, move |prompt, tokens, timeout| {
+                let request = json!({"prompt": prompt, "n_predict": tokens});
+                let reply = host.complete(0, "", &request, timeout)?;
+                serde_json::from_value(reply).ok()
+            })
             .map(|rows| json!({"rows": rows}));
         }
         let revision = envelope["revision"].as_u64().unwrap_or(0);
@@ -588,6 +643,7 @@ pub unsafe extern "C" fn zerocon_assist_request(
                 context,
                 revision,
                 read_learning,
+                benchmark_dictionary: None,
             }),
             || dispatch(request),
         )

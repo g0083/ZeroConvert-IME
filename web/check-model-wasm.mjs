@@ -16,7 +16,7 @@ let state;
 for (const value of 'ashitanokaigi') state = request('append', { value });
 assert.equal(state.raw, 'ashitanokaigi');
 assert.equal(state.reading, 'あしたのかいぎ');
-assert.match(state.modelStatus, /^load file:\/\/\/runtime\/models\/zerocon-nano-v4\.1-iq4nl-emb8\.gguf$/);
+assert.match(state.modelStatus, /^load file:\/\/\/runtime\/models\/zerocon-nano-v4\.2-iq4nl-emb8\.gguf$/);
 assert.equal(state.candidates[0].text + state.candidates[0].suffix, '明日の会議');
 assert.equal(request('move', { offset: -1 }).cursor, 6);
 assert.equal(request('move', { offset: 1 }).cursor, 7);

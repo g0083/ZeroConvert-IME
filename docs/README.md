@@ -21,7 +21,7 @@
 | [typo-correction.md](typo-correction.md) | Windows タイポ補正（`keyboard-prior` + メインモデル統合 Stage-1/2）の仕様・検証 |
 | [predictive-assist.md](predictive-assist.md) | Windows 文の先読み（ZeroCon 2段生成）の仕様・検証 |
 | [english-completion.md](english-completion.md) | 英字モードの単語補完と Windows/Android 共有学習の仕様 |
-| [model-assets.md](model-assets.md) | ZeroCon Model（Nano / Standard v4.1 4種・同梱せず取得）・バックエンド・翻訳モデル配置 |
+| [model-assets.md](model-assets.md) | ZeroCon Model（Nano / Standard v4.2 4種・同梱せず取得）・バックエンド・翻訳モデル配置 |
 | [dictionary-assets.md](dictionary-assets.md) | 日本語辞書（azooKey標準辞書＋追加辞書）の実行時取得・配置・初回起動ゲート |
 
 ## Android・共有エンジン開発

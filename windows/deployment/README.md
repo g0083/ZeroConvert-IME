@@ -2,14 +2,14 @@
 
 このディレクトリは配布スクリプトのソースです。パッケージ作成・インストール時にバイナリと同じ配布先へコピーされます。以下の操作は、必要なバイナリが揃った配布フォルダで実行してください。
 
-**ZeroConvert IME (Windows)** は、azooKey-Windows を基盤に、独自の **ZeroCon Model Nano v4.1**（ニューラルかな漢字変換・先読み・メインモデル統合タイポ補正）、GPU アクセラレーション（Vulkan / CPU）、ストリーミング自動確定、英字補完学習、ローカル翻訳入力（PLaMo 3 Translate、任意ダウンロード）を統合した Windows TSF 日本語入力システムです。
+**ZeroConvert IME (Windows)** は、azooKey-Windows を基盤に、独自の **ZeroCon Model Nano v4.2**（ニューラルかな漢字変換・先読み・メインモデル統合タイポ補正）、GPU アクセラレーション（Vulkan / CPU）、ストリーミング自動確定、英字補完学習、ローカル翻訳入力（PLaMo 3 Translate、任意ダウンロード）を統合した Windows TSF 日本語入力システムです。
 
 ---
 
 ## 主な特徴
 
-- **ZeroCon Model Nano / Standard v4.1 搭載**:
-  - **Nano v4.1 IQ4_emb8**（既定・強制、約 18.7 MiB）、**Nano v4.1 Q8**、**Standard v4.1 IQ4_emb8**、**Standard v4.1 Q8** の 4 種類を選択できます。モデルはインストーラーに含まれず、`%LOCALAPPDATA%\ZeroConIME\models\` にキャッシュが無い場合は設定画面から GitHub リリースの固定アセットをダウンロードします（正確な仕様は `model-catalog.json` を参照）。
+- **ZeroCon Model Nano / Standard v4.2 搭載**:
+  - **Nano v4.2 IQ4_emb8**（既定・強制、約 18.7 MiB）、**Nano v4.2 Q8**、**Standard v4.2 IQ4_emb8**、**Standard v4.2 Q8** の 4 種類を選択できます。モデルはインストーラーに含まれず、`%LOCALAPPDATA%\ZeroConIME\models\` にキャッシュが無い場合は設定画面から GitHub リリースの固定アセットをダウンロードします（正確な仕様は `model-catalog.json` を参照）。
   - 辞書ラティス＋ニューラル変換により、文脈・同音異義語・日常会話・数値変換（`nam` 連携）を高精度かつ低遅延で実行します。
 - **メインモデル統合のタイポ補正と文の先読み**:
   - 打鍵候補探索（`keyboard-prior.exe`）とメイン変換モデル（ポート `18091`）による 2 段リランキングで誤入力を補正し、同じモデルで文の先読みも提案します。

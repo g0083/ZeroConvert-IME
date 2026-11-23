@@ -22,22 +22,22 @@ Windowsでは `Ctrl+T` の翻訳バーから日本語→英語／英語→日本
 
 モデルはPLaMo Community Licenseで提供されます。ライセンス条件は [Androidの表示](android/THIRD_PARTY_LICENSES.md) / [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) を確認してください。
 
-## 変換操作を減らす、独自のZeroCon Model Nano v4.1
+## 変換操作を減らす、独自のZeroCon Model Nano v4.2
 
-ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nano）から文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、`nam` 数値置換と連携した数字変換を強化した派生モデルです。Windows・Androidともに通常変換モデルは Nano / Standard v4.1 の量子化（IQ4_emb8 / Q8）の4種類を選択でき、インストーラー・APKには含めず設定画面でキャッシュへダウンロードします。
+ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nano）から文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、`nam` 数値置換と連携した数字変換、さらに追加辞書の固有名詞・専門複合語変換を強化した派生モデルです。Windows・Androidともに通常変換モデルは Nano / Standard v4.2 の量子化（IQ4_emb8 / Q8）の4種類を選択でき、インストーラー・APKには含めず設定画面でキャッシュへダウンロードします。
 
 | モデル | サイズ | 特徴 |
 |---|---:|---|
-| **Nano v4.1 IQ4_emb8**（既定・強制） | **18.7 MiB** | 内部をIQ4_NL、入力埋め込み・出力をQ8_0にした省メモリ版 |
-| **Nano v4.1 Q8** | **27.7 MiB** | Q8_0で学習成果を保持した高精度版 |
-| **Standard v4.1 IQ4_emb8** | **58.5 MiB** | 中規模版の省メモリ版 |
-| **Standard v4.1 Q8** | **99.0 MiB** | 中規模版の高精度版 |
+| **Nano v4.2 IQ4_emb8**（既定・強制） | **18.7 MiB** | 内部をIQ4_NL、入力埋め込み・出力をQ8_0にした省メモリ版 |
+| **Nano v4.2 Q8** | **27.7 MiB** | Q8_0で学習成果を保持した高精度版 |
+| **Standard v4.2 IQ4_emb8** | **58.5 MiB** | 中規模版の省メモリ版 |
+| **Standard v4.2 Q8** | **99.0 MiB** | 中規模版の高精度版 |
 
-6層・約26.7Mパラメータの構造を保ちながら、v4のrank-64 DoRA・二重アンカー蒸留・自己コピー/EOS抑止学習を土台に、v4.1では日常会話・口語・過剰漢字抑止および数値マスク（`nam`）互換の追加学習を施しました。学習時のadapterは重みに統合するため、推論時に追加の層やadapter実行は必要ありません。
+6層・約26.7Mパラメータの構造を保ちながら、v4のrank-64 DoRA・二重アンカー蒸留・自己コピー/EOS抑止学習を土台に、v4.1の日常会話・口語・過剰漢字抑止および数値マスク（`nam`）互換、さらにv4.2では追加辞書105,039見出し・通常辞書同音対比・時間/数値単位表記の追加学習を施しました（840問評価で追加辞書100問が v4.1→v4.2 で Standard Q8/IQ4 `100/100`・Nano Q8/IQ4 `99/100`、直接推論 `Nano Q8 836/840`・`Std Q8 835/840`・`Nano IQ4 829/840`、共通候補生成 `Std Q8 836/840`・`Nano Q8 835/840`・`Nano IQ4 827/840` へ向上し、未学習24問の時間・単位プローブでも Nano Q8/IQ4 が 24/24 を達成）。学習時のadapterは重みに統合するため、推論時に追加の層やadapter実行は必要ありません。
 
-なお、取得元はGitHubリリース [`models-v4.1`](https://github.com/g0083/ZeroConvert-IME/releases/tag/models-v4.1) 固定で、モデル一覧には取得・進捗・中断・切替・削除を操作できます。モデルファイルの正規カタログは `windows/deployment/model-catalog.json` です。v4.1では Q5_K_M / Q5_K_S / Q6_K もベンチマークしましたがIQ4/Q8に勝てず不採用としています。
+なお、取得元はGitHubリリース [`models-v4.2`](https://github.com/g0083/ZeroConvert-IME/releases/tag/models-v4.2) 固定で、モデル一覧には取得・進捗・中断・切替・削除を操作できます。モデルファイルの正規カタログは `windows/deployment/model-catalog.json` です。v4.1では Q5_K_M / Q5_K_S / Q6_K もベンチマークしましたがIQ4/Q8に勝てず不採用としています。
 
-ZeroCon Model v4.1は、学習時にApache-2.0で公開されていたzenz-v3.2の重みを追加学習したモデルです。個別の許諾がないZeroCon独自の改変部分には製品の利用規約が適用されます。追加辞書に含まれるSudachiDictとWikidataのデータには、各出典の条件が適用されます。 [利用規約](LICENSE.md) · [モデルの来歴](docs/model-assets.md#上流ライセンス) · [共通ライセンス一覧](licenses/third-party.json)
+ZeroCon Model v4.2は、学習時にApache-2.0で公開されていたzenz-v3.2の重みを追加学習したモデルです。個別の許諾がないZeroCon独自の改変部分には製品の利用規約が適用されます。追加辞書に含まれるSudachiDictとWikidataのデータには、各出典の条件が適用されます。 [利用規約](LICENSE.md) · [モデルの来歴](docs/model-assets.md#上流ライセンス) · [共通ライセンス一覧](licenses/third-party.json)
 
 ### ベースzenzからどこまで進んだか（Nano v4 開発評価480問の記録）
 
@@ -55,7 +55,7 @@ CPUのみ・4スレッドのi5-14500HXでは、IQ4_emb8は平均38.7ms、Q8は40
 
 ## 🎯 タイポ補正の劇的進化：メインモデル統合（v0.2.3）
 
-v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（Nano v4、現行は Nano v4.1）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
+v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（Nano v4、現行は Nano v4.2）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
 
 これにより、**常駐 `llama-server` プロセス数を半減（2→1）** させてメモリと起動負荷を削減しながら、タイポ補正正解率は **20.8% → 78.0%（実質正解 86.7% / +57.2pt / 約4倍）** という圧倒的な進化を遂げました。
 

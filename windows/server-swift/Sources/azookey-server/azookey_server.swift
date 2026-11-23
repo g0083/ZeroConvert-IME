@@ -856,21 +856,33 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
     return zenzaiEnabled && !normalizedBackend.isEmpty && normalizedBackend != "cpu"
 }
 
+func canonicalZenzaiModelId(_ raw: String?) -> String {
+    switch raw ?? "nano_v4_2_iq4_emb8" {
+    case "nano_v4_2_q8", "nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km":
+        return "nano_v4_2_q8"
+    case "standard_v4_2_iq4_emb8", "standard_v4_1_iq4_emb8", "standard_v4_iq4_emb8":
+        return "standard_v4_2_iq4_emb8"
+    case "standard_v4_2_q8", "standard_v4_1_q8", "standard_v4_q8", "standard_v4_2", "standard_v4_1":
+        return "standard_v4_2_q8"
+    default:
+        return "nano_v4_2_iq4_emb8"
+    }
+}
+
 func converterModelURL() -> URL {
     if let embeddedPath = config["embeddedModelPath"] as? String {
         return URL(filePath: embeddedPath)
     }
-    let model = (config["model"] as? String) ?? "nano_v4_1_iq4_emb8"
     let filename: String
-    switch model {
-    case "nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km":
-        filename = "zerocon-nano-v4.1-q8_0.gguf"
-    case "standard_v4_1_iq4_emb8", "standard_v4_iq4_emb8":
-        filename = "zerocon-standard-v4.1-iq4nl-emb8.gguf"
-    case "standard_v4_1_q8", "standard_v4_q8", "standard_v4_1":
-        filename = "zerocon-standard-v4.1-q8_0.gguf"
+    switch canonicalZenzaiModelId(config["model"] as? String) {
+    case "nano_v4_2_q8":
+        filename = "zerocon-nano-v4.2-q8_0.gguf"
+    case "standard_v4_2_iq4_emb8":
+        filename = "zerocon-standard-v4.2-iq4nl-emb8.gguf"
+    case "standard_v4_2_q8":
+        filename = "zerocon-standard-v4.2-q8_0.gguf"
     default:
-        filename = "zerocon-nano-v4.1-iq4nl-emb8.gguf"
+        filename = "zerocon-nano-v4.2-iq4nl-emb8.gguf"
     }
     // 取得済みキャッシュ（%LOCALAPPDATA%\ZeroConIME\models\）を優先し、
     // 旧配布物に残ったモデルがあればそのまま使う。
@@ -882,11 +894,59 @@ func converterModelURL() -> URL {
     return execURL.appendingPathComponent("models/" + filename)
 }
 
-private func configureEngineRuntime(zenzaiEnabled: Bool) {
+#if os(Windows)
+internal let expectedWindowsCpuTuningVersion = 2
+nonisolated(unsafe) internal private(set) var lastAppliedWindowsCpuRuntimeTuning: RuntimeTuningProbeConfig?
+
+func resolvedWindowsCpuRuntimeTuning(
+    zenzaiEnabled: Bool,
+    shouldOffloadToGpu: Bool,
+    model: String?,
+    tuning: CpuRuntimeTuningSettings?
+) -> RuntimeTuningProbeConfig? {
+    guard zenzaiEnabled,
+          !shouldOffloadToGpu,
+          let tuning,
+          tuning.tuning_version == expectedWindowsCpuTuningVersion,
+          tuning.decode_threads > 0 else {
+        return nil
+    }
+    if let tunedModelId = tuning.model_id, !tunedModelId.isEmpty {
+        guard canonicalZenzaiModelId(tunedModelId) == canonicalZenzaiModelId(model) else {
+            return nil
+        }
+    }
+    return RuntimeTuningProbeConfig(
+        decodeThreads: tuning.decode_threads,
+        batchThreads: tuning.batch_threads.flatMap { $0 > 0 ? $0 : nil },
+        directModelFirst: tuning.direct_model_first
+    )
+}
+#endif
+
+internal func configureEngineRuntime(zenzaiEnabled: Bool) {
     let shouldOffloadToGpu = shouldOffloadZenzaiToGpu(
         zenzaiEnabled: zenzaiEnabled,
         backend: config["backend"] as? String
     )
+    #if os(Windows)
+    if let applied = resolvedWindowsCpuRuntimeTuning(
+        zenzaiEnabled: zenzaiEnabled,
+        shouldOffloadToGpu: shouldOffloadToGpu,
+        model: config["model"] as? String,
+        tuning: config["cpuRuntimeTuning"] as? CpuRuntimeTuningSettings
+    ) {
+        ZenzaiRuntimeTuning.configure(
+            decodeThreads: applied.decodeThreads,
+            batchThreads: applied.batchThreads,
+            directModelFirstOverride: applied.directModelFirst
+        )
+        lastAppliedWindowsCpuRuntimeTuning = applied
+    } else {
+        ZenzaiRuntimeTuning.reset()
+        lastAppliedWindowsCpuRuntimeTuning = nil
+    }
+    #endif
     KanaKanjiConverterEngineRuntime.configure(
         gpuLayerCount: shouldOffloadToGpu ? resolvedGpuLayerCount(config["gpuLayers"] as? Int) : 0
     )
@@ -1266,7 +1326,43 @@ func discardPinnedLearningCandidatesBeforeCompositionEdit() {
 }
 
 func normalizedLearningRuby(_ ruby: String) -> String {
-    ruby.precomposedStringWithCanonicalMapping.unicodeScalars.reduce(into: "") { normalized, scalar in
+    var needsPrecompose = false
+    var needsKanaShift = false
+    for scalar in ruby.unicodeScalars {
+        let value = scalar.value
+        if (0x3041...0x3096).contains(value) || (0x309D...0x309F).contains(value) {
+            needsKanaShift = true
+        } else if !((0x0020...0x007E).contains(value)
+            || (0x3000...0x3029).contains(value)
+            || (0x3030...0x303F).contains(value)
+            || (0x309B...0x309C).contains(value)
+            || (0x30A0...0x30FF).contains(value)
+            || (0x4E00...0x9FFF).contains(value)
+            || (0xFF01...0xFF9F).contains(value)
+            || value == 0x0009 || value == 0x000A || value == 0x000D) {
+            needsPrecompose = true
+            break
+        }
+    }
+    if !needsPrecompose {
+        guard needsKanaShift else {
+            return ruby
+        }
+        var shifted = String.UnicodeScalarView()
+        shifted.reserveCapacity(ruby.unicodeScalars.count)
+        for scalar in ruby.unicodeScalars {
+            let value = scalar.value
+            let normalizedValue = switch value {
+            case 0x3041...0x3096, 0x309D...0x309F:
+                value + 0x60
+            default:
+                value
+            }
+            shifted.append(UnicodeScalar(normalizedValue)!)
+        }
+        return String(shifted)
+    }
+    return ruby.precomposedStringWithCanonicalMapping.unicodeScalars.reduce(into: "") { normalized, scalar in
         let value = scalar.value
         let normalizedValue = switch value {
         case 0x3041...0x3096, 0x309D...0x309F:
@@ -1658,13 +1754,44 @@ func prioritizeLearningSelectionOverrides<Element>(
 
     guard isPredictiveConversionEnabled(), let synthesizeElement,
           normalizedRuby.count >= 2 || !expandedPrefixRubies.isEmpty else { return results }
+    let selectionPrefixMatches = mayReadLearning
+        ? learningSelectionOverrides.prefixMatches(
+            for: normalizedRuby, maxCount: 2, expandedPrefixRubies: expandedPrefixRubies
+        )
+        : []
+    var bigramMatches: [PostCompositionBigramEntry] = []
+    if mayReadLearning, normalizedRuby.count >= 2 {
+        for key in postCompositionContextLookupKeys(leftContext) {
+            for entry in postCompositionBigramStore.entries(for: key)
+            where entry.ruby != normalizedRuby && entry.ruby.hasPrefix(normalizedRuby) {
+                bigramMatches.append(entry)
+            }
+        }
+    }
+    let userDictMatches = (!currentUserDictionaryEntries.isEmpty && normalizedRuby.count >= 2)
+        ? (installedUserDictionary?.prefixes[normalizedRuby] ?? []).filter {
+            $0.ruby != normalizedRuby && $0.ruby.hasPrefix(normalizedRuby)
+        }
+        : []
+    guard !selectionPrefixMatches.isEmpty || !bigramMatches.isEmpty || !userDictMatches.isEmpty else {
+        return results
+    }
+
+    let normalizedRubyCount = normalizedRuby.count
     // All exact full-span candidates stay ahead of completions, even if there are interleaved subclauses.
     var insertionIndex = results.lastIndex {
-        learningCandidateRuby(candidate($0)) == normalizedRuby
+        let item = candidate($0)
+        return item.rubyCount == normalizedRubyCount && learningCandidateRuby(item) == normalizedRuby
     }.map { $0 + 1 } ?? min(1, results.count)
-    let ref = results.first { learningCandidateRuby(candidate($0)) == normalizedRuby } ?? results.first
+    let ref = results.first {
+        let item = candidate($0)
+        return item.rubyCount == normalizedRubyCount && learningCandidateRuby(item) == normalizedRuby
+    } ?? results.first
     let refCount = ref.map { candidate($0).composingCount } ?? .inputCount(ruby.count)
-    var seenOutputs = Set(results[..<insertionIndex].map { learningCandidateOutput(candidate($0)) })
+    var seenOutputs = Set<String>(minimumCapacity: insertionIndex)
+    for element in results[..<insertionIndex] {
+        seenOutputs.insert(learningCandidateOutput(candidate(element)))
+    }
 
     func insert(_ output: String, _ ruby: String, data: DicdataElement? = nil) -> Bool {
         guard seenOutputs.insert(output).inserted else { return false }
@@ -1682,27 +1809,14 @@ func prioritizeLearningSelectionOverrides<Element>(
         return true
     }
 
-    if mayReadLearning {
-        for match in learningSelectionOverrides.prefixMatches(
-            for: normalizedRuby, maxCount: 2, expandedPrefixRubies: expandedPrefixRubies
-        ) {
-            _ = insert(match.output, match.ruby)
-        }
+    for match in selectionPrefixMatches {
+        _ = insert(match.output, match.ruby)
     }
     guard normalizedRuby.count >= 2 else { return results }
-    if mayReadLearning {
-        for key in postCompositionContextLookupKeys(leftContext) {
-            for entry in postCompositionBigramStore.entries(for: key)
-            where entry.ruby != normalizedRuby && entry.ruby.hasPrefix(normalizedRuby) {
-                if insert(entry.surface, entry.ruby) { return results }
-            }
-        }
+    for entry in bigramMatches {
+        if insert(entry.surface, entry.ruby) { return results }
     }
-    guard !currentUserDictionaryEntries.isEmpty else { return results }
-    let dictionaryMatches = installedUserDictionary?.prefixes[normalizedRuby] ?? []
-    if let entry = dictionaryMatches.first(where: {
-        $0.ruby != normalizedRuby && $0.ruby.hasPrefix(normalizedRuby) && !seenOutputs.contains($0.word)
-    }) {
+    if let entry = userDictMatches.first(where: { !seenOutputs.contains($0.word) }) {
         _ = insert(entry.word, entry.ruby, data: entry)
     }
     return results
@@ -1790,12 +1904,21 @@ private struct LearningSettings: Decodable {
     let strength: String?
 }
 
+struct CpuRuntimeTuningSettings: Decodable {
+    let decode_threads: Int32
+    let batch_threads: Int32?
+    let direct_model_first: Bool
+    let model_id: String?
+    let tuning_version: Int?
+}
+
 private struct ZenzaiSettings: Decodable {
     let enable: Bool?
     let profile: String?
     let backend: String?
     let gpu_layers: Int?
     let model: String?
+    let cpu_runtime_tuning: CpuRuntimeTuningSettings?
 }
 
 private struct UserDictionarySettings: Decodable, Sendable {
@@ -1972,6 +2095,22 @@ private func installUserDictionarySnapshot(_ snapshot: UserDictionarySnapshot) {
 func adoptPendingUserDictionary() {
     guard let snapshot = userDictionaryReloader.takePending() else { return }
     installUserDictionarySnapshot(snapshot)
+}
+
+func withIsolatedProbeUserDictionary<T>(
+    mainConverter: KanaKanjiConverter = converter,
+    supplementConverter: KanaKanjiConverter = normalNBestSupplementConverter,
+    body: () -> T
+) -> T {
+    let restoreSnapshot = installedUserDictionary?.conversion ?? PreparedDynamicUserDictionary([])
+    let emptySnapshot = PreparedDynamicUserDictionary([])
+    mainConverter.installPreparedDynamicUserDictionary(emptySnapshot)
+    supplementConverter.installPreparedDynamicUserDictionary(emptySnapshot)
+    defer {
+        mainConverter.installPreparedDynamicUserDictionary(restoreSnapshot)
+        supplementConverter.installPreparedDynamicUserDictionary(restoreSnapshot)
+    }
+    return body()
 }
 
 
@@ -2682,7 +2821,7 @@ func optionsForNormalNBestSupplement(from options: ConvertRequestOptions) -> Con
 }
 
 func optionsForZenzaiConversion(from options: ConvertRequestOptions) -> ConvertRequestOptions {
-    var zenzaiOptions = options
+    var zenzaiOptions = options.disablingZenzaiRichCandidates()
     zenzaiOptions.requireJapanesePrediction = .disabled
     zenzaiOptions.requireEnglishPrediction = .disabled
     return zenzaiOptions
@@ -3013,11 +3152,13 @@ func mergeZenzaiMainResultsWithNormalNBest(
     hiragana: String,
     filterZenzaiAlternatives: Bool = true
 ) -> [Candidate] {
-    var seenTexts = Set<String>()
+    var seenTexts = Set<String>(minimumCapacity: zenzaiResults.count + normalNBestResults.count)
     var results: [Candidate] = []
+    results.reserveCapacity(zenzaiResults.count + normalNBestResults.count)
+    let katakanaHiragana = hiraganaToKatakana(hiragana)
 
-    func appendIfNeeded(_ candidate: Candidate) {
-        let text = constructCandidateString(candidate: candidate, hiragana: hiragana)
+    func appendIfNeeded(_ candidate: Candidate, precomputedText: String? = nil) {
+        let text = precomputedText ?? constructCandidateString(candidate: candidate, hiragana: hiragana)
         guard seenTexts.insert(text).inserted else {
             return
         }
@@ -3035,10 +3176,19 @@ func mergeZenzaiMainResultsWithNormalNBest(
         appendIfNeeded(topCandidate)
     }
     for candidate in zenzaiResults.dropFirst() {
-        if filterZenzaiAlternatives && !shouldKeepZenzaiAlternativeCandidate(candidate: candidate, hiragana: hiragana) {
-            continue
+        if filterZenzaiAlternatives {
+            guard candidate.rubyCount >= hiragana.count else {
+                continue
+            }
+            let rawText = constructCandidateString(candidate: candidate, hiragana: hiragana)
+            let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed != hiragana, trimmed != katakanaHiragana else {
+                continue
+            }
+            appendIfNeeded(candidate, precomputedText: rawText)
+        } else {
+            appendIfNeeded(candidate)
         }
-        appendIfNeeded(candidate)
     }
     for candidate in normalNBestResults {
         appendIfNeeded(candidate)
@@ -3059,11 +3209,10 @@ func mergePredictiveSupplementCandidates(
         return exactMerged
     }
     let katakanaHiragana = hiraganaToKatakana(hiragana)
-    var seenTexts = Set(
-        exactMerged.map {
-            constructCandidateString(candidate: $0, hiragana: hiragana)
-        }
-    )
+    var seenTexts = Set<String>(minimumCapacity: exactMerged.count + maxPredictions)
+    for candidate in exactMerged {
+        seenTexts.insert(constructCandidateString(candidate: candidate, hiragana: hiragana))
+    }
     var filteredPredictions: [Candidate] = []
     filteredPredictions.reserveCapacity(min(maxPredictions, predictionResults.count))
     for candidate in predictionResults {
@@ -3116,15 +3265,19 @@ func extendsKanaReading(_ candidate: Candidate, normalizedReading: String) -> Bo
 func promoteKanaReadingCompletion(
     in candidates: inout [Candidate], normalizedReading: String, afterFullSpan: Bool = false
 ) {
-    let insertionIndex = afterFullSpan
-        ? (candidates.lastIndex { learningCandidateRuby($0) == normalizedReading }.map { $0 + 1 } ?? 1)
-        : 1
     guard normalizedReading.count >= 2,
           let first = candidates.first,
           !extendsKanaReading(first, normalizedReading: normalizedReading),
           let index = candidates.dropFirst().firstIndex(where: {
               extendsKanaReading($0, normalizedReading: normalizedReading)
-          }), index > insertionIndex else { return }
+          }) else { return }
+    let normalizedCount = normalizedReading.count
+    let insertionIndex = afterFullSpan
+        ? (candidates.lastIndex {
+            $0.rubyCount == normalizedCount && learningCandidateRuby($0) == normalizedReading
+        }.map { $0 + 1 } ?? 1)
+        : 1
+    guard index > insertionIndex else { return }
     let completion = candidates.remove(at: index)
     candidates.insert(completion, at: insertionIndex)
 }
@@ -3169,6 +3322,7 @@ private func requestNormalNBestSupplementCandidates(
     sessionID: String? = nil,
     cacheOnlyJapanesePrediction: Bool = false,
     prefixConstraintSurface: String? = nil,
+    stage: String = "request_normal_nbest_supplement",
     operation: String,
     diagnosticDetails: String
 ) -> ConversionResult {
@@ -3186,7 +3340,7 @@ private func requestNormalNBestSupplementCandidates(
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: operation,
-        stage: "request_normal_nbest_supplement",
+        stage: stage,
         elapsedMs: requestMs,
         details: "candidate_count=\(converted.mainResults.count);\(diagnosticDetails)"
     )
@@ -3196,6 +3350,426 @@ private func requestNormalNBestSupplementCandidates(
     )
 
     return converted
+}
+
+private final class UncheckedSendableBox<Value>: @unchecked Sendable {
+    var value: Value
+    init(_ value: Value) {
+        self.value = value
+    }
+}
+
+private let normalNBestSupplementQueue = DispatchQueue(
+    label: "zerocon.nbest.supplement",
+    qos: .userInitiated
+)
+
+struct ZenzaiPredictionContinuationRequest {
+    let inputData: ComposingText
+    let options: ConvertRequestOptions
+    let prefixConstraintSurface: String
+    let cacheOnlyJapanesePrediction: Bool
+    let skipWhenSufficientPredictions: Bool
+}
+
+struct ZenzaiSupplementExecutionResult {
+    let zenzai: ConversionResult
+    let supplement: ConversionResult
+    let usedDirectModelFirst: Bool
+    let fellBackToAllZenzai: Bool
+    let ranInParallel: Bool
+    let nbestNs: UInt64
+    let predictionContinuationResult: ConversionResult?
+    let skippedPredictionContinuation: Bool
+
+    init(
+        zenzai: ConversionResult,
+        supplement: ConversionResult,
+        usedDirectModelFirst: Bool,
+        fellBackToAllZenzai: Bool,
+        ranInParallel: Bool,
+        nbestNs: UInt64,
+        predictionContinuationResult: ConversionResult? = nil,
+        skippedPredictionContinuation: Bool = false
+    ) {
+        self.zenzai = zenzai
+        self.supplement = supplement
+        self.usedDirectModelFirst = usedDirectModelFirst
+        self.fellBackToAllZenzai = fellBackToAllZenzai
+        self.ranInParallel = ranInParallel
+        self.nbestNs = nbestNs
+        self.predictionContinuationResult = predictionContinuationResult
+        self.skippedPredictionContinuation = skippedPredictionContinuation
+    }
+}
+
+func executeZenzaiWithNormalNBestSupplement(
+    mainConverter: KanaKanjiConverter = converter,
+    supplementConverter: KanaKanjiConverter = normalNBestSupplementConverter,
+    inputData: ComposingText,
+    zenzaiOptions: ConvertRequestOptions,
+    supplementOptions: ConvertRequestOptions,
+    sessionID: String? = nil,
+    cacheOnlyJapanesePrediction: Bool = false,
+    prefixConstraintSurface: String? = nil,
+    predictionContinuation: ZenzaiPredictionContinuationRequest? = nil,
+    emitLogs: Bool = true,
+    operation: String,
+    diagnosticDetails: String
+) -> ZenzaiSupplementExecutionResult {
+    var normalOptions = supplementOptions
+    normalOptions.zenzaiMode = .off
+
+    func runSupplementSync() -> (result: ConversionResult, lattice: ReusableFullInputLattice?, elapsedNs: UInt64) {
+        let nbStart = DispatchTime.now().uptimeNanoseconds
+        let converted = supplementConverter.requestCandidates(
+            inputData,
+            options: normalOptions,
+            sessionID: sessionID,
+            cacheOnlyJapanesePrediction: cacheOnlyJapanesePrediction,
+            prefixConstraintSurface: prefixConstraintSurface
+        )
+        let exported = supplementConverter.exportReusableFullInputLattice(for: inputData)
+        return (converted, exported, DispatchTime.now().uptimeNanoseconds - nbStart)
+    }
+
+    func logSupplementIfNeeded(_ result: ConversionResult, elapsedNs: UInt64) {
+        guard emitLogs else {
+            return
+        }
+        performanceLog(
+            operation: operation,
+            stage: "request_normal_nbest_supplement",
+            elapsedMs: Int(elapsedNs / 1_000_000),
+            details: "candidate_count=\(result.mainResults.count);\(diagnosticDetails)"
+        )
+        serverLog(
+            "DEBUG",
+            "\(operation): normal N-best supplement returned candidateCount=\(result.mainResults.count) \(diagnosticDetails)"
+        )
+    }
+
+    func logPredictionContinuationIfNeeded(_ result: ConversionResult, elapsedNs: UInt64) {
+        guard emitLogs else {
+            return
+        }
+        performanceLog(
+            operation: "\(operation)_prediction_continuation",
+            stage: "request_prediction_continuation",
+            elapsedMs: Int(elapsedNs / 1_000_000),
+            details: "candidate_count=\(result.mainResults.count);\(diagnosticDetails)"
+        )
+        serverLog(
+            "DEBUG",
+            "\(operation)_prediction_continuation: normal N-best supplement returned candidateCount=\(result.mainResults.count) \(diagnosticDetails)"
+        )
+    }
+
+    let prep = mainConverter.prepareDirectZenzaiGeneration(for: inputData, options: zenzaiOptions)
+    if prep.eligible {
+        let canParallel = prep.isGpuOffloaded || ProcessInfo.processInfo.processorCount >= 4
+        let supplementPayload: (result: ConversionResult, lattice: ReusableFullInputLattice?, elapsedNs: UInt64)
+        let inlinePredResult: ConversionResult?
+        let inlineSkippedPred: Bool
+        let directOutcome: DirectZenzaiGenerationResult
+
+        if canParallel {
+            typealias ParallelOutput = (
+                result: ConversionResult,
+                lattice: ReusableFullInputLattice?,
+                elapsedNs: UInt64,
+                predictionContinuationResult: ConversionResult?,
+                predictionContinuationNs: UInt64,
+                skippedPredictionContinuation: Bool
+            )
+            let semaphore = DispatchSemaphore(value: 0)
+            let inputBox = UncheckedSendableBox((supplementConverter, inputData, normalOptions, sessionID, cacheOnlyJapanesePrediction, prefixConstraintSurface, predictionContinuation))
+            let outputBox = UncheckedSendableBox<ParallelOutput?>(nil)
+
+            normalNBestSupplementQueue.async {
+                let args = inputBox.value
+                let nbStart = DispatchTime.now().uptimeNanoseconds
+                let converted = args.0.requestCandidates(
+                    args.1,
+                    options: args.2,
+                    sessionID: args.3,
+                    cacheOnlyJapanesePrediction: args.4,
+                    prefixConstraintSurface: args.5
+                )
+                let exported = args.0.exportReusableFullInputLattice(for: args.1)
+                let elapsedNs = DispatchTime.now().uptimeNanoseconds - nbStart
+
+                var predResult: ConversionResult?
+                var predNs: UInt64 = 0
+                var skippedPred = false
+                if let predCont = args.6 {
+                    if predCont.skipWhenSufficientPredictions && converted.predictionResults.count >= 3 {
+                        skippedPred = true
+                    } else {
+                        var predOptions = predCont.options
+                        predOptions.zenzaiMode = .off
+                        predOptions.N_best = min(predOptions.N_best, 3)
+                        let predStart = DispatchTime.now().uptimeNanoseconds
+                        predResult = args.0.requestCandidates(
+                            predCont.inputData,
+                            options: predOptions,
+                            sessionID: "continuation-prediction",
+                            cacheOnlyJapanesePrediction: predCont.cacheOnlyJapanesePrediction,
+                            prefixConstraintSurface: predCont.prefixConstraintSurface
+                        )
+                        predNs = DispatchTime.now().uptimeNanoseconds - predStart
+                    }
+                }
+
+                outputBox.value = (converted, exported, elapsedNs, predResult, predNs, skippedPred)
+                semaphore.signal()
+            }
+
+            directOutcome = mainConverter.runDirectZenzaiGenerationOnly(inputData, options: zenzaiOptions)
+            semaphore.wait()
+
+            if let parallelOutput = outputBox.value {
+                supplementPayload = (parallelOutput.result, parallelOutput.lattice, parallelOutput.elapsedNs)
+                inlinePredResult = parallelOutput.predictionContinuationResult
+                inlineSkippedPred = parallelOutput.skippedPredictionContinuation
+                if let predResult = parallelOutput.predictionContinuationResult {
+                    logPredictionContinuationIfNeeded(predResult, elapsedNs: parallelOutput.predictionContinuationNs)
+                }
+            } else {
+                supplementPayload = runSupplementSync()
+                inlinePredResult = nil
+                inlineSkippedPred = false
+            }
+        } else {
+            supplementPayload = runSupplementSync()
+            inlinePredResult = nil
+            inlineSkippedPred = false
+            directOutcome = mainConverter.runDirectZenzaiGenerationOnly(inputData, options: zenzaiOptions)
+        }
+
+        logSupplementIfNeeded(supplementPayload.result, elapsedNs: supplementPayload.elapsedNs)
+
+        if let finalized = mainConverter.finalizeDirectZenzaiResult(
+            directOutcome,
+            inputData: inputData,
+            options: zenzaiOptions,
+            normalNBestResults: supplementPayload.result.mainResults,
+            reusableLattice: supplementPayload.lattice
+        ) {
+            return ZenzaiSupplementExecutionResult(
+                zenzai: finalized,
+                supplement: supplementPayload.result,
+                usedDirectModelFirst: true,
+                fellBackToAllZenzai: false,
+                ranInParallel: canParallel,
+                nbestNs: supplementPayload.elapsedNs,
+                predictionContinuationResult: inlinePredResult,
+                skippedPredictionContinuation: inlineSkippedPred
+            )
+        }
+
+        mainConverter.adoptReusableFullInputLattice(supplementPayload.lattice)
+        let fallbackConverted = mainConverter.requestCandidates(
+            inputData,
+            options: zenzaiOptions,
+            sessionID: sessionID,
+            cacheOnlyJapanesePrediction: cacheOnlyJapanesePrediction
+        )
+        return ZenzaiSupplementExecutionResult(
+            zenzai: fallbackConverted,
+            supplement: supplementPayload.result,
+            usedDirectModelFirst: false,
+            fellBackToAllZenzai: true,
+            ranInParallel: canParallel,
+            nbestNs: supplementPayload.elapsedNs,
+            predictionContinuationResult: inlinePredResult,
+            skippedPredictionContinuation: inlineSkippedPred
+        )
+    }
+
+    let supplementPayload = runSupplementSync()
+    logSupplementIfNeeded(supplementPayload.result, elapsedNs: supplementPayload.elapsedNs)
+    mainConverter.adoptReusableFullInputLattice(supplementPayload.lattice)
+    let zenzaiResult = mainConverter.requestCandidates(
+        inputData,
+        options: zenzaiOptions,
+        sessionID: sessionID,
+        cacheOnlyJapanesePrediction: cacheOnlyJapanesePrediction
+    )
+    return ZenzaiSupplementExecutionResult(
+        zenzai: zenzaiResult,
+        supplement: supplementPayload.result,
+        usedDirectModelFirst: false,
+        fellBackToAllZenzai: false,
+        ranInParallel: false,
+        nbestNs: supplementPayload.elapsedNs
+    )
+}
+
+struct RuntimeTuningProbeConfig: Codable, Sendable, Equatable {
+    let decodeThreads: Int32
+    let batchThreads: Int32?
+    let directModelFirst: Bool
+}
+
+struct RuntimeTuningProbeMeasurement: Codable, Sendable {
+    let decodeThreads: Int32
+    let batchThreads: Int32?
+    let directModelFirst: Bool
+    let meanNs: UInt64
+    let completedSamples: Int
+}
+
+func probeRuntimeTuningConfigs(
+    mainConverter: KanaKanjiConverter = converter,
+    supplementConverter: KanaKanjiConverter = normalNBestSupplementConverter,
+    baseOptions: ConvertRequestOptions,
+    configs: [RuntimeTuningProbeConfig],
+    shouldCancel: () -> Bool = { false }
+) -> [RuntimeTuningProbeMeasurement]? {
+    guard !configs.isEmpty, !shouldCancel() else {
+        return nil
+    }
+    let zenzaiOptions = optionsForZenzaiConversion(from: baseOptions)
+    var supplementOptions = optionsForNormalNBestSupplement(from: zenzaiOptions)
+    supplementOptions.zenzaiMode = .off
+
+    let sampleReadings = [
+        "きょうはいいてんき",
+        "きしゃがしゅざいする",
+        "あしたのよていをかくにんする",
+        "あしたのかいぎのしりょうをじゅんびしてかられんらくします",
+    ]
+    var sampleInputs: [ComposingText] = []
+    sampleInputs.reserveCapacity(sampleReadings.count)
+    for reading in sampleReadings {
+        var input = ComposingText()
+        input.insertAtCursorPosition(reading, inputStyle: .direct)
+        sampleInputs.append(input)
+    }
+
+    var warmupInput = ComposingText()
+    warmupInput.insertAtCursorPosition("とうきょう", inputStyle: .direct)
+
+    defer {
+        ZenzaiRuntimeTuning.reset()
+        mainConverter.stopComposition()
+        supplementConverter.stopComposition()
+    }
+
+    // Warm up using the highest-thread config so the worker pool and DVFS clocks are active before timing starts.
+    let initialConfig = configs.max(by: {
+        ($0.batchThreads ?? $0.decodeThreads) < ($1.batchThreads ?? $1.decodeThreads)
+    }) ?? configs[0]
+    ZenzaiRuntimeTuning.configure(
+        decodeThreads: initialConfig.decodeThreads,
+        batchThreads: initialConfig.batchThreads,
+        directModelFirstOverride: initialConfig.directModelFirst
+    )
+    mainConverter.stopComposition()
+    supplementConverter.stopComposition()
+    _ = executeZenzaiWithNormalNBestSupplement(
+        mainConverter: mainConverter,
+        supplementConverter: supplementConverter,
+        inputData: warmupInput,
+        zenzaiOptions: zenzaiOptions,
+        supplementOptions: supplementOptions,
+        cacheOnlyJapanesePrediction: false,
+        emitLogs: false,
+        operation: "runtime_tuning_warmup",
+        diagnosticDetails: ""
+    )
+    guard !shouldCancel() else {
+        return nil
+    }
+
+    func measureRound(for config: RuntimeTuningProbeConfig) -> (meanNs: UInt64, samples: Int)? {
+        guard !shouldCancel() else {
+            return nil
+        }
+        ZenzaiRuntimeTuning.configure(
+            decodeThreads: config.decodeThreads,
+            batchThreads: config.batchThreads,
+            directModelFirstOverride: config.directModelFirst
+        )
+        var totalNs: UInt64 = 0
+        var completed = 0
+        for input in sampleInputs {
+            guard !shouldCancel() else {
+                return nil
+            }
+            mainConverter.stopComposition()
+            supplementConverter.stopComposition()
+            let started = DispatchTime.now().uptimeNanoseconds
+            _ = executeZenzaiWithNormalNBestSupplement(
+                mainConverter: mainConverter,
+                supplementConverter: supplementConverter,
+                inputData: input,
+                zenzaiOptions: zenzaiOptions,
+                supplementOptions: supplementOptions,
+                cacheOnlyJapanesePrediction: false,
+                emitLogs: false,
+                operation: "runtime_tuning_probe",
+                diagnosticDetails: ""
+            )
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started
+            totalNs += elapsed
+            completed += 1
+        }
+        guard !shouldCancel(), completed > 0 else {
+            return nil
+        }
+        return (totalNs / UInt64(completed), completed)
+    }
+
+    var roundMeansByConfig: [[UInt64]] = Array(repeating: [], count: configs.count)
+    var totalSamplesByConfig: [Int] = Array(repeating: 0, count: configs.count)
+
+    // Pass 1: screen every candidate configuration once.
+    for (index, config) in configs.enumerated() {
+        guard let result = measureRound(for: config) else {
+            return nil
+        }
+        roundMeansByConfig[index].append(result.meanNs)
+        totalSamplesByConfig[index] += result.samples
+    }
+
+    // Pass 2: confirm top 3 finalists (plus fastest max-decodeThreads config if absent) over 2 extra rounds.
+    let rankedIndices = (0..<configs.count).sorted { roundMeansByConfig[$0][0] < roundMeansByConfig[$1][0] }
+    var finalistIndices = Array(rankedIndices.prefix(3))
+    let maxDecodeThreads = configs.map(\.decodeThreads).max() ?? 0
+    if !finalistIndices.contains(where: { configs[$0].decodeThreads == maxDecodeThreads }),
+       let fastestMaxIdx = rankedIndices.first(where: { configs[$0].decodeThreads == maxDecodeThreads }) {
+        finalistIndices.append(fastestMaxIdx)
+    }
+
+    for confirmationRound in 0..<2 {
+        let order = confirmationRound == 0 ? Array(finalistIndices.reversed()) : finalistIndices
+        for index in order {
+            guard let result = measureRound(for: configs[index]) else {
+                return nil
+            }
+            roundMeansByConfig[index].append(result.meanNs)
+            totalSamplesByConfig[index] += result.samples
+        }
+    }
+
+    var measurements: [RuntimeTuningProbeMeasurement] = []
+    measurements.reserveCapacity(configs.count)
+    for index in 0..<configs.count {
+        let rounds = roundMeansByConfig[index].sorted()
+        let selectedMean = rounds.count >= 3 ? rounds[1] : rounds[0]
+        measurements.append(
+            RuntimeTuningProbeMeasurement(
+                decodeThreads: configs[index].decodeThreads,
+                batchThreads: configs[index].batchThreads,
+                directModelFirst: configs[index].directModelFirst,
+                meanNs: selectedMean,
+                completedSamples: totalSamplesByConfig[index]
+            )
+        )
+    }
+    return measurements
 }
 
 private func _flushLearningForConfigReload() -> Bool {
@@ -3237,6 +3811,7 @@ public func load_config() {
     config["backend"] = "cpu"
     config["gpuLayers"] = 99
     config["model"] = "standard"
+    config["cpuRuntimeTuning"] = nil
     config["experimentalTypoCorrection"] = defaultKeyboardTypoCorrection
     config["predictiveConversion"] = defaultPredictiveConversionEnabled
     config["postCompositionPrediction"] = nil
@@ -3250,7 +3825,7 @@ public func load_config() {
 
         if let zenzai = settings.zenzai {
             config["gpuLayers"] = Int(resolvedGpuLayerCount(zenzai.gpu_layers))
-            config["model"] = zenzai.model ?? "nano_v4_1_iq4_emb8"
+            config["model"] = zenzai.model ?? "nano_v4_2_iq4_emb8"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
             }
@@ -3261,6 +3836,10 @@ public func load_config() {
 
             if let backendValue = zenzai.backend {
                 config["backend"] = backendValue
+            }
+
+            if let tuningValue = zenzai.cpu_runtime_tuning, tuningValue.decode_threads > 0 {
+                config["cpuRuntimeTuning"] = tuningValue
             }
         }
 
@@ -4280,9 +4859,11 @@ func get_composed_text_impl(
     let cacheOnlyPrediction = hasTrailingRoman
     let completePendingRoman = isCursorAtEnd && suffixAfterCursor.isEmpty && cacheOnlyPrediction && japanesePredictionEnabled
     let predictiveContinuationRequest: ConversionContinuationRequest?
+    let isAutoOnlyPredictiveContinuation: Bool
     if suffixAfterCursor.isEmpty, japanesePredictionEnabled {
         if let continuationRequest {
             predictiveContinuationRequest = continuationRequest
+            isAutoOnlyPredictiveContinuation = (explicitContinuationRequest == nil)
         } else {
             let explicitPredictive = makePredictiveConversionContinuationRequest(
                 continuation: conversionContinuation,
@@ -4301,6 +4882,7 @@ func get_composed_text_impl(
             )
             if let committedPredictive {
                 predictiveContinuationRequest = committedPredictive
+                isAutoOnlyPredictiveContinuation = false
             } else {
                 let autoPredictive = (allowZenzai && isCursorAtEnd)
                     ? makeAutomaticConversionContinuation(
@@ -4318,10 +4900,12 @@ func get_composed_text_impl(
                     previewComposingText: previewComposingText,
                     context: rawContextString
                 )
+                isAutoOnlyPredictiveContinuation = predictiveContinuationRequest != nil
             }
         }
     } else {
         predictiveContinuationRequest = nil
+        isAutoOnlyPredictiveContinuation = false
     }
     candidateCrashTrace(
         useZenzai: useZenzai,
@@ -4341,30 +4925,59 @@ func get_composed_text_impl(
     }
     let zenzaiOptions = useZenzai ? optionsForZenzaiConversion(from: options) : options
     let normalNBestConverted: ConversionResult?
-    if useZenzai {
+    let inlinePredictionContinuationResult: ConversionResult?
+    let inlineSkippedPredictionContinuation: Bool
+    let converted: ConversionResult
+    let requestStart = performanceNow()
+    if useZenzai, requestComposingText == previewComposingText {
         let supplementOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
-        normalNBestConverted = requestNormalNBestSupplementCandidates(
-            inputData: previewComposingText,
-            options: supplementOptions,
+        let parallelPredictionContinuation = predictiveContinuationRequest.map { request in
+            var predOptions = supplementOptions
+            predOptions.zenzaiMode = .off
+            predOptions.N_best = min(predOptions.N_best, 3)
+            return ZenzaiPredictionContinuationRequest(
+                inputData: request.combinedComposingText,
+                options: predOptions,
+                prefixConstraintSurface: request.continuation.surface,
+                cacheOnlyJapanesePrediction: cacheOnlyPrediction,
+                skipWhenSufficientPredictions: isAutoOnlyPredictiveContinuation && previewHiragana.count > 8
+            )
+        }
+        let execution = executeZenzaiWithNormalNBestSupplement(
+            inputData: requestComposingText,
+            zenzaiOptions: zenzaiOptions,
+            supplementOptions: supplementOptions,
             cacheOnlyJapanesePrediction: cacheOnlyPrediction,
+            predictionContinuation: parallelPredictionContinuation,
             operation: "get_composed_text",
             diagnosticDetails: diagnosticDetails
         )
-        if requestComposingText == previewComposingText {
-            converter.adoptReusableFullInputLattice(
-                normalNBestSupplementConverter.exportReusableFullInputLattice(for: requestComposingText)
-            )
-        }
+        normalNBestConverted = execution.supplement
+        inlinePredictionContinuationResult = execution.predictionContinuationResult
+        inlineSkippedPredictionContinuation = execution.skippedPredictionContinuation
+        converted = execution.zenzai
     } else {
-        normalNBestConverted = nil
+        inlinePredictionContinuationResult = nil
+        inlineSkippedPredictionContinuation = false
+        if useZenzai {
+            let supplementOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
+            normalNBestConverted = requestNormalNBestSupplementCandidates(
+                inputData: previewComposingText,
+                options: supplementOptions,
+                cacheOnlyJapanesePrediction: cacheOnlyPrediction,
+                operation: "get_composed_text",
+                diagnosticDetails: diagnosticDetails
+            )
+        } else {
+            normalNBestConverted = nil
+        }
+        converted = converter.requestCandidates(
+            requestComposingText,
+            options: zenzaiOptions,
+            sessionID: nil,
+            cacheOnlyJapanesePrediction: cacheOnlyPrediction
+        )
     }
-    let requestStart = performanceNow()
-    let converted = converter.requestCandidates(
-        requestComposingText,
-        options: zenzaiOptions,
-        sessionID: nil,
-        cacheOnlyJapanesePrediction: cacheOnlyPrediction
-    )
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: "get_composed_text",
@@ -4437,6 +5050,7 @@ func get_composed_text_impl(
             diagnosticDetails += ";zenzai_raw_candidate_count=\(rawZenzaiCandidateCount);continuation_sliced_count=\(continuationSlicedCount);continuation_fallback=\(continuationFallback)"
         }
     }
+    let mergeExactStart = performanceEnabled ? performanceNow() : 0
     let mergedExactResults = normalNBestConverted.map {
         mergeZenzaiMainResultsWithNormalNBest(
             zenzaiResults: zenzaiMainResults,
@@ -4444,6 +5058,7 @@ func get_composed_text_impl(
             hiragana: previewHiragana
         )
     } ?? zenzaiMainResults
+    let mergeExactMs = performanceEnabled ? elapsedPerformanceMilliseconds(since: mergeExactStart) : 0
     let pendingRomanCompletions: [Candidate]
     if completePendingRoman {
         let start = performanceEnabled ? performanceNow() : 0
@@ -4489,30 +5104,46 @@ func get_composed_text_impl(
                 hiragana: previewHiragana
             )
         if let predictiveContinuationRequest, useZenzai || continuationRequest == nil {
-            let predictionConverter = useZenzai ? normalNBestSupplementConverter : converter
-            let contPredOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
-            let contPredConverted = requestNormalNBestSupplementCandidates(
-                converter: predictionConverter,
-                inputData: predictiveContinuationRequest.combinedComposingText,
-                options: contPredOptions,
-                sessionID: "continuation-prediction",
-                cacheOnlyJapanesePrediction: cacheOnlyPrediction,
-                prefixConstraintSurface: predictiveContinuationRequest.continuation.surface,
-                operation: "get_composed_text_prediction_continuation",
-                diagnosticDetails: diagnosticDetails
-            )
-            let contextualPredictions = contPredConverted.predictionResults.compactMap {
-                slicePredictiveContinuationCandidate(
-                    $0,
-                    continuation: predictiveContinuationRequest.continuation,
-                    currentReading: previewHiragana
+            let shouldSkipSequentialContinuation = isAutoOnlyPredictiveContinuation
+                && previewHiragana.count > 8
+                && basePredictions.count >= 3
+            let contPredConverted: ConversionResult?
+            if let cachedContPred = inlinePredictionContinuationResult {
+                contPredConverted = cachedContPred
+            } else if inlineSkippedPredictionContinuation || shouldSkipSequentialContinuation {
+                contPredConverted = nil
+            } else {
+                let predictionConverter = useZenzai ? normalNBestSupplementConverter : converter
+                var contPredOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
+                contPredOptions.N_best = min(contPredOptions.N_best, 3)
+                contPredConverted = requestNormalNBestSupplementCandidates(
+                    converter: predictionConverter,
+                    inputData: predictiveContinuationRequest.combinedComposingText,
+                    options: contPredOptions,
+                    sessionID: "continuation-prediction",
+                    cacheOnlyJapanesePrediction: cacheOnlyPrediction,
+                    prefixConstraintSurface: predictiveContinuationRequest.continuation.surface,
+                    stage: "request_prediction_continuation",
+                    operation: "get_composed_text_prediction_continuation",
+                    diagnosticDetails: diagnosticDetails
                 )
             }
-            effectivePredictionResults = mergeDistinctPredictionCandidates(
-                primary: contextualPredictions,
-                fallback: basePredictions,
-                hiragana: previewHiragana
-            )
+            if let contPredConverted {
+                let contextualPredictions = contPredConverted.predictionResults.compactMap {
+                    slicePredictiveContinuationCandidate(
+                        $0,
+                        continuation: predictiveContinuationRequest.continuation,
+                        currentReading: previewHiragana
+                    )
+                }
+                effectivePredictionResults = mergeDistinctPredictionCandidates(
+                    primary: contextualPredictions,
+                    fallback: basePredictions,
+                    hiragana: previewHiragana
+                )
+            } else {
+                effectivePredictionResults = basePredictions
+            }
         } else if useZenzai || continuationRequest != nil || completePendingRoman || !wholeReadingCompletions.isEmpty {
             effectivePredictionResults = basePredictions
         } else {
@@ -4521,6 +5152,7 @@ func get_composed_text_impl(
     } else {
         effectivePredictionResults = nil
     }
+    let mergePostStart = performanceEnabled ? performanceNow() : 0
     let mergedMainResults = effectivePredictionResults.map {
         let predictions = pendingRomanCompletions.isEmpty
             ? $0
@@ -4578,6 +5210,14 @@ func get_composed_text_impl(
         ? normalizedLearningRuby(previewHiragana) : nil
     if let kanaCompletionReading {
         promoteKanaReadingCompletion(in: &mainResults, normalizedReading: kanaCompletionReading, afterFullSpan: true)
+    }
+    if performanceEnabled {
+        performanceLog(
+            operation: "get_composed_text",
+            stage: "merge_candidates",
+            elapsedMs: mergeExactMs + elapsedPerformanceMilliseconds(since: mergePostStart),
+            details: "candidate_count=\(mainResults.count);\(diagnosticDetails)"
+        )
     }
     if let normalNBestConverted {
         serverLog(
@@ -4778,21 +5418,22 @@ public func get_composed_text_for_cursor_prefix(
     let cursorPrefixZenzaiOptions = useZenzai ? optionsForZenzaiConversion(from: options) : options
     let cursorPrefixSupplementOptions = optionsForNormalNBestSupplement(from: options)
     let normalNBestConverted: ConversionResult?
+    let converted: ConversionResult
+    let requestStart = performanceNow()
     if useZenzai {
-        normalNBestConverted = requestNormalNBestSupplementCandidates(
+        let execution = executeZenzaiWithNormalNBestSupplement(
             inputData: previewPrefixComposingText,
-            options: cursorPrefixSupplementOptions,
+            zenzaiOptions: cursorPrefixZenzaiOptions,
+            supplementOptions: cursorPrefixSupplementOptions,
             operation: "get_composed_text_for_cursor_prefix",
             diagnosticDetails: "suffix_len=\(suffixAfterCursor.count);\(diagnosticDetails)"
         )
-        converter.adoptReusableFullInputLattice(
-            normalNBestSupplementConverter.exportReusableFullInputLattice(for: previewPrefixComposingText)
-        )
+        normalNBestConverted = execution.supplement
+        converted = execution.zenzai
     } else {
         normalNBestConverted = nil
+        converted = converter.requestCandidates(previewPrefixComposingText, options: cursorPrefixZenzaiOptions)
     }
-    let requestStart = performanceNow()
-    let converted = converter.requestCandidates(previewPrefixComposingText, options: cursorPrefixZenzaiOptions)
     let requestMs = elapsedPerformanceMilliseconds(since: requestStart)
     performanceLog(
         operation: "get_composed_text_for_cursor_prefix",
@@ -4890,21 +5531,25 @@ public func get_composed_text_for_cursor_prefix(
             "GetComposedTextForCursorPrefix: requestCandidates exactClause begin correspondingCount=\(firstClauseCorrespondingCount) \(exactClauseDiagnosticDetails)"
         )
         let exactClauseNormalNBestConverted: ConversionResult?
+        let exactClauseConverted: ConversionResult
+        let exactClauseRequestStart = performanceNow()
         if useZenzai {
-            exactClauseNormalNBestConverted = requestNormalNBestSupplementCandidates(
+            let execution = executeZenzaiWithNormalNBestSupplement(
                 inputData: exactClausePreviewState.composingText,
-                options: cursorPrefixSupplementOptions,
+                zenzaiOptions: cursorPrefixZenzaiOptions,
+                supplementOptions: cursorPrefixSupplementOptions,
                 operation: "get_composed_text_for_cursor_prefix_exact_clause",
                 diagnosticDetails: "corresponding_count=\(firstClauseCorrespondingCount);\(exactClauseDiagnosticDetails)"
             )
+            exactClauseNormalNBestConverted = execution.supplement
+            exactClauseConverted = execution.zenzai
         } else {
             exactClauseNormalNBestConverted = nil
+            exactClauseConverted = converter.requestCandidates(
+                exactClausePreviewState.composingText,
+                options: cursorPrefixZenzaiOptions
+            )
         }
-        let exactClauseRequestStart = performanceNow()
-        let exactClauseConverted = converter.requestCandidates(
-            exactClausePreviewState.composingText,
-            options: cursorPrefixZenzaiOptions
-        )
         exactClauseResults = exactClauseNormalNBestConverted.map {
             mergeZenzaiMainResultsWithNormalNBest(
                 zenzaiResults: exactClauseConverted.mainResults,

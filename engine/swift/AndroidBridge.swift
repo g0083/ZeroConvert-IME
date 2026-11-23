@@ -52,9 +52,48 @@ private final class EmbeddedPerformance: @unchecked Sendable {
 }
 private let embeddedPerformance = EmbeddedPerformance()
 
-@MainActor private func embeddedDispatch(_ data: Data) throws -> [String: Any] {
+private func appendJsonString(_ value: String, to out: inout String) {
+    out.append("\"")
+    if value.utf8.allSatisfy({ $0 >= 0x20 && $0 != 0x22 && $0 != 0x5C }) {
+        out.append(value)
+        out.append("\"")
+        return
+    }
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x22: out.append("\\\"")
+        case 0x5C: out.append("\\\\")
+        case 0x08: out.append("\\b")
+        case 0x0C: out.append("\\f")
+        case 0x0A: out.append("\\n")
+        case 0x0D: out.append("\\r")
+        case 0x09: out.append("\\t")
+        case 0x00..<0x20:
+            let hex = String(scalar.value, radix: 16, uppercase: false)
+            out.append("\\u00")
+            if hex.count < 2 { out.append("0") }
+            out.append(hex)
+        default:
+            out.unicodeScalars.append(scalar)
+        }
+    }
+    out.append("\"")
+}
+
+@MainActor private func embeddedDispatchJson(_ data: Data) throws -> String {
     guard let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let op = request["op"] as? String else { return ["error": "invalid request"] }
+          let op = request["op"] as? String else {
+        return "{\"error\":\"invalid request\"}"
+    }
+    if op == "convert" {
+        return embeddedConvertJson(request)
+    }
+    let result = try embeddedDispatchRequest(request, op: op)
+    let output = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+    return String(decoding: output, as: UTF8.self)
+}
+
+@MainActor private func embeddedDispatchRequest(_ request: [String: Any], op: String) throws -> [String: Any] {
     if op == "configure" {
         guard let root = request["root"] as? String, let model = request["modelPath"] as? String else {
             return ["error": "missing runtime paths"]
@@ -70,7 +109,63 @@ private let embeddedPerformance = EmbeddedPerformance()
         config["embeddedModelPath"] = model
         return ["ready": true]
     }
+    if op == "applyRuntimeTuning" {
+        let decodeThreads = (request["decodeThreads"] as? NSNumber)?.int32Value
+        let batchThreads = (request["batchThreads"] as? NSNumber)?.int32Value
+        let directModelFirst = request["directModelFirst"] as? Bool
+        ZenzaiRuntimeTuning.configure(
+            decodeThreads: decodeThreads.map { max(1, $0) },
+            batchThreads: batchThreads.map { max(1, $0) },
+            directModelFirstOverride: directModelFirst
+        )
+        return ["applied": true]
+    }
     guard embeddedInitialized else { return ["error": "engine not initialized"] }
+    if op == "probeRuntimeTuning" {
+        let epoch = (request["requestEpoch"] as? NSNumber)?.uint64Value ?? zerocon_conversion_epoch()
+        zerocon_conversion_begin(epoch)
+        defer { zerocon_conversion_end() }
+        guard !zerocon_conversion_cancelled() else { return ["cancelled": true] }
+        guard let rawConfigs = request["configs"] else { return ["error": "missing configs"] }
+        let configsData = try JSONSerialization.data(withJSONObject: rawConfigs)
+        let configs = try JSONDecoder().decode([RuntimeTuningProbeConfig].self, from: configsData)
+        let savedContext = config["context"] as? String ?? ""
+        config["context"] = ""
+        defer { config["context"] = savedContext }
+        configureEngineRuntime(zenzaiEnabled: true)
+        let emojiURL = execURL
+            .appendingPathComponent("EmojiDictionary")
+            .appendingPathComponent("emoji_all_E15.1.txt")
+        let baseOptions = makeConvertRequestOptions(
+            context: "",
+            zenzaiEnabled: true,
+            runtimeDirectoryURL: converterRuntimeDirectoryURL(),
+            emojiDictionaryURL: emojiURL,
+            textReplacer: .empty,
+            zenzaiWeightURL: converterModelURL(),
+            profile: "",
+            learningType: .nothing,
+            learningMemoryDirectoryURL: nil,
+            experimentalKeyboardTypoCorrection: false,
+            predictiveConversion: false
+        )
+        guard let measurements = withIsolatedProbeUserDictionary(
+            mainConverter: converter,
+            supplementConverter: normalNBestSupplementConverter,
+            body: {
+                probeRuntimeTuningConfigs(
+                    baseOptions: baseOptions,
+                    configs: configs,
+                    shouldCancel: { zerocon_conversion_cancelled() }
+                )
+            }
+        ) else {
+            return ["cancelled": true]
+        }
+        let encoded = try JSONEncoder().encode(measurements)
+        let serialized = try JSONSerialization.jsonObject(with: encoded)
+        return ["measurements": serialized]
+    }
     if op == "readings" {
         let surface = request["surface"] as? String ?? ""
         guard surface.count <= 128,
@@ -195,8 +290,13 @@ private let embeddedPerformance = EmbeddedPerformance()
         }
         return payload
     }
-    guard op == "convert", let elements = request["elements"] as? [[String: Any]],
-          elements.count <= 4096 else { return ["error": "invalid conversion request"] }
+    return ["error": "invalid request"]
+}
+
+@MainActor private func embeddedConvertJson(_ request: [String: Any]) -> String {
+    guard embeddedInitialized else { return "{\"error\":\"engine not initialized\"}" }
+    guard let elements = request["elements"] as? [[String: Any]],
+          elements.count <= 4096 else { return "{\"error\":\"invalid conversion request\"}" }
     var input: [ComposingText.InputElement] = []
     for element in elements {
         let style: InputStyle
@@ -222,7 +322,10 @@ private let embeddedPerformance = EmbeddedPerformance()
     _ = snapshot.moveCursorFromCursorPosition(count: cursor - reading.count)
     // A local input implementation must never silently disagree with the engine.
     guard request["expectedReading"] as? String == reading else {
-        return ["error": "composition mismatch", "reading": reading]
+        var errorJson = "{\"error\":\"composition mismatch\",\"reading\":"
+        appendJsonString(reading, to: &errorJson)
+        errorJson.append("}")
+        return errorJson
     }
     composingText = snapshot
     currentKeyboardTouchEvidence = (request["touchEvidence"] as? [[String: Any]] ?? []).prefix(128).compactMap { entry in
@@ -251,7 +354,7 @@ private let embeddedPerformance = EmbeddedPerformance()
     zerocon_conversion_begin(epoch)
     embeddedPerformance.begin(request["diagnostics"] as? Bool ?? false)
     defer { zerocon_conversion_end(); embeddedPerformance.begin(false) }
-    guard !zerocon_conversion_cancelled() else { return ["cancelled": true] }
+    guard !zerocon_conversion_cancelled() else { return "{\"cancelled\":true}" }
     let started = DispatchTime.now().uptimeNanoseconds
     var length: CInt = 0
     var readingCompletions = Set<Int>()
@@ -270,39 +373,98 @@ private let embeddedPerformance = EmbeddedPerformance()
         // Keep learning candidate IDs from earlier, successfully displayed batches.
         converter.stopComposition()
         normalNBestSupplementConverter.stopComposition()
-        return ["cancelled": true]
+        return "{\"cancelled\":true}"
     }
-    var result: [[String: Any]] = []
-    var seenKeys = Set<String>()
+    let marshalStart = DispatchTime.now().uptimeNanoseconds
+    var json = ""
+    json.reserveCapacity(Int(length) * 96 + 512)
+    json.append("{\"reading\":")
+    appendJsonString(reading, to: &json)
+    json.append(",\"cursorUtf16\":")
+    json.append(String(cursorUtf16))
+    json.append(",\"candidates\":[")
     let boundaries = snapshot.inputIndexToSurfaceIndexMap()
+    var surfaceToUtf16 = [Int]()
+    surfaceToUtf16.reserveCapacity(reading.count + 1)
+    var utf16Offset = 0
+    for character in reading {
+        surfaceToUtf16.append(utf16Offset)
+        utf16Offset += character.utf16.count
+    }
+    surfaceToUtf16.append(utf16Offset)
+    var seenKeys = Set<String>(minimumCapacity: Int(length))
+    var wroteCandidate = false
     for index in 0..<Int(length) {
         guard let candidate = candidates[index]?.pointee else { continue }
         guard let consumed = boundaries[Int(candidate.correspondingCount)],
-              consumed > 0, consumed <= snapshot.convertTargetCursorPosition else { continue }
-        let end = reading.index(reading.startIndex, offsetBy: consumed)
-        let consumedUtf16 = reading[..<end].utf16.count
+              consumed > 0, consumed <= snapshot.convertTargetCursorPosition,
+              consumed < surfaceToUtf16.count else { continue }
+        let consumedUtf16 = surfaceToUtf16[consumed]
         let text = candidate.text.map { String(cString: $0) } ?? ""
-        let suffix = candidate.subtext.map { String(cString: $0) } ?? ""
         let key = "\(consumedUtf16):\(text)"
         guard seenKeys.insert(key).inserted else { continue }
-        result.append(["text": text, "suffix": suffix, "candidateId": String(candidate.candidateId),
-                       "correspondingCount": candidate.correspondingCount,
-                       "consumedReadingUtf16": consumedUtf16,
-                       "readingCompletion": readingCompletions.contains(index),
-                       "learningAllowed": learningCandidateCache.isLearningTarget(candidate.candidateId),
-                       "predictionReading": candidate.predictionReading.map { String(cString: $0) } ?? ""])
+        if wroteCandidate {
+            json.append(",")
+        } else {
+            wroteCandidate = true
+        }
+        json.append("{\"text\":")
+        appendJsonString(text, to: &json)
+        json.append(",\"consumedReadingUtf16\":")
+        json.append(String(consumedUtf16))
+        if let suffixPtr = candidate.subtext, suffixPtr[0] != 0 {
+            json.append(",\"suffix\":")
+            appendJsonString(String(cString: suffixPtr), to: &json)
+        }
+        if candidate.candidateId != 0 {
+            json.append(",\"candidateId\":\"")
+            json.append(String(candidate.candidateId))
+            json.append("\"")
+        }
+        if readingCompletions.contains(index) {
+            json.append(",\"readingCompletion\":true")
+        }
+        if candidate.candidateId != 0 && learningCandidateCache.isLearningTarget(candidate.candidateId) {
+            json.append(",\"learningAllowed\":true")
+        }
+        if let predPtr = candidate.predictionReading, predPtr[0] != 0 {
+            json.append(",\"predictionReading\":")
+            appendJsonString(String(cString: predPtr), to: &json)
+        }
+        json.append("}")
     }
-    var response: [String: Any] = ["reading": reading, "cursorUtf16": cursorUtf16, "candidates": result,
-            "timing": ["conversionNs": DispatchTime.now().uptimeNanoseconds - started,
-                       "decodeNs": zerocon_conversion_decode_nanoseconds(),
-                       "decodeCount": zerocon_conversion_decode_count(),
-                       "stagesMs": embeddedPerformance.snapshot()]]
+    json.append("]")
+    if embeddedPerformance.isEnabled() {
+        let marshalMs = (DispatchTime.now().uptimeNanoseconds - marshalStart) / 1_000_000
+        "bridge_marshal_candidates".withCString { embeddedPerformance.record($0, marshalMs) }
+    }
+    json.append(",\"timing\":{\"conversionNs\":")
+    json.append(String(DispatchTime.now().uptimeNanoseconds - started))
+    json.append(",\"decodeNs\":")
+    json.append(String(zerocon_conversion_decode_nanoseconds()))
+    json.append(",\"decodeCount\":")
+    json.append(String(zerocon_conversion_decode_count()))
+    json.append(",\"stagesMs\":{")
+    let stages = embeddedPerformance.snapshot()
+    var wroteStage = false
+    for key in stages.keys.sorted() {
+        if wroteStage { json.append(",") } else { wroteStage = true }
+        appendJsonString(key, to: &json)
+        json.append(":")
+        json.append(String(stages[key]!))
+    }
+    json.append("}}")
     if !continuationReading.isEmpty, !continuationSurface.isEmpty {
-        response["continuation"] = ["readingLength": continuationReading.count,
-                                    "surfaceLength": continuationSurface.count,
-                                    "accepted": continuationAccepted]
+        json.append(",\"continuation\":{\"readingLength\":")
+        json.append(String(continuationReading.count))
+        json.append(",\"surfaceLength\":")
+        json.append(String(continuationSurface.count))
+        json.append(",\"accepted\":")
+        json.append(continuationAccepted ? "true" : "false")
+        json.append("}")
     }
-    return response
+    json.append("}")
+    return json
 }
 
 private final class EmbeddedReply: @unchecked Sendable {
@@ -320,9 +482,7 @@ public func embeddedRequest(_ value: UnsafePointer<CChar>) -> UnsafeMutablePoint
     Task { @MainActor in
         defer { reply.completed.signal() }
         do {
-            let result = try embeddedDispatch(data)
-            let output = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
-            reply.text = String(decoding: output, as: UTF8.self)
+            reply.text = try embeddedDispatchJson(data)
         } catch {
             let output = try? JSONSerialization.data(withJSONObject: ["error": String(describing: error)])
             if let output { reply.text = String(decoding: output, as: UTF8.self) }

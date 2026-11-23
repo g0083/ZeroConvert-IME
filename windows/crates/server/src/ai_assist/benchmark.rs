@@ -280,7 +280,7 @@ pub fn reset_session() {
 }
 
 use super::{corrector, prediction, reading_check, runtime, AiAssistConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     cell::Cell,
@@ -289,7 +289,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Case {
     Conversion {
@@ -310,6 +310,8 @@ pub enum Case {
         is_clean: bool,
         #[serde(default)]
         acceptable: Vec<String>,
+        #[serde(default)]
+        raw_romaji: String,
     },
     Predictive {
         id: u32,
@@ -335,6 +337,14 @@ pub enum ConversionScope {
     #[default]
     Model,
     Candidates,
+    Typo,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize, Serialize)]
+pub struct WindowsTypoOptions {
+    pub enabled: bool,
+    pub engine: String,
 }
 
 #[derive(Deserialize)]
@@ -342,6 +352,96 @@ pub struct CandidateCompletion {
     candidates: Vec<String>,
     elapsed_ns: u64,
     nbest_ns: u64,
+    #[serde(default)]
+    corrected_reading: Option<String>,
+}
+
+pub fn run_typo_case(
+    case: &Case,
+    dictionary: &Path,
+    mut convert: impl FnMut(&str, &str) -> Option<CandidateCompletion>,
+    correct: impl FnOnce(&str, &str, &str, &str) -> Option<super::TypoSuggestion>,
+) -> Result<Value, String> {
+    let Case::Typo {
+        id,
+        context,
+        input_reading,
+        expected,
+        is_clean,
+        acceptable,
+        raw_romaji,
+    } = case
+    else {
+        return Err("typo benchmark requires a typo case".into());
+    };
+    reading_check::with_benchmark_dictionary(dictionary, || {
+        let started = Instant::now();
+        let context = normalize_context(context);
+        let reading = katakana_to_hiragana(&input_reading.replace([' ', '　'], ""));
+        let converted = convert(&reading, context)
+            .ok_or_else(|| format!("通常候補を生成できませんでした（問題 {id}）。"))?;
+        let baseline = converted
+            .candidates
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| reading.clone());
+        if let Some(corrected) = converted
+            .corrected_reading
+            .filter(|value| katakana_to_hiragana(value) != reading)
+        {
+            let score = score_typo(
+                *is_clean,
+                expected,
+                acceptable,
+                &reading,
+                &reading,
+                Some(&baseline),
+            );
+            return Ok(
+                json!({ "id": id, "main_output": baseline, "moshikashite_output": baseline,
+                "correction_reading": corrected, "status": score.status.as_str(),
+                "latency_ms": started.elapsed().as_secs_f64() * 1000.0 }),
+            );
+        }
+        let correction = correct(context, &reading, &baseline, raw_romaji)
+            .filter(|result| !result.surface.is_empty() && result.surface != baseline);
+        let mut corrected_reading = None;
+        let proposal = if let Some(result) = correction {
+            let surface = result.surface;
+            // The keyboard channel returns a reading, including any literal characters.
+            if result.channel_confidence.is_some()
+                || surface.chars().all(|c| {
+                    matches!(c, '\u{3041}'..='\u{309e}' | '\u{30a1}'..='\u{30fe}' | '。' | '、' | '！' | '？' | '!' | '?')
+                })
+            {
+                let converted = convert(&surface, context)
+                    .ok_or_else(|| format!("補正後の読みを変換できませんでした（問題 {id}）。"))?
+                    .candidates
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| surface.clone());
+                corrected_reading = (surface != converted).then_some(surface);
+                Some(converted)
+            } else {
+                Some(surface)
+            }
+        } else {
+            None
+        };
+        let score = score_typo(
+            *is_clean,
+            expected,
+            acceptable,
+            &reading,
+            &baseline,
+            proposal.as_deref(),
+        );
+        Ok(
+            json!({ "id": id, "main_output": baseline, "moshikashite_output": proposal,
+            "correction_reading": corrected_reading,
+            "status": score.status.as_str(), "latency_ms": started.elapsed().as_secs_f64() * 1000.0 }),
+        )
+    })?
 }
 
 pub fn run_candidate_batch(
@@ -509,6 +609,7 @@ fn execute_batch(
                         expected,
                         acceptable,
                         is_clean,
+                        ..
                     } => {
                         let context = normalize_context(context);
                         let reading = input_reading.replace([' ', '　'], "");
@@ -573,6 +674,69 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn typo_benchmark_scores_reconverted_reading_and_swift_corrections() {
+        let dictionary =
+            std::env::temp_dir().join(format!("zerocon-typo-benchmark-{}.bin", std::process::id()));
+        std::fs::write(
+            &dictionary,
+            b"AZR2\x01\0\0\0\x10\0\0\0\x1a\0\0\0\x01\0\x01\0\0\0\0\0aa",
+        )
+        .unwrap();
+        let case = |is_clean| Case::Typo {
+            id: 1,
+            context: "なし".into(),
+            input_reading: "オカイリ！".into(),
+            expected: "お帰り！".into(),
+            is_clean,
+            acceptable: vec![],
+            raw_romaji: String::new(),
+        };
+        let completion = |surface: &str, reading: Option<&str>| CandidateCompletion {
+            candidates: vec![surface.into()],
+            elapsed_ns: 0,
+            nbest_ns: 0,
+            corrected_reading: reading.map(str::to_owned),
+        };
+        let repaired = run_typo_case(
+            &case(false),
+            &dictionary,
+            |reading, context| {
+                assert_eq!(context, "");
+                Some(match reading {
+                    "おかいり！" => completion("おかいり！", None),
+                    "おかえり！" => completion("お帰り！", None),
+                    _ => panic!("unexpected reading {reading}"),
+                })
+            },
+            |_, reading, baseline, _| {
+                assert_eq!(reading, "おかいり！");
+                assert_eq!(baseline, "おかいり！");
+                Some(super::super::TypoSuggestion {
+                    surface: "おかえり！".into(),
+                    token_reading: reading.into(),
+                    token_surface: "おかえり！".into(),
+                    learned: false,
+                    channel_confidence: None,
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(repaired["moshikashite_output"], "お帰り！");
+        assert_eq!(repaired["correction_reading"], "おかえり！");
+        assert_eq!(repaired["status"], "exact_match");
+
+        let changed_clean = run_typo_case(
+            &case(true),
+            &dictionary,
+            |_, _| Some(completion("お買い物", Some("おかいもの"))),
+            |_, _, _, _| panic!("Swift has already changed the reading"),
+        )
+        .unwrap();
+        assert_eq!(changed_clean["status"], "false_positive");
+        std::fs::remove_file(dictionary).unwrap();
+    }
+
+    #[test]
     fn benchmark_batch_uses_shared_prompt_and_scores_the_returned_text() {
         let case = Case::Conversion {
             id: 4,
@@ -614,6 +778,7 @@ mod tests {
                 candidates: vec!["とうきょう".into(), "東京".into()],
                 elapsed_ns: 5_000_000,
                 nbest_ns: 2_000_000,
+                corrected_reading: None,
             })
         })
         .unwrap();

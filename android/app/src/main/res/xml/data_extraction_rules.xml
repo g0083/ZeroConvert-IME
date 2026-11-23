@@ -2,8 +2,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="translation/" />
+        <exclude domain="sharedpref" path="runtime_tuning_prefs.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="translation/" />
+        <exclude domain="sharedpref" path="runtime_tuning_prefs.xml" />
     </device-transfer>
 </data-extraction-rules>

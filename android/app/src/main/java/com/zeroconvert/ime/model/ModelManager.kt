@@ -45,36 +45,36 @@ object ModelManager {
     )
 
     private const val RELEASE_DOWNLOAD_BASE =
-        "https://github.com/g0083/ZeroConvert-IME/releases/download/models-v4.1/"
+        "https://github.com/g0083/ZeroConvert-IME/releases/download/models-v4.2/"
 
     val BUILT_IN_MODELS = listOf(
         BuiltInModelSpec(
             fileName = ConversionModelSelection.IQ4,
-            displayName = "ZeroCon Model Nano v4.1 IQ4_emb8 (18.7 MiB)",
+            displayName = "ZeroCon Model Nano v4.2 IQ4_emb8 (18.7 MiB)",
             expectedSize = 19602048L,
-            sha256 = "6a99ca4e1c46b3f6fb86dcf884ea0652c967d86d606c12268b33d894d3853b24",
+            sha256 = "5367df4e8c3373ba918df23ffab87bba28812629b0841f821dd30099d0494348",
             downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.IQ4,
             mandatory = true
         ),
         BuiltInModelSpec(
             fileName = ConversionModelSelection.Q8,
-            displayName = "ZeroCon Model Nano v4.1 Q8 (27.7 MiB)",
+            displayName = "ZeroCon Model Nano v4.2 Q8 (27.7 MiB)",
             expectedSize = 29039232L,
-            sha256 = "001d2cf3acd75343d2dd4ea11472e28258bc7429d7d46091b50a78776dead378",
+            sha256 = "7a613da590b6437be5775bf1595a27e44e1f37ef6acbb800c49c159af3f25130",
             downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.Q8
         ),
         BuiltInModelSpec(
             fileName = ConversionModelSelection.STANDARD_IQ4,
-            displayName = "ZeroCon Model Standard v4.1 IQ4_emb8 (58.5 MiB)",
+            displayName = "ZeroCon Model Standard v4.2 IQ4_emb8 (58.5 MiB)",
             expectedSize = 61399072L,
-            sha256 = "61af7b70aaf664a7c5b380bc373149fe0e0c67122c697f7127d7e8985fdbfb41",
+            sha256 = "bf73bf4778655baf3f1124adc50ff0869c7028a2920c4b43b4ea7f5fb6f35d1d",
             downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.STANDARD_IQ4
         ),
         BuiltInModelSpec(
             fileName = ConversionModelSelection.STANDARD_Q8,
-            displayName = "ZeroCon Model Standard v4.1 Q8 (99.0 MiB)",
+            displayName = "ZeroCon Model Standard v4.2 Q8 (99.0 MiB)",
             expectedSize = 103866400L,
-            sha256 = "5065b64d9d0cabdd41bef8cd748863adb84691426be24d2a9be95fa23269c8ca",
+            sha256 = "43fcbfaee7a325a7e027c3bb5d94bfb324b39b76dcb3e58da7935e678d87a644",
             downloadUrl = RELEASE_DOWNLOAD_BASE + ConversionModelSelection.STANDARD_Q8
         )
     )
@@ -142,7 +142,7 @@ object ModelManager {
             val downloaded = file.isFile && file.length() == spec.expectedSize
 
             val isSel = if (selectedPath == null) {
-                // Default to Nano v4.1 IQ4_emb8 if no selection yet
+                // Default to Nano v4.2 IQ4_emb8 if no selection yet
                 spec.fileName == DEFAULT_MODEL_SPEC.fileName
             } else {
                 selectedPath == file.absolutePath

@@ -18,7 +18,7 @@
     },
     {
       "id": "zenz",
-      "title": "ZeroCon Model v4.1（上流: zenz-v3.2）",
+      "title": "ZeroCon Model v4.2（上流: zenz-v3.2）",
       "credit": "上流モデル Copyright (c) Miwa Keita (ensan-hcl)",
       "license": "Apache-2.0（学習に使った上流リビジョン）",
       "note": "上流から既に許諾された権利は維持します。個別の許諾がないZeroCon独自の改変部分は、本製品外での利用・再配布を許諾しません。",

@@ -5,6 +5,7 @@ import android.app.Instrumentation
 import android.os.Bundle
 import com.zeroconvert.ime.benchmark.BenchmarkSession
 import com.zeroconvert.ime.benchmark.ConversionBenchmarkScope
+import com.zeroconvert.ime.benchmark.TypoStatus
 import org.json.JSONObject
 import java.io.File
 
@@ -17,7 +18,7 @@ internal class SharedBenchmarkRegression(private val instrumentation: Instrument
                 for ((kind, asset, scope) in listOf(
                     Triple("conversion", "benchmark_dataset.jsonl", ConversionBenchmarkScope.MODEL),
                     Triple("conversion", "benchmark_dataset.jsonl", ConversionBenchmarkScope.CANDIDATES),
-                    Triple("typo", "typo_testset.jsonl", ConversionBenchmarkScope.MODEL),
+                    Triple("typo", "typo_testset.jsonl", ConversionBenchmarkScope.TYPO),
                     Triple("predictive", "predictive_testset.jsonl", ConversionBenchmarkScope.MODEL),
                 )) {
                     val cases = context.assets.open(asset).bufferedReader().useLines { lines ->
@@ -38,6 +39,11 @@ internal class SharedBenchmarkRegression(private val instrumentation: Instrument
                                     val nbest = row.getDouble("nbest_ms")
                                     check(nbest > 0 && nbest <= row.getDouble("latency_ms"))
                                     check(row.getJSONArray("candidates").length() > 0)
+                                }
+                                if (scope == ConversionBenchmarkScope.TYPO) {
+                                    check(row.getString("main_output").isNotEmpty())
+                                    check(row.has("correction_reading"))
+                                    checkNotNull(TypoStatus.fromWire(row.getString("status")))
                                 }
                                 writer.appendLine(row.put("kind", kind).put("scope", scope.wire).toString())
                             }

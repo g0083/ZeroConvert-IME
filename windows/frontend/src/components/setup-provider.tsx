@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { downloadConversionModel } from "@/lib/conversion-model";
 import { downloadEnglishDictionary } from "@/lib/english-dictionary";
+import { BACKEND_LABELS, quickBenchmarkSummary, runQuickBenchmark, useQuickBenchmarkActivity, type QuickBenchmarkProgress } from "@/lib/quick-benchmark";
 import {
     downloadDictionary,
     getSetupAssetsStatus,
@@ -19,7 +20,22 @@ import {
     type SetupAssetsStatus,
 } from "@/lib/setup-assets";
 
-const MANDATORY_MODEL_ID = "nano_v4_1_iq4_emb8";
+const MANDATORY_MODEL_ID = "nano_v4_2_iq4_emb8";
+const PENDING_SETUP_KEY = "zerocon-setup-benchmark-pending-v1";
+
+function hasPendingSetup() {
+    try { return localStorage.getItem(PENDING_SETUP_KEY) === "1"; }
+    catch { return false; }
+}
+
+function rememberPendingSetup(pending: boolean) {
+    try {
+        if (pending) localStorage.setItem(PENDING_SETUP_KEY, "1");
+        else localStorage.removeItem(PENDING_SETUP_KEY);
+    } catch {
+        // ストレージに保存できない場合も、この起動中のセットアップは継続する。
+    }
+}
 
 type ItemState = {
     status: "pending" | "running" | "done" | "error";
@@ -54,7 +70,7 @@ type Requirement = {
 const requirements = (status: SetupAssetsStatus): Requirement[] => [
     {
         id: "model",
-        label: "変換モデル（ZeroCon Model Nano v4.1）",
+        label: "変換モデル（ZeroCon Model Nano v4.2）",
         description: "文脈に応じた漢字選択に使います。",
         bytes: status.model.size_bytes,
     },
@@ -76,23 +92,33 @@ const SetupGatePanel = ({
     status,
     items,
     running,
+    benchmarkStarted,
+    benchmarkProgress,
     onStart,
     error,
 }: {
     status: SetupAssetsStatus;
     items: Record<SetupAssetId, ItemState>;
     running: boolean;
+    benchmarkStarted: boolean;
+    benchmarkProgress: QuickBenchmarkProgress | null;
     onStart: () => void;
     error: string | null;
 }) => {
     const pending = missing(status);
+    const activity = useQuickBenchmarkActivity();
+    const percent = activity === "applying" ? 100
+        : benchmarkProgress ? Math.floor(100 * benchmarkProgress.completed / benchmarkProgress.total) : 0;
+    const benchmarkStatus = activity === "measuring"
+        ? benchmarkProgress ? `${BACKEND_LABELS[benchmarkProgress.backend]}を測定中` : "測定を準備中"
+        : activity === "applying" ? "推奨バックエンドを適用中" : benchmarkStarted ? "セットアップを完了中" : "ダウンロード後に開始";
     return (
-        <div className="flex h-dvh items-center justify-center bg-background p-6">
-            <div className="w-full max-w-xl space-y-5 rounded-lg border p-6">
+        <div className="flex h-dvh overflow-y-auto bg-background p-6">
+            <div className="m-auto w-full max-w-xl space-y-5 rounded-lg border p-6">
                 <div className="space-y-1">
                     <h1 className="text-lg font-semibold">必要データの準備</h1>
                     <p className="text-sm text-muted-foreground">
-                        変換に必要なデータがこのPCにありません。ダウンロードが終わるまで設定と入力は使えません。
+                        必要なデータをダウンロードしてから、CPUとVulkanを比較し、推奨バックエンドを自動で適用します。
                     </p>
                 </div>
                 <ul className="space-y-3">
@@ -128,10 +154,22 @@ const SetupGatePanel = ({
                             </li>
                         );
                     })}
+                    <li className="space-y-1">
+                        <div className="flex flex-wrap items-center justify-between gap-x-3 text-sm">
+                            <span className="font-medium">推奨バックエンドの測定</span>
+                            <span role="status" className="text-xs text-muted-foreground">{benchmarkStatus}</span>
+                        </div>
+                        {benchmarkStarted && <>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-label="バックエンド測定" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+                                <div className="h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} aria-hidden />
+                            </div>
+                            <p className="text-xs text-muted-foreground">{percent}%{activity === "measuring" && "・測定中は一時的に動作が重くなる場合があります。"}</p>
+                        </>}
+                    </li>
                 </ul>
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <Button onClick={onStart} disabled={running} className="w-full">
-                    {running ? "必要データをダウンロード中です…" : "ダウンロードする"}
+                    {benchmarkStarted ? "セットアップ中です…" : running ? "必要データをダウンロード中です…" : "ダウンロードする"}
                 </Button>
             </div>
         </div>
@@ -140,7 +178,7 @@ const SetupGatePanel = ({
 
 /**
  * 変換モデル・日本語辞書・英語辞書を初回起動時にまとめて取得する。
- * 同梱物ではなくキャッシュ（`%LOCALAPPDATA%\ZeroConIME\`）に置き、揃っていれば何もしない。
+ * ダウンロードが完了したら同じ画面でバックエンドを測定・適用する。
  * 「あとで」を選ぶと確認ダイアログだけ閉じ、以降はダウンロードボタンだけの画面になる。
  */
 export function SetupProvider({ children }: { children: ReactNode }) {
@@ -149,7 +187,9 @@ export function SetupProvider({ children }: { children: ReactNode }) {
     const [running, setRunning] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
-    const [checked, setChecked] = useState(false);
+    const [benchmarkStarted, setBenchmarkStarted] = useState(false);
+    const [benchmarkProgress, setBenchmarkProgress] = useState<QuickBenchmarkProgress | null>(null);
+    const checked = useRef(false);
     const started = useRef(false);
 
     const refresh = useCallback(async () => {
@@ -157,20 +197,6 @@ export function SetupProvider({ children }: { children: ReactNode }) {
         setStatus(next);
         return next;
     }, []);
-
-    useEffect(() => {
-        if (checked) return;
-        setChecked(true);
-        refresh()
-            .then((next) => {
-                // 未取得のものがあれば、初回だけ確認ダイアログを出す。
-                if (missing(next).length > 0) setDialogOpen(true);
-            })
-            .catch(() => {
-                // 設定ウィンドウ以外（サーバー起動前など）では判定できない。
-                setError("必要なデータの状態を確認できませんでした");
-            });
-    }, [checked, refresh]);
 
     const run = useCallback(async () => {
         if (started.current) return;
@@ -180,6 +206,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
         setItems(initialItems());
         try {
             const pending = missing(await refresh());
+            rememberPendingSetup(true);
 
             if (pending.includes("model")) {
                 setItems((previous) => ({ ...previous, model: { status: "running", percent: 0 } }));
@@ -195,10 +222,6 @@ export function SetupProvider({ children }: { children: ReactNode }) {
                     setItems((previous) => ({ ...previous, dictionary: { status: "running", percent } })),
                 );
                 setItems((previous) => ({ ...previous, dictionary: { status: dictionary.installed ? "done" : "error", percent: 100 } }));
-                if (dictionary.installed) {
-                    // 変換サーバーは起動時に辞書を読み込むため、取得後に読み直させる。
-                    await reloadDictionaryInServer().catch(() => {});
-                }
             }
 
             if (pending.includes("english")) {
@@ -212,7 +235,28 @@ export function SetupProvider({ children }: { children: ReactNode }) {
             const next = await refresh();
             if (missing(next).length === 0) {
                 setDialogOpen(false);
-                toast.success("必要なデータを準備しました");
+                setBenchmarkStarted(true);
+                let readyMessage = "必要なデータを準備しました。";
+                let restartedByApply = false;
+                try {
+                    const { result, outcome } = await runQuickBenchmark(true, setBenchmarkProgress);
+                    const backend = result.recommended && BACKEND_LABELS[result.recommended];
+                    restartedByApply = outcome === "applied" || outcome === "pending";
+                    if (outcome === "applied") readyMessage = `必要なデータを準備し、推奨バックエンド ${backend} を適用しました。`;
+                    else if (outcome === "unchanged") readyMessage += ` 推奨バックエンド ${backend} は設定済みです。`;
+                    else if (outcome === "measured") readyMessage += ` ${quickBenchmarkSummary(result)}`;
+                    else if (outcome === "stale") toast.info("測定中に変換設定が変わりました。「変換と候補」から再測定できます。");
+                } catch (failure) {
+                    toast.error("バックエンドを測定できませんでした。「変換と候補」から再測定できます。", { description: String(failure) });
+                }
+                if (!restartedByApply) {
+                    // 推奨の適用で再起動しなかった場合は、取得したモデルと辞書を読み直す。
+                    await reloadDictionaryInServer().catch(() => {
+                        toast.error("準備したデータをIMEに読み込めませんでした。IMEサーバーを再起動してください。");
+                    });
+                }
+                rememberPendingSetup(false);
+                toast.success(readyMessage);
             } else {
                 setError("一部のデータを取得できませんでした。再試行してください。");
             }
@@ -231,6 +275,22 @@ export function SetupProvider({ children }: { children: ReactNode }) {
         }
     }, [refresh]);
 
+    const checkSetup = useCallback(async () => {
+        try {
+            const current = await refresh();
+            if (missing(current).length > 0) setDialogOpen(true);
+            else if (hasPendingSetup()) void run();
+        } catch {
+            setError("必要なデータの状態を確認できませんでした");
+        }
+    }, [refresh, run]);
+
+    useEffect(() => {
+        if (checked.current) return;
+        checked.current = true;
+        void checkSetup();
+    }, [checkSetup]);
+
     if (status === null) {
         return (
             <div className="flex h-dvh flex-col items-center justify-center gap-3 bg-background">
@@ -240,11 +300,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
                         variant="outline"
                         onClick={() => {
                             setError(null);
-                            void refresh()
-                                .then((next) => {
-                                    if (missing(next).length > 0) setDialogOpen(true);
-                                })
-                                .catch(() => setError("必要なデータの状態を確認できませんでした"));
+                            void checkSetup();
                         }}
                     >
                         再確認する
@@ -254,13 +310,15 @@ export function SetupProvider({ children }: { children: ReactNode }) {
         );
     }
 
-    if (missing(status).length > 0) {
+    if (running || missing(status).length > 0) {
         return (
             <>
                 <SetupGatePanel
                     status={status}
                     items={items}
                     running={running}
+                    benchmarkStarted={benchmarkStarted}
+                    benchmarkProgress={benchmarkProgress}
                     error={error}
                     onStart={() => {
                         setDialogOpen(false);
@@ -272,7 +330,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
                         <AlertDialogHeader>
                             <AlertDialogTitle>必要データを準備します</AlertDialogTitle>
                             <AlertDialogDescription>
-                                変換モデル・日本語辞書・英語辞書はアプリに含まれていません。初回起動時にまとめてダウンロードします（サイズとSHA-256を検証）。
+                                必要なデータをダウンロードして検証します。その後CPUとVulkanを測定し、推奨を適用する際はIMEサーバーを再起動します。
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <ul className="space-y-1 text-sm">

@@ -538,6 +538,176 @@ MODULEMAP_REPLACEMENT = 'link "llama"\n    link "ggml"\n    link "ggml-base"'
 # replacement, so a later entry must not depend on text an earlier one removed.
 ZENZ_CONTEXT_REPLACEMENTS = (
     (
+        'enum ZenzError: LocalizedError {\n',
+        'public enum ZenzaiRuntimeTuning {\n'
+        '    private final class State: @unchecked Sendable {\n'
+        '        private let lock = NSLock()\n'
+        '        private var decodeThreadsOverride: Int32?\n'
+        '        private var batchThreadsOverride: Int32?\n'
+        '        private var directModelFirstOverride: Bool?\n\n'
+        '        func configure(decodeThreads: Int32?, batchThreads: Int32?, directModelFirstOverride: Bool?) {\n'
+        '            self.lock.lock()\n'
+        '            defer { self.lock.unlock() }\n'
+        '            self.decodeThreadsOverride = decodeThreads.map { max(1, $0) }\n'
+        '            self.batchThreadsOverride = batchThreads.map { max(1, $0) }\n'
+        '            self.directModelFirstOverride = directModelFirstOverride\n'
+        '        }\n\n'
+        '        func reset() {\n'
+        '            self.configure(decodeThreads: nil, batchThreads: nil, directModelFirstOverride: nil)\n'
+        '        }\n\n'
+        '        func snapshot() -> (decode: Int32?, batch: Int32?, directModelFirst: Bool?) {\n'
+        '            self.lock.lock()\n'
+        '            defer { self.lock.unlock() }\n'
+        '            return (self.decodeThreadsOverride, self.batchThreadsOverride, self.directModelFirstOverride)\n'
+        '        }\n'
+        '    }\n\n'
+        '    nonisolated(unsafe) private static let state = State()\n\n'
+        '    public static func configure(\n'
+        '        decodeThreads: Int32? = nil,\n'
+        '        batchThreads: Int32? = nil,\n'
+        '        directModelFirstOverride: Bool? = nil\n'
+        '    ) {\n'
+        '        self.state.configure(\n'
+        '            decodeThreads: decodeThreads,\n'
+        '            batchThreads: batchThreads,\n'
+        '            directModelFirstOverride: directModelFirstOverride\n'
+        '        )\n'
+        '    }\n\n'
+        '    public static func reset() {\n'
+        '        self.state.reset()\n'
+        '    }\n\n'
+        '    package static var resolvedDecodeThreadsOverride: Int32? {\n'
+        '        self.state.snapshot().decode\n'
+        '    }\n\n'
+        '    package static var resolvedBatchThreadsOverride: Int32? {\n'
+        '        self.state.snapshot().batch\n'
+        '    }\n\n'
+        '    package static var resolvedDirectModelFirstOverride: Bool? {\n'
+        '        self.state.snapshot().directModelFirst\n'
+        '    }\n'
+        '}\n\n'
+        'enum ZenzError: LocalizedError {\n',
+    ),
+    (
+        '    private var prevInputBySeq: [llama_seq_id: [llama_token]] = [:]\n'
+        '    private var prevPromptBySeq: [llama_seq_id: [llama_token]] = [:]',
+        '    private var prevInputBySeq: [llama_seq_id: [llama_token]] = [:]\n'
+        '    private var prevPromptBySeq: [llama_seq_id: [llama_token]] = [:]\n'
+        '    let isGpuOffloaded: Bool\n'
+        '    let modelWeightBytes: UInt64\n'
+        '    #if Zenzai || ZenzaiCPU\n'
+        '    private var greedySampler: UnsafeMutablePointer<llama_sampler>?\n'
+        '    #else\n'
+        '    private var greedySampler: OpaquePointer?\n'
+        '    #endif\n\n'
+        '    var prefersDirectModelFirst: Bool {\n'
+        '        if let override = ZenzaiRuntimeTuning.resolvedDirectModelFirstOverride {\n'
+        '            return override\n'
+        '        }\n'
+        '        return self.isGpuOffloaded || (self.modelWeightBytes > 0 && self.modelWeightBytes < 42 * 1024 * 1024)\n'
+        '    }\n\n'
+        '    static func resolvedThreads(isGpuOffloaded: Bool) -> (decode: Int, batch: Int) {\n'
+        '        let logicalCores = max(1, ProcessInfo.processInfo.processorCount)\n'
+        '        let defaultDecode = isGpuOffloaded\n'
+        '            ? (logicalCores <= 1 ? 1 : min(4, max(2, logicalCores / 2)))\n'
+        '            : (logicalCores <= 1 ? 1 : min(6, max(2, logicalCores / 2)))\n'
+        '        let defaultBatch = isGpuOffloaded\n'
+        '            ? defaultDecode\n'
+        '            : (logicalCores <= 1 ? 1 : min(12, max(defaultDecode, logicalCores - 2)))\n'
+        '        let decode = ZenzaiRuntimeTuning.resolvedDecodeThreadsOverride.map {\n'
+        '            min(logicalCores, max(1, Int($0)))\n'
+        '        } ?? defaultDecode\n'
+        '        let batch = ZenzaiRuntimeTuning.resolvedBatchThreadsOverride.map {\n'
+        '            min(logicalCores, max(decode, Int($0)))\n'
+        '        } ?? max(decode, defaultBatch)\n'
+        '        return (decode, batch)\n'
+        '    }',
+    ),
+    (
+        '    init(model: OpaquePointer, context: OpaquePointer, vocab: OpaquePointer) {\n'
+        '        self.model = model\n'
+        '        self.context = context\n'
+        '        self.vocab = vocab\n'
+        '    }\n\n'
+        '    deinit {\n'
+        '        llama_free(context)\n'
+        '        llama_model_free(model)\n'
+        '        llama_backend_free()\n'
+        '    }',
+        '    init(\n'
+        '        model: OpaquePointer,\n'
+        '        context: OpaquePointer,\n'
+        '        vocab: OpaquePointer,\n'
+        '        isGpuOffloaded: Bool = false,\n'
+        '        modelWeightBytes: UInt64 = 0\n'
+        '    ) {\n'
+        '        self.model = model\n'
+        '        self.context = context\n'
+        '        self.vocab = vocab\n'
+        '        self.isGpuOffloaded = isGpuOffloaded\n'
+        '        #if Zenzai || ZenzaiCPU\n'
+        '        self.modelWeightBytes = modelWeightBytes > 0 ? modelWeightBytes : llama_model_size(model)\n'
+        '        self.greedySampler = llama_sampler_init_greedy()\n'
+        '        #else\n'
+        '        self.modelWeightBytes = modelWeightBytes\n'
+        '        self.greedySampler = nil\n'
+        '        #endif\n'
+        '    }\n\n'
+        '    deinit {\n'
+        '        #if Zenzai || ZenzaiCPU\n'
+        '        if let greedySampler {\n'
+        '            llama_sampler_free(greedySampler)\n'
+        '        }\n'
+        '        #endif\n'
+        '        llama_free(context)\n'
+        '        llama_model_free(model)\n'
+        '        llama_backend_free()\n'
+        '    }',
+    ),
+    (
+        '        #if Zenzai\n'
+        '        model_params.n_gpu_layers = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount\n'
+        '        #endif\n'
+        '        #if ZenzaiCPU\n'
+        '        // CPU 専用: GPU へのオフロードを無効化\n'
+        '        model_params.n_gpu_layers = 0\n'
+        '        model_params.split_mode = LLAMA_SPLIT_MODE_NONE\n'
+        '        #endif\n'
+        '        let model = llama_model_load_from_file(path, model_params)',
+        '        #if Zenzai\n'
+        '        let resolvedGpuLayers = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount\n'
+        '        model_params.n_gpu_layers = resolvedGpuLayers\n'
+        '        model_params.split_mode = LLAMA_SPLIT_MODE_NONE\n'
+        '        let gpuOffloaded = resolvedGpuLayers > 0\n'
+        '        #elseif ZenzaiCPU\n'
+        '        // CPU 専用: GPU へのオフロードを無効化\n'
+        '        model_params.n_gpu_layers = 0\n'
+        '        model_params.split_mode = LLAMA_SPLIT_MODE_NONE\n'
+        '        let gpuOffloaded = false\n'
+        '        #else\n'
+        '        let gpuOffloaded = false\n'
+        '        #endif\n'
+        '        let loadedModel: OpaquePointer?\n'
+        '        #if Zenzai || ZenzaiCPU\n'
+        '        if !gpuOffloaded, let cpuDevice = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU) {\n'
+        '            var cpuDevices: [ggml_backend_dev_t?] = [cpuDevice, nil]\n'
+        '            loadedModel = cpuDevices.withUnsafeMutableBufferPointer { buffer in\n'
+        '                model_params.devices = buffer.baseAddress\n'
+        '                return llama_model_load_from_file(path, model_params)\n'
+        '            }\n'
+        '        } else {\n'
+        '            loadedModel = llama_model_load_from_file(path, model_params)\n'
+        '        }\n'
+        '        #else\n'
+        '        loadedModel = llama_model_load_from_file(path, model_params)\n'
+        '        #endif\n'
+        '        let model = loadedModel',
+    ),
+    (
+        '        return ZenzContext(model: model, context: context, vocab: vocab)',
+        '        return ZenzContext(model: model, context: context, vocab: vocab, isGpuOffloaded: gpuOffloaded)',
+    ),
+    (
         'model_params.use_mmap = true',
         'model_params.load_mode = LLAMA_LOAD_MODE_MMAP',
     ),
@@ -550,9 +720,7 @@ ZENZ_CONTEXT_REPLACEMENTS = (
     # than degrade. Keep the two paired.
     (
         'ctx_params.n_batch = 512',
-        'let logicalCores = max(1, ProcessInfo.processInfo.processorCount)\n'
-        '        let decodeThreads = logicalCores <= 1 ? 1 : min(6, max(2, logicalCores / 2))\n'
-        '        let batchThreads = logicalCores <= 1 ? 1 : min(12, max(decodeThreads, logicalCores - 2))\n'
+        'let (decodeThreads, batchThreads) = Self.resolvedThreads(isGpuOffloaded: false)\n'
         '        ctx_params.n_threads = Int32(decodeThreads)\n'
         '        ctx_params.n_threads_batch = Int32(batchThreads)\n'
         '        ctx_params.n_batch = 1024\n'
@@ -569,12 +737,18 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '        #endif',
         '        var params = ctx_params\n'
         '        #if Zenzai\n'
-        '        params.offload_kqv = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount > 0\n'
-        '        #endif\n'
-        '        #if ZenzaiCPU\n'
+        '        let isGpuParams = KanaKanjiConverterEngineRuntime.resolvedGpuLayerCount > 0\n'
+        '        params.offload_kqv = isGpuParams\n'
+        '        #elseif ZenzaiCPU\n'
         '        // CPU 専用: KV / KQV 等の GPU オフロードを完全に無効化\n'
+        '        let isGpuParams = false\n'
         '        params.offload_kqv = false\n'
-        '        #endif',
+        '        #else\n'
+        '        let isGpuParams = false\n'
+        '        #endif\n'
+        '        let (paramDecodeThreads, paramBatchThreads) = Self.resolvedThreads(isGpuOffloaded: isGpuParams)\n'
+        '        params.n_threads = Int32(paramDecodeThreads)\n'
+        '        params.n_threads_batch = Int32(paramBatchThreads)',
     ),
     (
         '    func resetContext() throws {\n'
@@ -595,6 +769,11 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '    func resetContext() throws {\n'
         '        // Reuse the allocated context and graph reservation; only clear KV memory.\n'
         '        llama_memory_clear(llama_get_memory(self.context), true)\n'
+        '        #if Zenzai || ZenzaiCPU\n'
+        '        if let greedySampler {\n'
+        '            llama_sampler_reset(greedySampler)\n'
+        '        }\n'
+        '        #endif\n'
         '        self.prevInputBySeq = [:]\n'
         '        self.prevPromptBySeq = [:]\n'
         '    }',
@@ -640,9 +819,9 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '            debug("error: prompt of", tokens.count, "tokens exceeds n_ctx", n_ctx, "or n_batch", n_batch)\n'
         '            return nil\n'
         '        }\n'
-        '        let logicalCores = max(1, ProcessInfo.processInfo.processorCount)\n'
-        '        let decodeThreads = Int32(logicalCores <= 1 ? 1 : min(6, max(2, logicalCores / 2)))\n'
-        '        let batchThreads = Int32(logicalCores <= 1 ? 1 : min(12, max(Int(decodeThreads), logicalCores - 2)))\n'
+        '        let (resolvedDecode, resolvedBatch) = Self.resolvedThreads(isGpuOffloaded: self.isGpuOffloaded)\n'
+        '        let decodeThreads = Int32(resolvedDecode)\n'
+        '        let batchThreads = Int32(resolvedBatch)\n'
         '        let deltaTokens = max(0, tokens.count - prefixCacheCount)\n'
         '        llama_set_n_threads(context, decodeThreads, deltaTokens <= 4 ? decodeThreads : batchThreads)\n'
         '        var batch = llama_batch_init(Int32(tokens.count), 0, 1)\n'
@@ -658,6 +837,261 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '            debug("llama_decode() failed")\n'
         '            return nil\n'
         '        }',
+    ),
+    (
+        '        } else {\n'
+        '            let bufferPointer: UnsafeBufferPointer<Int8> = UnsafeBufferPointer(start: result, count: Int(nTokens))\n'
+        '            return Array(bufferPointer)\n'
+        '        }\n'
+        '    }\n'
+        '}',
+        '        } else {\n'
+        '            let bufferPointer: UnsafeBufferPointer<Int8> = UnsafeBufferPointer(start: result, count: Int(nTokens))\n'
+        '            return Array(bufferPointer)\n'
+        '        }\n'
+        '    }\n\n'
+        '    #if Zenzai || ZenzaiCPU\n'
+        '    private static func appendPieceBytes(vocab: OpaquePointer, token: llama_token, buf: inout [CChar], into out: inout [UInt8]) {\n'
+        '        let cap = Int32(buf.count)\n'
+        '        let n = buf.withUnsafeMutableBufferPointer { ptr in\n'
+        '            llama_token_to_piece(vocab, token, ptr.baseAddress, cap, 0, false)\n'
+        '        }\n'
+        '        if n > 0 {\n'
+        '            let count = Int(n)\n'
+        '            out.reserveCapacity(out.count + count)\n'
+        '            for i in 0 ..< count {\n'
+        '                out.append(UInt8(bitPattern: buf[i]))\n'
+        '            }\n'
+        '        } else if n < 0 {\n'
+        '            let need = Int(-n)\n'
+        '            var large = [CChar](repeating: 0, count: need)\n'
+        '            let n2 = large.withUnsafeMutableBufferPointer { ptr in\n'
+        '                llama_token_to_piece(vocab, token, ptr.baseAddress, Int32(need), 0, false)\n'
+        '            }\n'
+        '            if n2 > 0 {\n'
+        '                let count = Int(n2)\n'
+        '                out.reserveCapacity(out.count + count)\n'
+        '                for i in 0 ..< count {\n'
+        '                    out.append(UInt8(bitPattern: large[i]))\n'
+        '                }\n'
+        '            }\n'
+        '        }\n'
+        '    }\n\n'
+        '    private static func findStopMarkerIndex(in bytes: [UInt8], from start: Int) -> Int? {\n'
+        '        let n = bytes.count\n'
+        '        var i = max(0, start)\n'
+        '        while i < n {\n'
+        '            let b = bytes[i]\n'
+        '            if b == 0x0A || b == 0x0D {\n'
+        '                return i\n'
+        '            }\n'
+        '            if b == 0xEE, i + 2 < n, bytes[i + 1] == 0xB8, (0x80 ... 0x8F).contains(bytes[i + 2]) {\n'
+        '                return i\n'
+        '            }\n'
+        '            if b == 0x3C {\n'
+        '                if i + 2 < n, bytes[i + 1] == 0x73, bytes[i + 2] == 0x3E {\n'
+        '                    return i\n'
+        '                }\n'
+        '                if i + 3 < n, bytes[i + 1] == 0x2F, bytes[i + 2] == 0x73, bytes[i + 3] == 0x3E {\n'
+        '                    return i\n'
+        '                }\n'
+        '            }\n'
+        '            i += 1\n'
+        '        }\n'
+        '        return nil\n'
+        '    }\n\n'
+        '    private static func pieceHasStopMarker(vocab: OpaquePointer, token: llama_token, buf: inout [CChar], rollingTail: inout [UInt8]) -> Bool {\n'
+        '        let prevCount = rollingTail.count\n'
+        '        Self.appendPieceBytes(vocab: vocab, token: token, buf: &buf, into: &rollingTail)\n'
+        '        if Self.findStopMarkerIndex(in: rollingTail, from: max(0, prevCount - 3)) != nil {\n'
+        '            return true\n'
+        '        }\n'
+        '        if rollingTail.count > 16 {\n'
+        '            rollingTail.removeFirst(rollingTail.count - 8)\n'
+        '        }\n'
+        '        return false\n'
+        '    }\n'
+        '    #endif\n\n'
+        '    func generateDirectGreedy(promptTokens: [llama_token], maxTokens: Int) -> DirectZenzaiGenerationResult {\n'
+        '        #if Zenzai || ZenzaiCPU\n'
+        '        guard let sampler = self.greedySampler,\n'
+        '              !promptTokens.isEmpty,\n'
+        '              maxTokens > 0 else {\n'
+        '            return .needsFallback\n'
+        '        }\n'
+        '        let nCtx = Int(llama_n_ctx(self.context))\n'
+        '        let nBatch = Int(llama_n_batch(self.context))\n'
+        '        guard promptTokens.count + maxTokens <= nCtx, nBatch > 0 else {\n'
+        '            return .needsFallback\n'
+        '        }\n'
+        '        let memory = llama_get_memory(self.context)\n'
+        '        let effectivePrevInput = self.prevInputBySeq[evalSeqId] ?? []\n'
+        '        var prefix = effectivePrevInput.commonPrefix(with: promptTokens).count\n'
+        '        if let otherPrevInput = self.prevInputBySeq[inputPredictionSeqId] {\n'
+        '            let otherPrefix = otherPrevInput.commonPrefix(with: promptTokens).count\n'
+        '            if otherPrefix > prefix {\n'
+        '                let copiedCount = min(otherPrefix, promptTokens.count - 1)\n'
+        '                if copiedCount > 0 {\n'
+        '                    llama_memory_seq_rm(memory, evalSeqId, 0, -1)\n'
+        '                    llama_memory_seq_cp(memory, inputPredictionSeqId, evalSeqId, 0, llama_pos(copiedCount))\n'
+        '                    prefix = copiedCount\n'
+        '                }\n'
+        '            }\n'
+        '        }\n'
+        '        prefix = min(prefix, promptTokens.count - 1)\n'
+        '        if prefix == 0\n'
+        '            || !llama_memory_seq_rm(memory, evalSeqId, llama_pos(prefix), -1)\n'
+        '            || llama_memory_seq_pos_max(memory, evalSeqId) != llama_pos(prefix - 1) {\n'
+        '            if !llama_memory_seq_rm(memory, evalSeqId, 0, -1)\n'
+        '                || llama_memory_seq_pos_max(memory, evalSeqId) != -1 {\n'
+        '                llama_memory_clear(memory, true)\n'
+        '                self.prevInputBySeq = [:]\n'
+        '            } else {\n'
+        '                self.prevInputBySeq[evalSeqId] = []\n'
+        '            }\n'
+        '            prefix = 0\n'
+        '        }\n\n'
+        '        let (resolvedDecode, resolvedBatch) = Self.resolvedThreads(isGpuOffloaded: self.isGpuOffloaded)\n'
+        '        let decodeThreads = Int32(resolvedDecode)\n'
+        '        let batchThreads = Int32(resolvedBatch)\n'
+        '        let promptDelta = promptTokens.count - prefix\n'
+        '        llama_set_n_threads(self.context, decodeThreads, promptDelta <= 4 ? decodeThreads : batchThreads)\n'
+        '        llama_sampler_reset(sampler)\n\n'
+        '        var cachedTokens = Array(promptTokens.prefix(prefix))\n'
+        '        var mutablePrompt = promptTokens\n'
+        '        var start = prefix\n'
+        '        var prefillFailed = false\n'
+        '        mutablePrompt.withUnsafeMutableBufferPointer { buf in\n'
+        '            guard let base = buf.baseAddress else {\n'
+        '                prefillFailed = true\n'
+        '                return\n'
+        '            }\n'
+        '            while start < promptTokens.count {\n'
+        '                let count = min(promptTokens.count - start, nBatch)\n'
+        '                if llama_decode(self.context, llama_batch_get_one(base.advanced(by: start), Int32(count))) != 0 {\n'
+        '                    prefillFailed = true\n'
+        '                    return\n'
+        '                }\n'
+        '                start += count\n'
+        '            }\n'
+        '        }\n'
+        '        if prefillFailed {\n'
+        '            llama_memory_clear(memory, true)\n'
+        '            self.prevInputBySeq = [:]\n'
+        '            self.prevPromptBySeq[evalSeqId] = nil\n'
+        '            return .decodeAborted\n'
+        '        }\n'
+        '        cachedTokens.append(contentsOf: promptTokens[prefix...])\n'
+        '        llama_set_n_threads(self.context, decodeThreads, decodeThreads)\n\n'
+        '        var outputBytes: [UInt8] = []\n'
+        '        outputBytes.reserveCapacity(128)\n'
+        '        var pieceBuf = [CChar](repeating: 0, count: 64)\n'
+        '        var finished = false\n\n'
+        '        for _ in 0 ..< maxTokens {\n'
+        '            var token = llama_sampler_sample(sampler, self.context, -1)\n'
+        '            if llama_vocab_is_eog(self.vocab, token) || token == self.eosToken {\n'
+        '                finished = true\n'
+        '                break\n'
+        '            }\n'
+        '            llama_sampler_accept(sampler, token)\n'
+        '            let scanStart = max(0, outputBytes.count - 4)\n'
+        '            Self.appendPieceBytes(vocab: self.vocab, token: token, buf: &pieceBuf, into: &outputBytes)\n'
+        '            if let stopIndex = Self.findStopMarkerIndex(in: outputBytes, from: scanStart) {\n'
+        '                outputBytes.removeSubrange(stopIndex...)\n'
+        '                finished = true\n'
+        '                break\n'
+        '            }\n'
+        '            if outputBytes.count > 8192 {\n'
+        '                self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '                self.prevPromptBySeq[evalSeqId] = promptTokens\n'
+        '                return .needsFallback\n'
+        '            }\n'
+        '            if llama_decode(self.context, llama_batch_get_one(&token, 1)) != 0 {\n'
+        '                llama_memory_clear(memory, true)\n'
+        '                self.prevInputBySeq = [:]\n'
+        '                self.prevPromptBySeq[evalSeqId] = nil\n'
+        '                return .decodeAborted\n'
+        '            }\n'
+        '            cachedTokens.append(token)\n'
+        '        }\n\n'
+        '        self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '        self.prevPromptBySeq[evalSeqId] = promptTokens\n'
+        '        guard finished, !outputBytes.isEmpty,\n'
+        '              let decoded = String(bytes: outputBytes, encoding: .utf8),\n'
+        '              !decoded.isEmpty else {\n'
+        '            return .needsFallback\n'
+        '        }\n'
+        '        return .text(decoded)\n'
+        '        #else\n'
+        '        return .needsFallback\n'
+        '        #endif\n'
+        '    }\n\n'
+        '    func continueDirectGreedy(prefixTokens: [llama_token], firstToken: llama_token, maxSteps: Int) -> [llama_token]? {\n'
+        '        #if Zenzai || ZenzaiCPU\n'
+        '        guard let sampler = self.greedySampler,\n'
+        '              !prefixTokens.isEmpty,\n'
+        '              maxSteps >= 0 else {\n'
+        '            return nil\n'
+        '        }\n'
+        '        let nCtx = Int(llama_n_ctx(self.context))\n'
+        '        guard prefixTokens.count + 1 + maxSteps <= nCtx else {\n'
+        '            return nil\n'
+        '        }\n'
+        '        let memory = llama_get_memory(self.context)\n'
+        '        let prefixCount = prefixTokens.count\n'
+        '        guard llama_memory_seq_rm(memory, evalSeqId, llama_pos(prefixCount), -1),\n'
+        '              llama_memory_seq_pos_max(memory, evalSeqId) == llama_pos(prefixCount - 1) else {\n'
+        '            return nil\n'
+        '        }\n'
+        '        let decodeThreads = Int32(Self.resolvedThreads(isGpuOffloaded: self.isGpuOffloaded).decode)\n'
+        '        llama_set_n_threads(self.context, decodeThreads, decodeThreads)\n'
+        '        llama_sampler_reset(sampler)\n\n'
+        '        var cachedTokens = prefixTokens\n'
+        '        var generated: [llama_token] = [firstToken]\n'
+        '        var curToken = firstToken\n'
+        '        var pieceBuf = [CChar](repeating: 0, count: 64)\n'
+        '        var rollingTail: [UInt8] = []\n'
+        '        rollingTail.reserveCapacity(16)\n\n'
+        '        if Self.pieceHasStopMarker(vocab: self.vocab, token: curToken, buf: &pieceBuf, rollingTail: &rollingTail) {\n'
+        '            self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '            return generated\n'
+        '        }\n\n'
+        '        if maxSteps == 0 {\n'
+        '            self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '            return nil\n'
+        '        }\n\n'
+        '        for _ in 0 ..< maxSteps {\n'
+        '            if cachedTokens.count + 1 >= nCtx {\n'
+        '                self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '                return nil\n'
+        '            }\n'
+        '            var stepToken = curToken\n'
+        '            if llama_decode(self.context, llama_batch_get_one(&stepToken, 1)) != 0 {\n'
+        '                llama_memory_seq_rm(memory, evalSeqId, llama_pos(prefixCount), -1)\n'
+        '                self.prevInputBySeq[evalSeqId] = prefixTokens\n'
+        '                return nil\n'
+        '            }\n'
+        '            cachedTokens.append(curToken)\n'
+        '            let nextToken = llama_sampler_sample(sampler, self.context, -1)\n'
+        '            if llama_vocab_is_eog(self.vocab, nextToken) || nextToken == self.eosToken {\n'
+        '                self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '                return generated\n'
+        '            }\n'
+        '            llama_sampler_accept(sampler, nextToken)\n'
+        '            generated.append(nextToken)\n'
+        '            if Self.pieceHasStopMarker(vocab: self.vocab, token: nextToken, buf: &pieceBuf, rollingTail: &rollingTail) {\n'
+        '                self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '                return generated\n'
+        '            }\n'
+        '            curToken = nextToken\n'
+        '        }\n'
+        '        self.prevInputBySeq[evalSeqId] = cachedTokens\n'
+        '        return nil\n'
+        '        #else\n'
+        '        return nil\n'
+        '        #endif\n'
+        '    }\n'
+        '}',
     ),
 )
 
@@ -881,6 +1315,7 @@ ZENZ_DIGIT_MASKING_SWIFT = r'''public enum ZenzDigitMasking {
     public static func restoreBytes(
         _ bytes: [UInt8],
         digits: [String],
+        asciiDigits: [String]? = nil,
         completePartialTrailingNam: Bool = false
     ) -> [UInt8] {
         guard !digits.isEmpty else {
@@ -916,7 +1351,17 @@ ZENZ_DIGIT_MASKING_SWIFT = r'''public enum ZenzDigitMasking {
                 if keepLiteral {
                     out.append(contentsOf: [0x6E, 0x61, 0x6D])
                 } else {
-                    out.append(contentsOf: digits[digitIndex].utf8)
+                    let prevIsAscii = out.last.map { $0 >= 0x21 && $0 <= 0x7E } ?? false
+                    let nextIsAscii = afterIndex < input.count && input[afterIndex] >= 0x21 && input[afterIndex] <= 0x7E
+                    let replacement: String
+                    if (prevIsAscii || nextIsAscii),
+                       let asciiDigits,
+                       digitIndex < asciiDigits.count {
+                        replacement = asciiDigits[digitIndex]
+                    } else {
+                        replacement = digits[digitIndex]
+                    }
+                    out.append(contentsOf: replacement.utf8)
                     digitIndex += 1
                 }
                 cursor = afterIndex
@@ -950,17 +1395,24 @@ ZENZ_DIGIT_MASKING_SWIFT = r'''public enum ZenzDigitMasking {
             }
             if let suffixLen {
                 current.removeLast(suffixLen)
-                current.append(contentsOf: digits[consumed].utf8)
+                let prevIsAscii = current.last.map { $0 >= 0x21 && $0 <= 0x7E } ?? false
+                let replacement: String
+                if prevIsAscii, let asciiDigits, consumed < asciiDigits.count {
+                    replacement = asciiDigits[consumed]
+                } else {
+                    replacement = digits[consumed]
+                }
+                current.append(contentsOf: replacement.utf8)
             }
         }
         return current
     }
 
-    public static func restore(_ text: String, digits: [String]) -> String {
+    public static func restore(_ text: String, digits: [String], asciiDigits: [String]? = nil) -> String {
         guard !digits.isEmpty, text.contains("nam") else {
             return text
         }
-        return String(decoding: restoreBytes(Array(text.utf8), digits: digits), as: UTF8.self)
+        return String(decoding: restoreBytes(Array(text.utf8), digits: digits, asciiDigits: asciiDigits), as: UTF8.self)
     }
 }
 
@@ -1144,6 +1596,8 @@ public struct PreparedDynamicUserDictionary: Sendable {
     private let entriesByNode: [Int: [DicdataElement]]
     private let sortedEntries: [DicdataElement]
     let shortcutsByReading: [String: [DicdataElement]]
+    private let protectedReadings: Set<String>
+    private let maxProtectedReadingLength: Int
 
     public init(_ entries: [DicdataElement], shortcuts: [DicdataElement] = []) {
         let converted = entries.map { source in
@@ -1165,16 +1619,43 @@ public struct PreparedDynamicUserDictionary: Sendable {
                 louds.searchNodeIndex(chars: Array(reading.utf8)).map { ($0, entries) }
             })
         }
-        sortedEntries = converted.filter { !$0.metadata.contains(.isKeyboardTypoCorrection) }
+        let protectedConversion = converted.filter { !$0.metadata.contains(.isKeyboardTypoCorrection) }
+        sortedEntries = protectedConversion
             .sorted { $0.ruby < $1.ruby }
-        shortcutsByReading = Dictionary(grouping: shortcuts.map { source in
+        let normalizedShortcuts = shortcuts.map { source in
             var element = source
+            element.ruby = source.ruby.precomposedStringWithCanonicalMapping
             element.metadata.insert(.isFromUserDictionary)
             return element
-        }, by: \\.ruby)
+        }
+        shortcutsByReading = Dictionary(grouping: normalizedShortcuts, by: \\.ruby)
+        let allProtected = protectedConversion.map(\\.ruby) + normalizedShortcuts.map(\\.ruby)
+        protectedReadings = Set(allProtected)
+        maxProtectedReadingLength = allProtected.reduce(0) { max($0, $1.count) }
     }
 
     var hasEntries: Bool { trie != nil }
+
+    func hasMatchInKatakana(_ katakana: String) -> Bool {
+        guard !self.protectedReadings.isEmpty else {
+            return false
+        }
+        let chars = Array(katakana.precomposedStringWithCanonicalMapping)
+        let n = chars.count
+        guard n > 0, self.maxProtectedReadingLength > 0 else {
+            return false
+        }
+        let maxLen = min(n, self.maxProtectedReadingLength)
+        for start in 0 ..< n {
+            let endLimit = min(n, start + maxLen)
+            for end in (start + 1) ... endLimit {
+                if self.protectedReadings.contains(String(chars[start ..< end])) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
 
     func exact(_ reading: String) -> [DicdataElement] {
         guard let trie, let index = trie.searchNodeIndex(chars: Array(reading.precomposedStringWithCanonicalMapping.utf8)) else {
@@ -1339,7 +1820,23 @@ REUSABLE_LATTICE_CONVERTER_API_REPLACEMENTS = (
     (
         '''/// かな漢字変換の管理を受け持つクラス
 public final class KanaKanjiConverter {''',
-        '''public final class ReusableFullInputLattice {
+        '''public enum DirectZenzaiGenerationResult: Sendable {
+    case text(String)
+    case needsFallback
+    case decodeAborted
+}
+
+extension ConvertRequestOptions {
+    public func disablingZenzaiRichCandidates() -> ConvertRequestOptions {
+        var copy = self
+        if copy.zenzaiMode.enabled {
+            copy.zenzaiMode.requestRichCandidates = false
+        }
+        return copy
+    }
+}
+
+public final class ReusableFullInputLattice {
     let inputData: ComposingText
     let experimentalKeyboardTypoCorrection: Bool?
     let keyboardLanguage: KeyboardLanguage
@@ -1563,6 +2060,181 @@ REUSABLE_LATTICE_PUBLIC_API = '''    public func exportReusableFullInputLattice(
         }
     }
 
+    public func prepareDirectZenzaiGeneration(
+        for inputData: ComposingText,
+        options: ConvertRequestOptions
+    ) -> (eligible: Bool, isGpuOffloaded: Bool) {
+        if case .完全一致 = options.requestQuery {
+            return (false, false)
+        }
+        guard !options.shouldResetMemory,
+              options.zenzaiMode.enabled,
+              options.zenzaiMode.personalizationMode == nil,
+              !self.isClassicTypoCorrectionEnabled(options),
+              (1...128).contains(inputData.convertTarget.count),
+              let zenz = self.getModel(modelURL: options.zenzaiMode.weightURL),
+              zenz.prefersDirectModelFirst else {
+            return (false, false)
+        }
+        if let previous = self.currentSessionState.experimentalKeyboardTypoCorrection,
+           previous != options.experimentalKeyboardTypoCorrection {
+            self.stopComposition()
+        }
+        self.updateCurrentSessionState {
+            $0.experimentalKeyboardTypoCorrection = options.experimentalKeyboardTypoCorrection
+        }
+        self.dicdataStoreState.updateIfRequired(options: options)
+        let katakana = inputData.convertTarget.toKatakana()
+        guard self.dicdataStoreState.userDictionaryLOUDS == nil,
+              self.dicdataStoreState.userShortcutsLOUDS == nil,
+              !(options.learningType != .nothing && self.dicdataStoreState.learningMemoryManager.hasTemporaryEntries),
+              !self.dicdataStoreState.dynamicUserDictionary.hasMatchInKatakana(katakana) else {
+            return (false, false)
+        }
+        return (true, zenz.isGpuOffloaded)
+    }
+
+    public func runDirectZenzaiGenerationOnly(
+        _ inputData: ComposingText,
+        options: ConvertRequestOptions
+    ) -> DirectZenzaiGenerationResult {
+        guard options.zenzaiMode.enabled,
+              let zenz = self.zenz,
+              zenz.resourceURL == options.zenzaiMode.weightURL else {
+            return .needsFallback
+        }
+        return zenz.generateDirectCandidate(
+            convertTarget: inputData.convertTarget,
+            versionDependentConfig: options.zenzaiMode.versionDependentMode
+        )
+    }
+
+    public func finalizeDirectZenzaiResult(
+        _ outcome: DirectZenzaiGenerationResult,
+        inputData: ComposingText,
+        options: ConvertRequestOptions,
+        normalNBestResults: [Candidate],
+        reusableLattice: ReusableFullInputLattice?
+    ) -> ConversionResult? {
+        switch outcome {
+        case .decodeAborted:
+            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.zenzaiCache = nil
+                $0.latticeBuiltAfterComplete = false
+                $0.lastUnconstrainedResult = nil
+                $0.pendingReusableLattice = nil
+            }
+            return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])
+        case .needsFallback:
+            return nil
+        case .text(let generatedText):
+            guard !generatedText.isEmpty,
+                  self.converter.heuristicRetryValidation(generatedText) else {
+                return nil
+            }
+            let hasProtectedUserDictConflict = normalNBestResults.contains { candidate in
+                candidate.data.contains { element in
+                    ZenzUserDictionaryProtection.isProtectedUserDictionaryElement(element)
+                        && !element.word.isEmpty
+                        && !generatedText.contains(element.word)
+                }
+            }
+            if hasProtectedUserDictConflict {
+                return nil
+            }
+            if options.learningType.needUsingMemory {
+                let hasLearnedConflict = normalNBestResults.prefix(3).contains { candidate in
+                    candidate.text != generatedText
+                        && candidate.data.contains { $0.metadata.contains(.isLearned) }
+                }
+                if hasLearnedConflict {
+                    return nil
+                }
+            }
+
+            let katakanaCount = inputData.convertTarget.count
+            let exactCandidate = normalNBestResults.first { candidate in
+                candidate.text == generatedText && candidate.rubyCount == katakanaCount
+            }
+
+            let chosenCandidate: Candidate
+            var firstClauseResults: [Candidate] = []
+            if let exactCandidate {
+                chosenCandidate = exactCandidate
+                if !exactCandidate.data.isEmpty {
+                    let prefixClause = Candidate.makePrefixClauseCandidate(data: exactCandidate.data)
+                    if !prefixClause.text.isEmpty {
+                        var clause = prefixClause
+                        clause.withActions(self.getAppropriateActions(clause))
+                        clause.parseTemplate()
+                        firstClauseResults = [clause]
+                    }
+                }
+                if firstClauseResults.isEmpty {
+                    firstClauseResults = [exactCandidate]
+                }
+            } else {
+                let materializedLattice = reusableLattice?.seed.makeLattice() ?? Lattice()
+                let baseNode = reusableLattice?.unconstrainedResult?.prevs.first ?? RegisteredNode.BOSNode()
+                let baseCandidate = normalNBestResults.first ?? Candidate(
+                    text: generatedText,
+                    value: -5,
+                    composingCount: .surfaceCount(katakanaCount),
+                    lastMid: MIDData.一般.mid,
+                    data: []
+                )
+                let materialized = self.converter.materializeWholeResultCandidate(
+                    wholeText: generatedText,
+                    inputData: inputData,
+                    baseCandidate: baseCandidate,
+                    baseNode: baseNode,
+                    lattice: materializedLattice,
+                    additionalNodes: reusableLattice?.unconstrainedResult?.prevs ?? []
+                )
+                var built = materialized.1
+                built.withActions(self.getAppropriateActions(built))
+                built.parseTemplate()
+                chosenCandidate = built
+
+                let candidateData = materialized.0.getCandidateData()
+                if let first = candidateData.clauses.first {
+                    let count = max(0, first.clause.dataEndIndex)
+                    let dataSlice = count < candidateData.data.count
+                        ? Array(candidateData.data[0...count])
+                        : candidateData.data
+                    var firstClause = Candidate(
+                        text: first.clause.text,
+                        value: first.value,
+                        composingCount: first.clause.ranges.reduce(into: .inputCount(0)) { $0 = .composite($0, $1.count) },
+                        lastMid: first.clause.mid,
+                        data: dataSlice
+                    )
+                    firstClause.withActions(self.getAppropriateActions(firstClause))
+                    firstClause.parseTemplate()
+                    firstClauseResults = [firstClause]
+                }
+                if firstClauseResults.isEmpty {
+                    firstClauseResults = [chosenCandidate]
+                }
+            }
+
+            self.updateCurrentSessionState {
+                $0.previousInputData = inputData
+                $0.zenzaiCache = nil
+                $0.latticeBuiltAfterComplete = false
+                $0.lastUnconstrainedResult = nil
+                $0.pendingReusableLattice = nil
+            }
+            return ConversionResult(
+                mainResults: [chosenCandidate],
+                predictionResults: [],
+                englishPredictionResults: [],
+                firstClauseResults: firstClauseResults
+            )
+        }
+    }
+
 '''
 
 def patch_converter_api(text):
@@ -1653,14 +2325,18 @@ ZENZ_EVALUATOR_SETUP_REPLACEMENT = r'''        let inputMask = ZenzDigitMasking.
         let candidateMask = hasInputDigits ? ZenzDigitMasking.mask(candidate.text, maxRuns: inputMask.rawDigits.count) : nil
         let evaluationCandidateText = candidateMask?.text ?? candidate.text
         let evaluationDigits: [String]
+        let evaluationAsciiDigits: [String]
         if let candidateMask {
             if candidateMask.rawDigits.count < inputMask.rawDigits.count {
                 evaluationDigits = candidateMask.rawDigits + Array(inputMask.rawDigits.dropFirst(candidateMask.rawDigits.count))
+                evaluationAsciiDigits = candidateMask.asciiDigits + Array(inputMask.asciiDigits.dropFirst(candidateMask.asciiDigits.count))
             } else {
                 evaluationDigits = candidateMask.rawDigits
+                evaluationAsciiDigits = candidateMask.asciiDigits
             }
         } else {
             evaluationDigits = []
+            evaluationAsciiDigits = []
         }
 
         let candidateTokens = context.encode(evaluationCandidateText, addBOS: false, addEOS: false)
@@ -1809,6 +2485,7 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
             ZenzDigitMasking.restoreBytes(
                 bytes,
                 digits: evaluationDigits,
+                asciiDigits: evaluationAsciiDigits,
                 completePartialTrailingNam: completePartialTrailingNam
             )
         }
@@ -1828,7 +2505,11 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
             }
             let data = Data(cchars.map { UInt8(bitPattern: $0) })
             let string = String(data: data, encoding: .utf8) ?? ""
-            return ZenzDigitMasking.restore(String(string.dropFirst(normalizedPrompt.count)), digits: evaluationDigits)
+            return ZenzDigitMasking.restore(
+                String(string.dropFirst(normalizedPrompt.count)),
+                digits: evaluationDigits,
+                asciiDigits: evaluationAsciiDigits
+            )
         }
 
         @inline(__always)
@@ -1911,54 +2592,39 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                 let whole = decodeWholeResult(upTo: index)
                 return !whole.isEmpty && whole != candidate.text ? whole : nil
             }
-            var genTokens = Array(tokens.prefix(index)) + [firstToken]
-            var reachedStop = containsStopScalar(firstBytes)
             let limitSteps = maxSteps ?? min(48, max(8, input.count + 8))
-            var step = 0
-            while !reachedStop, step < limitSteps, genTokens.count < 1020 {
-                step += 1
-                guard let stepLogits = context.evaluationLogits(tokens: genTokens, startOffset: genTokens.count - 1) else {
-                    return nil
-                }
-                var nextToken: llama_token = 0
-                var nextMaxLogit = stepLogits[0]
-                for v in 1 ..< Int(n_vocab) {
-                    let value = stepLogits[v]
-                    if value > nextMaxLogit {
-                        nextMaxLogit = value
-                        nextToken = llama_token(v)
-                    }
-                }
-                if nextToken == context.eosToken {
-                    reachedStop = true
-                    break
-                }
-                let nextBytes = context.tokenToPiece(token: nextToken).map { UInt8(bitPattern: $0) }
-                if isPureStopPiece(nextBytes) {
-                    reachedStop = true
-                    break
-                }
-                genTokens.append(nextToken)
-                if containsStopScalar(nextBytes) {
-                    reachedStop = true
-                    break
-                }
-            }
-            guard reachedStop else {
+            guard let suffixTokens = context.continueDirectGreedy(
+                prefixTokens: Array(tokens.prefix(index)),
+                firstToken: firstToken,
+                maxSteps: limitSteps
+            ) else {
                 return nil
             }
             var bytes: [UInt8] = []
-            for token in genTokens.dropFirst(promptTokens.count) {
+            for token in tokens[promptTokens.count ..< index] {
+                bytes.append(contentsOf: context.tokenToPiece(token: token).map { UInt8(bitPattern: $0) })
+            }
+            for token in suffixTokens {
                 bytes.append(contentsOf: context.tokenToPiece(token: token).map { UInt8(bitPattern: $0) })
             }
             var decoded = String(decoding: bytes, as: UTF8.self)
-            if let stopIndex = decoded.unicodeScalars.firstIndex(where: isStopScalar) {
-                decoded = String(decoded[..<stopIndex])
+            var stopCut = decoded.endIndex
+            if let scalarIdx = decoded.unicodeScalars.firstIndex(where: isStopScalar), scalarIdx < stopCut {
+                stopCut = scalarIdx
             }
-            let restoreDigits = (candidateMask != nil && candidateMask!.rawDigits.count < inputMask.rawDigits.count)
-                ? inputMask.rawDigits
-                : evaluationDigits
-            let whole = ZenzDigitMasking.restore(decoded, digits: restoreDigits)
+            if let endTag = decoded.range(of: "</s>")?.lowerBound, endTag < stopCut {
+                stopCut = endTag
+            }
+            if let startTag = decoded.range(of: "<s>")?.lowerBound, startTag < stopCut {
+                stopCut = startTag
+            }
+            if stopCut < decoded.endIndex {
+                decoded = String(decoded[..<stopCut])
+            }
+            let useInputDigits = candidateMask != nil && candidateMask!.rawDigits.count < inputMask.rawDigits.count
+            let restoreDigits = useInputDigits ? inputMask.rawDigits : evaluationDigits
+            let restoreAsciiDigits = useInputDigits ? inputMask.asciiDigits : evaluationAsciiDigits
+            let whole = ZenzDigitMasking.restore(decoded, digits: restoreDigits, asciiDigits: restoreAsciiDigits)
             guard !whole.isEmpty, whole != candidate.text else {
                 return nil
             }
@@ -2098,9 +2764,6 @@ ZENZ_EVALUATOR_LOOP_REPLACEMENT = '''        @inline(__always)
                         )
                     }
                 }
-
-                let logsumexp = stabilizedLogSumExp(startIndex: startIndex, endIndex: endIndex, maxRawLogit: maxRawLogit)
-                score += maxRawLogit - logsumexp
             }
         }
         if personalizationMode == nil,
@@ -2753,6 +3416,40 @@ ZENZ_CONTEXTUAL_REPLACEMENT = '''    package func pureGreedyDecoding(pureInput: 
             return ""
         }
         return ZenzPureGreedyDecoder.decode(context: zenzContext, leftSideContext: pureInput, maxCount: maxCount)
+    }
+
+    package var prefersDirectModelFirst: Bool {
+        self.zenzContext?.prefersDirectModelFirst ?? false
+    }
+
+    package var isGpuOffloaded: Bool {
+        self.zenzContext?.isGpuOffloaded ?? false
+    }
+
+    package func generateDirectCandidate(
+        convertTarget: String,
+        versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode
+    ) -> DirectZenzaiGenerationResult {
+        guard let zenzContext else {
+            return .needsFallback
+        }
+        let katakana = convertTarget.toKatakana()
+        let inputMask = ZenzDigitMasking.mask(katakana)
+        let prompt = ZenzPromptBuilder.candidateEvaluationPrompt(
+            input: katakana,
+            userDictionaryPrompt: "",
+            versionDependentConfig: versionDependentConfig
+        )
+        let promptTokens = zenzContext.encode(prompt, addBOS: true, addEOS: false)
+        let maxTokens = min(112, max(32, katakana.count * 3 + 12))
+        let generated = zenzContext.generateDirectGreedy(promptTokens: promptTokens, maxTokens: maxTokens)
+        switch generated {
+        case .text(let raw):
+            let restored = ZenzDigitMasking.restore(raw, digits: inputMask.rawDigits, asciiDigits: inputMask.asciiDigits)
+            return restored.isEmpty ? .needsFallback : .text(restored)
+        case .needsFallback, .decodeAborted:
+            return generated
+        }
     }
 
     func contextualNextWordReadings(
@@ -3424,7 +4121,7 @@ ZENZAI_REPLACEMENTS = (
         return (chosen, cache)
     }
 
-    private func materializeWholeResultCandidate(
+    func materializeWholeResultCandidate(
         wholeText: String,
         inputData: ComposingText,
         baseCandidate: Candidate,
@@ -3756,7 +4453,7 @@ ZENZAI_REPLACEMENTS = (
     }
 
     /// リトライの候補に対して恣意的なバリデーションを実施する
-    private func heuristicRetryValidation(_ text: String) -> Bool {''',
+    func heuristicRetryValidation(_ text: String) -> Bool {''',
     ),
 )
 

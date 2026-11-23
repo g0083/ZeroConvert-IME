@@ -24,6 +24,9 @@ bool CommitLearningCandidate(unsigned long long candidateId, int commitKind);
 bool ResetLearningMemory(void);
 int32_t SelectJevCandidate(const char *json);
 
+// Provided by the linked llama.dll in Windows benchmark workers.
+bool llama_supports_gpu_offload(void);
+
 #ifdef __cplusplus
 }
 #endif

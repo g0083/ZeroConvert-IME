@@ -1,6 +1,8 @@
 package com.zeroconvert.ime.engine
 
 import android.content.Context
+import android.util.JsonReader
+import android.util.JsonToken
 import com.zeroconvert.ime.*
 import com.zeroconvert.ime.assist.*
 import com.zeroconvert.ime.azookey.input.ComposingText
@@ -10,6 +12,7 @@ import kotlinx.coroutines.channels.Channel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.StringReader
 import java.util.concurrent.Executors
 
 /** Android supplies editor snapshots and model I/O; Windows owns conversion policy. */
@@ -43,7 +46,11 @@ object WindowsEngine {
     private lateinit var dataRoot: File
     private lateinit var root: File
     private var modelPath = ""
+    private var engineRevision = ""
     private var lastSettings = ""
+    private val tuningGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+    @Volatile private var benchmarkActive = false
+    @Volatile private var activeRuntimeTuning: TuningDecision? = null
     private data class ConfigureKey(
         val ai: Boolean,
         val profile: String,
@@ -110,7 +117,13 @@ object WindowsEngine {
         val fingerprint = application.assets.open("shared-engine/sources.json").bufferedReader().use { it.readText() }
         val revision = java.security.MessageDigest.getInstance("SHA-256").digest(fingerprint.toByteArray())
             .joinToString("") { "%02x".format(it) }
+        engineRevision = revision
         root = File(engineRoot, "runtime-$revision")
+        engineRoot.listFiles()?.forEach { child ->
+            if (child.isDirectory && child.name.startsWith("runtime-") && child.name != root.name) {
+                runCatching { child.deleteRecursively() }
+            }
+        }
         if (!File(root, ".complete").exists()) {
             copyAssets("shared-engine", root)
             File(root, ".complete").writeText(revision)
@@ -125,6 +138,7 @@ object WindowsEngine {
         lastSettings = ""
         configure(true, "", true, false)
         ready = true
+        applyInitialRuntimeTuning(selectedModel)
         true
     }
 
@@ -158,6 +172,9 @@ object WindowsEngine {
         val dictionary = resolveDictionaryRoot()
         useDictionary(dictionary)
         checkedSwift(JSONObject().put("op", "setDictionary").put("path", dictionary.absolutePath))
+        if (modelPath.isNotEmpty()) {
+            scheduleRuntimeTuningIfNeeded(File(modelPath))
+        }
         true
     }
 
@@ -166,12 +183,157 @@ object WindowsEngine {
         modelPath = model.absolutePath
         lastSettings = ""
         configure(true, "", true, false)
+        applyInitialRuntimeTuning(model)
+        scheduleRuntimeTuningIfNeeded(model)
         true
+    }
+
+    private fun applyRuntimeTuning(decision: TuningDecision) {
+        activeRuntimeTuning = decision
+        val request = JSONObject()
+            .put("op", "applyRuntimeTuning")
+            .put("decodeThreads", decision.decodeThreads)
+            .apply { decision.batchThreads?.let { put("batchThreads", it) } }
+            .put("directModelFirst", decision.directModelFirst)
+        checkedSwift(request)
+    }
+
+    private fun applyInitialRuntimeTuning(selectedModel: File) {
+        val topology = RuntimeThreadTuner.readTopology()
+        val revision = engineRevision.ifEmpty { RuntimeThreadTuner.engineRevision(application).also { engineRevision = it } }
+        val decision = RuntimeThreadTuner.loadCached(application, revision, topology, selectedModel)
+            ?: RuntimeThreadTuner.defaultFallback(topology, selectedModel.length())
+        if (!benchmarkActive) {
+            applyRuntimeTuning(decision)
+        }
+        if (decision.source == "cached") {
+            android.util.Log.i(
+                TAG,
+                "Applied cached runtime tuning for ${selectedModel.name}: decode=${decision.decodeThreads} " +
+                    "batch=${decision.batchThreads} directModelFirst=${decision.directModelFirst}"
+            )
+        }
+    }
+
+    fun scheduleRuntimeTuningIfNeeded(selectedModel: File) {
+        if (!ready || benchmarkActive || !selectedModel.isFile) return
+        val topology = RuntimeThreadTuner.readTopology()
+        val revision = engineRevision.ifEmpty { RuntimeThreadTuner.engineRevision(application).also { engineRevision = it } }
+        RuntimeThreadTuner.loadCached(application, revision, topology, selectedModel)?.let { cached ->
+            val generation = tuningGeneration.incrementAndGet()
+            scope.launch {
+                if (!ready || benchmarkActive || modelPath != selectedModel.absolutePath || tuningGeneration.get() != generation) {
+                    return@launch
+                }
+                applyRuntimeTuning(cached)
+            }
+            return
+        }
+        if (!com.zeroconvert.ime.model.DictionaryDownloadManager.isReady(application)) {
+            return
+        }
+        val launchEpoch = nativeConversionEpoch()
+        val generation = tuningGeneration.incrementAndGet()
+        scope.launch {
+            delay(1500)
+            if (!ready || benchmarkActive || modelPath != selectedModel.absolutePath ||
+                tuningGeneration.get() != generation || nativeConversionEpoch() != launchEpoch
+            ) {
+                return@launch
+            }
+            if (!com.zeroconvert.ime.model.DictionaryDownloadManager.isReady(application)) {
+                return@launch
+            }
+            if (RuntimeThreadTuner.loadCached(application, revision, topology, selectedModel) != null) {
+                return@launch
+            }
+            val fallback = RuntimeThreadTuner.defaultFallback(topology, selectedModel.length())
+            val configs = RuntimeThreadTuner.candidateConfigs(topology, selectedModel.length())
+            val response = runCatching {
+                checkedSwift(
+                    JSONObject()
+                        .put("op", "probeRuntimeTuning")
+                        .put("requestEpoch", launchEpoch)
+                        .put("configs", RuntimeThreadTuner.configsToJsonArray(configs))
+                )
+            }.onFailure { failure ->
+                android.util.Log.w(TAG, "Runtime auto-tuning probe failed; keeping fallback", failure)
+            }.getOrNull()
+            if (benchmarkActive || !ready || modelPath != selectedModel.absolutePath || tuningGeneration.get() != generation) {
+                return@launch
+            }
+            if (response == null || response.optBoolean("cancelled", false)) {
+                runCatching { applyRuntimeTuning(fallback) }
+                return@launch
+            }
+            val measurements = response.optJSONArray("measurements")
+                ?.let(RuntimeThreadTuner::parseMeasurements)
+                .orEmpty()
+            val winnerMeasurement = RuntimeThreadTuner.selectBest(measurements)
+            if (winnerMeasurement == null) {
+                runCatching { applyRuntimeTuning(fallback) }
+                return@launch
+            }
+            val winner = TuningDecision(
+                decodeThreads = winnerMeasurement.decodeThreads,
+                batchThreads = winnerMeasurement.batchThreads,
+                directModelFirst = winnerMeasurement.directModelFirst,
+                meanNs = winnerMeasurement.meanNs,
+                measuredConfigs = measurements.size,
+                source = "probed",
+            )
+            RuntimeThreadTuner.saveCached(application, revision, topology, selectedModel, winner, measurements)
+            applyRuntimeTuning(winner)
+            android.util.Log.i(
+                TAG,
+                "Auto-tuned runtime threads for ${selectedModel.name}: decode=${winner.decodeThreads} " +
+                    "batch=${winner.batchThreads} directModelFirst=${winner.directModelFirst} " +
+                    "meanMs=${"%.2f".format(winner.meanNs / 1_000_000.0)}"
+            )
+        }
+    }
+
+    /** Abort any background auto-tuning probe and drain the shared dispatcher before benchmark runs. */
+    fun suspendRuntimeTuningForBenchmark() {
+        benchmarkActive = true
+        tuningGeneration.incrementAndGet()
+        nativeAbortConversion()
+        runBlocking(dispatcher) { }
+    }
+
+    /** Restore IME runtime tuning after benchmark completion without resetting it out from under live typing. */
+    fun resumeRuntimeTuningAfterBenchmark() {
+        benchmarkActive = false
+        runBlocking(dispatcher) {
+            if (!ready || modelPath.isEmpty()) {
+                runCatching { checkedSwift(JSONObject().put("op", "applyRuntimeTuning")) }
+                return@runBlocking
+            }
+            val modelFile = File(modelPath)
+            val topology = RuntimeThreadTuner.readTopology()
+            val revision = engineRevision.ifEmpty { RuntimeThreadTuner.engineRevision(application).also { engineRevision = it } }
+            val decision = RuntimeThreadTuner.loadCached(application, revision, topology, modelFile)
+                ?: activeRuntimeTuning
+                ?: RuntimeThreadTuner.defaultFallback(topology, modelFile.length())
+            runCatching { applyRuntimeTuning(decision) }
+            if (RuntimeThreadTuner.loadCached(application, revision, topology, modelFile) == null &&
+                com.zeroconvert.ime.model.DictionaryDownloadManager.isReady(application)
+            ) {
+                scheduleRuntimeTuningIfNeeded(modelFile)
+            }
+        }
     }
 
     fun close() {
         ready = false
-        runBlocking(dispatcher) { checkedSwift(JSONObject().put("op", "close")); lastSettings = "" }
+        benchmarkActive = false
+        activeRuntimeTuning = null
+        tuningGeneration.incrementAndGet()
+        runBlocking(dispatcher) {
+            runCatching { checkedSwift(JSONObject().put("op", "applyRuntimeTuning")) }
+            checkedSwift(JSONObject().put("op", "close"))
+            lastSettings = ""
+        }
     }
 
     fun readingForSurface(surface: String): String? = runBlocking(dispatcher) {
@@ -432,41 +594,25 @@ object WindowsEngine {
                 elements.put(JSONObject().put("style", element.style)
                     .put("separator", element.separator).put("text", element.text))
             }
-            val result = checkedSwift(JSONObject().put("op", "convert").put("elements", elements)
+            val rawReply = nativeSwift(JSONObject().put("op", "convert").put("elements", elements)
                 .put("touchEvidence", engineTouchEvidence(input, touchBiases))
                 .put("cursorUtf16", input.convertTargetCursorPosition).put("expectedReading", input.convertTarget)
                 .put("continuationReading", continuation?.reading.orEmpty())
                 .put("continuationSurface", continuation?.surface.orEmpty())
                 .put("context", context).put("allowAI", neuralAllowed)
-                .put("requestEpoch", epoch).put("diagnostics", diagnosticsEnabled))
-            if (result.optBoolean("cancelled")) throw CancellationException("Native conversion superseded")
+                .put("requestEpoch", epoch).put("diagnostics", diagnosticsEnabled).toString())
+            val parsed = parseConvertResponse(rawReply, input, neuralAllowed)
+                ?: throw CancellationException("Native conversion superseded")
             ensureActive()
-            val timing = result.getJSONObject("timing")
-            val stages = timing.getJSONObject("stagesMs")
-            lastTiming = ConversionTiming((dequeued - queued) / 1e6, (configured - dequeued) / 1e6,
-                (System.nanoTime() - configured) / 1e6, timing.getLong("decodeNs") / 1e6, timing.getLong("decodeCount"),
-                stages.keys().asSequence().associateWith { stages.getLong(it) })
-            val candidates = result.getJSONArray("candidates")
-            val converted = (0 until candidates.length()).mapNotNull { index ->
-                val candidate = candidates.getJSONObject(index)
-                val consumed = safeConsumedReading(
-                    reading = input.convertTarget,
-                    rawConsumed = candidate.getInt("consumedReadingUtf16"),
-                    cursor = input.convertTargetCursorPosition,
-                ) ?: run {
-                    android.util.Log.w(
-                        TAG,
-                        "Ignoring out-of-bounds candidate consumedReadingUtf16=${candidate.optInt("consumedReadingUtf16")} cursor=${input.convertTargetCursorPosition}"
-                    )
-                    return@mapNotNull null
-                }
-                Candidate(candidate.getString("text"), KanaKanjiConverter.toKatakana(input.convertTarget.take(consumed)),
-                    isAI = neuralAllowed, learningAllowed = candidate.getBoolean("learningAllowed"),
-                    engineCandidateId = candidate.getString("candidateId").takeUnless { it == "0" }.orEmpty(),
-                    engineConsumedReading = consumed,
-                    enginePredictionReading = candidate.optString("predictionReading"),
-                    isReadingCompletion = candidate.optBoolean("readingCompletion"))
-            }.distinctBy { it.text to it.engineConsumedReading }
+            lastTiming = ConversionTiming(
+                (dequeued - queued) / 1e6,
+                (configured - dequeued) / 1e6,
+                (System.nanoTime() - configured) / 1e6,
+                parsed.decodeNs / 1e6,
+                parsed.decodeCount,
+                parsed.stagesMs,
+            )
+            val converted = parsed.candidates
             val macrosRaw = assistReply(JSONObject().put("op", "macros").put("input", input.convertTargetBeforeCursor))
             val macroTexts = macrosRaw?.let { raw ->
                 val array = runCatching { JSONArray(raw) }.getOrNull()
@@ -475,6 +621,126 @@ object WindowsEngine {
             }.orEmpty()
             MacroCandidateMerge.merge(converted, macroTexts, KanaKanjiConverter.toKatakana(input.convertTargetBeforeCursor))
         }
+    }
+
+    private data class ParsedConvertResponse(
+        val candidates: List<Candidate>,
+        val decodeNs: Long,
+        val decodeCount: Long,
+        val stagesMs: Map<String, Long>,
+    )
+
+    private fun JsonReader.nextStringOrEmpty(): String {
+        if (peek() == JsonToken.NULL) {
+            nextNull()
+            return ""
+        }
+        return nextString()
+    }
+
+    private fun parseConvertResponse(
+        raw: String,
+        input: ComposingText,
+        neuralAllowed: Boolean,
+    ): ParsedConvertResponse? {
+        val reading = input.convertTarget
+        val cursor = input.convertTargetCursorPosition
+        val katakanaReading = KanaKanjiConverter.toKatakana(reading)
+        val parsedCandidates = ArrayList<Candidate>(128)
+        val seen = HashSet<Pair<String, Int>>(128)
+        var cancelled = false
+        var decodeNs = 0L
+        var decodeCount = 0L
+        var stagesMs: Map<String, Long> = emptyMap()
+
+        JsonReader(StringReader(raw)).use { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "error" -> throw IllegalStateException("Shared conversion engine: ${reader.nextStringOrEmpty()}")
+                    "cancelled" -> cancelled = reader.nextBoolean()
+                    "candidates" -> {
+                        reader.beginArray()
+                        while (reader.hasNext()) {
+                            var text = ""
+                            var rawConsumed = -1
+                            var candidateId = "0"
+                            var learningAllowed = false
+                            var predictionReading = ""
+                            var readingCompletion = false
+                            reader.beginObject()
+                            while (reader.hasNext()) {
+                                when (reader.nextName()) {
+                                    "text" -> text = reader.nextStringOrEmpty()
+                                    "consumedReadingUtf16" -> rawConsumed = reader.nextInt()
+                                    "candidateId" -> candidateId = reader.nextStringOrEmpty()
+                                    "learningAllowed" -> learningAllowed = reader.nextBoolean()
+                                    "predictionReading" -> predictionReading = reader.nextStringOrEmpty()
+                                    "readingCompletion" -> readingCompletion = reader.nextBoolean()
+                                    else -> reader.skipValue()
+                                }
+                            }
+                            reader.endObject()
+                            val consumed = safeConsumedReading(
+                                reading = reading,
+                                rawConsumed = rawConsumed,
+                                cursor = cursor,
+                            )
+                            if (consumed == null) {
+                                android.util.Log.w(
+                                    TAG,
+                                    "Ignoring out-of-bounds candidate consumedReadingUtf16=$rawConsumed cursor=$cursor"
+                                )
+                                continue
+                            }
+                            if (!seen.add(text to consumed)) continue
+                            parsedCandidates.add(
+                                Candidate(
+                                    text = text,
+                                    reading = katakanaReading.take(consumed),
+                                    isAI = neuralAllowed,
+                                    learningAllowed = learningAllowed,
+                                    engineCandidateId = candidateId.takeUnless { it == "0" }.orEmpty(),
+                                    engineConsumedReading = consumed,
+                                    enginePredictionReading = predictionReading,
+                                    isReadingCompletion = readingCompletion,
+                                )
+                            )
+                        }
+                        reader.endArray()
+                    }
+                    "timing" -> {
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            when (reader.nextName()) {
+                                "decodeNs" -> decodeNs = reader.nextLong()
+                                "decodeCount" -> decodeCount = reader.nextLong()
+                                "stagesMs" -> {
+                                    val stageMap = HashMap<String, Long>(12)
+                                    reader.beginObject()
+                                    while (reader.hasNext()) {
+                                        stageMap[reader.nextName()] = reader.nextLong()
+                                    }
+                                    reader.endObject()
+                                    stagesMs = stageMap
+                                }
+                                else -> reader.skipValue()
+                            }
+                        }
+                        reader.endObject()
+                    }
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+        }
+        if (cancelled) return null
+        return ParsedConvertResponse(
+            candidates = parsedCandidates,
+            decodeNs = decodeNs,
+            decodeCount = decodeCount,
+            stagesMs = stagesMs,
+        )
     }
 
     internal data class PostCompositionResult(

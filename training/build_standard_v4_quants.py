@@ -8,9 +8,24 @@ import subprocess
 from dataset_isolation import evaluation_keys, load_jsonl, sha256, validate_rows
 
 
+def resolve_runtime_dir(explicit=None):
+    if explicit is not None:
+        runtime = Path(explicit)
+        if not (runtime / "llama-imatrix.exe").exists() or not (runtime / "llama-quantize.exe").exists():
+            raise FileNotFoundError(f"Missing llama-imatrix.exe or llama-quantize.exe in {runtime}")
+        return runtime
+    candidates = [Path("ZeroConvertIME-windows/llama_vulkan")]
+    candidates.extend(sorted(Path("artifacts/runtime").glob("windows-b12125-*/llama_vulkan"), reverse=True))
+    for candidate in candidates:
+        if (candidate / "llama-imatrix.exe").exists() and (candidate / "llama-quantize.exe").exists():
+            return candidate
+    raise FileNotFoundError("Could not locate llama_vulkan runtime containing llama-imatrix.exe and llama-quantize.exe")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-name", default="standard-v4-nano-transfer")
+    parser.add_argument("--runtime-dir", default=None)
     args = parser.parse_args()
     if Path(args.run_name).name != args.run_name:
         parser.error("run-name must be a single file name")
@@ -40,7 +55,7 @@ def main():
             lines.append(row["prompt"].replace(" ", "\u3000") + completion + "</s>")
     corpus = directory / "calibration.txt"
     corpus.write_text("\n".join(lines * 2) + "\n", encoding="utf-8")
-    runtime = Path("ZeroConvertIME-windows/llama_vulkan")
+    runtime = resolve_runtime_dir(args.runtime_dir)
     commands = [[str(runtime / "llama-imatrix.exe"), "-m", str(model), "-f", str(corpus),
                  "-o", str(imatrix), "-ngl", "99", "--chunks", "64"]]
     for quant, target in targets.items():

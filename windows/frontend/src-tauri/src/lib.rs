@@ -1,4 +1,3 @@
-mod benchmark_runtime;
 mod benchmark_worker;
 mod conversion_model;
 mod dictionary;
@@ -6,6 +5,7 @@ mod english_dictionary;
 mod ipc;
 mod jev_api;
 mod model_catalog;
+mod quick_benchmark;
 mod server_process;
 mod translation_model;
 mod updater;
@@ -795,33 +795,13 @@ struct SetupAssets {
 #[tauri::command]
 fn setup_assets_status() -> Result<SetupAssets, String> {
     let install_dir = install_dir_from_current_exe();
-    // 必須モデルは shared の既定（Nano v4.1 IQ4_emb8）と同じ解決を使う。
+    // 必須モデルは shared の既定（Nano v4.2 IQ4_emb8）と同じ解決を使う。
     let mandatory_model = shared::runtime_assets::default_model();
     Ok(SetupAssets {
         model: conversion_model::status(&install_dir, &mandatory_model)?,
         dictionary: dictionary::status(&install_dir),
         english: english_dictionary::status(),
     })
-}
-
-static BENCHMARK_SERVER: std::sync::Mutex<Option<std::process::Child>> =
-    std::sync::Mutex::new(None);
-static CURRENT_BENCHMARK_MODEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-// ベンチマーク用llama-serverは1つだけ起動する。クイックベンチマークと
-// ベンチマークページの個別実行が同じサーバーを奪い合わないようにする。
-fn benchmark_run_lock() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(tokio::sync::Mutex::default)
-}
-
-fn stop_benchmark_server() {
-    let mut server_guard = BENCHMARK_SERVER.lock().unwrap();
-    if let Some(mut child) = server_guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    let mut model_guard = CURRENT_BENCHMARK_MODEL.lock().unwrap();
-    *model_guard = None;
 }
 
 fn benchmark_roots() -> Vec<PathBuf> {
@@ -838,10 +818,6 @@ fn benchmark_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn find_llama_server_exe(backend: &str) -> Option<PathBuf> {
-    benchmark_runtime::find_server(&benchmark_roots(), backend)
-}
-
 fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
     benchmark_roots()
         .iter()
@@ -850,90 +826,11 @@ fn get_benchmark_model_path(config: &AppConfig) -> Result<PathBuf, String> {
         .ok_or_else(|| "ZeroCon model not found".to_string())
 }
 
-async fn ensure_benchmark_server_with_backend(
-    config: &AppConfig,
-    backend: &str,
-) -> Result<(), String> {
-    let server_exe = find_llama_server_exe(backend)
-        .ok_or_else(|| format!("llama-server.exe not found for backend: {backend}"))?;
-    let model_path = get_benchmark_model_path(config)?;
-    let model_path_str = model_path.to_string_lossy().to_string();
-    let gpu_layers = config.zenzai.effective_gpu_layers().to_string();
-    let identity = format!("{}|{}|{}", server_exe.display(), model_path_str, gpu_layers);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(500))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    // Check if server is already running with matching model
-    let model_matches = {
-        let current_model_guard = CURRENT_BENCHMARK_MODEL.lock().unwrap();
-        current_model_guard.as_deref() == Some(identity.as_str())
-    };
-    if model_matches {
-        if let Ok(resp) = client.get("http://127.0.0.1:8090/health").send().await {
-            if resp.status().is_success() {
-                return Ok(());
-            }
-        }
-    }
-
-    // Stop existing server if model changed or unresponsive
-    stop_benchmark_server();
-
-    let mut cmd = std::process::Command::new(server_exe);
-    cmd.args([
-        "-m",
-        &model_path_str,
-        "--port",
-        "8090",
-        "--host",
-        "127.0.0.1",
-        "-ngl",
-        &gpu_layers,
-        "--log-disable",
-    ]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
-
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn llama-server: {e}"))?;
-    {
-        let mut server_guard = BENCHMARK_SERVER.lock().unwrap();
-        *server_guard = Some(child);
-        let mut model_guard = CURRENT_BENCHMARK_MODEL.lock().unwrap();
-        *model_guard = Some(identity);
-    }
-
-    // Wait up to 7 seconds for server to be ready
-    let start = std::time::Instant::now();
-    loop {
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        if let Ok(resp) = client.get("http://127.0.0.1:8090/health").send().await {
-            if resp.status().is_success() {
-                return Ok(());
-            }
-        }
-        if start.elapsed().as_secs() > 7 {
-            return Err("llama-server failed to become ready within 7 seconds".to_string());
-        }
-    }
-}
-
 #[tauri::command]
 fn switch_model(state: tauri::State<AppState>, model_id: String) -> Result<String, String> {
     model_catalog::source_for(&model_id, &get_models_search_dirs())?;
     let model_update = shared::model_update::ModelUpdateGuard::begin(Duration::from_secs(5))
         .map_err(|error| error.to_string())?;
-    stop_benchmark_server();
     let base = state.settings.lock().map_err(|e| e.to_string())?.clone();
     let mut updated = base.clone();
     updated.zenzai.model = shared::runtime_assets::canonical_model_id(&model_id)
@@ -946,41 +843,140 @@ fn switch_model(state: tauri::State<AppState>, model_id: String) -> Result<Strin
     Ok(format!("Switched to {model_id}"))
 }
 
+fn benchmark_worker_paths(
+    backend: &str,
+    scope: azookey_server::ai_assist::benchmark::ConversionScope,
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    use azookey_server::ai_assist::benchmark::ConversionScope;
+    benchmark_roots()
+        .into_iter()
+        .find_map(|root| {
+            let runtime = shared::runtime_assets::backend(&root, backend);
+            let worker = root.join(match scope {
+                ConversionScope::Model => "keyboard-prior.exe",
+                ConversionScope::Candidates => "azookey-server.exe",
+                ConversionScope::Typo => "azookey-server.exe",
+            });
+            (worker.is_file() && runtime.join("llama.dll").is_file()).then(|| {
+                let dictionary = shared::runtime_assets::dictionary_dir(&root);
+                (worker, runtime, dictionary)
+            })
+        })
+        .ok_or_else(|| "ベンチマーク用の実行ファイルが見つかりません。".into())
+}
+
+fn persist_cpu_runtime_tuning(
+    state: &AppState,
+    tuned: shared::cpu_tuning::CpuRuntimeTuningConfig,
+) {
+    let Ok(_update_guard) = state.config_update_lock.lock() else {
+        return;
+    };
+    let Ok(_cross_process_guard) = ConfigWriteGuard::acquire() else {
+        return;
+    };
+    let mut current = match AppConfig::read() {
+        Ok(config) => config,
+        Err(_) => state.settings.lock().unwrap().clone(),
+    };
+    let current_model = crate::quick_benchmark::active_canonical_model_id(&current);
+    let tuned_model = shared::runtime_assets::canonical_model_id(&tuned.model_id)
+        .unwrap_or(&tuned.model_id);
+    if current.zenzai.backend != "cpu" || current_model != tuned_model {
+        return;
+    }
+    if current.zenzai.cpu_runtime_tuning.as_ref() == Some(&tuned) {
+        return;
+    }
+    current.zenzai.cpu_runtime_tuning = Some(tuned);
+    if current.write().is_err() {
+        return;
+    }
+    *state.settings.lock().unwrap() = current;
+    drop(_cross_process_guard);
+    let _ = ipc::IPCService::get_or_connect(&mut state.ipc.lock().unwrap())
+        .and_then(|ipc| ipc.update_config());
+}
+
 #[tauri::command]
 async fn start_benchmark(
     state: tauri::State<'_, AppState>,
     scope: Option<azookey_server::ai_assist::benchmark::ConversionScope>,
+    backend: Option<String>,
 ) -> Result<Value, String> {
-    use azookey_server::ai_assist::benchmark::ConversionScope;
+    use azookey_server::ai_assist::benchmark::{ConversionScope, WindowsTypoOptions};
     let scope = scope.unwrap_or_default();
     let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let model_id = crate::quick_benchmark::active_canonical_model_id(&config);
+    let (backend, gpu_layers) = benchmark_backend(&config, backend.as_deref())?;
+    let (mut session, newly_tuned) = tauri::async_runtime::spawn_blocking(move || {
         let model = get_benchmark_model_path(&config)?;
-        let (worker, runtime, dictionary) = benchmark_roots()
-            .into_iter()
-            .find_map(|root| {
-                let runtime = shared::runtime_assets::backend(&root, &config.zenzai.backend);
-                let worker = root.join(match scope {
-                    ConversionScope::Model => "keyboard-prior.exe",
-                    ConversionScope::Candidates => "azookey-server.exe",
-                });
-                (worker.is_file() && runtime.join("llama.dll").is_file()).then(|| {
-                    let dictionary = shared::runtime_assets::dictionary_dir(&root);
-                    (worker, runtime, dictionary)
-                })
-            })
-            .ok_or("ベンチマーク用の実行ファイルが見つかりません。")?;
-        benchmark_worker::start(
+        let (worker, runtime, dictionary) = benchmark_worker_paths(backend, scope)?;
+        let typo_options = (scope == ConversionScope::Typo).then(|| WindowsTypoOptions {
+            enabled: config.general.experimental_typo_correction,
+            engine: if config.general.experimental_ai_engine == "lm_studio" {
+                "lm_studio"
+            } else {
+                "embedded"
+            }
+            .into(),
+        });
+        let (session, newly_tuned) = benchmark_worker::start_with_cpu_tuning(
             worker,
             runtime,
             model,
             dictionary,
-            config.zenzai.effective_gpu_layers(),
+            gpu_layers,
             scope,
-        )
+            typo_options.as_ref(),
+            Some((&config, backend, &model_id)),
+        )?;
+        Ok::<_, String>((session, newly_tuned))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if let Some(tuned) = newly_tuned {
+        persist_cpu_runtime_tuning(&state, tuned);
+    }
+    session["backend"] = backend.into();
+    session["gpu_layers"] = gpu_layers.into();
+    Ok(session)
+}
+
+fn benchmark_backend(
+    config: &AppConfig,
+    override_backend: Option<&str>,
+) -> Result<(&'static str, u32), String> {
+    match override_backend.unwrap_or(&config.zenzai.backend) {
+        "cpu" => Ok(("cpu", 0)),
+        "vulkan" => Ok(("vulkan", config.zenzai.gpu_layers.min(99))),
+        _ => Err("ベンチマーク用のバックエンドを選択してください。".into()),
+    }
+}
+
+#[tauri::command]
+async fn run_quick_conversion_benchmark(
+    state: tauri::State<'_, AppState>,
+    backend: Option<String>,
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<quick_benchmark::SingleResult, String> {
+    let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    let (backend, gpu_layers) = benchmark_backend(&config, backend.as_deref())?;
+    let progress = progress.map(|id| id.channel_on(webview));
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
+        quick_benchmark::run_single(&config, backend, gpu_layers, |update| {
+            if let Some(channel) = &progress {
+                let _ = channel.send(update);
+            }
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if let Some(tuned) = result.cpu_tuning.take() {
+        persist_cpu_runtime_tuning(&state, tuned);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1000,122 +996,23 @@ async fn finish_benchmark(id: u64) -> Result<f64, String> {
         .map_err(|e| e.to_string())?
 }
 
-#[derive(Debug, Serialize, Clone)]
-struct QuickBackendResult {
-    backend: String,
-    ok: bool,
-    avg_latency_ms: Option<f64>,
-    error: Option<String>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct QuickBenchmarkResult {
-    results: Vec<QuickBackendResult>,
-    recommended: Option<String>,
-}
-
-/// 実測レイテンシが最も短かった、成功したバックエンドを推奨として選ぶ。
-fn recommend_quick_benchmark_backend(results: &[QuickBackendResult]) -> Option<String> {
-    results
-        .iter()
-        .filter(|result| result.ok)
-        .filter_map(|result| result.avg_latency_ms.map(|latency| (latency, result)))
-        .min_by(|(a, _), (b, _)| a.total_cmp(b))
-        .map(|(_, result)| result.backend.clone())
-}
-
-const QUICK_BENCHMARK_WARMUP_REQUESTS: usize = 1;
-const QUICK_BENCHMARK_MEASURED_REQUESTS: usize = 3;
-const QUICK_BENCHMARK_PROMPT: &str = "\u{EE02}\u{EE00}きょうはいいてんきですね\u{EE01}";
-
-/// 指定バックエンドでllama-serverを起動し、ウォームアップ後の
-/// 推論リクエスト平均レイテンシ(ms)を返す。
-async fn measure_quick_benchmark_backend(config: &AppConfig, backend: &str) -> Result<f64, String> {
-    ensure_benchmark_server_with_backend(config, backend).await?;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let request = serde_json::json!({
-        "prompt": QUICK_BENCHMARK_PROMPT,
-        "n_predict": 8,
-        "temperature": 0.0,
-        "samplers": ["temperature"],
-        "stop": ["</s>", "<s>", "\n", "\r", "\u{EE00}", "\u{EE01}", "\u{EE02}"]
-    });
-
-    let mut samples = Vec::with_capacity(QUICK_BENCHMARK_MEASURED_REQUESTS);
-    for attempt in 0..QUICK_BENCHMARK_WARMUP_REQUESTS + QUICK_BENCHMARK_MEASURED_REQUESTS {
-        let started = std::time::Instant::now();
-        let response = client
-            .post("http://127.0.0.1:8090/completion")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("completion request failed: {e}"))?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "completion request failed: HTTP {}",
-                response.status()
-            ));
-        }
-        let _: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-        if attempt >= QUICK_BENCHMARK_WARMUP_REQUESTS {
-            samples.push(started.elapsed().as_secs_f64() * 1000.0);
-        }
-    }
-    Ok(samples.iter().sum::<f64>() / samples.len() as f64)
-}
-
-async fn run_quick_benchmark_impl(config: &AppConfig) -> QuickBenchmarkResult {
-    let mut results = Vec::new();
-    let backends = [
-        ("cpu", shared::zenzai_cpu_backend_supported()),
-        ("vulkan", vulkan_available()),
-    ];
-    for (backend, available) in backends {
-        if !available {
-            results.push(QuickBackendResult {
-                backend: backend.to_string(),
-                ok: false,
-                avg_latency_ms: None,
-                error: Some("このPCでは利用できません".to_string()),
-            });
-            continue;
-        }
-        match measure_quick_benchmark_backend(config, backend).await {
-            Ok(avg_latency_ms) => results.push(QuickBackendResult {
-                backend: backend.to_string(),
-                ok: true,
-                avg_latency_ms: Some(avg_latency_ms),
-                error: None,
-            }),
-            Err(error) => results.push(QuickBackendResult {
-                backend: backend.to_string(),
-                ok: false,
-                avg_latency_ms: None,
-                error: Some(error),
-            }),
-        }
-    }
-
-    // 次の実行が正しい状態から始まるように、測定後にベンチマークサーバーを止める。
-    stop_benchmark_server();
-
-    QuickBenchmarkResult {
-        recommended: recommend_quick_benchmark_backend(&results),
-        results,
-    }
-}
-
 #[tauri::command]
 async fn run_quick_benchmark(
     state: tauri::State<'_, AppState>,
-) -> Result<QuickBenchmarkResult, String> {
-    let _run_guard = benchmark_run_lock().lock().await;
+    webview: tauri::Webview,
+    progress: Option<tauri::ipc::JavaScriptChannelId>,
+) -> Result<quick_benchmark::ResultSummary, String> {
     let config = state.settings.lock().map_err(|e| e.to_string())?.clone();
-    Ok(run_quick_benchmark_impl(&config).await)
+    let progress = progress.map(|id| id.channel_on(webview));
+    tauri::async_runtime::spawn_blocking(move || {
+        quick_benchmark::run(&config, |update| {
+            if let Some(channel) = &progress {
+                let _ = channel.send(update);
+            }
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1127,7 +1024,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                stop_benchmark_server();
                 tauri::async_runtime::spawn_blocking(benchmark_worker::close);
             }
         })
@@ -1153,6 +1049,7 @@ pub fn run() {
             run_benchmark_batch,
             finish_benchmark,
             run_quick_benchmark,
+            run_quick_conversion_benchmark,
             translation_model_status,
             translation_model_download,
             conversion_model_status,
@@ -1183,6 +1080,20 @@ pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn benchmark_backend_override_uses_gpu_layers_without_changing_ime_settings() {
+        let mut config = AppConfig::default();
+        config.zenzai.backend = "cpu".into();
+        config.zenzai.gpu_layers = 8;
+        assert_eq!(benchmark_backend(&config, None).unwrap(), ("cpu", 0));
+        assert_eq!(
+            benchmark_backend(&config, Some("vulkan")).unwrap(),
+            ("vulkan", 8)
+        );
+        assert_eq!(config.zenzai.backend, "cpu");
+        assert!(benchmark_backend(&config, Some("unknown")).is_err());
+    }
     use std::{env, ffi::OsString, fs, io, path::Path, sync::MutexGuard};
 
     fn env_lock() -> MutexGuard<'static, ()> {
@@ -1544,39 +1455,6 @@ mod tests {
         .expect_err("injected restart failure should be returned");
 
         assert!(error.to_string().contains("lock-scope assertion"));
-    }
-
-    fn quick_backend_result(backend: &str, ok: bool, avg_latency_ms: f64) -> QuickBackendResult {
-        QuickBackendResult {
-            backend: backend.to_string(),
-            ok,
-            avg_latency_ms: ok.then_some(avg_latency_ms),
-            error: None,
-        }
-    }
-
-    #[test]
-    fn quick_benchmark_recommends_only_the_fastest_successful_backend() {
-        let results = vec![
-            quick_backend_result("cpu", true, 210.0),
-            quick_backend_result("vulkan", true, 35.0),
-        ];
-        assert_eq!(
-            recommend_quick_benchmark_backend(&results).as_deref(),
-            Some("vulkan")
-        );
-
-        // 起動失敗・測定不能なバックエンドは推奨にならない。
-        let results = vec![
-            quick_backend_result("cpu", false, 0.0),
-            quick_backend_result("vulkan", true, 140.0),
-        ];
-        assert_eq!(
-            recommend_quick_benchmark_backend(&results).as_deref(),
-            Some("vulkan")
-        );
-
-        assert_eq!(recommend_quick_benchmark_backend(&[]), None);
     }
 
     #[test]

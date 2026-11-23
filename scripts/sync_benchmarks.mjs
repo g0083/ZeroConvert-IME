@@ -1,5 +1,5 @@
 // benchmarks/common を Windows/Android 配布物へ同期する。
-// 正本: benchmarks/common/conversion.jsonl (740), typo.jsonl (450), predictive.jsonl (30)
+// 正本: benchmarks/common/conversion.jsonl (840), typo.jsonl (450), predictive.jsonl (30)
 // 生成物は手編集しない。--check は生成物が正本と一致するか検査する。
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -35,21 +35,27 @@ const predictive = await readJsonl('benchmarks/common/predictive.jsonl');
 const parityText = await readFile(path.join(commonDir, 'parity_cases.jsonl'), 'utf8');
 const parityCount = parseJsonl(parityText).length;
 
-if (conversion.length !== 740) throw new Error(`conversion count ${conversion.length} != 740`);
+if (conversion.length !== 840) throw new Error(`conversion count ${conversion.length} != 840`);
 if (typo.length !== 450) throw new Error(`typo count ${typo.length} != 450`);
 if (predictive.length !== 30) throw new Error(`predictive count ${predictive.length} != 30`);
 
 const basic230 = conversion.filter((r) => r.subset === 'basic');
 const first480 = conversion.slice(0, 480);
+const first740 = conversion.slice(0, 740);
 const first300 = typo.slice(0, 300);
 if (basic230.length !== 230) throw new Error(`basic ${basic230.length} != 230`);
 if (first480.length !== 480) throw new Error(`first480 ${first480.length} != 480`);
+if (first740.length !== 740) throw new Error(`first740 ${first740.length} != 740`);
 if (first300.length !== 300) throw new Error(`first300 ${first300.length} != 300`);
 
 const outputs = [
   {
-    rel: 'windows/frontend/src/data/benchmark740.json',
+    rel: 'windows/frontend/src/data/benchmark840.json',
     content: toJsonArray(conversion),
+  },
+  {
+    rel: 'windows/frontend/src/data/benchmark740.json',
+    content: toJsonArray(first740),
   },
   {
     rel: 'windows/frontend/src/data/benchmark480.json',

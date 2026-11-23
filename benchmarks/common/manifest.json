@@ -1,12 +1,13 @@
 {
   "schema": "zerocon-common-benchmark/v1",
   "conversion": {
-    "count": 740,
+    "count": 840,
     "by_subset": {
       "basic": 230,
       "hard": 250,
       "realistic": 160,
-      "colloquial": 100
+      "colloquial": 100,
+      "additional_dict": 100
     }
   },
   "typo": {

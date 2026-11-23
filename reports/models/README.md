@@ -7,6 +7,9 @@ ZeroCon Model の学習、蒸留、量子化、CPU/GPU 推論比較などの実�
 - [nano-v4-platform-model-switch.md](nano-v4-platform-model-switch.md): Nano v4 への通常変換モデル統一記録（現行は Nano v4.1 へ更新）
 - [nano-standard-v4-cpu-comparison.md](nano-standard-v4-cpu-comparison.md): Nano v4 と Standard v4 の CPU 推論性能・精度比較
 - [zerocon-v41-q5km-comparison.md](zerocon-v41-q5km-comparison.md): v4.1 Q5_K_M 作成と Nano / Standard 比較（Q5_K_M 不採用）
+- [common-candidates-840-10models-20261123.md](common-candidates-840-10models-20261123.md): 共通候補生成840問×10モデルの実行時間×正答率比較
+- [common-candidates-840-18models-20261123.md](common-candidates-840-18models-20261123.md): 同上18モデル（v3/v4追加）の実行時間×正答率比較。v4.2更新後と新エンジン（07:16/07:25ビルド）での再測も含む
+- [common-model-scope-840-18models-20261123.md](common-model-scope-840-18models-20261123.md): モデル推論のみ（N-bestなし）の840問×18モデル比較
 - [zerocon_v4_capability_r1_report.md](zerocon_v4_capability_r1_report.md): Standard v4 / Nano v4 変換基礎能力向上（`cap-r1`）実験レポート
 - [zerocon_model_standard_v4_experiment_report.md](zerocon_model_standard_v4_experiment_report.md): Standard v4 の学習・評価レポート
 - [weight-space-programming-zerocon-v4-experiment.md](weight-space-programming-zerocon-v4-experiment.md): 重み空間プログラミング実験の記録

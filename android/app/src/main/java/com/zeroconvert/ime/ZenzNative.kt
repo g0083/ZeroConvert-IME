@@ -228,7 +228,7 @@ object ZenzNative {
     @Volatile
     private var isDictInitialized = false
 
-    var currentModelName: String = "ZeroCon Model Nano v4.1 IQ4_emb8 (18.7 MiB)"
+    var currentModelName: String = "ZeroCon Model Nano v4.2 IQ4_emb8 (18.7 MiB)"
         private set
 
     @Synchronized
@@ -321,6 +321,9 @@ object ZenzNative {
         // WINDOWS_ENGINE=false の旧経路だけで行う。
         if (!isDictInitialized) {
             initializeNativeDictionary(context)
+        }
+        if (BuildConfig.WINDOWS_ENGINE && isInitialized && converterPath.isNotEmpty()) {
+            com.zeroconvert.ime.engine.WindowsEngine.scheduleRuntimeTuningIfNeeded(File(converterPath))
         }
 
         return isInitialized

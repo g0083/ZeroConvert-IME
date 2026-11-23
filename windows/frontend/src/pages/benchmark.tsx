@@ -1,8 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { getConfigAfterPendingUpdates } from "@/lib/config";
+import { BACKEND_LABELS, useQuickBenchmarkActivity, type QuickBackendId, type QuickBenchmarkProgress } from "@/lib/quick-benchmark";
 import { useBlocker } from "react-router";
 import { toast } from "sonner";
-import rawBenchmarkData from "@/data/benchmark740.json";
+import rawBenchmarkData from "@/data/benchmark840.json";
 import rawTypoData from "@/data/typo_benchmark450.json";
 import rawPredictiveData from "@/data/predictive_testset.json";
 import type { LucideIcon } from "lucide-react";
@@ -17,20 +19,17 @@ import {
     Search, 
     SlidersHorizontal,
     Layers,
-    Cpu,
     Check,
     AlertTriangle,
     ShieldCheck,
-    Filter,
     X
 } from "lucide-react";
-import { ZeroConvertLogo } from "@/components/zeroconvert-logo";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-function BenchmarkDepartureGuard({ running }: { running: boolean }) {
+function BenchmarkDepartureGuard({ running, quick }: { running: boolean; quick: boolean }) {
     const blocker = useBlocker(running);
     return (
         <AlertDialog open={blocker.state === "blocked"}>
@@ -41,9 +40,9 @@ function BenchmarkDepartureGuard({ running }: { running: boolean }) {
                 }}
             >
                 <AlertDialogHeader>
-                    <AlertDialogTitle>ベンチマークを中断しますか？</AlertDialogTitle>
+                    <AlertDialogTitle>{quick ? "計測中に画面を移動しますか？" : "ベンチマークを中断しますか？"}</AlertDialogTitle>
                     <AlertDialogDescription>
-                        実行中の進捗と結果は破棄されます。続行するにはキャンセルしてください。
+                        {quick ? "計測は完了まで続きます。移動するとこの画面の結果表示は破棄されます。" : "実行中の進捗と結果は破棄されます。続行するにはキャンセルしてください。"}
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -55,7 +54,7 @@ function BenchmarkDepartureGuard({ running }: { running: boolean }) {
                     <AlertDialogAction onClick={() => {
                         if (blocker.state === "blocked") blocker.proceed();
                     }}>
-                        中断して移動
+                        {quick ? "移動する" : "中断して移動"}
                     </AlertDialogAction>
                 </AlertDialogFooter>
             </AlertDialogContent>
@@ -65,7 +64,7 @@ function BenchmarkDepartureGuard({ running }: { running: boolean }) {
 
 export type BenchmarkItem = {
     id: number;
-    subset: "basic" | "hard" | "realistic" | "colloquial";
+    subset: "basic" | "hard" | "realistic" | "colloquial" | "additional_dict";
     subset_label: string;
     category: string;
     left_context: string;
@@ -88,8 +87,19 @@ export type ItemResult = {
 const CONVERSION_SCOPES = [
     { id: "model", label: "モデル推論", description: "読みからモデルで直接生成" },
     { id: "candidates", label: "共通候補生成", description: "標準辞書の N-best 追加と候補の順位付けを含む" },
+    { id: "quick", label: "クイック検証（84問）", description: "共通候補生成を各問3回測定し、中央値の回の結果を表示" },
 ] as const;
-type ConversionScope = typeof CONVERSION_SCOPES[number]["id"];
+type ConversionMode = typeof CONVERSION_SCOPES[number]["id"];
+type ConversionScope = Exclude<ConversionMode, "quick">;
+type RunKey = ConversionMode | "typo" | "predictive";
+type BenchmarkRuntime = { backend: QuickBackendId; gpu_layers: number };
+type QuickConversionResult = BenchmarkRuntime & { rows: ItemResult[]; elapsed_ms: number };
+const emptyConversionResults = (): Record<ConversionMode, Record<number, ItemResult>> => ({ model: {}, candidates: {}, quick: {} });
+
+function backendText({ backend, gpu_layers }: BenchmarkRuntime) {
+    if (backend === "cpu") return BACKEND_LABELS.cpu;
+    return `Vulkan（${gpu_layers === 99 ? "GPU全層" : `GPU ${gpu_layers}層`}）`;
+}
 
 export type TypoBenchmarkItem = {
     id: number;
@@ -111,6 +121,7 @@ export type TypoItemResult = {
     id: number;
     main_output: string;
     moshikashite_output?: string | null;
+    correction_reading?: string | null;
     status: "exact_match" | "variant_match" | "clean_preserved" | "false_positive" | "missed";
     latency_ms: number;
 };
@@ -167,13 +178,14 @@ function latencyPercentiles(latencies: number[]): { p50: number; p95: number; p9
     return { p50: at(50), p95: at(95), p99: at(99) };
 }
 
-// 共通ベンチマーク正本 benchmarks/common (740問)。subset_label の件数は正本 manifest と一致させる。
+// 共通ベンチマーク正本 benchmarks/common (840問)。subset_label の件数は正本 manifest と一致させる。
 const SUBSETS = [
-    { id: "all", label: "全740問 (230+250+160+100)" },
+    { id: "all", label: "全840問 (230+250+160+100+100)" },
     { id: "basic", label: "基本・文脈 (230問)" },
     { id: "hard", label: "高難度文脈 (250問)" },
     { id: "realistic", label: "実IME (160問)" },
     { id: "colloquial", label: "口語 (100問)" },
+    { id: "additional_dict", label: "追加辞書 (100問)" },
 ];
 
 const TYPO_FILTER_TYPES = [
@@ -287,10 +299,11 @@ const SUBSET_BADGE: Record<string, string> = {
     hard: "bg-violet-500/10 border-violet-500/30 text-violet-700 dark:text-violet-300",
     realistic: "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300",
     colloquial: "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300",
+    additional_dict: "bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300",
 };
 
 function SubsetBadge({ subset }: { subset: BenchmarkItem["subset"] }) {
-    const label = subset === "basic" ? "基本230" : subset === "hard" ? "高難度250" : subset === "realistic" ? "実IME160" : "口語100";
+    const label = subset === "basic" ? "基本230" : subset === "hard" ? "高難度250" : subset === "realistic" ? "実IME160" : subset === "colloquial" ? "口語100" : "追加辞書100";
     return (
         <span className={`inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium ${SUBSET_BADGE[subset] ?? "border-border text-muted-foreground"}`}>
             {label}
@@ -314,11 +327,14 @@ function EmptyRow({ colSpan, message }: { colSpan: number; message: string }) {
 export function Benchmark() {
     const [benchmarkTab, setBenchmarkTab] = useState<"zenzai" | "typo" | "predictive">("zenzai");
 
-    // --- かな漢字変換 (740問) State ---
-    const [conversionScope, setConversionScope] = useState<ConversionScope>("model");
-    const [conversionResults, setConversionResults] = useState<Record<ConversionScope, Record<number, ItemResult>>>({ model: {}, candidates: {} });
+    // --- かな漢字変換 (840問) State ---
+    const [conversionScope, setConversionScope] = useState<ConversionMode>("model");
+    const [conversionResults, setConversionResults] = useState(emptyConversionResults);
     const results = conversionResults[conversionScope];
+    const quickResults = conversionResults.quick;
     const [isRunning, setIsRunning] = useState(false);
+    const [quickProgress, setQuickProgress] = useState<QuickBenchmarkProgress | null>(null);
+    const sharedQuickRunning = useQuickBenchmarkActivity() !== "idle";
     const [selectedSubset, setSelectedSubset] = useState<string>("all");
     const [selectedCategory, setSelectedCategory] = useState("すべて");
     const [showErrorsOnly, setShowErrorsOnly] = useState(false);
@@ -340,6 +356,10 @@ export function Benchmark() {
     const [models, setModels] = useState<ModelInfo[]>([]);
     const activeModel = models.find((model) => model.id === activeModelId);
     const [isSwitchingModel, setIsSwitchingModel] = useState(false);
+    const [configuredRuntime, setConfiguredRuntime] = useState<BenchmarkRuntime | null>(null);
+    const [backendOverride, setBackendOverride] = useState<QuickBackendId | null>(null);
+    const [capability, setCapability] = useState<Record<QuickBackendId, boolean> | null>(null);
+    const benchmarkBackend = backendOverride ?? configuredRuntime?.backend;
 
     const stopSignalRef = useRef(false);
     const stopTypoSignalRef = useRef(false);
@@ -351,6 +371,13 @@ export function Benchmark() {
             stopTypoSignalRef.current = true;
             stopPredictiveSignalRef.current = true;
         };
+    }, []);
+
+    useEffect(() => {
+        getConfigAfterPendingUpdates().then(({ zenzai }) => {
+            setConfiguredRuntime({ backend: zenzai.backend === "cpu" ? "cpu" : "vulkan", gpu_layers: Math.min(zenzai.gpu_layers ?? 99, 99) });
+        }).catch((error) => toast.error(`バックエンド設定を取得できませんでした: ${error}`));
+        invoke<Record<QuickBackendId, boolean>>("check_capability").then(setCapability).catch(() => {});
     }, []);
 
     useEffect(() => {
@@ -369,9 +396,11 @@ export function Benchmark() {
         try {
             await invoke("switch_model", { modelId: newModelId });
             setActiveModelId(newModelId);
-            setConversionResults({ model: {}, candidates: {} });
+            setConversionResults(emptyConversionResults());
             setWallMs({});
+            setRunRuntimes({});
             setTypoResults({});
+            setPredictiveResults({});
             toast.success(`モデルを ${models.find((model) => model.id === newModelId)?.name ?? newModelId} に切り替えました`, { id: toastId });
         } catch (err) {
             toast.error(`モデル切り替えに失敗しました: ${err}`, { id: toastId });
@@ -382,9 +411,10 @@ export function Benchmark() {
 
     // --- かな漢字変換: フィルタリング ---
     const subsetItems = useMemo(() => {
+        if (conversionScope === "quick") return BENCHMARK_ITEMS.filter((item) => quickResults[item.id]);
         if (selectedSubset === "all") return BENCHMARK_ITEMS;
         return BENCHMARK_ITEMS.filter((item) => item.subset === selectedSubset);
-    }, [selectedSubset]);
+    }, [conversionScope, quickResults, selectedSubset]);
 
     const availableCategories = useMemo(() => {
         return ["すべて", ...Array.from(new Set(subsetItems.map((item) => item.category).filter(Boolean)))];
@@ -431,7 +461,8 @@ export function Benchmark() {
         [evaluatedList],
     );
 
-    const [wallMs, setWallMs] = useState<Partial<Record<ConversionScope | "typo" | "predictive", number>>>({});
+    const [wallMs, setWallMs] = useState<Partial<Record<RunKey, number>>>({});
+    const [runRuntimes, setRunRuntimes] = useState<Partial<Record<RunKey, BenchmarkRuntime>>>({});
     const busyRef = useRef(false);
 
     const runCases = async <Row extends { id: number }>(
@@ -443,7 +474,12 @@ export function Benchmark() {
     ) => {
         const wallKey = kind === "conversion" ? scope : kind;
         setWallMs((previous) => ({ ...previous, [wallKey]: undefined }));
-        const session = await invoke<{ id: number; batch_size: number }>("start_benchmark", { scope });
+        setRunRuntimes((previous) => ({ ...previous, [wallKey]: undefined }));
+        const session = await invoke<BenchmarkRuntime & { id: number; batch_size: number }>("start_benchmark", {
+            scope: kind === "typo" ? "typo" : scope,
+            backend: benchmarkBackend,
+        });
+        setRunRuntimes((previous) => ({ ...previous, [wallKey]: session }));
         try {
             for (let offset = 0; offset < items.length && !stopped(); offset += session.batch_size) {
                 const cases = items.slice(offset, offset + session.batch_size).map((item) => ({ ...item, kind }));
@@ -457,12 +493,25 @@ export function Benchmark() {
     };
 
     const handleRunBenchmark = async (itemsToRun: BenchmarkItem[]) => {
-        if (busyRef.current || itemsToRun.length === 0) return;
+        if (busyRef.current || sharedQuickRunning || !benchmarkBackend || (conversionScope !== "quick" && itemsToRun.length === 0)) return;
         busyRef.current = true;
         setConversionResults((previous) => ({ ...previous, [conversionScope]: {} }));
         setIsRunning(true);
         stopSignalRef.current = false;
         try {
+            if (conversionScope === "quick") {
+                setQuickProgress(null);
+                setWallMs((previous) => ({ ...previous, quick: undefined }));
+                setRunRuntimes((previous) => ({ ...previous, quick: undefined }));
+                const progress = new Channel<QuickBenchmarkProgress>();
+                progress.onmessage = setQuickProgress;
+                const measured = await invoke<QuickConversionResult>("run_quick_conversion_benchmark", { backend: benchmarkBackend, progress })
+                    .finally(() => { progress.onmessage = () => {}; });
+                setConversionResults((previous) => ({ ...previous, quick: Object.fromEntries(measured.rows.map((row) => [row.id, row])) }));
+                setWallMs((previous) => ({ ...previous, quick: measured.elapsed_ms }));
+                setRunRuntimes((previous) => ({ ...previous, quick: measured }));
+                return;
+            }
             await runCases<ItemResult>("conversion", itemsToRun, () => stopSignalRef.current, (rows) =>
                 setConversionResults((previous) => ({
                     ...previous, [conversionScope]: { ...previous[conversionScope], ...rows },
@@ -508,6 +557,9 @@ export function Benchmark() {
     // タイポ集計
     const typoEvaluatedList = useMemo(() => Object.values(typoResults), [typoResults]);
     const typoEvaluatedCount = typoEvaluatedList.length;
+    const typoOverallCorrect = typoEvaluatedList.filter(({ status }) =>
+        status === "exact_match" || status === "variant_match" || status === "clean_preserved",
+    ).length;
     
     // タイポ問題（is_clean=false）の集計
     const typoCasesTested = typoEvaluatedList.filter((r) => {
@@ -580,19 +632,20 @@ export function Benchmark() {
     };
 
     const anyRunning = isRunning || isTypoRunning || isPredictiveRunning;
-    const lastRunMs = wallMs[benchmarkTab === "zenzai" ? conversionScope : benchmarkTab];
+    const visibleRunKey = benchmarkTab === "zenzai" ? conversionScope : benchmarkTab;
+    const lastRunMs = wallMs[visibleRunKey];
+    const lastRuntime = runRuntimes[visibleRunKey];
+    const runDisabled = anyRunning || sharedQuickRunning || isSwitchingModel || !benchmarkBackend || capability?.[benchmarkBackend] === false;
+    const caseCount = conversionScope === "quick" ? 84 : subsetItems.length;
     const tabDefs = [
-        { id: "zenzai" as const, icon: Zap, label: "かな漢字変換", meta: "740問" },
+        { id: "zenzai" as const, icon: Zap, label: "かな漢字変換", meta: "840問" },
         { id: "typo" as const, icon: Layers, label: "タイポ補正", meta: "450問" },
         { id: "predictive" as const, icon: Zap, label: "先読み", meta: "30問" },
     ];
 
     return (
         <div className="mx-auto max-w-7xl space-y-6 pb-12">
-            <BenchmarkDepartureGuard running={anyRunning} />
-            {lastRunMs !== undefined && (
-                <p className="text-sm text-muted-foreground">前回の実行時間 {formatExecutionTime(lastRunMs)}</p>
-            )}
+            <BenchmarkDepartureGuard running={anyRunning} quick={isRunning && conversionScope === "quick"} />
             {/* Tab Selector */}
             <div role="tablist" aria-label="ベンチマーク種別" className="flex flex-wrap items-center gap-2 border-b border-border/60 pb-3">
                 {tabDefs.map(({ id, icon: TabIcon, label, meta }) => {
@@ -619,165 +672,113 @@ export function Benchmark() {
                 })}
             </div>
 
-            {/* Header / Intro */}
-            <div className="flex flex-col gap-3 border-b border-border/60 pb-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                    <h2 className="flex items-center gap-2.5 text-xl font-semibold tracking-tight text-foreground">
-                        <ZeroConvertLogo className="size-5 shrink-0 rounded-sm shadow-2xs" />
-                        {benchmarkTab === "zenzai"
-                            ? "かな漢字変換ベンチマーク（740問）"
-                            : benchmarkTab === "predictive"
-                              ? "先読みベンチマーク（30問）"
-                              : "タイポ補正ベンチマーク（450問）"}
-                    </h2>
-                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-                        {benchmarkTab === "zenzai"
-                            ? "基本230問＋高難度250問＋実IME160問＋口語100問。Nano v4.1 直結推論の正解率とレイテンシ（p50/p95/p99）を検証します。"
-                            : benchmarkTab === "predictive"
-                              ? "Android と同一の30問で先読みの継続一致率とレイテンシを検証します。判定は共通エンジン（benchmark.rs）と同一です。"
-                              : "メインモデル統合タイポ補正255件と、正常入力を誤補正しないこと（195件＝旧45＋増強150）を実機測定します。"}
-                    </p>
-                </div>
+            <section aria-label="測定設定" className="grid gap-3 rounded-xl border border-border bg-card/60 p-4 sm:grid-cols-2">
+                <label className="flex min-w-0 flex-col gap-1.5 text-sm font-medium" htmlFor="benchmark-model">
+                    使用モデル
+                    <select id="benchmark-model" value={activeModelId} disabled={anyRunning || sharedQuickRunning || isSwitchingModel || models.length === 0}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-60" onChange={(event) => void handleSwitchModel(event.target.value)}>
+                        {!activeModel && <option value="">モデルを選択</option>}
+                        {models.map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.name}{model.available ? "" : "（未配置）"}</option>)}
+                    </select>
+                </label>
+                <label className="flex min-w-0 flex-col gap-1.5 text-sm font-medium" htmlFor="benchmark-backend">
+                    ベンチマーク用バックエンド
+                    <select id="benchmark-backend" value={benchmarkBackend ?? ""} disabled={anyRunning || sharedQuickRunning || isSwitchingModel || !configuredRuntime}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-60"
+                        onChange={(event) => setBackendOverride(event.target.value === configuredRuntime?.backend ? null : event.target.value as QuickBackendId)}>
+                        {!configuredRuntime && <option value="">設定を読み込み中</option>}
+                        <option value="cpu" disabled={capability?.cpu === false}>CPU{configuredRuntime?.backend === "cpu" ? "（IME設定）" : ""}</option>
+                        <option value="vulkan" disabled={capability?.vulkan === false}>Vulkan{configuredRuntime?.backend === "vulkan" ? "（IME設定）" : ""}</option>
+                    </select>
+                    <span className="text-xs font-normal text-muted-foreground">
+                        この画面内のみ。{benchmarkBackend && configuredRuntime && backendText({ ...configuredRuntime, backend: benchmarkBackend })}
+                    </span>
+                </label>
+            </section>
 
-                {/* Model Selector Pill */}
-                <fieldset className="shrink-0 self-start lg:self-auto">
-                    <legend className="sr-only">対象モデル</legend>
-                    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/70 bg-muted/60 p-1">
-                    {models.map((model) => (
-                        <button
-                            key={model.id}
-                            type="button"
-                            aria-pressed={activeModelId === model.id}
-                            disabled={isSwitchingModel || anyRunning || !model.available}
-                            onClick={() => handleSwitchModel(model.id)}
-                            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
-                                activeModelId === model.id
-                                    ? "border border-border/80 bg-card font-semibold text-foreground shadow-xs"
-                                    : "text-muted-foreground hover:text-foreground"
-                            }`}
-                        >
-                            <Cpu className="size-3.5" aria-hidden />
-                            <span>{model.name}</span>
-                            <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
-                                {model.available ? `${model.size_mb.toFixed(1)}MB` : "未配置"}
-                            </span>
-                            {activeModelId === model.id && <Check className="size-3 text-emerald-500 stroke-[2.5]" aria-hidden />}
-                        </button>
-                    ))}
-                    </div>
-                </fieldset>
-            </div>
+            {lastRuntime && <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs">
+                <span>この結果の使用バックエンド <strong className="ml-1">{backendText(lastRuntime)}</strong></span>
+                {lastRunMs !== undefined && <span className="text-muted-foreground">実行時間 {formatExecutionTime(lastRunMs)}</span>}
+            </div>}
 
-            {/* TAB 1: かな漢字変換 (740問) */}
+            {/* TAB 1: かな漢字変換 (840問) */}
             {benchmarkTab === "zenzai" && (
                 <div role="tabpanel" aria-label="かな漢字変換ベンチマーク" className="space-y-6">
-                    <fieldset disabled={anyRunning || isSwitchingModel} className="space-y-2">
-                        <legend className="text-sm font-medium">かな漢字変換の計測範囲</legend>
-                        <div className="flex flex-wrap gap-x-4 gap-y-2">
-                            {CONVERSION_SCOPES.map((scope) => (
-                                <label key={scope.id} className="inline-flex items-center gap-2 text-sm">
-                                    <input type="radio" name="conversion-benchmark-scope" value={scope.id}
-                                        checked={conversionScope === scope.id} onChange={() => setConversionScope(scope.id)} />
-                                    {scope.label}
-                                </label>
-                            ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground">{CONVERSION_SCOPES.find((scope) => scope.id === conversionScope)?.description}</p>
-                    </fieldset>
-                    {/* Metric KPI Cards */}
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-                        <KpiCard label="正解率 (Top 1)" value={evaluatedCount > 0 ? `${overallAccuracy}%` : "—"} sub={evaluatedCount > 0 ? `${correctCount} / ${evaluatedCount} 問 正解` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
-                        <KpiCard label="平均レイテンシ" value={evaluatedCount > 0 ? `${avgLatency} ms` : "—"} sub={evaluatedCount > 0 ? `p50 ${latencyP.p50.toFixed(0)} / p95 ${latencyP.p95.toFixed(0)} / p99 ${latencyP.p99.toFixed(0)} ms` : "1文あたりの実効処理時間"} icon={Clock} iconClassName="text-sky-500" />
-                        <KpiCard label={`評価進捗（${SUBSETS.find((s) => s.id === selectedSubset)?.label ?? ""}）`} value={`${evaluatedCount} / ${subsetItems.length}`} sub={evaluatedCount === subsetItems.length ? "対象セット検証完了" : "テスト準備完了"} icon={Layers} />
-                        <KpiCard label="選択モデル" value={activeModel?.name ?? "未選択"} sub={activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "モデルを選択してください"} icon={SlidersHorizontal} valueClassName="text-base" />
-                    </div>
-                    {conversionScope === "candidates" && evaluatedCount > 0 && (
-                        <p className="text-sm text-muted-foreground">N-best 追加 平均 {(evaluatedList.reduce((sum, row) => sum + (row.nbest_ms ?? 0), 0) / evaluatedCount).toFixed(1)} ms/問</p>
-                    )}
-
-                    {/* Action Bar / Controls */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-border/60 bg-muted/30">
-                        <div className="flex flex-wrap items-center gap-2">
-                            {!isRunning ? (
-                                <>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleRunBenchmark(subsetItems)}
-                                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-foreground text-background shadow-xs hover:opacity-90 transition-opacity cursor-pointer"
-                                    >
-                                        <Play className="size-3.5 fill-current" />
-                                        {SUBSETS.find((s) => s.id === selectedSubset)?.label} 開始 ({subsetItems.length}問)
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleRunBenchmark(subsetItems.slice(0, 10))}
-                                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-border bg-card hover:bg-muted/60 transition-colors cursor-pointer"
-                                    >
-                                        <Zap className="size-3.5 text-amber-500" />
-                                        クイック検証 (10件)
-                                    </button>
-                                </>
-                            ) : (
-                                <button
-                                    type="button"
-                                    onClick={() => { stopSignalRef.current = true; }}
-                                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 text-white shadow-xs hover:bg-rose-700 transition-colors cursor-pointer"
-                                >
-                                    <Square className="size-3.5 fill-current" />
-                                    テスト停止
-                                </button>
-                            )}
-
-                            {evaluatedCount > 0 && !isRunning && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setConversionResults((previous) => ({ ...previous, [conversionScope]: {} }));
-                                        setWallMs((previous) => ({ ...previous, [conversionScope]: undefined }));
-                                    }}
-                                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                                >
-                                    <RotateCcw className="size-3.5" />
-                                    結果リセット
-                                </button>
-                            )}
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-1 rounded-lg border border-border/70 bg-muted p-1 text-xs">
-                            {SUBSETS.map((subset) => (
-                                <FilterPill key={subset.id} active={selectedSubset === subset.id} label={subset.label} onClick={() => { setSelectedSubset(subset.id); setSelectedCategory("すべて"); }}>
-                                    {subset.label}
-                                </FilterPill>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Filter & Search Bar */}
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="flex items-start gap-2 sm:items-center">
-                            <span className="flex shrink-0 items-center gap-1 pt-1.5 text-xs font-medium text-muted-foreground sm:pt-0">
-                                <Filter className="size-3.5" aria-hidden />
-                                カテゴリ
-                            </span>
-                            <div className="flex max-w-full gap-1.5 overflow-x-auto pb-1">
-                                {availableCategories.map((cat) => (
-                                    <button
-                                        key={cat}
-                                        type="button"
-                                        aria-pressed={selectedCategory === cat}
-                                        onClick={() => setSelectedCategory(cat)}
-                                        className={`shrink-0 rounded-lg px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer ${
-                                            selectedCategory === cat
-                                                ? "bg-primary font-medium text-primary-foreground shadow-2xs"
-                                                : "border border-border/40 bg-muted/80 text-muted-foreground hover:text-foreground"
-                                        }`}
-                                    >
-                                        {cat}
-                                    </button>
+                    <div className="space-y-3 rounded-xl border border-border/70 bg-card/60 p-4">
+                        <fieldset disabled={anyRunning || isSwitchingModel} className="space-y-2">
+                            <legend className="text-sm font-medium">計測方法</legend>
+                            <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                {CONVERSION_SCOPES.map((scope) => (
+                                    <label key={scope.id} className="inline-flex items-center gap-2 text-sm">
+                                        <input type="radio" name="conversion-benchmark-scope" value={scope.id}
+                                            checked={conversionScope === scope.id} onChange={() => {
+                                                setConversionScope(scope.id);
+                                                setSelectedCategory("すべて");
+                                                if (conversionScope === "quick" || scope.id === "quick") {
+                                                    setSearchQuery("");
+                                                    setShowErrorsOnly(false);
+                                                }
+                                            }} />
+                                        {scope.label}
+                                    </label>
                                 ))}
                             </div>
+                            <p className="text-xs text-muted-foreground">{CONVERSION_SCOPES.find((scope) => scope.id === conversionScope)?.description}</p>
+                        </fieldset>
+                        {conversionScope !== "quick" && (
+                            <fieldset disabled={isRunning} className="flex flex-wrap items-center gap-1 rounded-lg bg-muted/60 p-1">
+                                <legend className="sr-only">問題セット</legend>
+                                {SUBSETS.map((subset) => (
+                                    <FilterPill key={subset.id} active={selectedSubset === subset.id} label={subset.label} onClick={() => { setSelectedSubset(subset.id); setSelectedCategory("すべて"); }}>
+                                        {subset.label}
+                                    </FilterPill>
+                                ))}
+                            </fieldset>
+                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                            {!isRunning ? (
+                                <button type="button" disabled={runDisabled} onClick={() => void handleRunBenchmark(subsetItems)}
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background enabled:cursor-pointer enabled:hover:opacity-90 disabled:opacity-50">
+                                    <Play className="size-3.5 fill-current" aria-hidden /> 計測開始（{caseCount}問）
+                                </button>
+                            ) : conversionScope === "quick" ? (
+                                <div role="status" className="flex flex-wrap items-center gap-3 text-xs">
+                                    <span>クイック検証を計測中</span>
+                                    <progress className="h-2 w-28 accent-primary" aria-label="クイック検証の進捗" max={quickProgress?.total ?? 1} value={quickProgress?.completed} />
+                                </div>
+                            ) : (
+                                <button type="button" onClick={() => { stopSignalRef.current = true; }}
+                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-xs font-semibold text-white">
+                                    <Square className="size-3.5 fill-current" aria-hidden /> テスト停止
+                                </button>
+                            )}
+                            {evaluatedCount > 0 && !isRunning && (
+                                <button type="button" onClick={() => {
+                                    setConversionResults((previous) => ({ ...previous, [conversionScope]: {} }));
+                                    setWallMs((previous) => ({ ...previous, [conversionScope]: undefined }));
+                                    setRunRuntimes((previous) => ({ ...previous, [conversionScope]: undefined }));
+                                }} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
+                                    <RotateCcw className="size-3.5" aria-hidden /> 結果リセット
+                                </button>
+                            )}
                         </div>
+                    </div>
 
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <KpiCard label="正解率 (Top 1)" value={evaluatedCount > 0 ? `${overallAccuracy}%` : "—"} sub={evaluatedCount > 0 ? `${correctCount} / ${evaluatedCount} 問 正解` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
+                        <KpiCard label="平均レイテンシ" value={evaluatedCount > 0 ? `${avgLatency} ms` : "—"} sub={evaluatedCount > 0 ? `p50 ${latencyP.p50.toFixed(1)} / p95 ${latencyP.p95.toFixed(1)} / p99 ${latencyP.p99.toFixed(1)} ms` : "未評価"} icon={Clock} iconClassName="text-sky-500" />
+                        <KpiCard label="評価進捗" value={`${evaluatedCount} / ${caseCount}`} sub={evaluatedCount === caseCount ? "計測完了" : isRunning ? "計測中" : "評価した問題数"} icon={Layers} />
+                        {conversionScope !== "model" && <KpiCard label="N-best追加の平均" value={evaluatedCount > 0 ? `${(evaluatedList.reduce((sum, row) => sum + (row.nbest_ms ?? 0), 0) / evaluatedCount).toFixed(1)} ms` : "—"} sub="標準辞書から候補を追加" icon={SlidersHorizontal} />}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <label htmlFor="conversion-category" className="flex items-center gap-2 text-xs font-medium">
+                            カテゴリ
+                            <select id="conversion-category" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}
+                                className="max-w-52 rounded-md border border-input bg-background px-2 py-1.5 text-xs">
+                                {availableCategories.map((category) => <option key={category}>{category}</option>)}
+                            </select>
+                        </label>
                         <div className="flex items-center gap-2">
                             <SearchField value={searchQuery} onChange={setSearchQuery} placeholder="文脈・読み・期待表記..." />
                             <button
@@ -796,58 +797,55 @@ export function Benchmark() {
                         </div>
                     </div>
 
-                    {/* Results Table */}
-                    <div className="overflow-hidden rounded-xl border border-border/70 bg-card/60 shadow-xs">
+                    <section aria-labelledby="conversion-result-title" className="overflow-hidden rounded-xl border border-border/70 bg-card/60">
+                        <h3 id="conversion-result-title" className="border-b border-border/60 px-3 py-2.5 text-sm font-semibold">問題ごとの結果</h3>
                         <div className="max-h-[640px] overflow-auto">
-                            <table className="w-full min-w-[900px] border-collapse text-left text-xs">
+                            <table className="w-full min-w-[540px] table-fixed border-collapse text-left text-xs">
                                 <thead className={TABLE_HEAD}>
                                     <tr>
-                                        <th className={`${TABLE_HEAD_CELL} w-12 text-center`}>#</th>
-                                        <th className={`${TABLE_HEAD_CELL} w-28`}>セット</th>
-                                        <th className={`${TABLE_HEAD_CELL} w-28`}>カテゴリ</th>
-                                        <th className={`${TABLE_HEAD_CELL} min-w-[180px]`}>前文</th>
-                                        <th className={`${TABLE_HEAD_CELL} w-28`}>入力読み</th>
-                                        <th className={`${TABLE_HEAD_CELL} w-32`}>期待表記（正解）</th>
-                                        <th className={`${TABLE_HEAD_CELL} min-w-[140px]`}>モデル予測</th>
-                                        <th className={`${TABLE_HEAD_CELL} w-20 text-right`}>遅延</th>
-                                        <th className={`${TABLE_HEAD_CELL} w-20 text-center`}>判定</th>
+                                        <th scope="col" className={TABLE_HEAD_CELL}>入力読み</th>
+                                        <th scope="col" className={TABLE_HEAD_CELL}>期待表記（正解）</th>
+                                        <th scope="col" className={TABLE_HEAD_CELL}>変換結果</th>
+                                        <th scope="col" className={TABLE_HEAD_CELL + " w-20 text-center"}>判定</th>
+                                        <th scope="col" className={TABLE_HEAD_CELL + " w-20 text-right"}>遅延</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border/50">
                                     {filteredItems.length === 0 ? (
-                                        <EmptyRow colSpan={9} message="条件に一致する問題はありません" />
+                                        <EmptyRow colSpan={5} message={conversionScope === "quick" && evaluatedCount === 0 ? "計測完了後に対象問題の結果が表示されます" : "条件に一致する問題はありません"} />
                                     ) : filteredItems.slice(0, 100).map((item) => {
                                         const res = results[item.id];
                                         return (
-                                            <tr key={item.id} className="hover:bg-muted/30 transition-colors">
-                                                <td className="p-3 text-center font-mono text-muted-foreground">{item.id}</td>
-                                                <td className="p-3"><SubsetBadge subset={item.subset} /></td>
-                                                <td className="p-3 text-muted-foreground font-medium">{item.category}</td>
-                                                <td className="p-3 text-muted-foreground max-w-xs truncate" title={item.left_context}>
-                                                    {item.left_context || <span className="opacity-40">なし</span>}
+                                            <tr key={item.id} className="align-top hover:bg-muted/30">
+                                                <td className="break-words p-3">
+                                                    <div className="font-medium text-foreground">{item.target}</div>
+                                                    <details className="mt-1 text-muted-foreground">
+                                                        <summary className="w-fit cursor-pointer rounded underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">詳細</summary>
+                                                        <dl className="mt-2 space-y-1.5">
+                                                            <div><dt className="sr-only">問題番号とセット</dt><dd>#{item.id} <SubsetBadge subset={item.subset} /></dd></div>
+                                                            <div><dt className="font-medium text-foreground">カテゴリ</dt><dd>{item.category}</dd></div>
+                                                            <div><dt className="font-medium text-foreground">前文</dt><dd>{item.left_context || "なし"}</dd></div>
+                                                            {item.acceptable?.length ? <div><dt className="font-medium text-foreground">許容表記</dt><dd>{item.acceptable.join(" / ")}</dd></div> : null}
+                                                            {res?.candidates.length ? <div><dt className="font-medium text-foreground">候補一覧</dt><dd>{res.candidates.join(" / ")}</dd></div> : null}
+                                                            {res?.nbest_ms !== undefined && <div><dt className="font-medium text-foreground">N-best追加</dt><dd>{res.nbest_ms.toFixed(1)} ms</dd></div>}
+                                                        </dl>
+                                                    </details>
                                                 </td>
-                                                <td className="p-3 font-semibold text-foreground">{item.target}</td>
-                                                <td className="p-3 font-medium text-foreground">{item.expected}</td>
-                                                <td className="p-3">
-                                                    {res ? (
-                                                        <span className={res.is_correct ? "font-medium text-foreground" : "font-semibold text-destructive"}>{res.top1}</span>
-                                                    ) : (
-                                                        <span className="text-muted-foreground/30">—</span>
-                                                    )}
-                                                </td>
-                                                <td className="p-3 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
-                                                    {res ? `${res.latency_ms.toFixed(0)} ms` : "—"}
+                                                <td className="break-words p-3 font-medium text-foreground">{item.expected}</td>
+                                                <td className={"break-words p-3 " + (res?.is_correct === false ? "font-semibold text-destructive" : "text-foreground")}>
+                                                    {res ? res.top1 || "候補なし" : <span className="text-muted-foreground">—</span>}
                                                 </td>
                                                 <td className="p-3 text-center">
                                                     {res ? (
                                                         res.is_correct ? (
-                                                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-4" aria-hidden />正解</span>
+                                                            <span className="inline-flex items-center gap-1 whitespace-nowrap text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-3.5" aria-hidden />正解</span>
                                                         ) : (
-                                                            <span className="inline-flex items-center gap-1 text-rose-500"><XCircle className="size-4" aria-hidden />不正解</span>
+                                                            <span className="inline-flex items-center gap-1 whitespace-nowrap text-destructive"><XCircle className="size-3.5" aria-hidden />不正解</span>
                                                         )
-                                                    ) : (
-                                                        <span className="text-[11px] text-muted-foreground/30">—</span>
-                                                    )}
+                                                    ) : <span className="text-muted-foreground">—</span>}
+                                                </td>
+                                                <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                                    {res ? res.latency_ms.toFixed(1) + " ms" : "—"}
                                                 </td>
                                             </tr>
                                         );
@@ -860,15 +858,17 @@ export function Benchmark() {
                                 最初の100件を表示中（絞り込み後 {filteredItems.length} 件）
                             </div>
                         )}
-                    </div>
+                    </section>
                 </div>
             )}
 
             {/* TAB 2: タイポ補正 (450問) */}
             {benchmarkTab === "typo" && (
                 <div role="tabpanel" aria-label="タイポ補正ベンチマーク" className="space-y-6">
+                    <p className="text-sm text-muted-foreground">Windowsの候補生成と補正を、現在のタイポ補正設定で測ります。450問は入力読みから評価し、個人の学習履歴は使いません。</p>
                     {/* KPI Cards */}
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5 lg:gap-4">
+                        <KpiCard label="全体成功率" value={typoEvaluatedCount > 0 ? `${(100 * typoOverallCorrect / typoEvaluatedCount).toFixed(1)}%` : "—"} sub={typoEvaluatedCount > 0 ? `${typoOverallCorrect} / ${typoEvaluatedCount} 問（正常保持を含む）` : "Androidと同じ集計"} icon={CheckCircle2} iconClassName="text-emerald-500" />
                         <KpiCard label="タイポ正解率（完全一致）" value={typoCasesTested.length > 0 ? `${typoAccuracyExact}%` : "—"} sub={typoCasesTested.length > 0 ? `${exactMatches} / ${typoCasesTested.length} 問（実質 ${typoAccuracyEffective}%）` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
                         <KpiCard label="正常入力の誤補正 (FP)" value={cleanCasesTested.length > 0 ? `${falsePositives} 件` : "—"} sub={cleanCasesTested.length > 0 ? `${cleanCasesTested.length - falsePositives} / ${cleanCasesTested.length} 保持（誤補正率 ${fpRate}%）` : "195問で検証"} icon={ShieldCheck} iconClassName={falsePositives > 0 ? "text-rose-500" : "text-sky-500"} valueClassName={falsePositives > 0 ? "text-destructive" : undefined} />
                         <KpiCard label="平均レイテンシ" value={typoEvaluatedCount > 0 ? `${avgTypoLatency} ms` : "—"} sub={typoEvaluatedCount > 0 ? `p50 ${typoLatencyP.p50.toFixed(0)} / p95 ${typoLatencyP.p95.toFixed(0)} / p99 ${typoLatencyP.p99.toFixed(0)} ms` : "1文あたりの実効処理時間"} icon={Clock} iconClassName="text-amber-500" />
@@ -882,6 +882,7 @@ export function Benchmark() {
                                 <>
                                     <button
                                         type="button"
+                                        disabled={runDisabled}
                                         onClick={() => handleRunTypoBenchmark(filteredTypoItems)}
                                         className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-foreground text-background shadow-xs hover:opacity-90 transition-opacity cursor-pointer"
                                     >
@@ -890,11 +891,12 @@ export function Benchmark() {
                                     </button>
                                     <button
                                         type="button"
+                                        disabled={runDisabled}
                                         onClick={() => handleRunTypoBenchmark(filteredTypoItems.slice(0, 15))}
                                         className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-border bg-card hover:bg-muted/60 transition-colors cursor-pointer"
                                     >
                                         <Zap className="size-3.5 text-amber-500" />
-                                        クイック検証 (15件)
+                                        タイポ補正の先頭15件
                                     </button>
                                 </>
                             ) : (
@@ -911,7 +913,7 @@ export function Benchmark() {
                             {typoEvaluatedCount > 0 && !isTypoRunning && (
                                 <button
                                     type="button"
-                                    onClick={() => setTypoResults({})}
+                                    onClick={() => { setTypoResults({}); setWallMs((previous) => ({ ...previous, typo: undefined })); setRunRuntimes((previous) => ({ ...previous, typo: undefined })); }}
                                     className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                                 >
                                     <RotateCcw className="size-3.5" />
@@ -1000,6 +1002,8 @@ export function Benchmark() {
                                                     ) : (
                                                         <span className="text-muted-foreground/30">—</span>
                                                     )}
+                                                    {res?.correction_reading && <p className="mt-1 text-[11px] text-muted-foreground">補正後の読み {res.correction_reading}</p>}
+                                                    {res?.moshikashite_output && res.main_output !== res.moshikashite_output && <p className="mt-1 text-[11px] text-muted-foreground">通常候補 {res.main_output}</p>}
                                                 </td>
                                                 <td className="p-3 text-right font-mono text-[11px] text-muted-foreground">
                                                     {res ? `${res.latency_ms.toFixed(0)} ms` : "—"}
@@ -1047,15 +1051,14 @@ export function Benchmark() {
             )}
             {benchmarkTab === "predictive" && (
                 <div role="tabpanel" aria-label="先読みベンチマーク" className="space-y-6">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 lg:gap-4">
                         <KpiCard label="継続一致率" value={predictiveEvaluatedList.length > 0 ? `${predictiveAccuracy}%` : "—"} sub={predictiveEvaluatedList.length > 0 ? `${predictiveCorrect} / ${predictiveEvaluatedList.length} 問 命中` : "未評価"} icon={CheckCircle2} iconClassName="text-emerald-500" />
                         <KpiCard label="平均レイテンシ" value={predictiveEvaluatedList.length > 0 ? `${(predictiveEvaluatedList.reduce((a, r) => a + r.latency_ms, 0) / predictiveEvaluatedList.length).toFixed(1)} ms` : "—"} sub={predictiveEvaluatedList.length > 0 ? `p50 ${predictiveLatencyP.p50.toFixed(0)} / p95 ${predictiveLatencyP.p95.toFixed(0)} / p99 ${predictiveLatencyP.p99.toFixed(0)} ms` : "1文あたりの実効処理時間"} icon={Clock} iconClassName="text-sky-500" />
                         <KpiCard label="評価進捗" value={`${predictiveEvaluatedList.length} / ${PREDICTIVE_ITEMS.length}`} sub={predictiveEvaluatedList.length === PREDICTIVE_ITEMS.length ? "全30問評価完了" : "30問ベンチマーク準備完了"} icon={Layers} />
-                        <KpiCard label="選択モデル" value={activeModel?.name ?? "未選択"} sub={activeModel ? `${activeModel.size_mb.toFixed(1)} MB` : "モデルを選択してください"} icon={SlidersHorizontal} valueClassName="text-base" />
                     </div>
                     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/30 p-3.5">
                         {!isPredictiveRunning ? (
-                            <button type="button" onClick={() => handleRunPredictiveBenchmark(PREDICTIVE_ITEMS)} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                            <button type="button" disabled={runDisabled} onClick={() => handleRunPredictiveBenchmark(PREDICTIVE_ITEMS)} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                                 <Play className="size-3.5 fill-current" aria-hidden /> 先読みベンチマーク開始 ({PREDICTIVE_ITEMS.length}問)
                             </button>
                         ) : (
@@ -1064,7 +1067,7 @@ export function Benchmark() {
                             </button>
                         )}
                         {predictiveEvaluatedList.length > 0 && !isPredictiveRunning && (
-                            <button type="button" onClick={() => setPredictiveResults({})} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                            <button type="button" onClick={() => { setPredictiveResults({}); setWallMs((previous) => ({ ...previous, predictive: undefined })); setRunRuntimes((previous) => ({ ...previous, predictive: undefined })); }} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                                 <RotateCcw className="size-3.5" aria-hidden /> 結果リセット
                             </button>
                         )}

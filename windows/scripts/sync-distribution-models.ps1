@@ -1,4 +1,4 @@
-# 変換モデル（ZeroCon Model v4.1）はインストーラー・APKに同梱しない。
+﻿# 変換モデル（ZeroCon Model v4.2）はインストーラー・APKに同梱しない。
 # このスクリプトは配布元（GitHub リリースの model assets）へ置く前提で、
 # カタログと一致する canonical ストア（artifacts/models/zerocon）の
 # 存在・サイズ・SHA-256 を検証するだけを行う。 -RuntimeDirectory 由来の

@@ -161,6 +161,27 @@ pub fn suggest_composition_heuristic(
     suggest_composition_with_channel(context, input, baseline, "", "", "", config, false)
 }
 
+#[cfg(windows)]
+pub fn suggest_windows_composition(
+    context: &str,
+    input: &str,
+    baseline: &str,
+    raw: &str,
+    config: &AiAssistConfig,
+) -> (Option<TypoSuggestion>, bool) {
+    let hybrid = super::keyboard_hybrid::suggest(context, input, raw, config);
+    let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
+    let allow_channel_repair = hybrid.is_none();
+    let suggestion = hybrid.flatten().or_else(|| {
+        if allow_channel_repair {
+            suggest_composition(context, input, baseline, config)
+        } else {
+            suggest_composition_heuristic(context, input, baseline, config)
+        }
+    });
+    (suggestion, hybrid_proposal)
+}
+
 fn suggest_composition_with_channel(
     context: &str,
     input: &str,

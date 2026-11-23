@@ -1,6 +1,6 @@
 # 評価コード
 
-Windows/Android の実機ベンチマーク正本は [common/](common/README.md)（変換740・タイポ450・先読み30）。
+Windows/Android の実機ベンチマーク正本は [common/](common/README.md)（変換840・タイポ450・先読み30）。
 同フォルダが採点契約正本（Rust `benchmark.rs`）と同期スクリプトを持つ。本 README は研究用評価の案内。
 
 Standard v4のQWERTY候補順位付け、実打鍵の記録、policy固定後の評価は

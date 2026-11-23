@@ -1,0 +1,100 @@
+{"id": 1, "category": "IT・AI・現代ビジネス複合語", "left_context": "製薬会社の研究所で", "target": "えーあいそうやくをけんきゅうする", "expected": "AI創薬を研究する", "acceptable": [], "forbidden_examples": ["AI装薬", "エーアイ創薬"]}
+{"id": 2, "category": "IT・AI・現代ビジネス複合語", "left_context": "エッジ端末上で高速な", "target": "えーあいすいろんをじっこうする", "expected": "AI推論を実行する", "acceptable": [], "forbidden_examples": ["エーアイ推論"]}
+{"id": 3, "category": "IT・AI・現代ビジネス複合語", "left_context": "社内の業務フローを", "target": "えーあいくどうにかいかくする", "expected": "AI駆動に改革する", "acceptable": [], "forbidden_examples": ["エーアイ駆動"]}
+{"id": 4, "category": "IT・AI・現代ビジネス複合語", "left_context": "専門知識がなくてもアプリを作れる", "target": "のーこーどかいはつがひろがる", "expected": "ノーコード開発が広がる", "acceptable": [], "forbidden_examples": ["のーこーど開発"]}
+{"id": 5, "category": "IT・AI・現代ビジネス複合語", "left_context": "短期間で業務システムを作る", "target": "ろーこーどかいはつをすすめる", "expected": "ローコード開発を進める", "acceptable": [], "forbidden_examples": ["ろーこーど開発"]}
+{"id": 6, "category": "IT・AI・現代ビジネス複合語", "left_context": "開発コストを抑えるために", "target": "おふしょあかいはつをえらぶ", "expected": "オフショア開発を選ぶ", "acceptable": [], "forbidden_examples": ["おふしょあ開発"]}
+{"id": 7, "category": "IT・AI・現代ビジネス複合語", "left_context": "送金手続きのあとに", "target": "そくじけっさいがかんりょうする", "expected": "即時決済が完了する", "acceptable": [], "forbidden_examples": ["即時決裁"]}
+{"id": 8, "category": "IT・AI・現代ビジネス複合語", "left_context": "改札やレジの端末で", "target": "たっちけっさいをつかう", "expected": "タッチ決済を使う", "acceptable": [], "forbidden_examples": ["タッチ決裁"]}
+{"id": 9, "category": "IT・AI・現代ビジネス複合語", "left_context": "店頭の端末で複数の", "target": "まるちけっさいにたいおうする", "expected": "マルチ決済に対応する", "acceptable": [], "forbidden_examples": ["マルチ決裁", "まるち決済"]}
+{"id": 10, "category": "IT・AI・現代ビジネス複合語", "left_context": "ブラウザ上の買い物かごから", "target": "うぇぶけっさいですませる", "expected": "Web決済で済ませる", "acceptable": ["ウェブ決済で済ませる"], "forbidden_examples": ["うぇぶ決済", "Web決裁"]}
+{"id": 11, "category": "IT・AI・現代ビジネス複合語", "left_context": "ビル全体の省エネに向けて", "target": "えねるぎーまねじめんとをまなぶ", "expected": "エネルギーマネジメントを学ぶ", "acceptable": [], "forbidden_examples": ["えねるぎーまねじめんと"]}
+{"id": 12, "category": "IT・AI・現代ビジネス複合語", "left_context": "大規模災害に備えて企業の", "target": "じぎょうけいぞくけいかくをさくていする", "expected": "事業継続計画を策定する", "acceptable": [], "forbidden_examples": []}
+{"id": 13, "category": "IT・AI・現代ビジネス複合語", "left_context": "匿名通信の経路として", "target": "こうかいぷろきしをけいゆする", "expected": "公開プロキシを経由する", "acceptable": [], "forbidden_examples": ["公開ぷろきし"]}
+{"id": 14, "category": "IT・AI・現代ビジネス複合語", "left_context": "会社の会計や在庫を支える", "target": "きかんしすてむをいこうする", "expected": "基幹システムを移行する", "acceptable": [], "forbidden_examples": ["帰還システム", "機関システム"]}
+{"id": 15, "category": "IT・AI・現代ビジネス複合語", "left_context": "株主価値の指標として", "target": "けいざいてきふかかちをけいさんする", "expected": "経済的付加価値を計算する", "acceptable": [], "forbidden_examples": ["経済的負荷価値"]}
+{"id": 16, "category": "IT・AI・現代ビジネス複合語", "left_context": "注文を受けてから生産する", "target": "じゅちゅうせいぞうにきりかえる", "expected": "受注製造に切り替える", "acceptable": [], "forbidden_examples": []}
+{"id": 17, "category": "IT・AI・現代ビジネス複合語", "left_context": "日々の注文と納期をまとめる", "target": "じゅちゅうかんりをきょうかする", "expected": "受注管理を強化する", "acceptable": [], "forbidden_examples": []}
+{"id": 18, "category": "IT・AI・現代ビジネス複合語", "left_context": "新入社員に向けた", "target": "しゃないきょういくをじゅうじつさせる", "expected": "社内教育を充実させる", "acceptable": [], "forbidden_examples": ["車内教育"]}
+{"id": 19, "category": "IT・AI・現代ビジネス複合語", "left_context": "台風が来る前に建物の", "target": "ぼうさいてんけんをすませる", "expected": "防災点検を済ませる", "acceptable": [], "forbidden_examples": []}
+{"id": 20, "category": "IT・AI・現代ビジネス複合語", "left_context": "工場の設備を仮想空間に再現する", "target": "でじたるついんをかつようする", "expected": "デジタルツインを活用する", "acceptable": [], "forbidden_examples": ["でじたるついん"]}
+{"id": 21, "category": "学術・医療・理工・法務専門語", "left_context": "一時的に脳の血流が途絶える", "target": "いっかせいのうきょけつほっさをうたがう", "expected": "一過性脳虚血発作を疑う", "acceptable": [], "forbidden_examples": []}
+{"id": 22, "category": "学術・医療・理工・法務専門語", "left_context": "神経変性疾患の一つである", "target": "たけいとういしゅくしょうのしんさつ", "expected": "多系統萎縮症の診察", "acceptable": [], "forbidden_examples": []}
+{"id": 23, "category": "学術・医療・理工・法務専門語", "left_context": "心臓のポンプ機能が低下して", "target": "うっけつせいしんふぜんをおこす", "expected": "うっ血性心不全を起こす", "acceptable": [], "forbidden_examples": []}
+{"id": 24, "category": "学術・医療・理工・法務専門語", "left_context": "家畜の顎などが腫れる感染症の", "target": "うしほうせんきんしょうをけいかいする", "expected": "牛放線菌症を警戒する", "acceptable": [], "forbidden_examples": ["牛包せん菌症"]}
+{"id": 25, "category": "学術・医療・理工・法務専門語", "left_context": "牧場で定期検査を行って", "target": "うしはっけつびょうをよぼうする", "expected": "牛白血病を予防する", "acceptable": [], "forbidden_examples": []}
+{"id": 26, "category": "学術・医療・理工・法務専門語", "left_context": "腎臓の機能を評価するために", "target": "じんけっしょうりゅうりょうをはかる", "expected": "腎血漿流量を測る", "acceptable": [], "forbidden_examples": ["人血小流量"]}
+{"id": 27, "category": "学術・医療・理工・法務専門語", "left_context": "有機合成の試薬として", "target": "えんかするふりるをあつかう", "expected": "塩化スルフリルを扱う", "acceptable": [], "forbidden_examples": ["円化するフリル"]}
+{"id": 28, "category": "学術・医療・理工・法務専門語", "left_context": "内燃機関の燃料として使われる", "target": "きはつゆをほぞんする", "expected": "揮発油を保存する", "acceptable": [], "forbidden_examples": ["機発油"]}
+{"id": 29, "category": "学術・医療・理工・法務専門語", "left_context": "高周波回路の設計において", "target": "ゆうでんそんをおさえる", "expected": "誘電損を抑える", "acceptable": [], "forbidden_examples": ["ゆうでんそん"]}
+{"id": 30, "category": "学術・医療・理工・法務専門語", "left_context": "エネルギー変換の効率を高める", "target": "ねつこうがくをせんこうする", "expected": "熱工学を専攻する", "acceptable": [], "forbidden_examples": ["熱高額"]}
+{"id": 31, "category": "学術・医療・理工・法務専門語", "left_context": "建物の避難経路や耐火構造を扱う", "target": "かさいあんぜんこうがくをまなぶ", "expected": "火災安全工学を学ぶ", "acceptable": [], "forbidden_examples": []}
+{"id": 32, "category": "学術・医療・理工・法務専門語", "left_context": "複雑な物理現象に見られる", "target": "ひせんけいせいをかいせきする", "expected": "非線形性を解析する", "acceptable": [], "forbidden_examples": ["非線形成"]}
+{"id": 33, "category": "学術・医療・理工・法務専門語", "left_context": "宇宙ステーションの環境で", "target": "びしょうじゅうりょくをりようする", "expected": "微小重力を利用する", "acceptable": [], "forbidden_examples": []}
+{"id": 34, "category": "学術・医療・理工・法務専門語", "left_context": "地球の形状を表す回転楕円体の", "target": "べっせるだえんたいをもちいる", "expected": "ベッセル楕円体を用いる", "acceptable": [], "forbidden_examples": ["ベッセルだ塩対"]}
+{"id": 35, "category": "学術・医療・理工・法務専門語", "left_context": "民法上の親子関係に関する", "target": "ちゃくしゅつひにんのてつづき", "expected": "嫡出否認の手続き", "acceptable": [], "forbidden_examples": ["着出費にん"]}
+{"id": 36, "category": "学術・医療・理工・法務専門語", "left_context": "株主総会における議案への", "target": "ひょうけつけんをこうしする", "expected": "表決権を行使する", "acceptable": [], "forbidden_examples": ["票ケツ県"]}
+{"id": 37, "category": "学術・医療・理工・法務専門語", "left_context": "行政行為が取り消されるまで有効とされる", "target": "こうていりょくをせつめいする", "expected": "公定力を説明する", "acceptable": [], "forbidden_examples": ["肯定力"]}
+{"id": 38, "category": "学術・医療・理工・法務専門語", "left_context": "戸籍から抜けて新しい戸籍を作る", "target": "ぶんせきとどけをていしゅつする", "expected": "分籍届を提出する", "acceptable": [], "forbidden_examples": ["分析届"]}
+{"id": 39, "category": "学術・医療・理工・法務専門語", "left_context": "妊産婦と乳幼児の健康を守る", "target": "ぼしほけんほうにもとづく", "expected": "母子保健法に基づく", "acceptable": [], "forbidden_examples": ["母子保険法"]}
+{"id": 40, "category": "学術・医療・理工・法務専門語", "left_context": "戦後の結核対策の柱となった", "target": "けっかくよぼうほうをしらべる", "expected": "結核予防法を調べる", "acceptable": [], "forbidden_examples": ["欠格予防法"]}
+{"id": 41, "category": "地名・駅名・施設・行政機関", "left_context": "土佐くろしお鉄道ごめん・なはり線の", "target": "あきそうごうびょういんまええきでまつ", "expected": "あき総合病院前駅で待つ", "acceptable": [], "forbidden_examples": ["あきそうごうびょういん", "あきそう号病院"]}
+{"id": 42, "category": "地名・駅名・施設・行政機関", "left_context": "あいの風とやま鉄道の", "target": "しんとやまぐちえきにとうちゃくする", "expected": "新富山口駅に到着する", "acceptable": [], "forbidden_examples": ["新戸山口駅"]}
+{"id": 43, "category": "地名・駅名・施設・行政機関", "left_context": "広島県呉市の倉橋島にある", "target": "なるとやまからのながめ", "expected": "鳴門山からの眺め", "acceptable": [], "forbidden_examples": ["なると山"]}
+{"id": 44, "category": "地名・駅名・施設・行政機関", "left_context": "東武スカイツリーラインの", "target": "しんこしがやえきでのりかえる", "expected": "新越谷駅で乗り換える", "acceptable": [], "forbidden_examples": ["新越ケ谷駅"]}
+{"id": 45, "category": "地名・駅名・施設・行政機関", "left_context": "東京メトロ南北線の", "target": "ほんこまごめえきからあるく", "expected": "本駒込駅から歩く", "acceptable": [], "forbidden_examples": ["ほんこまごめ駅"]}
+{"id": 46, "category": "地名・駅名・施設・行政機関", "left_context": "常磐線各駅停車の", "target": "まばしえきでおりる", "expected": "馬橋駅で降りる", "acceptable": [], "forbidden_examples": ["まばし駅"]}
+{"id": 47, "category": "地名・駅名・施設・行政機関", "left_context": "名古屋市営地下鉄桜通線の", "target": "くるまみちえきをりようする", "expected": "車道駅を利用する", "acceptable": [], "forbidden_examples": ["くるまみち駅"]}
+{"id": 48, "category": "地名・駅名・施設・行政機関", "left_context": "北海道北部の自然豊かな", "target": "おといねっぷそんをおとずれる", "expected": "音威子府村を訪れる", "acceptable": [], "forbidden_examples": ["おといねっぷそん"]}
+{"id": 49, "category": "地名・駅名・施設・行政機関", "left_context": "北九州市にある歴史ある街の", "target": "やはたひがしくをさんさくする", "expected": "八幡東区を散策する", "acceptable": [], "forbidden_examples": ["やはたひがしく"]}
+{"id": 50, "category": "地名・駅名・施設・行政機関", "left_context": "大阪市の中心部にも近い", "target": "みやこじまくへひっこす", "expected": "都島区へ引っ越す", "acceptable": [], "forbidden_examples": ["みやこ島区"]}
+{"id": 51, "category": "地名・駅名・施設・行政機関", "left_context": "島根県西部を流れる", "target": "みすみがわのほとりをあるく", "expected": "三隅川のほとりを歩く", "acceptable": [], "forbidden_examples": ["三角川"]}
+{"id": 52, "category": "地名・駅名・施設・行政機関", "left_context": "千葉県松戸市などを流れる", "target": "じっけんがわのきしべ", "expected": "十間川の岸辺", "acceptable": [], "forbidden_examples": ["実験川"]}
+{"id": 53, "category": "地名・駅名・施設・行政機関", "left_context": "北海道南富良野町にある", "target": "かなやまだむをけんがくする", "expected": "金山ダムを見学する", "acceptable": [], "forbidden_examples": ["かなやまダム"]}
+{"id": 54, "category": "地名・駅名・施設・行政機関", "left_context": "大阪府交野市に築かれた中世の山城の", "target": "かたのじょうのあとをめぐる", "expected": "交野城の跡を巡る", "acceptable": [], "forbidden_examples": ["方の場"]}
+{"id": 55, "category": "地名・駅名・施設・行政機関", "left_context": "古墳時代の遺跡である", "target": "いわやこふんをけんがくする", "expected": "岩屋古墳を見学する", "acceptable": [], "forbidden_examples": ["いわや古墳"]}
+{"id": 56, "category": "地名・駅名・施設・行政機関", "left_context": "古くから地域に鎮座する", "target": "うちじんじゃへさんぱいする", "expected": "内神社へ参拝する", "acceptable": [], "forbidden_examples": ["うち神社"]}
+{"id": 57, "category": "地名・駅名・施設・行政機関", "left_context": "名古屋市西区の商店街として知られる", "target": "えんどうじをさんぽする", "expected": "円頓寺を散歩する", "acceptable": [], "forbidden_examples": ["えんどう寺"]}
+{"id": 58, "category": "地名・駅名・施設・行政機関", "left_context": "地域の歴史を伝える古刹の", "target": "りゅうこうじをおとずれる", "expected": "龍興寺を訪れる", "acceptable": [], "forbidden_examples": ["りゅうこう寺"]}
+{"id": 59, "category": "地名・駅名・施設・行政機関", "left_context": "不正アクセスなどの被害は", "target": "けいしちょうさいばーはんざいたいさくかへ", "expected": "警視庁サイバー犯罪対策課へ", "acceptable": [], "forbidden_examples": ["けいしちょうさいばー"]}
+{"id": 60, "category": "地名・駅名・施設・行政機関", "left_context": "宮城県大和町にキャンパスがある", "target": "みやぎだいがくをかこむしぜん", "expected": "宮城大学を囲む自然", "acceptable": [], "forbidden_examples": ["みやぎ大学"]}
+{"id": 61, "category": "作品・ブランド・外来語・動植物", "left_context": "クレーンゲーム風のアクションゲーム", "target": "はたらくゆーふぉーでくりあする", "expected": "はたらくUFOでクリアする", "acceptable": [], "forbidden_examples": ["働くユーフォー", "はたらくゆーふぉー"]}
+{"id": 62, "category": "作品・ブランド・外来語・動植物", "left_context": "PlayStation 4向けのレースゲーム", "target": "どらいぶくらぶをぷれいする", "expected": "DRIVECLUBをプレイする", "acceptable": [], "forbidden_examples": ["ドライブクラブ", "どらいぶくらぶ"]}
+{"id": 63, "category": "作品・ブランド・外来語・動植物", "left_context": "渋谷スクランブルスクエアの展望施設", "target": "しぶやすかいからのやけい", "expected": "SHIBUYA SKYからの夜景", "acceptable": [], "forbidden_examples": ["しぶやすかい", "渋谷スカイ"]}
+{"id": 64, "category": "作品・ブランド・外来語・動植物", "left_context": "初台駅に直結した複合文化施設の", "target": "おぺらしてぃでこんさーとをきく", "expected": "オペラシティでコンサートを聞く", "acceptable": ["オペラシティでコンサートを聴く"], "forbidden_examples": ["おぺらしてぃ"]}
+{"id": 65, "category": "作品・ブランド・外来語・動植物", "left_context": "JR蒲田駅に直結している駅ビルの", "target": "ぐらんでゅおかまたでかいものする", "expected": "グランデュオ蒲田で買い物する", "acceptable": [], "forbidden_examples": ["ぐらんでゅお蒲田"]}
+{"id": 66, "category": "作品・ブランド・外来語・動植物", "left_context": "和歌山市にある多目的アリーナの", "target": "わかやまびっぐほえーるへいく", "expected": "和歌山ビッグホエールへ行く", "acceptable": [], "forbidden_examples": ["和歌山びっぐほえーる"]}
+{"id": 67, "category": "作品・ブランド・外来語・動植物", "left_context": "静岡県磐田市のサッカースタジアムの", "target": "やまはすたじあむでかんせんする", "expected": "ヤマハスタジアムで観戦する", "acceptable": [], "forbidden_examples": ["やまはすたじあむ", "山葉スタジアム"]}
+{"id": 68, "category": "作品・ブランド・外来語・動植物", "left_context": "兵庫県尼崎市の音楽ホールの", "target": "あるかいっくほーるにいく", "expected": "アルカイックホールに行く", "acceptable": [], "forbidden_examples": ["あるかいっくほーる"]}
+{"id": 69, "category": "作品・ブランド・外来語・動植物", "left_context": "映画情報のニュースサイトとして有名な", "target": "しねまとぅでいのきじをよむ", "expected": "シネマトゥデイの記事を読む", "acceptable": [], "forbidden_examples": ["しねまとぅでい"]}
+{"id": 70, "category": "作品・ブランド・外来語・動植物", "left_context": "福井晴敏の小説を原作とする映画", "target": "ぼうこくのいーじすをみる", "expected": "亡国のイージスを観る", "acceptable": ["亡国のイージスを見る"], "forbidden_examples": ["ぼうこくのいーじす"]}
+{"id": 71, "category": "作品・ブランド・外来語・動植物", "left_context": "大量の弾丸を避けて進むゲームジャンル", "target": "だんまくけいしゅーてぃんぐにむちゅうだ", "expected": "弾幕系シューティングに夢中だ", "acceptable": [], "forbidden_examples": ["弾幕系しゅーてぃんぐ"]}
+{"id": 72, "category": "作品・ブランド・外来語・動植物", "left_context": "上上下下左右左右BAで知られる隠し入力", "target": "こなみこまんどをにゅうりょくする", "expected": "コナミコマンドを入力する", "acceptable": [], "forbidden_examples": ["こなみこまんど"]}
+{"id": 73, "category": "作品・ブランド・外来語・動植物", "left_context": "女子サッカーの国内リーグ杯である", "target": "なでしこりーぐかっぷのかいさい", "expected": "なでしこリーグカップの開催", "acceptable": [], "forbidden_examples": ["撫子リーグカップ"]}
+{"id": 74, "category": "作品・ブランド・外来語・動植物", "left_context": "トーナメントの準々決勝にあたる", "target": "くぉーたーふぁいなるにすすむ", "expected": "クォーターファイナルに進む", "acceptable": [], "forbidden_examples": ["くぉーたーふぁいなる"]}
+{"id": 75, "category": "作品・ブランド・外来語・動植物", "left_context": "北海道に生息するタヌキの亜種の", "target": "えぞたぬきをかんさつする", "expected": "エゾタヌキを観察する", "acceptable": [], "forbidden_examples": ["えぞたぬき"]}
+{"id": 76, "category": "作品・ブランド・外来語・動植物", "left_context": "北海道の池などに飛来するカモの仲間の", "target": "あかあしこがもをさつえいする", "expected": "アカアシコガモを撮影する", "acceptable": [], "forbidden_examples": ["あかあしこがも"]}
+{"id": 77, "category": "作品・ブランド・外来語・動植物", "left_context": "日本で最小クラスの野鳥として知られる", "target": "きくいただきのこえをきく", "expected": "キクイタダキの声を聞く", "acceptable": ["キクイタダキの声を聴く"], "forbidden_examples": ["きくいただき", "聞くいただき"]}
+{"id": 78, "category": "作品・ブランド・外来語・動植物", "left_context": "里山や林の上空を飛ぶ猛禽類の", "target": "はいたかのすがたをさがす", "expected": "ハイタカの姿を探す", "acceptable": [], "forbidden_examples": ["はいたか"]}
+{"id": 79, "category": "作品・ブランド・外来語・動植物", "left_context": "暖かい海の岩礁に棲む高級魚の", "target": "まだらはたをつりあげる", "expected": "マダラハタを釣り上げる", "acceptable": [], "forbidden_examples": ["まだらはた"]}
+{"id": 80, "category": "作品・ブランド・外来語・動植物", "left_context": "乾燥に強く防風林にも植えられる常緑樹の", "target": "ときわぎょりゅうをそだてる", "expected": "トキワギョリュウを育てる", "acceptable": [], "forbidden_examples": ["ときわぎょりゅう", "ときわ魚流"]}
+{"id": 81, "category": "人名・歴史人物・著名人", "left_context": "競輪選手として活躍している", "target": "ささきゆなさんのれーすをみる", "expected": "佐々木柚奈さんのレースを見る", "acceptable": ["佐々木柚奈さんのレースを観る"], "forbidden_examples": ["佐々木ゆな"]}
+{"id": 82, "category": "人名・歴史人物・著名人", "left_context": "江戸時代の漢学者として知られる", "target": "かとうあきらのちょさくをよむ", "expected": "加藤杲の著作を読む", "acceptable": [], "forbidden_examples": ["加藤明", "加藤あきら"]}
+{"id": 83, "category": "人名・歴史人物・著名人", "left_context": "競技の第一線で挑戦を続ける", "target": "ささきはるきせんしゅをしゃしんにとる", "expected": "佐々木遥希選手を写真に撮る", "acceptable": [], "forbidden_examples": ["佐々木晴樹", "佐々木春樹", "佐々木はるき"]}
+{"id": 84, "category": "人名・歴史人物・著名人", "left_context": "サッカー選手としてピッチで躍動する", "target": "かとうれんせんしゅにきたいする", "expected": "加藤蓮選手に期待する", "acceptable": [], "forbidden_examples": ["加藤連", "加藤廉"]}
+{"id": 85, "category": "人名・歴史人物・著名人", "left_context": "自転車競技の舞台で注目を集める", "target": "やまぐちきらりせんしゅのかつやく", "expected": "山口葵良梨選手の活躍", "acceptable": [], "forbidden_examples": ["山口きらり"]}
+{"id": 86, "category": "人名・歴史人物・著名人", "left_context": "陸上競技の大会で記録に挑む", "target": "とよだこうきせんしゅをみる", "expected": "豊田晃大選手を見る", "acceptable": [], "forbidden_examples": ["豊田校旗", "豊田公基", "豊田弘毅"]}
+{"id": 87, "category": "人名・歴史人物・著名人", "left_context": "多彩な表現で注目を集める", "target": "あまねりなさんのこうえん", "expected": "天音里菜さんの講演", "acceptable": [], "forbidden_examples": ["あまねりな"]}
+{"id": 88, "category": "人名・歴史人物・著名人", "left_context": "バレーボールコートで輝く", "target": "さとうよしのせんしゅをおうえんする", "expected": "佐藤淑乃選手を応援する", "acceptable": [], "forbidden_examples": ["佐藤よしの", "佐藤ヨシノ"]}
+{"id": 89, "category": "人名・歴史人物・著名人", "left_context": "競技の舞台で成長を続ける", "target": "はやしまなみせんしゅのいんたびゅー", "expected": "林愛望選手のインタビュー", "acceptable": [], "forbidden_examples": ["林まなみ", "林真波", "はやしまなみ"]}
+{"id": 90, "category": "人名・歴史人物・著名人", "left_context": "落ち着いた佇まいが印象的な", "target": "いしかわしんのすけさんにはなす", "expected": "石川真之介さんに話す", "acceptable": [], "forbidden_examples": ["石川しんのすけ", "石川慎之助"]}
+{"id": 91, "category": "人名・歴史人物・著名人", "left_context": "赤毛のアンの翻訳者として名高い", "target": "むらおかはなこのでんきをよむ", "expected": "村岡花子の伝記を読む", "acceptable": [], "forbidden_examples": ["むらおかはなこ"]}
+{"id": 92, "category": "人名・歴史人物・著名人", "left_context": "鎌倉時代後期の第94代天皇である", "target": "ごふしみてんのうのじだい", "expected": "後伏見天皇の時代", "acceptable": [], "forbidden_examples": ["ご伏見天皇"]}
+{"id": 93, "category": "人名・歴史人物・著名人", "left_context": "歴史文学や翻訳を手がけた", "target": "うじたにつとむのさくひん", "expected": "宇治谷孟の作品", "acceptable": [], "forbidden_examples": ["うじたにつとむ"]}
+{"id": 94, "category": "人名・歴史人物・著名人", "left_context": "音楽プロデューサーやギタリストとして有名な", "target": "とりやまゆうじのがっきょくをきく", "expected": "鳥山雄司の楽曲を聞く", "acceptable": ["鳥山雄司の楽曲を聴く"], "forbidden_examples": ["とりやまゆうじ"]}
+{"id": 95, "category": "人名・歴史人物・著名人", "left_context": "数多くのゲームやアニメ音楽を手がける", "target": "あげまつのりやすのさっきょく", "expected": "上松範康の作曲", "acceptable": [], "forbidden_examples": ["あげまつのりやす"]}
+{"id": 96, "category": "人名・歴史人物・著名人", "left_context": "カシオペアのドラマーとして世界的に知られる", "target": "じんぼあきらのえんそうをみる", "expected": "神保彰の演奏を見る", "acceptable": ["神保彰の演奏を観る"], "forbidden_examples": ["じんぼあきら"]}
+{"id": 97, "category": "人名・歴史人物・著名人", "left_context": "数々の人気作品に出演する声優の", "target": "なかむらえりこのらじおをきく", "expected": "中村繪里子のラジオを聞く", "acceptable": ["中村繪里子のラジオを聴く"], "forbidden_examples": ["中村絵里子", "なかむらえりこ"]}
+{"id": 98, "category": "人名・歴史人物・著名人", "left_context": "日本のテレビドラマ演出の草分けである", "target": "わだつとむのえんしゅつ", "expected": "和田勉の演出", "acceptable": [], "forbidden_examples": ["わだつとむ"]}
+{"id": 99, "category": "人名・歴史人物・著名人", "left_context": "日本古代史研究の第一人者として知られる", "target": "うえだまさあきのけんきゅう", "expected": "上田正昭の研究", "acceptable": [], "forbidden_examples": ["上田正明", "うえだまさあき"]}
+{"id": 100, "category": "人名・歴史人物・著名人", "left_context": "昭和の映画界で数々の名作を手がけた監督の", "target": "ちばやすきのさくひんをみる", "expected": "千葉泰樹の作品を見る", "acceptable": ["千葉泰樹の作品を観る"], "forbidden_examples": ["千葉安樹", "ちばやすき"]}

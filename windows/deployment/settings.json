@@ -14,7 +14,7 @@
     "profile": "",
     "backend": "vulkan",
     "gpu_layers": 99,
-    "model": "nano_v4_1_iq4_emb8"
+    "model": "nano_v4_2_iq4_emb8"
   },
   "shortcuts": {
     "ctrl_space_toggle": true,

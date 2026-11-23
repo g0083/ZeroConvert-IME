@@ -14,3 +14,11 @@ void keyboard_assist_preload_dictionary(const char *path);
 // Returns the worker's reply JSON object, or "null" when no answer is available
 // (dictionary still loading, cancelled, timed out, or error).
 std::string keyboard_assist_request(const char *payload, unsigned long long timeout_ms);
+
+#ifdef __ANDROID__
+struct BenchmarkKeyboardAssist;
+BenchmarkKeyboardAssist *keyboard_assist_open_benchmark(llama_model *model, const char *path);
+void keyboard_assist_close_benchmark(BenchmarkKeyboardAssist *session);
+std::string keyboard_assist_request_benchmark(BenchmarkKeyboardAssist *session,
+                                             const char *payload, unsigned long long timeout_ms);
+#endif

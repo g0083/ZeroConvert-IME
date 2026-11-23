@@ -1,4 +1,4 @@
-# Build once; both local trial deployment and installers consume this immutable package.
+﻿# Build once; both local trial deployment and installers consume this immutable package.
 [CmdletBinding()]
 param([string]$DependencyDirectory, [switch]$SkipBuild, [string]$SwiftRuntimeDirectory)
 $ErrorActionPreference = 'Stop'
@@ -129,7 +129,7 @@ try {
     # 変換モデルは配布物に同梱しない。英字辞書・翻訳モデルと同じく、利用者が
     # cache（%LOCALAPPDATA%\ZeroConIME\models）を持たない場合は設定画面から
     # model-catalog.json の GitHub リリース固定アセットをダウンロードする。
-    # 既定モデル nano_v4_1_iq4_emb8 は必須として扱う（docs/model-assets.md）。
+    # 既定モデル nano_v4_2_iq4_emb8 は必須として扱う（docs/model-assets.md）。
     # Use maintained distribution defaults, never this user's live settings or learning.
     # The translation model is not bundled: enabling 翻訳機能 in the settings app
     # downloads the pinned PLaMo 3 GGUF from Hugging Face on demand.

@@ -244,7 +244,7 @@ Windows と同様:
 
 ### 7.5 設定・モデル
 
-- モデルは `ModelManager` が `assets/models/` から `filesDir/models/` へ展開・SHA-256 検証する。組込みモデルは **Nano v4.1 IQ4_emb8**（既定、18.7 MiB / 19,602,048 bytes）と **Nano v4.1 Q8**（27.7 MiB / 29,039,232 bytes）の 2 種類。
+- モデルは `ModelManager` がキャッシュディレクトリ `files/models/` から読み込み・SHA-256 検証する。通常変換モデルは **Nano / Standard v4.2** の **IQ4_emb8**（Nano 既定、18.7 MiB / 19,602,048 bytes）・**Q8** 等をオンデマンド取得して利用する。
 - 旧バージョンの独立した `filesDir/assist/`（Corrector モデル）は廃止され、`ModelManager.cleanupLegacyCorrector` で削除される。補正・先読みともにメイン変換モデルを使用する。
 - 辞書は `filesDir/dictionary` に展開（LOUDS + `reverse-v2.bin`）。
 - `predictiveModelState` は `"zerocon"` 固定（旧設定は互換のため残存）。

@@ -10,14 +10,19 @@ import { createServer } from "vite";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 
-function installMock() {
+function installMock({ setup = false, resume = false, failBenchmark = false, failApply = false } = {}) {
+    if (resume) localStorage.setItem("zerocon-setup-benchmark-pending-v1", "1");
     const config = {
         general: {}, shortcuts: {}, character_width: {}, learning: { mode: "enabled" }, debug: {},
-        zenzai: { enable: true, profile: "old profile", backend: "vulkan", gpu_layers: 99 },
+        zenzai: { enable: true, profile: "old profile", model: "standard", backend: "vulkan", gpu_layers: 99 },
         romaji_table: { rows: [{ input: "ka", output: "か", next_input: "" }] },
         user_dictionary: { entries: Array.from({ length: 25 }, (_, i) => ({ reading: `よみ${i}`, word: `単語${i}` })) },
     };
     window.settingsTest = { config, checks: 0, writes: 0, updateStarts: 0, failStart: false, holdStart: false, failCheck: false, failSave: false, failLoad: sessionStorage.getItem("failSettingsLoad") === "true", available: true, holdSave: false, callbacks: {}, listeners: {}, nextCallback: 0, destroys: 0 };
+    Object.assign(window.settingsTest, {
+        assets: { model: !setup, dictionary: !setup, english: !setup },
+        downloads: [], failBenchmark, failApply,
+    });
     window.isTauri = true;
     window.__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: "main" } },
@@ -35,6 +40,18 @@ function installMock() {
                 case "plugin:window|destroy": state.destroys++; return null;
                 case "take_config_startup_notice":
                 case "take_update_install_result": return null;
+                case "setup_assets_status": return {
+                    model: { installed: state.assets.model }, dictionary: { installed: state.assets.dictionary }, english: { installed: state.assets.english },
+                };
+                case "conversion_model_download":
+                case "dictionary_download":
+                case "english_dictionary_download": {
+                    const asset = { conversion_model_download: "model", dictionary_download: "dictionary", english_dictionary_download: "english" }[command];
+                    state.downloads.push(asset);
+                    while (state.holdDownload) await new Promise((resolve) => setTimeout(resolve, 20));
+                    state.assets[asset] = true;
+                    return { installed: true };
+                }
                 case "get_config":
                     if (state.failLoad) throw new Error("mock load failure");
                     return structuredClone(config);
@@ -55,7 +72,43 @@ function installMock() {
                     return { launched: true };
                 case "check_capability": return { cpu: true, vulkan: true };
                 case "get_active_model": return { active_id: "standard", models: [] };
-                case "run_quick_benchmark": return { results: [], recommended: null };
+                case "run_quick_conversion_benchmark":
+                    state.benchmarkRun = { backend: args.backend, mode: "quick" };
+                    state.callbacks[args.progress.id]({ id: 0, message: { backend: args.backend, completed: 126, total: 252 } });
+                    while (state.holdQuick) await new Promise((resolve) => setTimeout(resolve, 20));
+                    return { backend: args.backend, gpu_layers: 0, elapsed_ms: 2100, rows: [
+                        { id: 1, top1: "記者が取材する", candidates: ["記者が取材する", "汽車が取材する"], is_correct: true, latency_ms: 7.4, nbest_ms: 1.2 },
+                        { id: 12, top1: "今日敗者に行く", candidates: ["今日敗者に行く"], is_correct: false, latency_ms: 15.2, nbest_ms: 2.8 },
+                    ] };
+                case "start_benchmark":
+                    state.benchmarkRun = { backend: args.backend, mode: args.scope };
+                    return { id: 1, batch_size: 16, backend: args.backend, gpu_layers: config.zenzai.gpu_layers };
+                case "run_benchmark_batch": return args.cases.map((item) => item.kind === "typo" ? {
+                    id: item.id, main_output: item.input_reading, moshikashite_output: item.is_clean ? null : item.expected,
+                    status: item.is_clean ? "clean_preserved" : "variant_match", latency_ms: 8,
+                } : {
+                    id: item.id, top1: item.expected, candidates: [item.expected], is_correct: true, latency_ms: 6, nbest_ms: 1,
+                });
+                case "finish_benchmark": return 1900;
+                case "run_quick_benchmark":
+                    state.quickRuns = (state.quickRuns ?? 0) + 1;
+                    if (state.failBenchmark) throw new Error("mock benchmark error");
+                    if (args?.progress) {
+                        const callback = state.callbacks[args.progress.id];
+                        callback({ id: 0, message: { backend: "cpu", completed: 126, total: 504 } });
+                        while (state.holdCpu) await new Promise((resolve) => setTimeout(resolve, 20));
+                        callback({ id: 1, message: { backend: "vulkan", completed: 378, total: 504 } });
+                    }
+                    while (state.holdQuick) await new Promise((resolve) => setTimeout(resolve, 20));
+                    if (args?.progress) state.callbacks[args.progress.id]({ id: 2, message: { backend: "vulkan", completed: 504, total: 504 } });
+                    return {
+                        model_id: "standard", vulkan_gpu_layers: config.zenzai.gpu_layers, case_count: 84,
+                        results: [
+                            { backend: "cpu", avg_latency_ms: 12.0, p95_latency_ms: 17.1, error: null },
+                            { backend: "vulkan", avg_latency_ms: 20.0, p95_latency_ms: 23.1, error: null },
+                        ],
+                        recommended: "cpu",
+                    };
                 case "get_default_romaji_rows": return [{ input: "ka", output: "か", next_input: "" }, { input: "kk", output: "っ", next_input: "k" }];
                 case "restart_server":
                     state.restarts = (state.restarts ?? 0) + 1;
@@ -398,6 +451,144 @@ test("runtime settings use RAM presets and retry failed application without a PC
             await mkdir(process.env.SETTINGS_UI_EVIDENCE_DIR, { recursive: true });
             await page.screenshot({ path: path.join(process.env.SETTINGS_UI_EVIDENCE_DIR, "runtime-settings.png"), fullPage: true });
         }
+    } finally {
+        await browser.close();
+        await server.close();
+    }
+});
+
+test("initial setup downloads assets, reports benchmark progress, and applies the recommendation", async () => {
+    const server = await createServer({ root, configFile: path.join(root, "vite.config.ts"), server: { host: "127.0.0.1", port: 0 }, logLevel: "error" });
+    await server.listen();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }).catch(async (error) => {
+        await server.close();
+        throw error;
+    });
+    const openPage = async (options) => {
+        const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+        await context.addInitScript(installMock, options);
+        const page = await context.newPage();
+        await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/conversion`);
+        return page;
+    };
+    try {
+        const page = await openPage({ setup: true });
+        const consent = page.getByRole("alertdialog", { name: "必要データを準備します" });
+        await consent.waitFor();
+        assert.equal(await page.evaluate(() => window.settingsTest.quickRuns ?? 0), 0);
+        await page.evaluate(() => Object.assign(window.settingsTest, { holdDownload: true, holdCpu: true, holdQuick: true, holdSave: true }));
+        await consent.getByRole("button", { name: "ダウンロードする", exact: true }).click();
+        await page.waitForFunction(() => window.settingsTest.downloads.length === 1);
+        assert.equal(await page.evaluate(() => window.settingsTest.quickRuns ?? 0), 0);
+        await page.evaluate(() => { window.settingsTest.holdDownload = false; });
+
+        const progress = page.getByRole("progressbar", { name: "バックエンド測定", exact: true });
+        await page.getByText("CPUを測定中", { exact: true }).waitFor();
+        assert.equal(await progress.getAttribute("aria-valuenow"), "25");
+        assert.deepEqual(await page.evaluate(() => window.settingsTest.downloads), ["model", "dictionary", "english"]);
+        await page.evaluate(() => { window.settingsTest.holdCpu = false; });
+        await page.getByText("Vulkanを測定中", { exact: true }).waitFor();
+        assert.equal(await progress.getAttribute("aria-valuenow"), "75");
+        assert.equal(await page.evaluate(() => window.settingsTest.writes), 0);
+
+        await page.evaluate(() => { window.settingsTest.holdQuick = false; });
+        await page.getByText("推奨バックエンドを適用中", { exact: true }).waitFor();
+        assert.equal(await progress.getAttribute("aria-valuenow"), "100");
+        assert.equal(await page.getByRole("heading", { name: "変換と候補", exact: true }).count(), 0);
+        await page.evaluate(() => { window.settingsTest.holdSave = false; });
+        await page.getByRole("heading", { name: "変換と候補", exact: true }).waitFor();
+        await page.getByText("必要なデータを準備し、推奨バックエンド CPU を適用しました。", { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => window.settingsTest.config.zenzai.backend), "cpu");
+        assert.equal(await page.evaluate(() => window.settingsTest.quickRuns), 1);
+        assert.equal(await page.evaluate(() => window.settingsTest.writes), 1);
+        assert.equal(await page.evaluate(() => window.settingsTest.restarts ?? 0), 0);
+        assert.equal(await page.evaluate(() => localStorage.getItem("zerocon-setup-benchmark-pending-v1")), null);
+
+        // The benchmark resumes if the window was closed after the assets finished downloading.
+        const resumed = await openPage({ resume: true, failBenchmark: true });
+        await resumed.getByText(/バックエンドを測定できませんでした/).waitFor();
+        await resumed.getByRole("heading", { name: "変換と候補", exact: true }).waitFor();
+        assert.equal(await resumed.evaluate(() => window.settingsTest.quickRuns), 1);
+        assert.equal(await resumed.evaluate(() => window.settingsTest.writes), 0);
+        assert.equal(await resumed.evaluate(() => window.settingsTest.restarts), 1);
+        assert.deepEqual(await resumed.evaluate(() => window.settingsTest.downloads), []);
+
+        const pending = await openPage({ resume: true, failApply: true });
+        await pending.getByRole("button", { name: "IMEサーバーを再起動して再試行", exact: true }).waitFor();
+        assert.equal(await pending.evaluate(() => window.settingsTest.config.zenzai.backend), "cpu");
+        assert.equal(await pending.evaluate(() => window.settingsTest.restarts ?? 0), 0);
+
+        const existing = await openPage({});
+        await existing.getByLabel("バックエンド", { exact: true }).waitFor();
+        assert.equal(await existing.evaluate(() => window.settingsTest.quickRuns ?? 0), 0);
+        await existing.locator("#zenzai-quick-benchmark").click();
+        await existing.getByText("共通候補生成 84問（各3回の中央値）", { exact: true }).waitFor();
+        assert.equal(await existing.evaluate(() => window.settingsTest.config.zenzai.backend), "vulkan");
+        await existing.getByRole("button", { name: "推奨のCPUを適用", exact: true }).click();
+        await existing.waitForFunction(() => window.settingsTest.config.zenzai.backend === "cpu");
+    } finally {
+        await browser.close();
+        await server.close();
+    }
+});
+
+test("quick conversion rows show answers and keep the measured backend when the selector changes", async () => {
+    const server = await createServer({ root, configFile: path.join(root, "vite.config.ts"), server: { host: "127.0.0.1", port: 0 }, logLevel: "error" });
+    await server.listen();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }).catch(async (error) => {
+        await server.close();
+        throw error;
+    });
+    try {
+        const context = await browser.newContext({ viewport: { width: 920, height: 700 } });
+        await context.addInitScript(installMock);
+        const page = await context.newPage();
+        await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/benchmark`);
+        const backend = page.locator("#benchmark-backend");
+        await page.waitForFunction(() => document.querySelector("#benchmark-backend")?.value === "vulkan");
+        await backend.selectOption("cpu");
+        await page.getByRole("radio", { name: "クイック検証（84問）", exact: true }).check();
+        await page.evaluate(() => { window.settingsTest.holdQuick = true; });
+        await page.getByRole("button", { name: "計測開始（84問）", exact: true }).click();
+        await page.getByRole("progressbar", { name: "クイック検証の進捗" }).waitFor();
+        assert.equal(await backend.isDisabled(), true);
+        await page.waitForFunction(() => window.settingsTest.benchmarkRun?.mode === "quick");
+        await page.evaluate(() => { window.settingsTest.holdQuick = false; });
+
+        const results = page.getByRole("region", { name: "問題ごとの結果" });
+        const match = results.getByRole("row").filter({ hasText: "きしゃがしゅざいする" });
+        await match.getByRole("cell", { name: "正解", exact: true }).waitFor();
+        const miss = results.getByRole("row").filter({ hasText: "きょうはいしゃにいく" });
+        await miss.getByRole("cell", { name: "不正解", exact: true }).waitFor();
+        await miss.getByRole("cell", { name: "今日歯医者に行く", exact: true }).waitFor();
+        await miss.getByRole("cell", { name: "今日敗者に行く", exact: true }).waitFor();
+        await miss.getByRole("cell", { name: "15.2 ms", exact: true }).waitFor();
+        await match.getByText("詳細", { exact: true }).click();
+        await match.getByText("記者が取材する / 汽車が取材する", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "不正解のみ", exact: true }).click();
+        assert.equal(await match.count(), 0);
+        assert.equal(await miss.count(), 1);
+        await page.getByRole("button", { name: "不正解のみ", exact: true }).click();
+
+        await backend.selectOption("vulkan");
+        await page.getByText(/この結果の使用バックエンド CPU/).waitFor();
+        await page.getByRole("radio", { name: "共通候補生成", exact: true }).check();
+        await page.getByRole("button", { name: "口語 (100問)", exact: true }).click();
+        await page.getByRole("button", { name: "計測開始（100問）", exact: true }).click();
+        await page.getByText(/この結果の使用バックエンド Vulkan（GPU全層）/).waitFor();
+        await page.getByRole("button", { name: "計測開始（100問）", exact: true }).waitFor();
+        assert.deepEqual(await page.evaluate(() => window.settingsTest.benchmarkRun), { backend: "vulkan", mode: "candidates" });
+
+        await page.getByRole("radio", { name: "クイック検証（84問）", exact: true }).check();
+        await miss.getByRole("cell", { name: "不正解", exact: true }).waitFor();
+        await page.getByText(/この結果の使用バックエンド CPU/).waitFor();
+        assert.equal(await page.evaluate(() => window.settingsTest.writes), 0);
+        assert.equal(await page.evaluate(() => window.settingsTest.config.zenzai.backend), "vulkan");
+        await page.getByRole("tab", { name: /タイポ補正/ }).click();
+        await page.getByRole("button", { name: /タイポベンチマーク開始/ }).click();
+        await page.getByText("450 / 450 問（正常保持を含む）", { exact: true }).waitFor();
+        await page.getByText("0 / 255 問（実質 100.0%）", { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => window.settingsTest.benchmarkRun.mode), "typo");
     } finally {
         await browser.close();
         await server.close();

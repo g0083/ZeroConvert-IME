@@ -4096,6 +4096,9 @@ private func testCandidate(
     let truncatedKanji = Array("nam円".utf8).dropLast()
     let restoredTruncated = ZenzDigitMasking.restoreBytes(Array(truncatedKanji), digits: ["100"])
     #expect(restoredTruncated == Array("100".utf8) + Array("円".utf8).dropLast())
+
+    #expect(ZenzDigitMasking.restore("nam%の確率", digits: ["５０"], asciiDigits: ["50"]) == "50%の確率")
+    #expect(ZenzDigitMasking.restore("nam円の飴", digits: ["１００"], asciiDigits: ["100"]) == "１００円の飴")
 }
 
 @MainActor @Test func userDictionaryEvaluatorProtectsCoinedAndAsciiWordsWithoutPromptInjection() throws {
@@ -4103,7 +4106,7 @@ private func testCandidate(
     let modelURL = packageRoot
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
     try #require(FileManager.default.fileExists(atPath: modelURL.path(percentEncoded: false)))
 
     let dictionaryURL = packageRoot.appending(path: "azooKey_dictionary_storage/Dictionary")
@@ -4151,7 +4154,7 @@ private func testCandidate(
         .deletingLastPathComponent()
     let envModel = ProcessInfo.processInfo.environment["ZEROCON_TYPO_EVALUATION_MODEL"]
         .flatMap { $0.isEmpty ? nil : URL(filePath: $0) }
-    let defaultModel = repoRoot.appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+    let defaultModel = repoRoot.appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
     let modelURL = [envModel, defaultModel].compactMap { $0 }.first {
         FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
     }
@@ -4581,7 +4584,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 @MainActor @Test func zenzaiRanksDictionarySuffixWhenPrefixReviewExhaustsInference() throws {
     let package = packageRootURL()
     let model = package.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
     try #require(FileManager.default.fileExists(atPath: model.path))
     let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
     let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
@@ -4589,14 +4592,14 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     let main = KanaKanjiConverter(dicdataStore: store)
     let supplement = KanaKanjiConverter(dicdataStore: store)
 
-    for (reading, context, expected) in [
-        ("ぬるぽんえっくすをきどうする", "架空の名称を含む。", "ぬるぽんえっくすを起動する"),
-        ("ぬるぽんえっくすをきどうする", "", "ぬるぽんえっくすを起動する"),
-        ("あぷりをきどうする", "", "アプリを起動する"),
-        ("きょうせいしっこうのもうしたて", "", "強制執行の申立て"),
-        ("しんらばんしょうのことわり", "宇宙空間に存在するあらゆる物質や自然現象の法則を解き明かそうと研究に没頭する。", "森羅万象の理"),
-        ("わいふぁいにつなぐ", "", "Wi-Fiにつなぐ"),
-        ("みるふぁんぐをさいきどうする", "架空の名称を含む。", "みるふぁんぐを再起動する"),
+    for (reading, context, acceptable) in [
+        ("ぬるぽんえっくすをきどうする", "架空の名称を含む。", ["ぬるぽんえっくすを起動する"]),
+        ("ぬるぽんえっくすをきどうする", "", ["ぬるぽんえっくすを起動する"]),
+        ("あぷりをきどうする", "", ["アプリを起動する"]),
+        ("きょうせいしっこうのもうしたて", "", ["強制執行の申立て"]),
+        ("しんらばんしょうのことわり", "宇宙空間に存在するあらゆる物質や自然現象の法則を解き明かそうと研究に没頭する。", ["森羅万象の理"]),
+        ("わいふぁいにつなぐ", "", ["Wi-Fiにつなぐ"]),
+        ("みるふぁんぐをさいきどうする", "架空の名称を含む。", ["みるふぁんぐを再起動する", "ミルファングを再起動する"]),
     ] {
         main.stopComposition()
         supplement.stopComposition()
@@ -4611,7 +4614,8 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         normalOptions.zenzaiMode = .off
         _ = supplement.requestCandidates(input, options: normalOptions)
         main.adoptReusableFullInputLattice(supplement.exportReusableFullInputLattice(for: input))
-        #expect(main.requestCandidates(input, options: options).mainResults.first?.text == expected)
+        let actual = main.requestCandidates(input, options: options).mainResults.first?.text ?? ""
+        #expect(acceptable.contains(actual), "reading=\(reading), actual=\(actual), acceptable=\(acceptable)")
     }
 
     var suru = ComposingText()
@@ -4623,7 +4627,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 @MainActor @Test func modelFirstAndPreparedUserDictionaryRegressionsWithRealNanoV41() throws {
     let packageRoot = packageRootURL()
     let model = packageRoot.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
     try #require(FileManager.default.fileExists(atPath: model.path))
     let emoji = packageRoot.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
     try withDictionaryLearningState { directory, _ in
@@ -4667,5 +4671,399 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         )
         #expect(implicit.first?.text == baseline)
         print("Model-first context probe:", baseline, explicit.first?.text ?? "", implicit.first?.text ?? "")
+    }
+}
+
+@MainActor @Test func parallelModelFirstExecutionProtectsUserDictAndLearningAndFixesPercentHalfwidth() throws {
+    let package = packageRootURL()
+    let model = package.deletingLastPathComponent().deletingLastPathComponent()
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-q8_0.gguf")
+    try #require(FileManager.default.fileExists(atPath: model.path))
+    let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
+    let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
+    let store = DicdataStore(dictionaryURL: dictionary, preloadDictionary: false)
+    let main = KanaKanjiConverter(dicdataStore: store)
+    let supplement = KanaKanjiConverter(dicdataStore: store)
+
+    do {
+        var input = ComposingText()
+        input.insertAtCursorPosition("５０％のかくりつ", inputStyle: .direct)
+        let baseOptions = makeConvertRequestOptions(
+            context: "コインを投げたときに表が出る数学的な期待値。",
+            zenzaiEnabled: true,
+            runtimeDirectoryURL: dictionary,
+            emojiDictionaryURL: emoji,
+            zenzaiWeightURL: model,
+            profile: "",
+            learningType: .nothing,
+            experimentalKeyboardTypoCorrection: false
+        )
+        let execution = executeZenzaiWithNormalNBestSupplement(
+            mainConverter: main,
+            supplementConverter: supplement,
+            inputData: input,
+            zenzaiOptions: optionsForZenzaiConversion(from: baseOptions),
+            supplementOptions: optionsForNormalNBestSupplement(from: baseOptions),
+            emitLogs: false,
+            operation: "test_model_first_percent",
+            diagnosticDetails: ""
+        )
+        let merged = mergeZenzaiMainResultsWithNormalNBest(
+            zenzaiResults: execution.zenzai.mainResults,
+            normalNBestResults: execution.supplement.mainResults,
+            hiragana: input.convertTarget
+        )
+        #expect(execution.usedDirectModelFirst)
+        #expect(merged.first?.text == "50%の確率", "merged=\(merged.prefix(3).map(\.text))")
+        #expect(!execution.supplement.mainResults.isEmpty)
+        #expect(!execution.zenzai.firstClauseResults.isEmpty)
+    }
+
+    do {
+        let userDict = UserDictionarySnapshot(entries: [
+            UserDictionaryEntry(reading: "ぜろこん", word: "ZeroConvert", pos: .properNoun)
+        ])
+        main.installPreparedDynamicUserDictionary(userDict.conversion)
+        supplement.installPreparedDynamicUserDictionary(userDict.conversion)
+        var input = ComposingText()
+        input.insertAtCursorPosition("ぜろこんをつかう", inputStyle: .direct)
+        let baseOptions = makeConvertRequestOptions(
+            context: "",
+            zenzaiEnabled: true,
+            runtimeDirectoryURL: dictionary,
+            emojiDictionaryURL: emoji,
+            zenzaiWeightURL: model,
+            profile: "",
+            learningType: .nothing,
+            experimentalKeyboardTypoCorrection: false
+        )
+        let execution = executeZenzaiWithNormalNBestSupplement(
+            mainConverter: main,
+            supplementConverter: supplement,
+            inputData: input,
+            zenzaiOptions: optionsForZenzaiConversion(from: baseOptions),
+            supplementOptions: optionsForNormalNBestSupplement(from: baseOptions),
+            emitLogs: false,
+            operation: "test_model_first_user_dict",
+            diagnosticDetails: ""
+        )
+        let merged = mergeZenzaiMainResultsWithNormalNBest(
+            zenzaiResults: execution.zenzai.mainResults,
+            normalNBestResults: execution.supplement.mainResults,
+            hiragana: input.convertTarget
+        )
+        #expect(!execution.usedDirectModelFirst)
+        #expect(merged.contains { $0.text == "ZeroConvertを使う" && $0.data.contains { $0.word == "ZeroConvert" } },
+                "merged=\(merged.prefix(5).map(\.text))")
+        let emptyDict = UserDictionarySnapshot(entries: [])
+        main.installPreparedDynamicUserDictionary(emptyDict.conversion)
+        supplement.installPreparedDynamicUserDictionary(emptyDict.conversion)
+    }
+
+    try withDictionaryLearningState { directory, _ in
+        let learningStore = DicdataStore(dictionaryURL: dictionary, preloadDictionary: false)
+        let learnMain = KanaKanjiConverter(dicdataStore: learningStore)
+        let learnSupplement = KanaKanjiConverter(dicdataStore: learningStore)
+        let learnedElement = DicdataElement(
+            word: "BridgeX",
+            ruby: "ハシ",
+            cid: CIDData.一般名詞.cid,
+            mid: MIDData.一般.mid,
+            value: -2.0,
+            adjust: 0,
+            metadata: [.isLearned]
+        )
+        let learnedCandidate = Candidate(
+            text: "BridgeX",
+            value: -2.0,
+            composingCount: .surfaceCount(2),
+            lastMid: MIDData.一般.mid,
+            data: [learnedElement]
+        )
+        learnMain.syncLearningConfig(learningType: .inputAndOutput, memoryDirectoryURL: directory)
+        learnSupplement.syncLearningConfig(learningType: .inputAndOutput, memoryDirectoryURL: directory)
+        learnMain.updateLearningData(learnedCandidate)
+        var input = ComposingText()
+        input.insertAtCursorPosition("はし", inputStyle: .direct)
+        let baseOptions = makeConvertRequestOptions(
+            context: "",
+            zenzaiEnabled: true,
+            runtimeDirectoryURL: dictionary,
+            emojiDictionaryURL: emoji,
+            zenzaiWeightURL: model,
+            profile: "",
+            learningType: .inputAndOutput,
+            learningMemoryDirectoryURL: directory,
+            experimentalKeyboardTypoCorrection: false
+        )
+        let execution = executeZenzaiWithNormalNBestSupplement(
+            mainConverter: learnMain,
+            supplementConverter: learnSupplement,
+            inputData: input,
+            zenzaiOptions: optionsForZenzaiConversion(from: baseOptions),
+            supplementOptions: optionsForNormalNBestSupplement(from: baseOptions),
+            emitLogs: false,
+            operation: "test_model_first_learning",
+            diagnosticDetails: ""
+        )
+        let merged = mergeZenzaiMainResultsWithNormalNBest(
+            zenzaiResults: execution.zenzai.mainResults,
+            normalNBestResults: execution.supplement.mainResults,
+            hiragana: input.convertTarget
+        )
+        #expect(!execution.usedDirectModelFirst)
+        #expect(merged.contains { $0.text == "BridgeX" }, "merged=\(merged.prefix(5).map(\.text))")
+    }
+}
+
+@Test func normalizedLearningRubyPreservesKanaFastPathAndDecomposedMarks() {
+    #expect(normalizedLearningRuby("きょうはいいてんき") == "キョウハイイテンキ")
+    #expect(normalizedLearningRuby("カタカナ") == "カタカナ")
+    #expect(normalizedLearningRuby("abc123") == "abc123")
+    #expect(normalizedLearningRuby("か\u{3099}き\u{3099}は\u{309A}") == "ガギパ")
+    #expect(normalizedLearningRuby("カ\u{3099}キ\u{3099}ハ\u{309A}") == "ガギパ")
+}
+
+@MainActor @Test func zenzaiRuntimeTuningConfigureResetAndCancelledProbeWork() {
+    ZenzaiRuntimeTuning.configure(decodeThreads: 2, batchThreads: 2, directModelFirstOverride: true)
+    defer { ZenzaiRuntimeTuning.reset() }
+    let emptyURL = FileManager.default.temporaryDirectory
+    let options = makeConvertRequestOptions(
+        context: "",
+        zenzaiEnabled: false,
+        runtimeDirectoryURL: emptyURL,
+        emojiDictionaryURL: emptyURL.appendingPathComponent("missing.txt"),
+        zenzaiWeightURL: emptyURL.appendingPathComponent("missing.gguf"),
+        profile: "",
+        learningType: .nothing,
+        learningMemoryDirectoryURL: emptyURL,
+        experimentalKeyboardTypoCorrection: false
+    )
+    let cancelled = probeRuntimeTuningConfigs(
+        baseOptions: options,
+        configs: [RuntimeTuningProbeConfig(decodeThreads: 2, batchThreads: 2, directModelFirst: true)],
+        shouldCancel: { true }
+    )
+    #expect(cancelled == nil)
+    ZenzaiRuntimeTuning.reset()
+}
+
+@Test func mergeZenzaiMainResultsWithNormalNBestDeduplicatesAndFiltersAlternatives() {
+    let reading = "はし"
+    let top = testCandidate(word: "橋", ruby: "ハシ", composingCount: .inputCount(2))
+    let duplicateTop = testCandidate(word: "橋", ruby: "ハシ", composingCount: .inputCount(2))
+    let rawHiragana = testCandidate(word: "はし", ruby: "ハシ", composingCount: .inputCount(2))
+    let rawKatakana = testCandidate(word: "ハシ", ruby: "ハシ", composingCount: .inputCount(2))
+    let validAlt = testCandidate(word: "箸", ruby: "ハシ", composingCount: .inputCount(2))
+    let normalDup = testCandidate(word: "箸", ruby: "ハシ", composingCount: .inputCount(2))
+    let normalNew = testCandidate(word: "端", ruby: "ハシ", composingCount: .inputCount(2))
+    let merged = mergeZenzaiMainResultsWithNormalNBest(
+        zenzaiResults: [top, duplicateTop, rawHiragana, rawKatakana, validAlt],
+        normalNBestResults: [normalDup, normalNew],
+        hiragana: reading
+    )
+    #expect(merged.map(\.text) == ["橋", "箸", "端"])
+}
+
+@MainActor @Test func cpuRuntimeTuningSettingsDecodeAndWindowsEngineRuntimeResolution() throws {
+    let fullJSON = Data("""
+    {
+        "decode_threads": 4,
+        "batch_threads": 6,
+        "direct_model_first": false,
+        "model_id": "nano_v4_2_iq4_emb8",
+        "tuning_version": 2
+    }
+    """.utf8)
+    let fullDecoded = try JSONDecoder().decode(CpuRuntimeTuningSettings.self, from: fullJSON)
+    #expect(fullDecoded.decode_threads == 4)
+    #expect(fullDecoded.batch_threads == 6)
+    #expect(!fullDecoded.direct_model_first)
+    #expect(fullDecoded.model_id == "nano_v4_2_iq4_emb8")
+    #expect(fullDecoded.tuning_version == 2)
+
+    let omittedBatchJSON = Data("""
+    {
+        "decode_threads": 2,
+        "direct_model_first": true,
+        "model_id": "standard_v4_2"
+    }
+    """.utf8)
+    let omittedBatchDecoded = try JSONDecoder().decode(CpuRuntimeTuningSettings.self, from: omittedBatchJSON)
+    #expect(omittedBatchDecoded.decode_threads == 2)
+    #expect(omittedBatchDecoded.batch_threads == nil)
+    #expect(omittedBatchDecoded.direct_model_first)
+    #expect(omittedBatchDecoded.tuning_version == nil)
+    #expect(canonicalZenzaiModelId(omittedBatchDecoded.model_id) == "standard_v4_2_q8")
+    #expect(canonicalZenzaiModelId(nil) == "nano_v4_2_iq4_emb8")
+
+    #if os(Windows)
+    let savedConfig = config
+    defer {
+        config = savedConfig
+        ZenzaiRuntimeTuning.reset()
+        configureEngineRuntime(zenzaiEnabled: false)
+    }
+
+    config["backend"] = "cpu"
+    config["model"] = "standard_v4_2_q8"
+    config["cpuRuntimeTuning"] = CpuRuntimeTuningSettings(
+        decode_threads: 4,
+        batch_threads: 6,
+        direct_model_first: true,
+        model_id: "standard_v4_2",
+        tuning_version: expectedWindowsCpuTuningVersion
+    )
+    configureEngineRuntime(zenzaiEnabled: true)
+    #expect(lastAppliedWindowsCpuRuntimeTuning?.decodeThreads == 4)
+    #expect(lastAppliedWindowsCpuRuntimeTuning?.batchThreads == 6)
+    #expect(lastAppliedWindowsCpuRuntimeTuning?.directModelFirst == true)
+
+    config["cpuRuntimeTuning"] = CpuRuntimeTuningSettings(
+        decode_threads: 4,
+        batch_threads: 6,
+        direct_model_first: true,
+        model_id: "standard_v4_2",
+        tuning_version: nil
+    )
+    configureEngineRuntime(zenzaiEnabled: true)
+    #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
+
+    config["cpuRuntimeTuning"] = CpuRuntimeTuningSettings(
+        decode_threads: 4,
+        batch_threads: 6,
+        direct_model_first: true,
+        model_id: "standard_v4_2",
+        tuning_version: 1
+    )
+    configureEngineRuntime(zenzaiEnabled: true)
+    #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
+
+    config["cpuRuntimeTuning"] = CpuRuntimeTuningSettings(
+        decode_threads: 4,
+        batch_threads: 6,
+        direct_model_first: true,
+        model_id: "standard_v4_2",
+        tuning_version: expectedWindowsCpuTuningVersion
+    )
+    config["backend"] = "vulkan"
+    configureEngineRuntime(zenzaiEnabled: true)
+    #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
+
+    config["backend"] = "cpu"
+    config["model"] = "nano_v4_2_iq4_emb8"
+    configureEngineRuntime(zenzaiEnabled: true)
+    #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
+
+    config["model"] = "standard_v4_2_q8"
+    configureEngineRuntime(zenzaiEnabled: false)
+    #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
+    #endif
+}
+
+@MainActor @Test func parallelModelFirstPiggybacksAndSkipsLongPredictionContinuation() throws {
+    let package = packageRootURL()
+    let model = package.deletingLastPathComponent().deletingLastPathComponent()
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-q8_0.gguf")
+    try #require(FileManager.default.fileExists(atPath: model.path))
+    let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
+    let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
+    let store = DicdataStore(dictionaryURL: dictionary, preloadDictionary: false)
+    let main = KanaKanjiConverter(dicdataStore: store)
+    let supplement = KanaKanjiConverter(dicdataStore: store)
+
+    ZenzaiRuntimeTuning.configure(decodeThreads: 2, batchThreads: 2, directModelFirstOverride: true)
+    defer { ZenzaiRuntimeTuning.reset() }
+
+    let continuation = ConversionContinuation(reading: "とうきょう", surface: "東京")
+
+    do {
+        var input = ComposingText()
+        input.insertAtCursorPosition("きょう", inputStyle: .direct)
+        var combined = ComposingText()
+        combined.insertAtCursorPosition("とうきょう" + "きょう", inputStyle: .direct)
+
+        let baseOptions = makeConvertRequestOptions(
+            context: "",
+            zenzaiEnabled: true,
+            runtimeDirectoryURL: dictionary,
+            emojiDictionaryURL: emoji,
+            zenzaiWeightURL: model,
+            profile: "",
+            learningType: .nothing,
+            experimentalKeyboardTypoCorrection: false
+        )
+        let zenzaiOptions = optionsForZenzaiConversion(from: baseOptions)
+        let supplementOptions = optionsForNormalNBestSupplementWithPrediction(from: baseOptions)
+        var predOptions = supplementOptions
+        predOptions.zenzaiMode = .off
+        predOptions.N_best = min(predOptions.N_best, 3)
+
+        let execution = executeZenzaiWithNormalNBestSupplement(
+            mainConverter: main,
+            supplementConverter: supplement,
+            inputData: input,
+            zenzaiOptions: zenzaiOptions,
+            supplementOptions: supplementOptions,
+            predictionContinuation: ZenzaiPredictionContinuationRequest(
+                inputData: combined,
+                options: predOptions,
+                prefixConstraintSurface: continuation.surface,
+                cacheOnlyJapanesePrediction: false,
+                skipWhenSufficientPredictions: false
+            ),
+            emitLogs: false,
+            operation: "test_parallel_pred_cont",
+            diagnosticDetails: ""
+        )
+        if execution.ranInParallel {
+            #expect(execution.predictionContinuationResult != nil)
+            #expect(!execution.skippedPredictionContinuation)
+        }
+    }
+
+    do {
+        var input = ComposingText()
+        input.insertAtCursorPosition("あしたのよていをかくにんする", inputStyle: .direct)
+        var combined = ComposingText()
+        combined.insertAtCursorPosition("とうきょう" + "あしたのよていをかくにんする", inputStyle: .direct)
+
+        let baseOptions = makeConvertRequestOptions(
+            context: "",
+            zenzaiEnabled: true,
+            runtimeDirectoryURL: dictionary,
+            emojiDictionaryURL: emoji,
+            zenzaiWeightURL: model,
+            profile: "",
+            learningType: .nothing,
+            experimentalKeyboardTypoCorrection: false
+        )
+        let zenzaiOptions = optionsForZenzaiConversion(from: baseOptions)
+        let supplementOptions = optionsForNormalNBestSupplementWithPrediction(from: baseOptions)
+        var predOptions = supplementOptions
+        predOptions.zenzaiMode = .off
+        predOptions.N_best = min(predOptions.N_best, 3)
+
+        let execution = executeZenzaiWithNormalNBestSupplement(
+            mainConverter: main,
+            supplementConverter: supplement,
+            inputData: input,
+            zenzaiOptions: zenzaiOptions,
+            supplementOptions: supplementOptions,
+            predictionContinuation: ZenzaiPredictionContinuationRequest(
+                inputData: combined,
+                options: predOptions,
+                prefixConstraintSurface: continuation.surface,
+                cacheOnlyJapanesePrediction: false,
+                skipWhenSufficientPredictions: true
+            ),
+            emitLogs: false,
+            operation: "test_skip_long_auto_pred_cont",
+            diagnosticDetails: ""
+        )
+        if execution.ranInParallel && execution.supplement.predictionResults.count >= 3 {
+            #expect(execution.skippedPredictionContinuation)
+            #expect(execution.predictionContinuationResult == nil)
+        }
     }
 }

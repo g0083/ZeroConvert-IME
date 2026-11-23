@@ -134,6 +134,13 @@ struct BenchmarkModel {
         params.load_mode = LLAMA_LOAD_MODE_MMAP;
         params.n_gpu_layers = gpu_layers;
         params.split_mode = LLAMA_SPLIT_MODE_NONE;
+        ggml_backend_dev_t cpu_devices[2] = {nullptr, nullptr};
+        if (gpu_layers <= 0) {
+            if (auto *cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
+                cpu_devices[0] = cpu_dev;
+                params.devices = cpu_devices;
+            }
+        }
         model = llama_model_load_from_file(path, params);
         if (!model) return false;
         auto config = llama_context_default_params();

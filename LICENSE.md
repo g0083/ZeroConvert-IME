@@ -8,4 +8,4 @@ ZeroConvert IME および ZeroCon Model Nano の独自部分のうち、製作�
 
 第三者コンポーネントや、個別のライセンスを明示した成果物には、それぞれの条件が適用されます。これらにより既に許諾された権利は製品の利用規約でも維持します。SudachiDict 改変辞書のライセンス全文と上流の帰属表示、Wikidata 構造化データの出典は、配布辞書の `AdditionalDictionaryNotices/` とアプリのライセンス表示から確認できます。 [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) · [Androidの表示](android/THIRD_PARTY_LICENSES.md) · [設定画面の共通データ](licenses/third-party.json)
 
-ZeroCon Model v4.1 の学習に使った zenz-v3.2 の GGUF は、学習時の上流リビジョンで Apache License 2.0 が明示されていました。Apache-2.0 §4 は、上流の条件を守ったうえで独自改変に別の条件を付けることを認めています。現在の上流の公開条件と、学習時のファイルを確認するためのリビジョン・ハッシュは、モデルの来歴に記録しています。 [モデルの来歴](docs/model-assets.md#上流ライセンス) · [Apache License 2.0 §4](https://www.apache.org/licenses/LICENSE-2.0#redistribution)
+ZeroCon Model v4.2 の学習に使った zenz-v3.2 の GGUF は、学習時の上流リビジョンで Apache License 2.0 が明示されていました。Apache-2.0 §4 は、上流の条件を守ったうえで独自改変に別の条件を付けることを認めています。現在の上流の公開条件と、学習時のファイルを確認するためのリビジョン・ハッシュは、モデルの来歴に記録しています。 [モデルの来歴](docs/model-assets.md#上流ライセンス) · [Apache License 2.0 §4](https://www.apache.org/licenses/LICENSE-2.0#redistribution)

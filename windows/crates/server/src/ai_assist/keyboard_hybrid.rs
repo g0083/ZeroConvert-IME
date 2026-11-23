@@ -116,7 +116,7 @@ fn resolve_runtime_preferences_from_str(settings_json: &str) -> (String, String,
     let model = zenzai
         .and_then(|z| z.get("model"))
         .and_then(Value::as_str)
-        .unwrap_or("nano_v4_1_iq4_emb8")
+        .unwrap_or("nano_v4_2_iq4_emb8")
         .to_owned();
     let raw_backend = zenzai
         .and_then(|z| z.get("backend"))
@@ -223,8 +223,8 @@ fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
     for candidate in [
         root.join("models").join(filename),
         shared::runtime_assets::model_download_root().join(filename),
-        root.join("models/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
-        root.join("models/zerocon-nano-v4.1-q8_0.gguf"),
+        root.join("models/zerocon-nano-v4.2-iq4nl-emb8.gguf"),
+        root.join("models/zerocon-nano-v4.2-q8_0.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -237,8 +237,8 @@ fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
         repo_root
             .join("ZeroConvertIME-windows/models")
             .join(filename),
-        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
-        repo_root.join("artifacts/models/zerocon-nano-v4.1-iq4nl-emb8.gguf"),
+        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf"),
+        repo_root.join("artifacts/models/zerocon-nano-v4.2-iq4nl-emb8.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -263,11 +263,15 @@ impl Worker {
     fn start(root: &Path, dictionary: &Path) -> Option<Self> {
         let executable = find_worker_executable(root)?;
         let spec = resolve_worker_spec(root, &executable)?;
+        Self::start_with_spec(&executable, spec, dictionary)
+    }
+
+    fn start_with_spec(executable: &Path, spec: WorkerSpec, dictionary: &Path) -> Option<Self> {
         if !dictionary.is_file() {
             return None;
         }
         let existing_path = std::env::var("PATH").unwrap_or_default();
-        let mut command = Command::new(&executable);
+        let mut command = Command::new(executable);
         command
             .arg("--assist")
             .arg(&spec.model)
@@ -349,6 +353,37 @@ impl Worker {
         self.input.flush().map_err(|_| ())?;
         self.output.pending_since = Some(Instant::now());
         self.output.receive_reply(Duration::from_millis(timeout_ms))
+    }
+}
+
+#[cfg(windows)]
+pub(crate) struct BenchmarkKeyboard(Worker);
+
+#[cfg(windows)]
+impl BenchmarkKeyboard {
+    pub(crate) fn open(
+        model: PathBuf,
+        runtime_dir: PathBuf,
+        dictionary: &Path,
+        gpu_layers: u32,
+    ) -> Option<Self> {
+        let executable = find_worker_executable(&exe_root()?)?;
+        let spec = WorkerSpec {
+            model,
+            runtime_dir,
+            gpu_layers,
+        };
+        Worker::start_with_spec(&executable, spec, dictionary).map(Self)
+    }
+
+    pub(crate) fn repair(
+        &mut self,
+        raw: &str,
+        input: &str,
+        context: &str,
+        timeout_ms: u64,
+    ) -> Result<Option<Value>, ()> {
+        self.0.request(raw, input, context, timeout_ms.min(220))
     }
 }
 
@@ -840,9 +875,9 @@ mod deployment_tests {
         );
 
         let (parsed_model, parsed_backend, parsed_layers) = resolve_runtime_preferences_from_str(
-            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_1_q8"}}"#,
+            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_2_q8"}}"#,
         );
-        assert_eq!(parsed_model, "nano_v4_1_q8");
+        assert_eq!(parsed_model, "nano_v4_2_q8");
         assert_eq!(parsed_backend, "vulkan");
         assert_eq!(parsed_layers, 16);
 

@@ -301,31 +301,9 @@ fn append_ai_assist_candidates_with_refinement(
                 }
             }
         } else {
-            let hybrid = ai_assist::keyboard_hybrid::suggest(
-                context,
-                hiragana_text,
-                composing_raw,
-                config,
+            let (found_typo, hybrid_proposal) = ai_assist::corrector::suggest_windows_composition(
+                context, hiragana_text, &first_surface, composing_raw, config,
             );
-            let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
-            let allow_channel_repair = hybrid.is_none();
-            let found_typo = hybrid.flatten().or_else(|| {
-                if allow_channel_repair {
-                    ai_assist::corrector::suggest_composition(
-                        context,
-                        hiragana_text,
-                        &first_surface,
-                        config,
-                    )
-                } else {
-                    ai_assist::corrector::suggest_composition_heuristic(
-                        context,
-                        hiragana_text,
-                        &first_surface,
-                        config,
-                    )
-                }
-            });
             if let Some(suggestion) = found_typo {
                 let can_auto =
                     ai_assist::corrector::can_auto_apply_composition_suggestion_with_strength(
@@ -4343,8 +4321,12 @@ impl Drop for MainFfiShutdownGuard {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args_os().nth(1).as_deref() == Some(OsStr::new("--conversion-benchmark")) {
-        return conversion_benchmark_worker::serve();
+    let mode = std::env::args_os().nth(1);
+    if mode.as_deref() == Some(OsStr::new("--conversion-benchmark")) {
+        return conversion_benchmark_worker::serve(false);
+    }
+    if mode.as_deref() == Some(OsStr::new("--typo-benchmark")) {
+        return conversion_benchmark_worker::serve(true);
     }
     ai_assist::runtime::configure_settings_resolver(|| AppConfig::settings_path().ok());
     ai_assist::runtime::configure_read_learning_resolver(|| {
@@ -4431,6 +4413,129 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+static CPU_TUNING_PROBE_SPAWNED: AtomicBool = AtomicBool::new(false);
+
+fn maybe_spawn_idle_cpu_tuning_probe(service: MyAzookeyService) {
+    if CPU_TUNING_PROBE_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let Ok(initial_config) = AppConfig::read_settings() else {
+        return;
+    };
+    if !initial_config.zenzai.enable
+        || initial_config.general.jev_conversion
+        || initial_config.zenzai.backend != "cpu"
+        || !shared::zenzai_cpu_backend_supported()
+    {
+        return;
+    }
+    let topology = shared::cpu_tuning::detect_topology();
+    let model_id = shared::runtime_assets::canonical_model_id(&initial_config.zenzai.model)
+        .unwrap_or(&initial_config.zenzai.model)
+        .to_owned();
+    if initial_config
+        .zenzai
+        .cpu_runtime_tuning
+        .as_ref()
+        .is_some_and(|tuned| tuned.is_valid_for(&model_id, &topology.signature()))
+    {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(install_dir) = exe.parent().map(Path::to_path_buf) else {
+        return;
+    };
+    let runtime = shared::runtime_assets::backend(&install_dir, "cpu");
+    let dictionary = shared::runtime_assets::dictionary_dir(&install_dir);
+    let model = shared::runtime_assets::converter_model(&install_dir, &model_id);
+    if !runtime.join("llama.dll").is_file()
+        || !dictionary.join("louds/charID.chid").is_file()
+        || !model.is_file()
+    {
+        return;
+    }
+
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if warmup_skip_reason().is_some() {
+            return;
+        }
+        let expected_topology = topology.signature();
+        let expected_model = model_id.clone();
+        let probed = tokio::task::spawn_blocking(
+            move || -> Option<shared::cpu_tuning::CpuRuntimeTuningConfig> {
+                let _probe_lock = shared::cpu_tuning::CpuProbeLock::try_acquire()?;
+                if warmup_skip_reason().is_some() {
+                    return None;
+                }
+                let tuned = match shared::cpu_tuning::probe_cpu_tuning_via_worker(
+                    &exe,
+                    &runtime,
+                    &install_dir,
+                    &model,
+                    &dictionary,
+                    &expected_model,
+                    true,
+                    std::time::Duration::from_secs(30),
+                ) {
+                    Ok(Some(cfg)) => cfg,
+                    Ok(None) => return None,
+                    Err(error) => {
+                        log_event_lazy!(
+                            ServerLogLevel::Warn,
+                            "[cpu_tuning] idle probe failed: {error}"
+                        );
+                        return None;
+                    }
+                };
+                let _write_guard = shared::ConfigWriteGuard::acquire().ok()?;
+                let mut latest = AppConfig::read().ok()?;
+                let latest_model =
+                    shared::runtime_assets::canonical_model_id(&latest.zenzai.model)
+                        .unwrap_or(&latest.zenzai.model);
+                if latest.zenzai.backend != "cpu" || latest_model != expected_model {
+                    return None;
+                }
+                if latest.zenzai.cpu_runtime_tuning.as_ref().is_some_and(|cur| {
+                    cur.is_valid_for(&expected_model, &expected_topology)
+                }) {
+                    return None;
+                }
+                latest.zenzai.cpu_runtime_tuning = Some(tuned.clone());
+                if let Err(error) = latest.write() {
+                    log_event_lazy!(
+                        ServerLogLevel::Warn,
+                        "[cpu_tuning] failed saving settings: {error}"
+                    );
+                    return None;
+                }
+                Some(tuned)
+            },
+        )
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(tuned) = probed {
+            let _mutation_guard = service.mutation_lock.lock().await;
+            let _ = run_ffi(|| {
+                unsafe { LoadConfig() };
+            })
+            .await;
+            log_event_lazy!(
+                ServerLogLevel::Info,
+                "[cpu_tuning] applied idle CPU tuning model={} decode={} batch={:?} model_first={}",
+                tuned.model_id,
+                tuned.decode_threads,
+                tuned.batch_threads,
+                tuned.direct_model_first
+            );
+        }
+    });
+}
+
 async fn run_server() -> std::io::Result<()> {
     let service = MyAzookeyService::default();
 
@@ -4510,6 +4615,8 @@ async fn run_server() -> std::io::Result<()> {
                 "reason=active_composition"
             );
         }
+        drop(_guard);
+        maybe_spawn_idle_cpu_tuning_probe(warmup_service);
     });
 
     let reflection_service = ReflectionBuilder::configure()

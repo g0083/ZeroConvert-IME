@@ -347,7 +347,7 @@ fun MainScreen(
     var englishDictionaryProgress by remember { mutableStateOf<EnglishDictionaryManager.Progress?>(null) }
     var englishDictionaryError by remember { mutableStateOf<String?>(null) }
     var englishDictionaryJob by remember { mutableStateOf<Job?>(null) }
-    // 変換モデルはキャッシュに無い場合だけ取得する。Nano v4.1 IQ4_emb8 は必須で、
+    // 変換モデルはキャッシュに無い場合だけ取得する。Nano v4.2 IQ4_emb8 は必須で、
     // 無い間はかな漢字変換レベルの候補化が止まるため、英字辞書と同じく初回表示する。
     var mandatoryModelReady by remember {
         mutableStateOf(
@@ -605,7 +605,7 @@ fun MainScreen(
             ConversionModelDownloadManager.discardPart(context, spec)
             availableModels = ModelManager.getAvailableModels(context)
             if (wasSelected) {
-                // 必須モデル（Nano v4.1 IQ4_emb8）の選択へ落とす。
+                // 必須モデル（Nano v4.2 IQ4_emb8）の選択へ落とす。
                 val mandatoryFile = ConversionModelDownloadManager.modelFile(context, ModelManager.DEFAULT_MODEL_SPEC)
                 if (mandatoryFile.isFile) {
                     coroutineScope.launch {
@@ -2323,7 +2323,7 @@ fun MainScreen(
                 )
                 Text("かな漢字変換の計測範囲", color = palette.textPrimary, fontSize = 13.sp)
                 Column(Modifier.selectableGroup()) {
-                    ConversionBenchmarkScope.entries.forEach { scope ->
+                    listOf(ConversionBenchmarkScope.MODEL, ConversionBenchmarkScope.CANDIDATES).forEach { scope ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth().selectable(
@@ -2408,7 +2408,7 @@ fun MainScreen(
                         0f
                     }
                     SettingsDivider(palette)
-                    if (progress.kind == BenchmarkKind.CONVERSION) {
+                    if (progress.kind != BenchmarkKind.PREDICTIVE) {
                         Text(progress.conversionScope.label, color = palette.textPrimary, fontSize = 13.sp)
                     }
                     LinearProgressIndicator(
@@ -2438,7 +2438,7 @@ fun MainScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "正解率: ${String.format("%.1f", accuracy)}%（${progress.perfectCount}/${progress.current}）",
+                            text = "${if (progress.kind == BenchmarkKind.TYPO) "全体成功率" else "正解率"}: ${String.format("%.1f", accuracy)}%（${progress.perfectCount}/${progress.current}）",
                             color = palette.readyEmerald,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -2578,7 +2578,7 @@ fun MainScreen(
                     }
                 }
                 Text(
-                    text = "ZeroCon Model Nano v4.1 によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
+                    text = "ZeroCon Model Nano v4.2 によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
                     color = palette.textMuted,
                     fontSize = 12.sp,
                     lineHeight = 17.sp
@@ -2968,7 +2968,7 @@ private fun setupRequirements(
     englishError: String?
 ): List<SetupRequirement> = listOf(
     SetupRequirement(
-        label = "変換モデル（ZeroCon Model Nano v4.1）",
+        label = "変換モデル（ZeroCon Model Nano v4.2）",
         detail = "約18.7MB · 文脈に応じた漢字選択に使います",
         ready = mandatoryModelReady,
         progress = modelProgress?.fraction,
