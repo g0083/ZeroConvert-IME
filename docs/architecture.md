@@ -12,7 +12,7 @@
 | 運用・配布 | PowerShell、Node.js生成スクリプト、Inno Setup（`Build-Trial.bat` / `Build-Package.bat` / `Build-Installer.bat`） |
 | Android | Kotlin 1.9.23、AGP 8.3.2、Compose、Coroutines、JNI/C++17、CMake/llama.cpp。SDK 34、minSdk 26、NDK 27.1.12297006（正本: `android/gradle.properties`）。変換・アシスト中核は `engine/` 経由で Windows の Swift/Rust ソースを共有 |
 | ブラウザ体験版 | Swift Wasm / Rust `wasm32-wasip1` / llama.cpp 単一スレッド Wasm + Web Worker。`web/` |
-| 学習・研究 | Python、PyTorch、Transformers、Datasets、PEFT/LoRA。`training/`・`data/`・`benchmarks/` |
+| 学習・研究 | Python（内部で管理） |
 
 WindowsのRust toolchain指定は `windows/rust-toolchain.toml` の `1.98.1`。Swift変換ライブラリは `windows/scripts/prepare-modern-llama.py` が AzooKeyKanaKanjiConverter（`c228776b0b869f81ee2a1031ff9dbd679f4b3cd9`）と llama.cpp（`7d516e2` / b12125）を取得・パッチ適用して `artifacts/dependencies/azookey-b12125` と `artifacts/runtime/windows-b12125` へ展開し、`Package.swift` から参照する。
 
@@ -91,7 +91,7 @@ TSFの入力欄が `IS_PRIVATE`、パスワード、PINの入力スコープを�
 
 ## モデル作成とAndroid
 
-- **モデル学習・配布**: `data/` のJSONL生成 → `training/` の学習・マージ → GGUF変換・量子化 → `benchmarks/` での評価。現行本番モデルは ZeroCon Model Nano / Standard v4.2（`IQ4_emb8` / `Q8`）で、正本カタログは `windows/deployment/model-catalog.json`。詳細は [model-assets.md](model-assets.md) を参照。
+- **モデル学習・配布**: 現行本番モデルは ZeroCon Model Nano / Standard v4.2（`IQ4_emb8` / `Q8`）で、正本カタログは `windows/deployment/model-catalog.json`。詳細は [model-assets.md](model-assets.md) を参照。
 - **Android構成（`:rebuilt`）**: 2026-11-08 に旧 `:app` モジュールを廃止し、現在は `:rebuilt` のみがビルド対象。`ZeroConvertInputMethodService` → `KanaKanjiConverter` → `WindowsEngine` → JNI → `engine/rust`・`engine/swift`（Windowsと同一のSwift変換・Rustアシスト・共有ポリシー）・`engine/native`（llama.cpp + `keyboard_assist.cpp`）という共通エンジン構成で動作する。翻訳機能（PLaMo 3 Translate 0.8B）のみ `files/translation/` へオンデマンドダウンロードし、`assist_jni.cpp` の独立した Translation Runtime で推論する。詳細は [Android新構成](android-shared-engine.md)、[Android変換ロジック](android-conversion-logic.md)、[Android翻訳入力](investigations/android-translation-input.md) を参照。
 
 ## ビルド・実行・検証コマンド

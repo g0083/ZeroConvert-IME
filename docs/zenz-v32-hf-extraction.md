@@ -136,32 +136,7 @@ with open(os.path.join(out_dir, 'provenance.json'), 'w', encoding='utf-8') as f:
 "
 ```
 
-## 4. Corrector v3.2 学習・マージ・GGUF化への接続方法
 
-既存の `training/train_typo_corrector.py` と `training/export_typo_corrector.py` は `--base_model` にローカルディレクトリをそのまま受け取れる。
+## 4. 追加学習への接続
 
-```powershell
-# 1. LoRA学習（出力先は未使用ディレクトリを指定）
-python scripts/run.py training/train_typo_corrector.py `
-  --base_model artifacts/models/hf/zenz-v3.2-xsmall `
-  --train_file artifacts/datasets/corrector-v2-20261027/train.jsonl `
-  --val_file artifacts/datasets/corrector-v2-20261027/val.jsonl `
-  --output_dir artifacts/checkpoints/corrector-v32-xsmall-lora
-
-# 2. LoRA重みのマージ
-python scripts/run.py training/export_typo_corrector.py `
-  --base_model artifacts/models/hf/zenz-v3.2-xsmall `
-  --lora_dir artifacts/checkpoints/corrector-v32-xsmall-lora `
-  --output_dir artifacts/checkpoints/corrector-v32-xsmall-merged
-
-# 3. GGUF (F16) 変換と Q4_K_M 量子化
-.\.venv\Scripts\python.exe android/app/src/main/cpp/llama.cpp/convert_hf_to_gguf.py `
-  artifacts/checkpoints/corrector-v32-xsmall-merged `
-  --outfile artifacts/models/corrector-v32-xsmall-f16.gguf `
-  --outtype f16
-
-.\ZeroConvertIME-windows\llama_vulkan\llama-quantize.exe `
-  artifacts/models/corrector-v32-xsmall-f16.gguf `
-  artifacts/models/corrector-v32-xsmall-q4km.gguf `
-  Q4_K_M
-```
+逆展開した重みは、内部の追加学習で利用できます。学習手順の詳細は内部で管理しています。

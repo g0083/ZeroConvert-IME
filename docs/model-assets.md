@@ -11,7 +11,7 @@
 
 IQ4_emb8はNano / Standard v4.2の省メモリ版（内部IQ4_NL、入力埋め込み・出力Q8_0）。Q8はQ8_0高精度版。SHA-256・元ファイル名・モデル仕様の正本は `windows/deployment/model-catalog.json` とする（取得URLは `releases/download/models-v4.2/<filename>`）。
 
-ZeroCon Model v4.2 は `standard-v4-cap-nam-r6` / `nano-v4-cap-nam-r6`（v4.1 の `cap-nam-r3` を土台に、追加辞書105,039見出し・通常辞書同音対比・時間/数値単位表記を段階追加学習した版）の量子化済みファイルで、配布ファイル名は `zerocon-{nano,standard}-v4.2-*.gguf`。なお旧 v4.1 検証時に作成した Q5_K_M（Nano / Standard）も 480問で Nano 453/480、Standard 443/480（埋め込み保護版でも 448/480・442/480）と IQ4/Q8 より明確に劣るため選択肢に採用しない。結果は `artifacts/results/v41_q5km_cpu_*.json` および `artifacts/results/v4_cap_nam_r6_cpu_*.json` を参照。
+ZeroCon Model v4.2 は Nano / Standard v4.2 の量子化済みファイルで、配布ファイル名は `zerocon-{nano,standard}-v4.2-*.gguf` です。追加辞書の固有名詞や時間・数値表記の変換精度を改善しています。
 
 旧設定・旧ファイルとの互換移行にのみ対応し、旧 `zenz.gguf` 等をそのまま現行モデルとしてフォールバック読み込みはしない。モデル未配置なら新しい配布資産を準備する。
 

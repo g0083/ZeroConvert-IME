@@ -12,7 +12,7 @@
 |---|---|---|
 | Android: SYMBOLS パネルで composition を破棄しない | 実装済み | 新規 `android/app/src/main/java/com/zeroconvert/ime/PanelTextCommit.kt`、`ZeroConvertInputMethodService.kt` の `commitPanelText` / 配線、`PanelTextCommitTest.kt` |
 | Android: 動的マクロの実用化 | 実装済み | 下記のとおり「接続」の実態を訂正。新規 `engine/MacroCandidateMerge.kt` とテスト。デッドコード `assist/DynamicMacro.kt` を削除 |
-| Windows: 先読みの数字・記号末尾ガード | 実装済み | `windows/crates/server/src/ai_assist/prediction.rs` の `is_continuation_tail` とテスト、`docs/predictive-assist.md` 更新 |
+| Windows: 先読みの数字・記号末尾ガード | 実装済み | `windows/crates/server/src/ai_assist/prediction.rs` の `is_continuation_tail` とテスト、関連ガイド更新 |
 
 ### Android: 記号パネル
 
@@ -219,7 +219,7 @@ Rust 定義 `windows/crates/shared/src/lib.rs`、UI `windows/frontend/src/pages/
 ### 低
 
 9. **Windows: `symbol_fullwidth` の個別編集 UI**。設定ファイル項目としてのみ存在する（`shared/src/lib.rs:462-512`）ため、設定画面から編集可能にする。
-10. **zenz モデルの数字・記号・絵文字トークン対応の確認**。トークナイザは GGUF 依存でリポジトリ外。`benchmarks/` で数字・記号入り読み（「だい1」「3ねん」等）と絵文字を含む文脈の変換精度を評価し、語彙不足なら学習側（`training/`）へ課題を上げる。実IMEの確認は別途必要。
+10. **zenz モデルの数字・記号・絵文字トークン対応の確認**。トークナイザは GGUF 依存でリポジトリ外。`benchmarks/` で数字・記号入り読み（「だい1」「3ねん」等）と絵文字を含む文脈の変換精度を評価し、語彙不足なら学習側（内部）へ課題を上げる。実IMEの確認は別途必要。
 
 ### 実施上の注意
 

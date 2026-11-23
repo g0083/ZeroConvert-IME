@@ -1,6 +1,6 @@
-"""Run a research/training script with paths relative to the repository root.
+"""Run a script with paths relative to the repository root.
 
-Example: python scripts/run.py training/train_nano_v2.py --help
+Example: python scripts/run.py benchmarks/common/run_common_candidates.py --help
 """
 
 import argparse

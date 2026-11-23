@@ -2,7 +2,7 @@
 
 本ドキュメントは、ZeroConvert-IME の Windows 版における「入力 → 変換 → 表示 → 確定」までの処理を、層ごとに解説する。対象は `windows/` 配下の Rust クライアント/サーバー、Swift 変換エンジン、Tauri 設定 UI である。Android 実装は対象外。
 
-関連ドキュメント: [architecture.md](architecture.md)（構成・コマンド）、[file-map.md](file-map.md)（探索先）、[typo-correction.md](typo-correction.md)（タイポ補正詳細）、[predictive-assist.md](predictive-assist.md)（先読み詳細）。
+関連ドキュメント: [architecture.md](architecture.md)（構成・コマンド）、[file-map.md](file-map.md)（探索先）。
 
 ---
 

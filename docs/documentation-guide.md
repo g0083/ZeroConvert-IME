@@ -14,10 +14,9 @@
 | `docs/` | **現行仕様・恒久ガイド** | システム構成、ファイル地図、セットアップ、開発・配布手順、モデル資産仕様、現行変換ロジック、学習/評価契約 |
 | `docs/investigations/` | **個別機能の調査・実装計画・障害解析** | 特定機能の設計/調査、バージョン別不具合解析、実装計画（後述のステータス明記が必須） |
 | `reports/models/` | モデル学習・評価レポート | ZeroCon Model（Nano / Standard / Origin 等）の学習・量子化・比較結果のスナップショット |
-| `reports/typo-assist/` | タイポ補正・先読み・翻訳検証 | 補正・先読み・翻訳のアルゴリズム検証、ベンチマーク監査、実IME確認記録 |
 | `reports/port-history/` | Android 移植・復旧の履歴 | 移植各ステージの記録、完了監査、ソース復旧記録（歴史的記録） |
 | `reports/web/` | Web / ブラウザ版レポート・HTML | ブラウザ版パリティ検証記録、外部向け紹介・比較 HTML |
-| 各サブプロジェクト直下（`windows/`、`android/`、`engine/`、`data/`、`training/`、`benchmarks/`、`web/`、`experiments/legacy/`） | サブプロジェクト固有の入口・規約 | 各ディレクトリの `README.md`、`AGENTS.md`、固有運用手順（`windows/docs/` 等） |
+| 各サブプロジェクト直下（`windows/`、`android/`、`engine/`、`data/`、`benchmarks/`、`web/`、`experiments/legacy/`） | サブプロジェクト固有の入口・規約 | 各ディレクトリの `README.md`、`AGENTS.md`、固有運用手順（`windows/docs/` 等） |
 | `artifacts/results/`・`artifacts/logs/` | 実行ログ・機械生成結果（Git対象外） | ベンチマーク結果 JSON、ビルドログ、手動確認ログ |
 
 ### 一時ファイル・ログの禁止場所

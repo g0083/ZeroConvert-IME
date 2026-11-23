@@ -18,7 +18,6 @@
 | 設定変更が反映されない | `W/crates/shared/src/lib.rs` → `W/frontend/src/lib/config.ts` / `pages/general.tsx` → `W/frontend/src-tauri/src/lib.rs` → serverの `reload_ai_assist_from_settings` / Swiftの `LoadConfig` |
 | 起動・DLL登録・配布差分 | `ZeroConvertIME-windows/Start-ZeroConvertIME.ps1` / `Status-ZeroConvertIME.ps1` → `W/crates/launcher/src/main.rs` → `W/scripts/prepare-distribution.ps1` / `installer/Installer.iss` |
 | モデル切替・画面内ベンチマーク | `W/frontend/src/pages/zenzai.tsx` / `benchmark.tsx` → `W/frontend/src-tauri/src/lib.rs` の `switch_model` / `run_ai_assist_benchmark_item` |
-| 学習モデル・量子化比較 | 目的の `training/train_*.py` / `training/export_*.py` → `benchmarks/research/` → 対応する `artifacts/results/` |
 | ライセンス表示・帰属の修正 | `licenses/third-party.json`（両OSの設定画面が読む唯一の一覧） → `W/frontend/src/pages/about.tsx` / `A/main/java/com/zeroconvert/ime/LicenseNotices.kt` → `A/../THIRD_PARTY_LICENSES.md` / `W/deployment/THIRD_PARTY_LICENSES.md`（法的通知の本文） |
 
 探索例: `rg -n 'fetch_typo_suggestion|TYPO_CORRECTION' windows/crates/server`。まず対象ディレクトリと拡張子を絞り、ワークスペース全体の再帰検索は必要になってから行う。
@@ -45,16 +44,14 @@
 | `engine/` | WindowsとAndroidが共有するRust/Swift/native。`Package.resolved` がAndroidのSwift pin、`shared-engine.lock.json` がAPKと突き合わせるエンジン指紋 |
 | `web/` | ブラウザ体験版（Swift/Rust/llama.cpp Wasm）、Web Worker、パリティ検証スクリプト |
 | `tests/` | Windows/Android共有の入力ポリシー・自動確定シナリオ仕様表（`tests/input-policy/*.tsv`） |
-| `data/` | 学習・検証・ベンチマークJSONLと生成Python |
-| `benchmarks/research/` | モデル比較、タイポ・文脈・先読み評価、試作 |
-| `training/` | モデル学習、LoRAマージ、GGUF変換補助 |
+| `data/` | 共有評価データ（JSONL） |
 | `benchmarks/` | 複数方式・量子化等の評価 / 結果解析。目的別に1本ずつ読む |
 | `experiments/legacy/` | 過去のコード書換スクリプト・調査断片。通常の開発には使わない |
 | `artifacts/models/` | 学習・量子化したGGUFや比較用モデル。配布先 `ZeroConvertIME-windows/models/` とは別 |
 | `artifacts/checkpoints/` | LoRA、マージ済み重み、全層学習、チェックポイント等の実験成果物 |
 | `artifacts/results/` / `artifacts/logs/` | 評価JSON / ログ。実装の一次情報にはしない |
 | `docs/` | 現行の仕様書・設計書・開発手順・文書管理ルール（[索引](README.md)）。個別調査・実装計画は `docs/investigations/` |
-| `reports/` | 過去の実験・実装調査レポート（[索引](../reports/README.md)）。`models/`・`typo-assist/`・`port-history/`・`web/` に分類 |
+| `reports/` | 過去の実験・実装調査レポート（[索引](../reports/README.md)）。`models/`・`port-history/`・`web/` に分類 |
 | `scratch/` | このPCだけの旧チェックアウト・調査資料保管先。新規クローンには含まれない |
 | `.venv/` / `.venv_train/` / `__pycache__/` | Python環境・キャッシュ。通常のソース探索から除外 |
 
@@ -95,17 +92,12 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | `scripts/check-input-policy-parity.ps1` | 仕様表・Rust正本・Kotlinフォールバックの一致と両OSテストをまとめて検査する |
 | `A/main/cpp/zenz_jni.cpp` / `assist_jni.cpp` / `azookey_louds.cpp` | 推論JNI / assist・翻訳Runtime / 辞書読取。nativeのビルド定義は `engine/native/CMakeLists.txt` |
 | `data/generate_typo_dataset.py` / `generate_word_typo_30k.py` | タイポ学習データ生成 |
-| `data/build_distillation_corpus.py` / `generate_distilled_dataset.py` | 蒸留コーパス関連処理 |
-| `training/train_nano_v2.py` / `training/train_nano_v2_gentle.py` / `training/train_nano_v2_fullft.py` | 蒸留LoRA / gentle版 / 全層学習 |
-| `training/train_typo_corrector.py` / `training/export_typo_corrector.py` / `training/export_nano_v2.py` | タイポ学習 / 各LoRAのマージ |
 
 ## テスト・評価を選ぶ際の注意
 
 - Windows入力状態は `W/crates/client/src/engine/composition/tests.rs` と `composition/tests/`。サーバーの補正優先・先読み提示テストは `W/crates/server/src/main.rs`、補正生成テストは `ai_assist/` 内にある。
 - Swiftの変換テストは `W/server-swift/Tests/azookey-serverTests/`。フロント保存処理は `W/frontend/tests/`。Android単体テストは `A/test/java/com/zeroconvert/ime/`。
-- `benchmarks/research/benchmark_typo_300.py` はPythonへ移植したルール表とモデルを比較する。`benchmarks/research/benchmark_windows_ai_assist.py` も独自の補正表・キャッシュを含む。現行Rustパイプラインの直接テストではない。
 - Tauriの `benchmark_moshikashite` も独自の補正処理を持つため、設定画面の結果と実IMEの結果を同一視しない。
-- `benchmarks/research/test_server_ai_assist_live.py` はimportと案内表示だけで、実IMEの動作検証になっていない。`experiments/legacy/test_pipe.py` も古い固定Pipe名を持つ探索用断片。
 - `scratch/verify_predictive_phrase_matching.py` は旧 `ai_assist.rs` パス・旧ロジックを参照する。現在の `ai_assist/mod.rs` に対する回帰テストとしてそのまま使わない。
 
 ## 直接編集しない出力・依存物

@@ -24,7 +24,7 @@ Windowsでは `Ctrl+T` の翻訳バーから日本語→英語／英語→日本
 
 ## 変換操作を減らす、独自のZeroCon Model Nano v4.2
 
-ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nano）から文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、`nam` 数値置換と連携した数字変換、さらに追加辞書の固有名詞・専門複合語変換を強化した派生モデルです。Windows・Androidともに通常変換モデルは Nano / Standard v4.2 の量子化（IQ4_emb8 / Q8）の4種類を選択でき、インストーラー・APKには含めず設定画面でキャッシュへダウンロードします。
+ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nano）から文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、数字変換、さらに追加辞書の固有名詞・専門複合語変換を強化した派生モデルです。Windows・Androidともに通常変換モデルは Nano / Standard v4.2 の量子化（IQ4_emb8 / Q8）の4種類を選択でき、インストーラー・APKには含めず設定画面でキャッシュへダウンロードします。
 
 | モデル | サイズ | 特徴 |
 |---|---:|---|
@@ -33,9 +33,9 @@ ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nan
 | **Standard v4.2 IQ4_emb8** | **58.5 MiB** | 中規模版の省メモリ版 |
 | **Standard v4.2 Q8** | **99.0 MiB** | 中規模版の高精度版 |
 
-6層・約26.7Mパラメータの構造を保ちながら、v4のrank-64 DoRA・二重アンカー蒸留・自己コピー/EOS抑止学習を土台に、v4.1の日常会話・口語・過剰漢字抑止および数値マスク（`nam`）互換、さらにv4.2では追加辞書105,039見出し・通常辞書同音対比・時間/数値単位表記の追加学習を施しました（840問評価で追加辞書100問が v4.1→v4.2 で Standard Q8/IQ4 `100/100`・Nano Q8/IQ4 `99/100`、直接推論 `Nano Q8 836/840`・`Std Q8 835/840`・`Nano IQ4 829/840`、共通候補生成 `Std Q8 836/840`・`Nano Q8 835/840`・`Nano IQ4 827/840` へ向上し、未学習24問の時間・単位プローブでも Nano Q8/IQ4 が 24/24 を達成）。学習時のadapterは重みに統合するため、推論時に追加の層やadapter実行は必要ありません。
+6層・約26.7Mパラメータの構造を保ちながら、日常会話・口語・過剰漢字抑止と数字変換、追加辞書の固有名詞・専門複合語、時間・数値単位表記を改善しました（840問評価で直接推論 `Nano Q8 836/840`・`Std Q8 835/840`・`Nano IQ4 829/840`、共通候補生成 `Std Q8 836/840`・`Nano Q8 835/840`・`Nano IQ4 827/840`）。推論時に追加の層は必要ありません。
 
-なお、取得元はGitHubリリース [`models-v4.2`](https://github.com/g0083/ZeroConvert-IME/releases/tag/models-v4.2) 固定で、モデル一覧には取得・進捗・中断・切替・削除を操作できます。モデルファイルの正規カタログは `windows/deployment/model-catalog.json` です。v4.1では Q5_K_M / Q5_K_S / Q6_K もベンチマークしましたがIQ4/Q8に勝てず不採用としています。
+なお、取得元はGitHubリリース [`models-v4.2`](https://github.com/g0083/ZeroConvert-IME/releases/tag/models-v4.2) 固定で、モデル一覧には取得・進捗・中断・切替・削除を操作できます。モデルファイルの正規カタログは `windows/deployment/model-catalog.json` です。
 
 ZeroCon Model v4.2は、学習時にApache-2.0で公開されていたzenz-v3.2の重みを追加学習したモデルです。個別の許諾がないZeroCon独自の改変部分には製品の利用規約が適用されます。追加辞書に含まれるSudachiDictとWikidataのデータには、各出典の条件が適用されます。 [利用規約](LICENSE.md) · [モデルの来歴](docs/model-assets.md#上流ライセンス) · [共通ライセンス一覧](licenses/third-party.json)
 
@@ -76,7 +76,7 @@ v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐�
 - **QWERTY隣接キーミス**: **73.3% 正解** (実質 85.0%)
 - **母音抜け**: **74.0% 正解** (実質 82.0%)
 
-詳細は [タイポ補正刷新レポート](reports/typo-assist/unified-converter-corrector-20261104.md) をご覧ください。
+詳細は GitHub Releases の性能結果をご覧ください。
 
 ## モデルだけでなく、入力から確定までを改良
 
@@ -101,9 +101,8 @@ ZeroConvert-IMEは、重みを差し替えるだけのIMEではありません�
 | `engine/` | WindowsのSwift/Rustを直接利用するAndroid向け共通エンジン |
 | `web/` | ブラウザ体験版（Swift/Rust/llama.cpp Wasm）とパリティ検証 |
 | `tests/` | Windows/Android共有の入力ポリシー・自動確定テスト仕様表 |
-| `training/` | LoRA・全層学習、マージ、GGUF変換補助 |
-| `benchmarks/` | 評価・解析、`research/` に研究用試作 |
-| `data/` | 共有評価データと学習データ生成コード |
+| `benchmarks/` | 公開用評価・解析 |
+| `data/` | 共有評価データ |
 | `scripts/` | 依存準備、Python実行、公開対象の検証 |
 | `patches/` | 外部依存への独自変更 |
 | `docs/` | アーキテクチャ・ファイル地図・開発環境・ルール（[索引](docs/README.md)） |
@@ -131,11 +130,10 @@ python scripts/check_repository.py
 
 Windowsのビルドは `windows/` 内で、Androidは `android/` 内で実行します。モデル・辞書・ネイティブランタイムの準備は [セットアップ](docs/setup.md) を確認してください。モデル重み、配布バイナリ、学習結果、仮想環境はGitに含めません。
 
-Pythonの実験・学習はルート基準で実行します。使用するPython環境に各スクリプトの依存を準備してください。
+Pythonの補助スクリプトはルート基準で実行します。使用するPython環境に各スクリプトの依存を準備してください。
 
 ```powershell
-python scripts/run.py training/train_nano_v2.py --help
-python scripts/run.py benchmarks/research/benchmark_nano_v2.py
+python scripts/check_repository.py
 ```
 
 ルートのGitHub Actionsはソース検証とNodeテストを実行します。Windows/Androidのフルビルドや実IMEの動作保証を行うものではありません。

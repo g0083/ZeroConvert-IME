@@ -11,7 +11,7 @@
 - ルートのGit管理先は `https://github.com/g0083/ZeroConvert-IME.git`（`origin`）。Windowsソースは `windows/`、共有エンジンは `engine/`、Androidは `android/`、ブラウザ版は `web/`。ルートのGitで管理する。
 - `windows/` の作業には、その配下の [AGENTS.md](windows/AGENTS.md) と必要な開発手順も適用する。
 - `android/` の作業には、その配下の [AGENTS.md](android/AGENTS.md)、`engine/` の作業には [engine/AGENTS.md](engine/AGENTS.md) と [Android開発手順](docs/android-development.md) を適用する。Windows用のビルド・適用スクリプトやスキルをAndroidへそのまま流用しない。
-- 学習は `training/`、評価は `benchmarks/`、共有データは `data/`。Pythonは `python scripts/run.py <対象.py> [引数]` でルート基準のパス・importを揃える。
+- 評価（公開用）は `benchmarks/`、共有データは `data/`。モデル学習・研究は内部で管理する。
 - モデルは `artifacts/models/`、学習出力は `artifacts/checkpoints/`、評価結果・ログは `artifacts/results/` / `artifacts/logs/`。いずれもGit対象外。
 - `scratch/` は旧チェックアウト・実験保管先でGit対象外。`scratch/batao_src/` は移行前の保全用であり、今後の編集先ではない。ローカル履歴バックアップは `.local/migration-backup/`。既存の実行環境 `ZeroConvertIME-windows/` もGit対象外で保持する。
 - 外部依存はルートの `.gitmodules` で固定。Android llama.cppの独自変更は `patches/llama.cpp/` に保存し、`scripts/setup-dependencies.ps1` で適用する。
@@ -24,8 +24,7 @@
 - **`docs/`（現行仕様・運用ガイド）**: システム設計、アーキテクチャ、セットアップ・開発手順など、継続的に参照・保守される恒久文書のみを配置する（一覧: [docs/README.md](docs/README.md)）。
   - `docs/investigations/`: 個別機能の設計メモ、実装計画（冒頭に状態を明記）、特定バージョンでの不具合解析などを配置する（一覧: [docs/investigations/README.md](docs/investigations/README.md)）。
 - **`reports/`（実験・検証・過去の進捗レポート）**: スナップショット的な記録、実験結果、移行フェーズの記録などをサブディレクトリに分類して格納する（一覧: [reports/README.md](reports/README.md)）。新規レポートを `reports/` や `docs/` の直下に散らかさない。
-  - `reports/models/`: ZeroCon Model（nano / standard / Origin / 各バージョン）の学習・評価・比較実験レポート
-  - `reports/typo-assist/`: タイポ補正、先読み、キーボードハイブリッド、翻訳検証の調査・検証レポート
+  - `reports/models/`: ZeroCon Model の性能比較レポート（公開用）
   - `reports/port-history/`: Android移植の各ステージ進捗記録（stage2〜10等）や過去の監査ドキュメント
   - `reports/web/`: ブラウザ版パリティ検証記録、外部向け紹介HTMLや技術比較ページ
 - **一時ファイル・ログの管理**:
