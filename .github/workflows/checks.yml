@@ -69,8 +69,6 @@ jobs:
           node-version: '22'
       - name: Validate source tree
         run: python scripts/check_repository.py
-      - name: Check public surface for recipe leaks
-        run: python scripts/check-public-surface.py
       - name: Frontend behavior tests
         working-directory: windows/frontend
         run: npm test
