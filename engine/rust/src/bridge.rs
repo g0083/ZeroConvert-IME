@@ -261,18 +261,20 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             .as_str()
             .map(parse_token_logit_margins)
             .unwrap_or_default();
-        return Ok(policy::find_auto_commit_live_conversion_snapshot_with_policy(
-            raw,
-            reading,
-            preview,
-            "",
-            &snapshots,
-            &history,
-            mode,
-            &top_token_margins,
-        )
-        .map(|s| json!({"readingLength":s.hiragana_len,"surface":s.preview}))
-        .unwrap_or(Value::Null));
+        return Ok(
+            policy::find_auto_commit_live_conversion_snapshot_with_policy(
+                raw,
+                reading,
+                preview,
+                "",
+                &snapshots,
+                &history,
+                mode,
+                &top_token_margins,
+            )
+            .map(|s| json!({"readingLength":s.hiragana_len,"surface":s.preview}))
+            .unwrap_or(Value::Null),
+        );
     }
     if envelope["op"] == "englishSuggest" {
         let prefix = envelope["input"].as_str().unwrap_or_default();
