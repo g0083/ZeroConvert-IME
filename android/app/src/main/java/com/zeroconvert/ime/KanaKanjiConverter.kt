@@ -255,7 +255,8 @@ class KanaKanjiConverter {
                     text = fixedSurfacePrefix + it.text,
                     reading = toKatakana(fixedSurfacePrefix + toHiragana(it.reading)),
                     segments = emptyList(), learningAllowed = it.isLearningTarget,
-                    engineConsumedReading = it.engineConsumedReading?.let { consumed -> fixedSurfacePrefix.length + consumed }
+                    engineConsumedReading = it.engineConsumedReading?.let { consumed -> fixedSurfacePrefix.length + consumed },
+                    engineTokenMargins = ""
                 )
             }
         }

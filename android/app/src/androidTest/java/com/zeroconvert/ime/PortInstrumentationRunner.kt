@@ -738,11 +738,14 @@ class PortInstrumentationRunner : Instrumentation() {
             val policyAiKey = ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST
             val policyLayoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
             val policyAutoCommitKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED
+            val policyAutoCommitModeKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_MODE
             val savedNumberRow = policyPrefs.getBoolean(numberRowKey, false)
             val savedPolicyLive = policyPrefs.getBoolean(policyLiveKey, true)
             val savedPolicyAi = policyPrefs.getBoolean(policyAiKey, true)
             val savedPolicyLayout = policyPrefs.getString(policyLayoutKey, JapaneseInputLayout.FLICK_12KEY.name)
             val savedPolicyAutoCommit = policyPrefs.getBoolean(policyAutoCommitKey, true)
+            val hadPolicyAutoCommitMode = policyPrefs.contains(policyAutoCommitModeKey)
+            val savedPolicyAutoCommitMode = policyPrefs.getString(policyAutoCommitModeKey, null)
             try {
                 onUi {
                     // Live conversion would turn the reading ん into 安, auto-commit would
@@ -753,6 +756,7 @@ class PortInstrumentationRunner : Instrumentation() {
                         .putBoolean(policyLiveKey, false)
                         .putBoolean(policyAiKey, false)
                         .putBoolean(policyAutoCommitKey, false)
+                        .putString(policyAutoCommitModeKey, AutoCommitMode.OFF.storageValue)
                         .putString(policyLayoutKey, JapaneseInputLayout.QWERTY.name)
                         .apply()
                     checkNotNull(activity).field.setText("")
@@ -815,13 +819,15 @@ class PortInstrumentationRunner : Instrumentation() {
                 }
             } finally {
                 onUi {
-                    policyPrefs.edit()
-                        .putBoolean(numberRowKey, savedNumberRow)
-                        .putBoolean(policyLiveKey, savedPolicyLive)
-                        .putBoolean(policyAiKey, savedPolicyAi)
-                        .putBoolean(policyAutoCommitKey, savedPolicyAutoCommit)
-                        .putString(policyLayoutKey, savedPolicyLayout)
-                        .apply()
+                    policyPrefs.edit().apply {
+                        putBoolean(numberRowKey, savedNumberRow)
+                        putBoolean(policyLiveKey, savedPolicyLive)
+                        putBoolean(policyAiKey, savedPolicyAi)
+                        putBoolean(policyAutoCommitKey, savedPolicyAutoCommit)
+                        if (hadPolicyAutoCommitMode) putString(policyAutoCommitModeKey, savedPolicyAutoCommitMode)
+                        else remove(policyAutoCommitModeKey)
+                        putString(policyLayoutKey, savedPolicyLayout)
+                    }.apply()
                     checkNotNull(activity).field.setText("")
                 }
             }
@@ -830,16 +836,21 @@ class PortInstrumentationRunner : Instrumentation() {
             val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
             val layoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
             val autoKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED
+            val autoModeKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_MODE
             val liveKey = ZeroConvertInputMethodService.KEY_REALTIME_INLINE
             val hadLayout = prefs.contains(layoutKey)
             val savedLayout = prefs.getString(layoutKey, JapaneseInputLayout.FLICK_12KEY.name)
             val hadAuto = prefs.contains(autoKey)
             val savedAuto = prefs.getBoolean(autoKey, true)
+            val hadAutoMode = prefs.contains(autoModeKey)
+            val savedAutoMode = prefs.getString(autoModeKey, null)
             val hadLive = prefs.contains(liveKey)
             val savedLive = prefs.getBoolean(liveKey, true)
             try {
                 onUi {
-                    prefs.edit().putBoolean(autoKey, false).putBoolean(liveKey, true).apply()
+                    prefs.edit().putBoolean(autoKey, false)
+                        .putString(autoModeKey, AutoCommitMode.OFF.storageValue)
+                        .putBoolean(liveKey, true).apply()
                     val field = checkNotNull(activity).field
                     field.setText("")
                     (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
@@ -892,6 +903,7 @@ class PortInstrumentationRunner : Instrumentation() {
                     prefs.edit().apply {
                         if (hadLayout) putString(layoutKey, savedLayout) else remove(layoutKey)
                         if (hadAuto) putBoolean(autoKey, savedAuto) else remove(autoKey)
+                        if (hadAutoMode) putString(autoModeKey, savedAutoMode) else remove(autoModeKey)
                         if (hadLive) putBoolean(liveKey, savedLive) else remove(liveKey)
                     }.apply()
                     val field = checkNotNull(activity).field
@@ -904,16 +916,21 @@ class PortInstrumentationRunner : Instrumentation() {
             val prefs = targetContext.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
             val layoutKey = ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT
             val autoKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED
+            val autoModeKey = ZeroConvertInputMethodService.KEY_AUTO_COMMIT_MODE
             val liveKey = ZeroConvertInputMethodService.KEY_REALTIME_INLINE
             val hadLayout = prefs.contains(layoutKey)
             val savedLayout = prefs.getString(layoutKey, JapaneseInputLayout.FLICK_12KEY.name)
             val hadAuto = prefs.contains(autoKey)
             val savedAuto = prefs.getBoolean(autoKey, true)
+            val hadAutoMode = prefs.contains(autoModeKey)
+            val savedAutoMode = prefs.getString(autoModeKey, null)
             val hadLive = prefs.contains(liveKey)
             val savedLive = prefs.getBoolean(liveKey, true)
             try {
                 onUi {
-                    prefs.edit().putBoolean(autoKey, false).putBoolean(liveKey, true).apply()
+                    prefs.edit().putBoolean(autoKey, false)
+                        .putString(autoModeKey, AutoCommitMode.OFF.storageValue)
+                        .putBoolean(liveKey, true).apply()
                     val field = checkNotNull(activity).field
                     field.setText("")
                     (targetContext.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(field)
@@ -989,6 +1006,7 @@ class PortInstrumentationRunner : Instrumentation() {
                     prefs.edit().apply {
                         if (hadLayout) putString(layoutKey, savedLayout) else remove(layoutKey)
                         if (hadAuto) putBoolean(autoKey, savedAuto) else remove(autoKey)
+                        if (hadAutoMode) putString(autoModeKey, savedAutoMode) else remove(autoModeKey)
                         if (hadLive) putBoolean(liveKey, savedLive) else remove(liveKey)
                     }.apply()
                     val field = checkNotNull(activity).field

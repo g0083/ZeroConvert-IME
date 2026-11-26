@@ -986,9 +986,37 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '        var outputBytes: [UInt8] = []\n'
         '        outputBytes.reserveCapacity(128)\n'
         '        var pieceBuf = [CChar](repeating: 0, count: 64)\n'
-        '        var finished = false\n\n'
+        '        var finished = false\n'
+        '        var tokenMargins: [TokenLogitMargin] = []\n'
+        '        tokenMargins.reserveCapacity(32)\n'
+        '        let nVocab = Int(llama_vocab_n_tokens(self.vocab))\n\n'
         '        for _ in 0 ..< maxTokens {\n'
-        '            var token = llama_sampler_sample(sampler, self.context, -1)\n'
+        '            var token: llama_token\n'
+        '            var marginMilli: Int32? = nil\n'
+        '            if nVocab > 0, let logits = llama_get_logits_ith(self.context, -1) {\n'
+        '                var max1: Float = -Float.infinity\n'
+        '                var max2: Float = -Float.infinity\n'
+        '                var bestTok: llama_token = 0\n'
+        '                for idx in 0 ..< nVocab {\n'
+        '                    let value = logits[idx]\n'
+        '                    if value > max1 {\n'
+        '                        max2 = max1\n'
+        '                        max1 = value\n'
+        '                        bestTok = llama_token(idx)\n'
+        '                    } else if value > max2 {\n'
+        '                        max2 = value\n'
+        '                    }\n'
+        '                }\n'
+        '                token = bestTok\n'
+        '                if max1.isFinite && max2.isFinite {\n'
+        '                    let diff = max(Float(0), max1 - max2)\n'
+        '                    marginMilli = Int32(min(Float(60_000), (diff * 1000.0).rounded()))\n'
+        '                } else if max1.isFinite {\n'
+        '                    marginMilli = 60_000\n'
+        '                }\n'
+        '            } else {\n'
+        '                token = llama_sampler_sample(sampler, self.context, -1)\n'
+        '            }\n'
         '            if llama_vocab_is_eog(self.vocab, token) || token == self.eosToken {\n'
         '                finished = true\n'
         '                break\n'
@@ -998,8 +1026,14 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '            Self.appendPieceBytes(vocab: self.vocab, token: token, buf: &pieceBuf, into: &outputBytes)\n'
         '            if let stopIndex = Self.findStopMarkerIndex(in: outputBytes, from: scanStart) {\n'
         '                outputBytes.removeSubrange(stopIndex...)\n'
+        '                while let last = tokenMargins.last, last.byteEnd > outputBytes.count {\n'
+        '                    tokenMargins.removeLast()\n'
+        '                }\n'
         '                finished = true\n'
         '                break\n'
+        '            }\n'
+        '            if let marginMilli {\n'
+        '                tokenMargins.append(TokenLogitMargin(byteEnd: outputBytes.count, marginMilli: marginMilli))\n'
         '            }\n'
         '            if outputBytes.count > 8192 {\n'
         '                self.prevInputBySeq[evalSeqId] = cachedTokens\n'
@@ -1021,7 +1055,8 @@ ZENZ_CONTEXT_REPLACEMENTS = (
         '              !decoded.isEmpty else {\n'
         '            return .needsFallback\n'
         '        }\n'
-        '        return .text(decoded)\n'
+        '        let verifiedMargins = tokenMargins.last?.byteEnd == outputBytes.count ? tokenMargins : []\n'
+        '        return .text(decoded, tokenMargins: verifiedMargins)\n'
         '        #else\n'
         '        return .needsFallback\n'
         '        #endif\n'
@@ -1820,8 +1855,18 @@ REUSABLE_LATTICE_CONVERTER_API_REPLACEMENTS = (
     (
         '''/// かな漢字変換の管理を受け持つクラス
 public final class KanaKanjiConverter {''',
-        '''public enum DirectZenzaiGenerationResult: Sendable {
-    case text(String)
+        '''public struct TokenLogitMargin: Sendable, Equatable, Hashable {
+    public let byteEnd: Int
+    public let marginMilli: Int32
+
+    public init(byteEnd: Int, marginMilli: Int32) {
+        self.byteEnd = byteEnd
+        self.marginMilli = marginMilli
+    }
+}
+
+public enum DirectZenzaiGenerationResult: Sendable {
+    case text(String, tokenMargins: [TokenLogitMargin] = [])
     case needsFallback
     case decodeAborted
 }
@@ -2128,7 +2173,7 @@ REUSABLE_LATTICE_PUBLIC_API = '''    public func exportReusableFullInputLattice(
             return ConversionResult(mainResults: [], predictionResults: [], englishPredictionResults: [], firstClauseResults: [])
         case .needsFallback:
             return nil
-        case .text(let generatedText):
+        case .text(let generatedText, _):
             guard !generatedText.isEmpty,
                   self.converter.heuristicRetryValidation(generatedText) else {
                 return nil
@@ -3444,9 +3489,10 @@ ZENZ_CONTEXTUAL_REPLACEMENT = '''    package func pureGreedyDecoding(pureInput: 
         let maxTokens = min(112, max(32, katakana.count * 3 + 12))
         let generated = zenzContext.generateDirectGreedy(promptTokens: promptTokens, maxTokens: maxTokens)
         switch generated {
-        case .text(let raw):
+        case .text(let raw, let tokenMargins):
             let restored = ZenzDigitMasking.restore(raw, digits: inputMask.rawDigits, asciiDigits: inputMask.asciiDigits)
-            return restored.isEmpty ? .needsFallback : .text(restored)
+            let safeMargins = (inputMask.rawDigits.isEmpty || restored.utf8.count == raw.utf8.count) ? tokenMargins : []
+            return restored.isEmpty ? .needsFallback : .text(restored, tokenMargins: safeMargins)
         case .needsFallback, .decodeAborted:
             return generated
         }

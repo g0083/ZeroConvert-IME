@@ -106,22 +106,17 @@ QWERTY のシフト記号 (`isImmediateCommitChar`) は composition を即時確
 
 ## 5. 自動確定 (Auto-commit)
 
-Android にも Windows と同様の自動確定がある。`MIN_READING_LEN_FOR_AUTO_COMMIT = 16`, `MIN_TAIL_UNCOMMITTED_READING_LEN = 7`, `STABLE_INFERENCE_COUNT = 5`。
+Android の自動確定ルールは共有エンジン (`windows/crates/shared/src/conversion_policy.rs`) に一本化されており、`WindowsEngine.autoCommit` (`engine/rust/src/bridge.rs` の `op = "autoCommit"`) 経由で判定する。設定 `auto_commit_mode`（`off` / `standard` / `fast`、未設定時は旧 `auto_commit_enabled` 真偽値へフォールバック）で 3 段階を切り替えられる。
 
-### 5.1 判定 (`findStableAutoCommitPrefix`)
+### 5.1 判定 (`find_auto_commit_live_conversion_snapshot_with_policy`)
 
-`ZeroConvertInputMethodService` の companion に実装。`InferenceSnapshot` の履歴から、安定した句境界プレフィックス (L, P) を探索する。条件:
+`ZeroConvertInputMethodService` が `InferenceSnapshot` の履歴と先頭候補のトークン別 `top1 - top2` ロジット差（Swift `AndroidBridge.swift` の `tokenMargins` → `Candidate.engineTokenMargins` → Rust `topTokenMargins`）を共有エンジンへ渡して判定する。
 
-- currentReading.length >= 16 かつ末尾に未確定ローマ字子音がない
-- 履歴が 5 件以上
-- L <= currentReading.length - 7 (少なくとも 7 文字残す)
-- L >= 8
-- `safeRawBoundary(L)` が true
-- currentReading が snap.readingHiragana で始まる
-- `isNaturalAutoCommitPrefix(P, currentAiSurface)` が true (句読点、または漢字/カタカナを含み平仮名で終わり、次が内容語)
-- 直近 5 件の推論で P が安定 (全て P で始まり P より長い)
-
-最大 L の候補を採用。
+- 末尾に未確定ローマ字子音がある場合は確定しない。
+- `tokenMargins` が利用可能な場合、確定候補プレフィックス内の最小ロジット差 `min_margin` を参照し、`1.2` 未満は高リスクとして確定を保留する。
+- `standard`（通常・推奨）: 句読点境界かつ `min_margin >= 1.5` は `総文字数>=10, 確定>=5, 残り>=3, 安定>=2`；高確信 (`min_margin >= 2.5`) は `12 / 6 / 4 / 安定3`；ロジット差なしまたは標準閾値時は `16 / 8 / 7 / 安定5`。
+- `fast`（早め・速度重視）: 高確信 (`min_margin >= 2.2`) は `10 / 5 / 4 / 安定2`、通常時は `14 / 7 / 5 / 安定4`（句読点境界時は `10 / 5 / 3 / 安定2`）。
+- いずれも `is_natural_auto_commit_prefix`（句読点、または漢字/カタカナを含み平仮名で終わり次が内容語）かつ `safeBoundary(L)` を満たす最大 `L` を採用する。
 
 ### 5.2 巻き戻し (AutoCommitRewind)
 
@@ -338,6 +333,8 @@ Windows と同様:
 ---
 
 ## 12. 検証
+
+設定画面のタイポ補正ベンチマークは、選択中のモデルと現在のタイポ補正設定で共通候補を生成する。通常変換で読みが補正されなかった場合は、実IMEと同じRustの補正処理と端末内のキーボード補正を呼ぶ。補正候補が読みで返る場合の再変換と450問の採点はWindowsと共通で、全体成功率には完全一致・表記ゆれ一致・正常入力の保持を含む。各問は入力読みから独立して実行し、打鍵中の補正、タッチ位置、ユーザー辞書、学習履歴は測定対象外。
 
 ```powershell
 cd D:\angra\ZeroConvert-IME\android

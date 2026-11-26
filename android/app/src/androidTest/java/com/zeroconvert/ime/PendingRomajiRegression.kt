@@ -155,7 +155,8 @@ class PendingRomajiRegression(private val instrumentation: Instrumentation) {
         val prefs = context.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
         val keys = listOf(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, ZeroConvertInputMethodService.KEY_REALTIME_INLINE,
             ZeroConvertInputMethodService.KEY_EXPERIMENTAL_AI_ASSIST, ZeroConvertInputMethodService.KEY_AUTO_TYPO_CORRECTION,
-            ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION)
+            ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, ZeroConvertInputMethodService.KEY_AUTO_COMMIT_MODE,
+            ZeroConvertInputMethodService.KEY_PREDICTIVE_CONVERSION)
         val saved = prefs.all.filterKeys { it in keys }
         var activity: PortTestActivity? = null
         try {
@@ -163,7 +164,8 @@ class PendingRomajiRegression(private val instrumentation: Instrumentation) {
             info.flags = info.flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             instrumentation.uiAutomation.serviceInfo = info
             onUi { prefs.edit().putString(keys[0], JapaneseInputLayout.QWERTY.name)
-                .putBoolean(keys[1], false).putBoolean(keys[2], true).putBoolean(keys[3], true).putBoolean(keys[4], true).apply() }
+                .putBoolean(keys[1], false).putBoolean(keys[2], true).putBoolean(keys[3], true)
+                .putBoolean(keys[4], true).putString(keys[5], AutoCommitMode.STANDARD.storageValue).apply() }
             activity = instrumentation.startActivitySync(Intent(context, PortTestActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as PortTestActivity
             val editor = activity

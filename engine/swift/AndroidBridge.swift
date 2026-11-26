@@ -431,6 +431,10 @@ private func appendJsonString(_ value: String, to out: inout String) {
             json.append(",\"predictionReading\":")
             appendJsonString(String(cString: predPtr), to: &json)
         }
+        if let marginsPtr = candidate.tokenMargins, marginsPtr[0] != 0 {
+            json.append(",\"tokenMargins\":")
+            appendJsonString(String(cString: marginsPtr), to: &json)
+        }
         json.append("}")
     }
     json.append("]")

@@ -866,12 +866,11 @@ impl TextServiceFactory {
             .or_else(|| is_reading_only_correction(surface).then(|| surface.to_owned()));
         let converter_input = repaired_reading.as_deref().unwrap_or(surface).to_owned();
         let refinement_origin = original.typo.applied.as_deref().and_then(|prev| {
-            let (origin_reading, origin_raw_input, applied_prefix) =
-                build_auto_refinement_inputs(
-                    prev,
-                    &original.raw_input,
-                    &original.candidates.hiragana,
-                )?;
+            let (origin_reading, origin_raw_input, applied_prefix) = build_auto_refinement_inputs(
+                prev,
+                &original.raw_input,
+                &original.candidates.hiragana,
+            )?;
             (!converter_input.starts_with(&applied_prefix))
                 .then_some((origin_reading, origin_raw_input))
         });
@@ -1123,12 +1122,8 @@ impl TextServiceFactory {
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
         if applied.refined || trailing_raw.as_deref().is_some_and(|t| !t.is_empty()) {
             let trailing = trailing_raw.as_deref().unwrap_or("");
-            return self.apply_reverted_prefix_to_composition(
-                &mut ipc,
-                &applied,
-                correction,
-                trailing,
-            );
+            return self
+                .apply_reverted_prefix_to_composition(&mut ipc, &applied, correction, trailing);
         }
         let mut candidates = match ipc.replace_from_snapshot(&applied.ledger) {
             Ok(candidates) => candidates,
@@ -1331,6 +1326,7 @@ mod tests {
                 hiragana: "かいぎはあしたです".into(),
                 corresponding_count: vec![16],
                 candidate_ids: vec![1],
+                top_token_margins: Default::default(),
             },
             ..Default::default()
         };
@@ -1342,7 +1338,10 @@ mod tests {
         );
         result.auto_apply = true; // Never treat a translation as a typo replacement.
         result.suggestions[0].corresponding_count = 16;
-        assert_eq!(merge_results(&mut state, vec![(3, result)]), MergeOutcome::None);
+        assert_eq!(
+            merge_results(&mut state, vec![(3, result)]),
+            MergeOutcome::None
+        );
         assert_eq!(state.candidates.texts[0], "会議は明日です");
         assert_eq!(state.raw_input, "kaigihaashitadesu");
         assert_eq!(
@@ -1490,6 +1489,7 @@ mod tests {
                 hiragana: "しりょうをおくりmっす".into(),
                 candidate_ids: vec![0],
                 corresponding_count: vec![16],
+                top_token_margins: Default::default(),
             },
             ..Default::default()
         };
@@ -1523,6 +1523,7 @@ mod tests {
             hiragana: "よろしくおねがい".into(),
             candidate_ids: vec![0],
             corresponding_count: vec![4],
+            top_token_margins: Default::default(),
         };
         let mut state = Composition {
             candidates: base_candidates(),
@@ -1663,6 +1664,7 @@ mod tests {
                 hiragana: "おkせり".into(),
                 corresponding_count: vec![6; 2],
                 candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+                top_token_margins: Default::default(),
             },
             ..Default::default()
         };
@@ -1782,6 +1784,7 @@ mod tests {
             candidate_ids: vec![10, 20],
             corresponding_count: vec![6; 2],
             hiragana: "おkせり".into(),
+            top_token_margins: Default::default(),
         };
         append_suggestions(
             &mut candidates,
@@ -1844,6 +1847,7 @@ mod tests {
             hiragana: "あしたのかいぎのおkせり".into(),
             corresponding_count: vec![23; 2],
             candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+            top_token_margins: Default::default(),
         };
         let proposal_json = TextServiceFactory::build_assist_reading_json(
             &candidates,
@@ -1905,6 +1909,7 @@ mod tests {
             hiragana: "あやまり".into(),
             corresponding_count: vec![4; 2],
             candidate_ids: vec![shared::ai_candidate::TYPO_CORRECTION, 42],
+            top_token_margins: Default::default(),
         };
         assert_eq!(
             baseline_surface_from_candidates(&ai_first),
@@ -1933,11 +1938,15 @@ mod tests {
     fn reading_only_typo_correction_diffs_against_hiragana_and_enter_applies_in_preview() {
         let candidates = Candidates {
             prediction_readings: Default::default(),
-            texts: vec!["お世話になております".into(), "おせわになっております".into()],
+            texts: vec![
+                "お世話になております".into(),
+                "おせわになっております".into(),
+            ],
             sub_texts: vec![String::new(), String::new()],
             hiragana: "おせわになております".into(),
             corresponding_count: vec![20; 2],
             candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+            top_token_margins: Default::default(),
         };
         let proposal_json = TextServiceFactory::build_assist_reading_json(
             &candidates,
@@ -1983,8 +1992,8 @@ mod tests {
     }
 
     #[test]
-    fn post_edit_differential_undo_keeps_escape_reconciles_prefix_allows_later_tab_and_blocks_boomerang()
-    {
+    fn post_edit_differential_undo_keeps_escape_reconciles_prefix_allows_later_tab_and_blocks_boomerang(
+    ) {
         let ipc = IPCService::recovery_for_test(false);
         let mut applied = AppliedCorrection {
             original: Composition {
@@ -2053,6 +2062,7 @@ mod tests {
             hiragana: "きょうはいいてんき".into(),
             corresponding_count: vec![9; 2],
             candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+            top_token_margins: Default::default(),
         };
         let post_edit_json = TextServiceFactory::build_assist_reading_json(
             &candidates_with_proposal,
@@ -2172,7 +2182,11 @@ mod tests {
                 ),
                 (
                     2,
-                    response(shared::ai_candidate::PREDICTIVE, "きょおはいいてんきです", 75),
+                    response(
+                        shared::ai_candidate::PREDICTIVE,
+                        "きょおはいいてんきです",
+                        75,
+                    ),
                 ),
             ],
         );
@@ -2250,6 +2264,11 @@ mod tests {
             )],
         );
         assert_eq!(revert_outcome, MergeOutcome::AutoRevert);
-        assert!(first_assist_ready(false, true, true, Duration::from_millis(1)));
+        assert!(first_assist_ready(
+            false,
+            true,
+            true,
+            Duration::from_millis(1)
+        ));
     }
 }

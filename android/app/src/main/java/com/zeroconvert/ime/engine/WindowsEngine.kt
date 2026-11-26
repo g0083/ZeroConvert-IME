@@ -667,6 +667,7 @@ object WindowsEngine {
                             var candidateId = "0"
                             var learningAllowed = false
                             var predictionReading = ""
+                            var tokenMargins = ""
                             var readingCompletion = false
                             reader.beginObject()
                             while (reader.hasNext()) {
@@ -676,6 +677,7 @@ object WindowsEngine {
                                     "candidateId" -> candidateId = reader.nextStringOrEmpty()
                                     "learningAllowed" -> learningAllowed = reader.nextBoolean()
                                     "predictionReading" -> predictionReading = reader.nextStringOrEmpty()
+                                    "tokenMargins" -> tokenMargins = reader.nextStringOrEmpty()
                                     "readingCompletion" -> readingCompletion = reader.nextBoolean()
                                     else -> reader.skipValue()
                                 }
@@ -703,6 +705,7 @@ object WindowsEngine {
                                     engineCandidateId = candidateId.takeUnless { it == "0" }.orEmpty(),
                                     engineConsumedReading = consumed,
                                     enginePredictionReading = predictionReading,
+                                    engineTokenMargins = tokenMargins,
                                     isReadingCompletion = readingCompletion,
                                 )
                             )
@@ -1069,16 +1072,28 @@ object WindowsEngine {
      * a change here cannot drift from the Windows client. A not-ready engine
      * declines instead of throwing, because this runs on the inference result path.
      */
-    fun autoCommit(raw: String, reading: String, history: List<InferenceSnapshot>, safeBoundary: (Int) -> Boolean): AutoCommitCandidate? {
-        if (!ready) return null
+    fun autoCommit(
+        raw: String,
+        reading: String,
+        history: List<InferenceSnapshot>,
+        safeBoundary: (Int) -> Boolean,
+        mode: AutoCommitMode = AutoCommitMode.STANDARD,
+        topTokenMargins: String = "",
+    ): AutoCommitCandidate? {
+        if (!ready || !mode.isEnabled) return null
         val entries = JSONArray()
         history.forEach { snapshot ->
             entries.put(JSONObject().put("rawCount", snapshot.rawInputCount)
                 .put("readingCount", snapshot.readingHiragana.codePointCount(0, snapshot.readingHiragana.length))
                 .put("surface", snapshot.aiSurface))
         }
-        val result = assistReply(JSONObject().put("op", "autoCommit").put("raw", raw).put("input", reading)
-            .put("baseline", history.lastOrNull()?.aiSurface.orEmpty()).put("history", entries)) ?: return null
+        val request = JSONObject().put("op", "autoCommit").put("raw", raw).put("input", reading)
+            .put("baseline", history.lastOrNull()?.aiSurface.orEmpty()).put("history", entries)
+            .put("mode", mode.storageValue)
+        if (topTokenMargins.isNotEmpty()) {
+            request.put("topTokenMargins", topTokenMargins)
+        }
+        val result = assistReply(request) ?: return null
         val candidate = runCatching { JSONObject(result) }.getOrNull() ?: return null
         val length = safeAutoCommitLength(reading, candidate.optInt("readingLength", -1))
         if (length <= 0 || !safeBoundary(length)) return null

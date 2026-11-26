@@ -1485,6 +1485,7 @@ impl TextServiceFactory {
             hiragana: raw_hiragana.to_string(),
             corresponding_count: vec![corresponding_count],
             candidate_ids: vec![0],
+            top_token_margins: Default::default(),
         };
         FutureClauseSnapshot {
             clause_preview: clause_preview.to_string(),
@@ -2739,18 +2740,28 @@ impl TextServiceFactory {
             live_conversion_history,
         );
 
-        if !app_config.general.auto_commit_live_conversion {
+        if !app_config.general.auto_commit_live_conversion.is_enabled() {
             return Ok(());
         }
 
-        let Some(snap) = Self::find_auto_commit_live_conversion_snapshot(
-            raw_input,
-            raw_hiragana,
-            preview,
-            suffix,
-            live_conversion_snapshots,
-            live_conversion_history,
-        ) else {
+        let top_token_margins =
+            if candidates.texts.first().map(String::as_str) == Some(preview.as_str()) {
+                candidates.top_token_margins.as_slice()
+            } else {
+                &[]
+            };
+        let Some(snap) =
+            shared::conversion_policy::find_auto_commit_live_conversion_snapshot_with_policy(
+                raw_input,
+                raw_hiragana,
+                preview,
+                suffix,
+                live_conversion_snapshots,
+                live_conversion_history,
+                app_config.general.auto_commit_live_conversion,
+                top_token_margins,
+            )
+        else {
             return Ok(());
         };
 
@@ -10764,6 +10775,108 @@ mod lifecycle_tests {
             "watashiwagakkounn",
             "わたしはがっこうん"
         ));
+    }
+
+    #[test]
+    fn live_conversion_auto_commit_policy_uses_margins_and_mode() {
+        use shared::conversion_policy::{
+            find_auto_commit_live_conversion_snapshot_with_policy, AutoCommitLiveConversionMode,
+            TokenLogitMargin,
+        };
+
+        let mut snapshots = Vec::new();
+        let mut history = VecDeque::new();
+        let steps = [
+            ("watashiwagakkouni", "わたしはがっこうに", "私は学校に"),
+            (
+                "watashiwagakkouniik",
+                "わたしはがっこうにいk",
+                "私は学校にいk",
+            ),
+            (
+                "watashiwagakkouniitt",
+                "わたしはがっこうにいっt",
+                "私は学校にいっt",
+            ),
+            (
+                "watashiwagakkouniitte",
+                "わたしはがっこうにいって",
+                "私は学校に行って",
+            ),
+            (
+                "watashiwagakkouniittebe",
+                "わたしはがっこうにいってべ",
+                "私は学校に行ってべ",
+            ),
+            (
+                "watashiwagakkouniittebenn",
+                "わたしはがっこうにいってべん",
+                "私は学校に行ってべん",
+            ),
+            (
+                "watashiwagakkouniittebennkyo",
+                "わたしはがっこうにいってべんきょ",
+                "私は学校に行って勉強",
+            ),
+        ];
+        for (raw_input, raw_hiragana, preview) in steps {
+            TextServiceFactory::record_live_conversion_prefix_snapshot(
+                raw_input,
+                raw_hiragana,
+                preview,
+                "",
+                &mut snapshots,
+                &mut history,
+            );
+        }
+
+        let last = steps.last().unwrap();
+        let strong_margins = vec![
+            TokenLogitMargin {
+                byte_end: "私は学校に".len() as u32,
+                margin_milli: 2800,
+            },
+            TokenLogitMargin {
+                byte_end: last.2.len() as u32,
+                margin_milli: 3200,
+            },
+        ];
+        assert!(find_auto_commit_live_conversion_snapshot_with_policy(
+            last.0,
+            last.1,
+            last.2,
+            "",
+            &snapshots,
+            &history,
+            AutoCommitLiveConversionMode::Standard,
+            &[],
+        )
+        .is_none());
+        let early = find_auto_commit_live_conversion_snapshot_with_policy(
+            last.0,
+            last.1,
+            last.2,
+            "",
+            &snapshots,
+            &history,
+            AutoCommitLiveConversionMode::Standard,
+            &strong_margins,
+        );
+        assert_eq!(
+            early.as_ref().map(|s| s.preview.as_str()),
+            Some("私は学校に行って")
+        );
+        assert!(find_auto_commit_live_conversion_snapshot_with_policy(
+            last.0,
+            last.1,
+            last.2,
+            "",
+            &snapshots,
+            &history,
+            AutoCommitLiveConversionMode::Off,
+            &strong_margins,
+        )
+        .is_none());
     }
 }
 

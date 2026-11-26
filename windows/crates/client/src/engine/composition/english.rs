@@ -168,10 +168,7 @@ pub(super) fn split_at_char(s: &str, char_index: usize) -> (String, String) {
         .nth(index)
         .map(|(byte, _)| byte)
         .unwrap_or(s.len());
-    (
-        s[..byte_index].to_owned(),
-        s[byte_index..].to_owned(),
-    )
+    (s[..byte_index].to_owned(), s[byte_index..].to_owned())
 }
 
 pub(super) fn insert_at_char(s: &mut String, char_index: usize, text: &str) {
@@ -246,6 +243,7 @@ pub(super) fn candidates_with_store(
         hiragana: prefix.into(),
         corresponding_count: vec![prefix.len() as i32; count],
         candidate_ids,
+        top_token_margins: Default::default(),
     }
 }
 
@@ -364,7 +362,10 @@ impl TextServiceFactory {
                 if cursor >= total {
                     Some((c.state.clone(), Vec::new()))
                 } else {
-                    Some((CompositionState::Composing, vec![ClientAction::DeleteForwardText]))
+                    Some((
+                        CompositionState::Composing,
+                        vec![ClientAction::DeleteForwardText],
+                    ))
                 }
             }
             UserAction::Navigation(Navigation::Left) if active => Some((
@@ -855,10 +856,22 @@ mod tests {
 
     #[test]
     fn cursor_helpers_insert_and_delete_at_caret() {
-        assert_eq!(split_at_char("hello", 2), ("he".to_owned(), "llo".to_owned()));
-        assert_eq!(split_at_char("hello", 0), ("".to_owned(), "hello".to_owned()));
-        assert_eq!(split_at_char("hello", 5), ("hello".to_owned(), "".to_owned()));
-        assert_eq!(split_at_char("hello", 99), ("hello".to_owned(), "".to_owned()));
+        assert_eq!(
+            split_at_char("hello", 2),
+            ("he".to_owned(), "llo".to_owned())
+        );
+        assert_eq!(
+            split_at_char("hello", 0),
+            ("".to_owned(), "hello".to_owned())
+        );
+        assert_eq!(
+            split_at_char("hello", 5),
+            ("hello".to_owned(), "".to_owned())
+        );
+        assert_eq!(
+            split_at_char("hello", 99),
+            ("hello".to_owned(), "".to_owned())
+        );
 
         let mut word = "helo".to_owned();
         insert_at_char(&mut word, 3, "l");

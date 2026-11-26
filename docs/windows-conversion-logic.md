@@ -127,19 +127,21 @@ Pipe 名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`（`shared
 
 ライブ変換の先頭部分が十分に安定したら、サーバー側で `ShrinkText` 相当を実行し、先頭部分を確定して composition を縮める。クライアントの `maybe_auto_commit_live_conversion_chunk` が判定する。
 
-### 5.1 判定条件 (`find_auto_commit_live_conversion_snapshot`)
+### 5.1 判定条件 (`find_auto_commit_live_conversion_snapshot_with_policy`)
 
-- 全体の読みが 16 文字以上 (`MIN_TOTAL_HIRAGANA = 16`)
-- 確定部分が 8 文字以上 (`MIN_COMMIT_HIRAGANA = 8`)
-- 残りが 7 文字以上 (`MIN_REMAINING_HIRAGANA = 7`)
-- 表記接頭部が 4 文字以上 (`MIN_PREFIX_CHARS = 4`)
-- 安定性履歴が 5 段階 (`STABLE_STEPS = 5`)
-- suffix が空、未確定ローマ字尾部がない
-- clause スナップショット / future clause が空、selection_index == 0
-- fixed_prefix が空、temporary_latin でない、reconversion 中でない
-- `typo.hold_auto_commit` が false、`jev_conversion` が false
+設定 `general.auto_commit_live_conversion` は `off` / `standard`（既定）/ `fast` の3段階（旧 `bool` 設定は `false -> off`, `true -> standard` へ移行）で、Zenzai の Direct Model First 経路で取得した先頭候補のトークン単位 `top1 - top2` logit 差（`top_token_margins`）を併用する。
 
-さらに、スナップショット候補の preview が現在 preview の接頭部であり、履歴の全エントリが `snap.preview` で始まり長さが超えること。最大 hiragana_len のスナップショットを採用する。
+- 共通ガード: `mode != off`、表記接頭部 4 文字以上、自然な境界（句読点または漢字/カタカナを含むひらがな→漢字/カタカナ遷移）、`suffix` が空、未確定ローマ字尾部がない、分割でローマ字が壊れない、clause スナップショット / future clause が空、`selection_index == 0`、`fixed_prefix` が空、`temporary_latin` / `reconversion` でない、`typo.hold_auto_commit` が false、`jev_conversion` が false
+- 低確信ホールド（マージンあり時）: 接頭部の最小 `top1 - top2` logit 差 `< 1.2` の場合は、従来条件を満たしても確定を保留する
+- 句読点高確信（`standard` / `fast`、最小マージン `>= 1.5`）: 総読み 10 以上、確定 5 以上、残り 3 以上、安定 2 回以上
+- 高確信早期確定:
+  - `standard`（最小マージン `>= 2.5`）: 総読み 12 以上、確定 6 以上、残り 4 以上、安定 3 回以上
+  - `fast`（最小マージン `>= 2.2`）: 総読み 10 以上、確定 5 以上、残り 4 以上、安定 2 回以上
+- 標準・マージン未提供フォールバック:
+  - `standard`: 総読み 16 以上、確定 8 以上、残り 7 以上、安定 5 回以上
+  - `fast`: 総読み 14 以上、確定 7 以上、残り 5 以上、安定 4 回以上
+
+さらに、スナップショット候補の preview が現在 preview の接頭部であり、履歴が安定回数を満たすものから最大 `hiragana_len` のスナップショットを採用する。
 
 ### 5.2 確定テキスト算出
 

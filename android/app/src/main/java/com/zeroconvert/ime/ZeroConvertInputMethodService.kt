@@ -97,6 +97,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_TERMS_ACCEPTED = "terms_accepted"
         const val KEY_REALTIME_INLINE = "realtime_inline_conversion"
         const val KEY_AUTO_COMMIT_ENABLED = "auto_commit_enabled"
+        const val KEY_AUTO_COMMIT_MODE = "auto_commit_mode" // off|standard|fast
         const val KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE = "auto_commit_rewind_on_backspace"
         const val KEY_AI_PROFILE = "ai_profile"
         // "system" or a ZeroConThemes id ("dark_blue", "graphite", "forest", "plum", "sakura", "paper").
@@ -185,6 +186,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     }
 
     val isRealtimeInlineState = mutableStateOf(false)
+    val autoCommitModeState = mutableStateOf(AutoCommitMode.STANDARD)
     val isAutoCommitEnabledState = mutableStateOf(true)
     val isAutoCommitRewindState = mutableStateOf(false)
     val aiProfileState = mutableStateOf("")
@@ -1512,7 +1514,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         prefs.edit().putBoolean(KEY_REALTIME_INLINE, enabled).apply()
     }
 
-    fun isAutoCommitEnabled(): Boolean = isAutoCommitEnabledState.value
+    fun autoCommitMode(): AutoCommitMode = autoCommitModeState.value
+    fun isAutoCommitEnabled(): Boolean = autoCommitModeState.value.isEnabled
     fun isAutoCommitRewindEnabled(): Boolean = isAutoCommitRewindState.value
     fun isFlickOnly(): Boolean = isFlickOnlyState.value
 
@@ -1636,7 +1639,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         cancelPendingInference(edited = false)
         val prefs = sharedPreferences ?: getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
         isRealtimeInlineState.value = prefs.getBoolean(KEY_REALTIME_INLINE, true)
-        isAutoCommitEnabledState.value = prefs.getBoolean(KEY_AUTO_COMMIT_ENABLED, true)
+        val autoCommitMode = AutoCommitMode.readFrom(prefs, KEY_AUTO_COMMIT_MODE, KEY_AUTO_COMMIT_ENABLED)
+        autoCommitModeState.value = autoCommitMode
+        isAutoCommitEnabledState.value = autoCommitMode.isEnabled
         isAutoCommitRewindState.value = prefs.getBoolean(KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, false)
         aiProfileState.value = prefs.getString(KEY_AI_PROFILE, "") ?: ""
         themeModeState.value = prefs.getString(KEY_THEME_MODE, "system") ?: "system"
@@ -2956,14 +2961,25 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     ) {
                         recordInferenceSnapshot(inferenceHistory, InferenceSnapshot(surface, aiCand, snapshot.input.size))
                     }
-                    if (!sensitive && !reconversion && !rangeConversion && isAutoCommitEnabled() && composingText.isAtEndIndex &&
+                    val autoCommitMode = autoCommitMode()
+                    if (!sensitive && !reconversion && !rangeConversion && autoCommitMode.isEnabled && composingText.isAtEndIndex &&
                         !corrections.holdsAutoCommit && !hasTrailingIncompleteRomaji(surface)
                     ) {
                         // Auto-commit is shared policy: the engine owns the rule and
                         // its unit conversions, so Android has no second implementation.
+                        val topTokenMargins = if (aiCandidate != null && aiCandidate.text == aiCand) {
+                            aiCandidate.engineTokenMargins
+                        } else {
+                            ""
+                        }
                         val autoCommit = com.zeroconvert.ime.engine.WindowsEngine.autoCommit(
                             composingText.input.mapNotNull { (it.piece as? com.zeroconvert.ime.azookey.input.InputPiece.CharPiece)?.char }.joinToString(""),
-                            surface, inferenceHistory, composingText::isIndependentInputBoundary)
+                            surface,
+                            inferenceHistory,
+                            composingText::isIndependentInputBoundary,
+                            mode = autoCommitMode,
+                            topTokenMargins = topTokenMargins,
+                        )
                         if (autoCommit != null && aiCand.startsWith(autoCommit.surfacePrefix)) {
                             performAutoCommit(autoCommit, aiCand)
                             return@withContext

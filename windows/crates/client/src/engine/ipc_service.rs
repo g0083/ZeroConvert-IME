@@ -596,6 +596,7 @@ pub struct Candidates {
     pub corresponding_count: Vec<i32>,
     pub candidate_ids: Vec<u64>,
     pub prediction_readings: std::collections::HashMap<String, String>,
+    pub top_token_margins: Vec<shared::conversion_policy::TokenLogitMargin>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -625,6 +626,7 @@ impl Candidates {
             && self.corresponding_count.is_empty()
             && self.candidate_ids.is_empty()
             && self.prediction_readings.is_empty()
+            && self.top_token_margins.is_empty()
     }
 
     #[inline]
@@ -1188,6 +1190,14 @@ impl IPCService {
                     .suggestions
                     .iter()
                     .map(|s| s.candidate_id)
+                    .collect(),
+                top_token_margins: composing_text
+                    .top_token_margins
+                    .into_iter()
+                    .map(|m| shared::conversion_policy::TokenLogitMargin {
+                        byte_end: m.byte_end,
+                        margin_milli: m.margin_milli,
+                    })
                     .collect(),
             })
         } else {
@@ -3396,6 +3406,7 @@ mod tests {
             hiragana: "す".into(),
             corresponding_count: vec![2],
             candidate_ids: vec![7],
+            top_token_margins: Default::default(),
         };
         for direct in [false, true] {
             let actual = if direct {
@@ -3506,6 +3517,7 @@ mod tests {
                 candidate_id: 1,
                 ..Default::default()
             }],
+            top_token_margins: Vec::new(),
         }
     }
 
@@ -4371,6 +4383,7 @@ mod tests {
                 prediction_reading: "しました".into(),
                 ..Default::default()
             }],
+            top_token_margins: Vec::new(),
         };
         let candidates = IPCService::candidates_from_composing_text(Some(response)).unwrap();
         assert_eq!(candidates.hiragana, "しますた");
@@ -4395,6 +4408,7 @@ mod tests {
             hiragana: "いいかげんとういつ".to_string(),
             corresponding_count: vec![7],
             candidate_ids: vec![1],
+            top_token_margins: Default::default(),
         };
         let refreshed = Candidates {
             candidate_ids: vec![2],
@@ -4416,6 +4430,7 @@ mod tests {
             hiragana: "いいかげんとういつ".to_string(),
             corresponding_count: vec![7],
             candidate_ids: vec![1],
+            top_token_margins: Default::default(),
         };
 
         assert!(
@@ -4435,6 +4450,7 @@ mod tests {
             hiragana: "か".to_string(),
             corresponding_count: vec![1],
             candidate_ids: vec![1],
+            top_token_margins: Default::default(),
         };
 
         let attempt =

@@ -11,10 +11,16 @@ message Suggestion {
   string prediction_reading = 5;
 }
 
+message TokenMargin {
+  uint32 byte_end = 1;
+  uint32 margin_milli = 2;
+}
+
 // ComposingText represents the text and its associated suggestions.
 message ComposingText {
   string hiragana = 1; // The main text content.
   repeated Suggestion suggestions = 2; // List of suggestions for the text.
+  repeated TokenMargin top_token_margins = 3;
 }
 
 enum InputStyle {

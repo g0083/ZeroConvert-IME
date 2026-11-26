@@ -3381,6 +3381,7 @@ struct ZenzaiSupplementExecutionResult {
     let nbestNs: UInt64
     let predictionContinuationResult: ConversionResult?
     let skippedPredictionContinuation: Bool
+    let topTokenMargins: [TokenLogitMargin]
 
     init(
         zenzai: ConversionResult,
@@ -3390,7 +3391,8 @@ struct ZenzaiSupplementExecutionResult {
         ranInParallel: Bool,
         nbestNs: UInt64,
         predictionContinuationResult: ConversionResult? = nil,
-        skippedPredictionContinuation: Bool = false
+        skippedPredictionContinuation: Bool = false,
+        topTokenMargins: [TokenLogitMargin] = []
     ) {
         self.zenzai = zenzai
         self.supplement = supplement
@@ -3400,6 +3402,7 @@ struct ZenzaiSupplementExecutionResult {
         self.nbestNs = nbestNs
         self.predictionContinuationResult = predictionContinuationResult
         self.skippedPredictionContinuation = skippedPredictionContinuation
+        self.topTokenMargins = topTokenMargins
     }
 }
 
@@ -3556,6 +3559,12 @@ func executeZenzaiWithNormalNBestSupplement(
             normalNBestResults: supplementPayload.result.mainResults,
             reusableLattice: supplementPayload.lattice
         ) {
+            let directMargins: [TokenLogitMargin]
+            if case .text(_, let margins) = directOutcome {
+                directMargins = margins
+            } else {
+                directMargins = []
+            }
             return ZenzaiSupplementExecutionResult(
                 zenzai: finalized,
                 supplement: supplementPayload.result,
@@ -3564,7 +3573,8 @@ func executeZenzaiWithNormalNBestSupplement(
                 ranInParallel: canParallel,
                 nbestNs: supplementPayload.elapsedNs,
                 predictionContinuationResult: inlinePredResult,
-                skippedPredictionContinuation: inlineSkippedPred
+                skippedPredictionContinuation: inlineSkippedPred,
+                topTokenMargins: directMargins
             )
         }
 
@@ -4654,6 +4664,21 @@ public func get_learning_stats() -> UnsafeMutablePointer<CChar>? {
     return _strdup(json)
 }
 
+func encodeTokenLogitMargins(_ margins: [TokenLogitMargin]) -> String? {
+    guard !margins.isEmpty else {
+        return nil
+    }
+    var parts: [String] = []
+    parts.reserveCapacity(min(margins.count, 128))
+    for margin in margins.prefix(128) {
+        guard margin.byteEnd > 0, margin.marginMilli >= 0 else {
+            return nil
+        }
+        parts.append("\(margin.byteEnd):\(margin.marginMilli)")
+    }
+    return parts.joined(separator: ",")
+}
+
 func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
     let pointer = UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?>.allocate(capacity: list.count)
     guard !list.isEmpty else {
@@ -4713,6 +4738,7 @@ public func free_candidate_list(
         free(candidate.subtext)
         free(candidate.hiragana)
         free(candidate.predictionReading)
+        free(candidate.tokenMargins)
     }
 
     if isContiguousCandidateStorage, let candidateStorage {
@@ -4927,6 +4953,7 @@ func get_composed_text_impl(
     let normalNBestConverted: ConversionResult?
     let inlinePredictionContinuationResult: ConversionResult?
     let inlineSkippedPredictionContinuation: Bool
+    let directTopTokenMargins: [TokenLogitMargin]
     let converted: ConversionResult
     let requestStart = performanceNow()
     if useZenzai, requestComposingText == previewComposingText {
@@ -4955,10 +4982,12 @@ func get_composed_text_impl(
         normalNBestConverted = execution.supplement
         inlinePredictionContinuationResult = execution.predictionContinuationResult
         inlineSkippedPredictionContinuation = execution.skippedPredictionContinuation
+        directTopTokenMargins = execution.topTokenMargins
         converted = execution.zenzai
     } else {
         inlinePredictionContinuationResult = nil
         inlineSkippedPredictionContinuation = false
+        directTopTokenMargins = []
         if useZenzai {
             let supplementOptions = optionsForNormalNBestSupplementWithPrediction(from: options)
             normalNBestConverted = requestNormalNBestSupplementCandidates(
@@ -5244,6 +5273,17 @@ func get_composed_text_impl(
         ? [] : Set(pendingRomanCompletions.map(\.text))
     let normalizedNasalReading = previewHiragana.last == "n"
         ? hiraganaToKatakana(String(previewHiragana.dropLast()) + "ん") : nil
+    let encodedTopTokenMargins: String?
+    if !directTopTokenMargins.isEmpty,
+       suffixAfterCursor.isEmpty,
+       let firstMain = mainResults.first,
+       let firstZenzai = zenzaiMainResults.first,
+       constructCandidateString(candidate: firstMain, hiragana: previewHiragana)
+           == constructCandidateString(candidate: firstZenzai, hiragana: previewHiragana) {
+        encodedTopTokenMargins = encodeTokenLogitMargins(directTopTokenMargins)
+    } else {
+        encodedTopTokenMargins = nil
+    }
 
     for i in 0..<mainResults.count {
         let candidate = mainResults[i]
@@ -5296,7 +5336,8 @@ func get_composed_text_impl(
                 candidateId: learningCandidateId(at: i, batchFirstId: learningCandidateBatchFirstId),
                 predictionReading: suffixAfterCursor.isEmpty
                     ? keyboardCorrectionReading(candidate, remainingReading: resolvedCandidate.remainingConvertTarget).flatMap { _strdup($0) }
-                    : nil
+                    : nil,
+                tokenMargins: i == 0 ? encodedTopTokenMargins.flatMap { _strdup($0) } : nil
             )
         )
     }
@@ -5668,7 +5709,8 @@ public func get_composed_text_for_cursor_prefix(
                 hiragana: hiragana,
                 correspondingCount: Int32(correspondingCount),
                 candidateId: learningCandidateId(at: i, batchFirstId: learningCandidateBatchFirstId),
-                predictionReading: nil
+                predictionReading: nil,
+                tokenMargins: nil
             )
         )
     }

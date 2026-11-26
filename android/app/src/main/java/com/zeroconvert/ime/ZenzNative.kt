@@ -17,6 +17,7 @@ data class Candidate(
     val engineCandidateId: String = "",
     val engineConsumedReading: Int? = null,
     val enginePredictionReading: String = "",
+    val engineTokenMargins: String = "",
     val enginePostCompositionId: String = "",
     val isReadingCompletion: Boolean = false
 ) {

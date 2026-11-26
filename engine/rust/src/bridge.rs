@@ -253,8 +253,23 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
             });
         }
         let preview = envelope["baseline"].as_str().unwrap_or_default();
-        return Ok(policy::find_auto_commit_live_conversion_snapshot(
-            raw, reading, preview, "", &snapshots, &history,
+        let mode = envelope["mode"]
+            .as_str()
+            .map(policy::AutoCommitLiveConversionMode::from_str_lossy)
+            .unwrap_or_default();
+        let top_token_margins = envelope["topTokenMargins"]
+            .as_str()
+            .map(parse_token_logit_margins)
+            .unwrap_or_default();
+        return Ok(policy::find_auto_commit_live_conversion_snapshot_with_policy(
+            raw,
+            reading,
+            preview,
+            "",
+            &snapshots,
+            &history,
+            mode,
+            &top_token_margins,
         )
         .map(|s| json!({"readingLength":s.hiragana_len,"surface":s.preview}))
         .unwrap_or(Value::Null));
@@ -685,6 +700,33 @@ pub unsafe extern "C" fn zerocon_assist_policy(request: *const c_char) -> *mut c
         Err(_) => json!({"error": "assist policy panic"}),
     };
     CString::new(value.to_string()).unwrap().into_raw()
+}
+
+fn parse_token_logit_margins(raw: &str) -> Vec<crate::conversion_policy::TokenLogitMargin> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut margins = Vec::new();
+    let mut prev_end = 0u32;
+    for entry in trimmed.split(',').take(128) {
+        let Some((end_str, milli_str)) = entry.split_once(':') else {
+            return Vec::new();
+        };
+        let (Ok(byte_end), Ok(margin_milli)) = (end_str.parse::<u32>(), milli_str.parse::<u32>())
+        else {
+            return Vec::new();
+        };
+        if byte_end <= prev_end {
+            return Vec::new();
+        }
+        prev_end = byte_end;
+        margins.push(crate::conversion_policy::TokenLogitMargin {
+            byte_end,
+            margin_milli,
+        });
+    }
+    margins
 }
 
 #[cfg(test)]

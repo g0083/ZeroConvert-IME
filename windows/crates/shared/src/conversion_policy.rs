@@ -1,4 +1,5 @@
 //! Input and stability policy shared by the Windows client and Android host.
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 /// Default fullwidth state of the symbols the Windows client can convert.
@@ -120,6 +121,45 @@ pub fn symbol_default_fullwidth(symbol: &str) -> Option<bool> {
         .find_map(|(key, value)| (*key == symbol).then_some(*value))
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoCommitLiveConversionMode {
+    Off,
+    #[default]
+    Standard,
+    Fast,
+}
+
+impl AutoCommitLiveConversionMode {
+    pub fn is_enabled(self) -> bool {
+        self != Self::Off
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Standard => "standard",
+            Self::Fast => "fast",
+        }
+    }
+
+    pub fn from_str_lossy(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "off" | "disabled" | "none" | "false" => Self::Off,
+            "fast" | "early" | "aggressive" | "high" | "quick" => Self::Fast,
+            _ => Self::Standard,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenLogitMargin {
+    /// Exclusive UTF-8 byte end offset in the top candidate surface.
+    pub byte_end: u32,
+    /// `top1_logit - top2_logit` in milli-units (e.g. 2500 == 2.500).
+    pub margin_milli: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveConversionPrefixSnapshot {
     pub raw_input_len: usize,
@@ -132,6 +172,11 @@ const LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA: usize = 8;
 const LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA: usize = 7;
 const LIVE_CONVERSION_AUTO_COMMIT_MIN_PREFIX_CHARS: usize = 4;
 const LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS: usize = 5;
+
+const AUTO_COMMIT_MIN_MARGIN_FLOOR_MILLI: u32 = 1200;
+const AUTO_COMMIT_PUNCT_MIN_MARGIN_MILLI: u32 = 1500;
+const AUTO_COMMIT_STANDARD_FAST_MIN_MARGIN_MILLI: u32 = 2500;
+const AUTO_COMMIT_FAST_FAST_MIN_MARGIN_MILLI: u32 = 2200;
 
 #[inline]
 pub fn is_hiragana_char(ch: char) -> bool {
@@ -273,6 +318,35 @@ pub fn record_live_conversion_prefix_snapshot(
     }
 }
 
+pub fn prefix_min_margin_milli(prefix: &str, margins: &[TokenLogitMargin]) -> Option<u32> {
+    let prefix_bytes = prefix.len();
+    if prefix_bytes == 0 || margins.is_empty() {
+        return None;
+    }
+    if (margins.last()?.byte_end as usize) < prefix_bytes {
+        return None;
+    }
+    let mut prev_end = 0usize;
+    let mut min_margin: Option<u32> = None;
+    for m in margins {
+        let end = m.byte_end as usize;
+        if end <= prev_end {
+            return None;
+        }
+        if prev_end < prefix_bytes {
+            min_margin = Some(match min_margin {
+                Some(cur) => cur.min(m.margin_milli),
+                None => m.margin_milli,
+            });
+        }
+        prev_end = end;
+        if prev_end >= prefix_bytes {
+            break;
+        }
+    }
+    min_margin
+}
+
 pub fn find_auto_commit_live_conversion_snapshot(
     raw_input: &str,
     raw_hiragana: &str,
@@ -281,25 +355,98 @@ pub fn find_auto_commit_live_conversion_snapshot(
     snapshots: &[LiveConversionPrefixSnapshot],
     history: &VecDeque<String>,
 ) -> Option<LiveConversionPrefixSnapshot> {
-    let total_hiragana = raw_hiragana.chars().count();
-    if total_hiragana < LIVE_CONVERSION_AUTO_COMMIT_MIN_TOTAL_HIRAGANA
+    find_auto_commit_live_conversion_snapshot_with_policy(
+        raw_input,
+        raw_hiragana,
+        preview,
+        suffix,
+        snapshots,
+        history,
+        AutoCommitLiveConversionMode::Standard,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn find_auto_commit_live_conversion_snapshot_with_policy(
+    raw_input: &str,
+    raw_hiragana: &str,
+    preview: &str,
+    suffix: &str,
+    snapshots: &[LiveConversionPrefixSnapshot],
+    history: &VecDeque<String>,
+    mode: AutoCommitLiveConversionMode,
+    top_token_margins: &[TokenLogitMargin],
+) -> Option<LiveConversionPrefixSnapshot> {
+    if !mode.is_enabled()
         || !suffix.is_empty()
         || raw_input_has_pending_romaji_tail(raw_input, raw_hiragana)
-        || history.len() < LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS
     {
         return None;
     }
+    let total_hiragana = raw_hiragana.chars().count();
     snapshots
         .iter()
         .filter(|snap| {
-            snap.hiragana_len >= LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA
-                && total_hiragana.saturating_sub(snap.hiragana_len)
-                    >= LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA
-                && !raw_input_split_breaks_romaji(raw_input, snap.raw_input_len)
-                && is_natural_auto_commit_prefix(&snap.preview, preview)
-                && history.iter().all(|entry| {
+            if raw_input_split_breaks_romaji(raw_input, snap.raw_input_len)
+                || !is_natural_auto_commit_prefix(&snap.preview, preview)
+            {
+                return false;
+            }
+            let stable_count = history
+                .iter()
+                .rev()
+                .take_while(|entry| {
                     entry.starts_with(&snap.preview) && entry.len() > snap.preview.len()
                 })
+                .count();
+            let commit_hiragana = snap.hiragana_len;
+            let remaining_hiragana = total_hiragana.saturating_sub(commit_hiragana);
+            let is_punct = snap
+                .preview
+                .chars()
+                .last()
+                .is_some_and(is_japanese_clause_punctuation_char);
+            let min_margin = prefix_min_margin_milli(&snap.preview, top_token_margins);
+
+            match (mode, min_margin) {
+                (AutoCommitLiveConversionMode::Off, _) => false,
+                (_, Some(m)) if m < AUTO_COMMIT_MIN_MARGIN_FLOOR_MILLI => false,
+                (_, Some(m)) if is_punct && m >= AUTO_COMMIT_PUNCT_MIN_MARGIN_MILLI => {
+                    total_hiragana >= 10
+                        && commit_hiragana >= 5
+                        && remaining_hiragana >= 3
+                        && stable_count >= 2
+                }
+                (AutoCommitLiveConversionMode::Standard, Some(m))
+                    if m >= AUTO_COMMIT_STANDARD_FAST_MIN_MARGIN_MILLI =>
+                {
+                    total_hiragana >= 12
+                        && commit_hiragana >= 6
+                        && remaining_hiragana >= 4
+                        && stable_count >= 3
+                }
+                (AutoCommitLiveConversionMode::Standard, _) => {
+                    total_hiragana >= LIVE_CONVERSION_AUTO_COMMIT_MIN_TOTAL_HIRAGANA
+                        && commit_hiragana >= LIVE_CONVERSION_AUTO_COMMIT_MIN_COMMIT_HIRAGANA
+                        && remaining_hiragana >= LIVE_CONVERSION_AUTO_COMMIT_MIN_REMAINING_HIRAGANA
+                        && stable_count >= LIVE_CONVERSION_AUTO_COMMIT_STABLE_STEPS
+                }
+                (AutoCommitLiveConversionMode::Fast, Some(m))
+                    if m >= AUTO_COMMIT_FAST_FAST_MIN_MARGIN_MILLI =>
+                {
+                    total_hiragana >= 10
+                        && commit_hiragana >= 5
+                        && remaining_hiragana >= 4
+                        && stable_count >= 2
+                }
+                (AutoCommitLiveConversionMode::Fast, _) => {
+                    total_hiragana >= 14
+                        && commit_hiragana >= 7
+                        && remaining_hiragana >= 5
+                        && stable_count >= 4
+                }
+            }
         })
         .max_by_key(|snap| snap.hiragana_len)
         .cloned()
@@ -819,5 +966,274 @@ mod tests {
             CursorDeleteAction::DeleteForward
         );
         assert_eq!(decide_delete_forward_action(3, 3), CursorDeleteAction::NoOp);
+    }
+
+    #[test]
+    fn prefix_min_margin_milli_handles_boundaries_and_invalid_inputs() {
+        let prefix = "私は学校に";
+        let prefix_bytes = prefix.len() as u32;
+        let margins = vec![
+            TokenLogitMargin {
+                byte_end: 3,
+                margin_milli: 4200,
+            },
+            TokenLogitMargin {
+                byte_end: 6,
+                margin_milli: 3100,
+            },
+            TokenLogitMargin {
+                byte_end: prefix_bytes,
+                margin_milli: 2600,
+            },
+            TokenLogitMargin {
+                byte_end: prefix_bytes + 6,
+                margin_milli: 500,
+            },
+        ];
+        assert_eq!(prefix_min_margin_milli(prefix, &margins), Some(2600));
+        assert_eq!(prefix_min_margin_milli("", &margins), None);
+        assert_eq!(prefix_min_margin_milli(prefix, &[]), None);
+        assert_eq!(
+            prefix_min_margin_milli("私は学校に行って", &margins[..2]),
+            None
+        );
+        let non_monotonic = vec![
+            TokenLogitMargin {
+                byte_end: 6,
+                margin_milli: 3000,
+            },
+            TokenLogitMargin {
+                byte_end: 6,
+                margin_milli: 2000,
+            },
+            TokenLogitMargin {
+                byte_end: prefix_bytes,
+                margin_milli: 2500,
+            },
+        ];
+        assert_eq!(prefix_min_margin_milli(prefix, &non_monotonic), None);
+    }
+
+    #[test]
+    fn auto_commit_policy_respects_modes_margin_hold_and_early_tiers() {
+        let reading = "わたしはがっこうにいく"; // 11 kana
+        let preview = "私は学校に行く";
+        let prefix = "私は学校に"; // 6 kana
+        let rem_kana = 5usize;
+        assert_eq!(reading.chars().count(), 6 + rem_kana);
+
+        let snapshots = vec![
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 17,
+                hiragana_len: 6,
+                preview: prefix.to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 19,
+                hiragana_len: 8,
+                preview: "私は学校にい".to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 21,
+                hiragana_len: 10,
+                preview: "私は学校に行".to_string(),
+            },
+        ];
+        let mut history = VecDeque::new();
+        for s in &snapshots {
+            push_live_conversion_history(&mut history, &s.preview);
+        }
+
+        let high_margins = vec![
+            TokenLogitMargin {
+                byte_end: prefix.len() as u32,
+                margin_milli: 2400,
+            },
+            TokenLogitMargin {
+                byte_end: preview.len() as u32,
+                margin_milli: 3000,
+            },
+        ];
+        // Off never commits.
+        assert!(find_auto_commit_live_conversion_snapshot_with_policy(
+            "watashiwagakkouniiku",
+            reading,
+            preview,
+            "",
+            &snapshots,
+            &history,
+            AutoCommitLiveConversionMode::Off,
+            &high_margins,
+        )
+        .is_none());
+
+        // Margin 2400 with total=11, commit=6, rem=5, stable=2 (after prefix) -> Fast commits, Standard waits.
+        assert!(find_auto_commit_live_conversion_snapshot_with_policy(
+            "watashiwagakkouniiku",
+            reading,
+            preview,
+            "",
+            &snapshots,
+            &history,
+            AutoCommitLiveConversionMode::Standard,
+            &high_margins,
+        )
+        .is_none());
+        let fast_hit = find_auto_commit_live_conversion_snapshot_with_policy(
+            "watashiwagakkouniiku",
+            reading,
+            preview,
+            "",
+            &snapshots,
+            &history,
+            AutoCommitLiveConversionMode::Fast,
+            &high_margins,
+        );
+        assert_eq!(fast_hit.as_ref().map(|s| s.preview.as_str()), Some(prefix));
+
+        // Standard fast tier commits at total>=12, commit>=6, rem>=4, stable>=3, margin>=2500.
+        let reading12 = "わたしはがっこうにいくよ";
+        let preview12 = "私は学校に行くよ";
+        let mut hist3 = history.clone();
+        push_live_conversion_history(&mut hist3, preview12);
+        let std_margins = vec![
+            TokenLogitMargin {
+                byte_end: prefix.len() as u32,
+                margin_milli: 2600,
+            },
+            TokenLogitMargin {
+                byte_end: preview12.len() as u32,
+                margin_milli: 3000,
+            },
+        ];
+        let std_hit = find_auto_commit_live_conversion_snapshot_with_policy(
+            "watashiwagakkouniikuyo",
+            reading12,
+            preview12,
+            "",
+            &snapshots,
+            &hist3,
+            AutoCommitLiveConversionMode::Standard,
+            &std_margins,
+        );
+        assert_eq!(std_hit.as_ref().map(|s| s.preview.as_str()), Some(prefix));
+
+        // Low-confidence hold: even long + stable (5+ steps) is held when min_margin < 1200.
+        let long_reading = "こうせいをみなおしてからていしゅつする";
+        let long_preview = "構成を見直してから提出する";
+        let long_prefix = "構成を見直してから"; // 10 kana
+        let long_snaps = vec![
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 10,
+                hiragana_len: 10,
+                preview: long_prefix.to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 12,
+                hiragana_len: 12,
+                preview: "構成を見直してからて".to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 13,
+                hiragana_len: 13,
+                preview: "構成を見直してからてい".to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 15,
+                hiragana_len: 15,
+                preview: "構成を見直してからていしゅ".to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 17,
+                hiragana_len: 17,
+                preview: "構成を見直してから提出".to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 19,
+                hiragana_len: 19,
+                preview: long_preview.to_string(),
+            },
+        ];
+        let mut long_hist = VecDeque::new();
+        for s in &long_snaps {
+            push_live_conversion_history(&mut long_hist, &s.preview);
+        }
+        let low_margins = vec![
+            TokenLogitMargin {
+                byte_end: 3,
+                margin_milli: 800,
+            },
+            TokenLogitMargin {
+                byte_end: long_preview.len() as u32,
+                margin_milli: 4000,
+            },
+        ];
+        assert!(find_auto_commit_live_conversion_snapshot_with_policy(
+            long_reading,
+            long_reading,
+            long_preview,
+            "",
+            &long_snaps,
+            &long_hist,
+            AutoCommitLiveConversionMode::Fast,
+            &low_margins,
+        )
+        .is_none());
+        // Without margins (fallback), the baseline thresholds still commit it.
+        assert!(find_auto_commit_live_conversion_snapshot_with_policy(
+            long_reading,
+            long_reading,
+            long_preview,
+            "",
+            &long_snaps,
+            &long_hist,
+            AutoCommitLiveConversionMode::Standard,
+            &[],
+        )
+        .is_some());
+
+        // Punctuation early commit at total>=10, commit>=5, rem>=3, stable>=2, margin>=1500.
+        let punct_reading = "きょうはあめ、あしたは"; // 11 kana
+        let punct_preview = "今日は雨、明日は";
+        let punct_prefix = "今日は雨、"; // 6 kana
+        let punct_snaps = vec![
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 6,
+                hiragana_len: 6,
+                preview: punct_prefix.to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 9,
+                hiragana_len: 9,
+                preview: "今日は雨、あした".to_string(),
+            },
+            LiveConversionPrefixSnapshot {
+                raw_input_len: 11,
+                hiragana_len: 11,
+                preview: punct_preview.to_string(),
+            },
+        ];
+        let mut punct_hist = VecDeque::new();
+        for s in &punct_snaps {
+            push_live_conversion_history(&mut punct_hist, &s.preview);
+        }
+        let punct_margins = vec![TokenLogitMargin {
+            byte_end: punct_preview.len() as u32,
+            margin_milli: 1600,
+        }];
+        let punct_hit = find_auto_commit_live_conversion_snapshot_with_policy(
+            punct_reading,
+            punct_reading,
+            punct_preview,
+            "",
+            &punct_snaps,
+            &punct_hist,
+            AutoCommitLiveConversionMode::Standard,
+            &punct_margins,
+        );
+        assert_eq!(
+            punct_hit.as_ref().map(|s| s.preview.as_str()),
+            Some(punct_prefix)
+        );
     }
 }

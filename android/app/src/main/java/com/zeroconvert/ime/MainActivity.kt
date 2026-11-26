@@ -269,9 +269,16 @@ fun MainScreen(
     var isTouchTypoCorrectionEnabled by remember {
         mutableStateOf(initialTouchAssistSettings.correctionEnabled)
     }
-    var isAutoCommitEnabled by remember {
-        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, true))
+    var autoCommitMode by remember {
+        mutableStateOf(
+            AutoCommitMode.readFrom(
+                imePrefs,
+                ZeroConvertInputMethodService.KEY_AUTO_COMMIT_MODE,
+                ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED,
+            )
+        )
     }
+    var autoCommitMenuExpanded by remember { mutableStateOf(false) }
     var isAutoCommitRewind by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, false))
     }
@@ -1359,29 +1366,70 @@ fun MainScreen(
                 }
             )
             SettingsDivider(palette)
-            SettingsSwitchRow(
-                title = "ストリーミング自動確定",
-                description = "16文字以上の入力中、直近5回のAI推論で変化しなかった先頭の文節を自動確定し、文脈を維持します。",
-                checked = isAutoCommitEnabled,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    isAutoCommitEnabled = checked
-                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED, checked).apply()
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "ストリーミング自動確定",
+                    color = palette.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "入力中に安定した先頭の文節を自動で確定します。変換時の確信度（1位と2位のスコア差）も利用し、迷いがある箇所は保留します。",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                Box {
+                    SettingsSecondaryButton(
+                        text = autoCommitMode.label,
+                        palette = palette,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { autoCommitMenuExpanded = true }
+                    )
+                    DropdownMenu(
+                        expanded = autoCommitMenuExpanded,
+                        onDismissRequest = { autoCommitMenuExpanded = false }
+                    ) {
+                        AutoCommitMode.entries.forEach { preset ->
+                            DropdownMenuItem(
+                                text = { Text(preset.label) },
+                                onClick = {
+                                    autoCommitMode = preset
+                                    autoCommitMenuExpanded = false
+                                    imePrefs.edit()
+                                        .putString(
+                                            ZeroConvertInputMethodService.KEY_AUTO_COMMIT_MODE,
+                                            preset.storageValue
+                                        )
+                                        .putBoolean(
+                                            ZeroConvertInputMethodService.KEY_AUTO_COMMIT_ENABLED,
+                                            preset.isEnabled
+                                        )
+                                        .apply()
+                                }
+                            )
+                        }
+                    }
                 }
-            )
-            SettingsDivider(palette)
-            SettingsSwitchRow(
-                title = "自動確定直後のBackspaceで未確定に戻す",
-                description = "自動確定された直後にBackspaceを押した際、確定済みテキストを未確定のひらがなに戻して再変換できるようにします。",
-                checked = isAutoCommitRewind,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    isAutoCommitRewind = checked
-                    imePrefs.edit()
-                        .putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, checked)
-                        .apply()
-                }
-            )
+            }
+            if (autoCommitMode.isEnabled) {
+                SettingsDivider(palette)
+                SettingsSwitchRow(
+                    title = "自動確定直後のBackspaceで未確定に戻す",
+                    description = "自動確定された直後にBackspaceを押した際、確定済みテキストを未確定のひらがなに戻して再変換できるようにします。",
+                    checked = isAutoCommitRewind,
+                    palette = palette,
+                    onCheckedChange = { checked ->
+                        isAutoCommitRewind = checked
+                        imePrefs.edit()
+                            .putBoolean(ZeroConvertInputMethodService.KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, checked)
+                            .apply()
+                    }
+                )
+            }
             SettingsDivider(palette)
             SettingsSwitchRow(
                 title = "予測変換（単語・フレーズ）",

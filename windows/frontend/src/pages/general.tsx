@@ -35,6 +35,7 @@ type LearningStats = {
 };
 type ReconversionKey = "convert" | "shift_convert" | "space" | "win_slash" | "disabled";
 type AutoTypoCorrectionStrength = "off" | "conservative" | "standard" | "aggressive";
+type AutoCommitLiveConversionMode = "off" | "standard" | "fast";
 type ClipboardConfigState = {
     trigger_key: string;
     retention_hours: number;
@@ -67,7 +68,7 @@ type GeneralConfigState = {
     translation_target: string;
     translation_keep_alive: boolean;
     experimental_ai_engine: string;
-    auto_commit_live_conversion: boolean;
+    auto_commit_live_conversion: AutoCommitLiveConversionMode;
     auto_commit_rewind_on_backspace: boolean;
     follow_input_scope_mode: boolean;
 };
@@ -101,7 +102,7 @@ const DEFAULT_GENERAL_CONFIG: GeneralConfigState = {
     translation_target: "auto",
     translation_keep_alive: false,
     experimental_ai_engine: "embedded",
-    auto_commit_live_conversion: true,
+    auto_commit_live_conversion: "standard",
     auto_commit_rewind_on_backspace: false,
     follow_input_scope_mode: false,
 };
@@ -168,6 +169,28 @@ const normalizeAutoTypoCorrectionStrength = (value: unknown): AutoTypoCorrection
     }
     return "standard";
 };
+const AUTO_COMMIT_LIVE_CONVERSION_OPTIONS: { value: AutoCommitLiveConversionMode; label: string }[] = [
+    { value: "off", label: "オフ" },
+    { value: "standard", label: "通常（推奨）" },
+    { value: "fast", label: "早め（速度重視）" },
+];
+const normalizeAutoCommitLiveConversionMode = (value: unknown): AutoCommitLiveConversionMode => {
+    if (value === false) return "off";
+    if (value === true) return "standard";
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+        if (AUTO_COMMIT_LIVE_CONVERSION_OPTIONS.some((option) => option.value === normalized)) {
+            return normalized as AutoCommitLiveConversionMode;
+        }
+        if (["fast", "early", "aggressive", "high", "quick"].includes(normalized)) {
+            return "fast";
+        }
+        if (["off", "disabled", "none", "false"].includes(normalized)) {
+            return "off";
+        }
+    }
+    return "standard";
+};
 const LEARNING_MODE_OPTIONS: { value: LearningMode; label: string }[] = [
     { value: "enabled", label: "学習して履歴を使う" },
     { value: "read_only", label: "既存の履歴のみ使う" },
@@ -201,6 +224,7 @@ const normalizeGeneralConfig = (value?: Record<string, unknown>): GeneralConfigS
         next.numpad_input = DEFAULT_GENERAL_CONFIG.numpad_input;
     }
     next.auto_typo_correction = normalizeAutoTypoCorrectionStrength(value?.auto_typo_correction);
+    next.auto_commit_live_conversion = normalizeAutoCommitLiveConversionMode(value?.auto_commit_live_conversion);
     next.live_conversion_reading_vertical_adjustment =
         clampLiveConversionReadingVerticalAdjustment(value?.live_conversion_reading_vertical_adjustment);
     return next;
@@ -538,10 +562,17 @@ export const General = ({ page }: { page: "input" | "conversion" | "keys" | "adv
             {page === "conversion" && <>
                 <Zenzai />
                 <SettingsSection title="確定">
-                    <SettingsRow label="長文の自動確定（ストリーミング確定）" description="長い文を入力中、先頭側の変換が安定した時点で自動的に確定し、続けて快適に入力できるようにします。" htmlFor="auto-commit-live-conversion">
-                        <Switch id="auto-commit-live-conversion" checked={generalValue.auto_commit_live_conversion} onCheckedChange={(value) => void updateGeneralConfig("auto_commit_live_conversion", value)} />
+                    <SettingsRow label="長文の自動確定（ストリーミング確定）" description="長い文を入力中、先頭側の変換の確信度と安定性に応じて自動的に確定し、続けて快適に入力できるようにします。" htmlFor="auto-commit-live-conversion">
+                        <Select value={generalValue.auto_commit_live_conversion} onValueChange={(value) => void updateGeneralConfig("auto_commit_live_conversion", normalizeAutoCommitLiveConversionMode(value))}>
+                            <SelectTrigger id="auto-commit-live-conversion" className="w-64"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                {AUTO_COMMIT_LIVE_CONVERSION_OPTIONS.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </SettingsRow>
-                    {generalValue.auto_commit_live_conversion && <div className="settings-subgroup">
+                    {generalValue.auto_commit_live_conversion !== "off" && <div className="settings-subgroup">
                         <SettingsRow label="自動確定直後のBackspaceで未確定に戻す" description="自動確定された直後にBackspaceキーを押した際、確定を取り消して未確定の入力状態に戻します。" htmlFor="auto-commit-rewind-on-backspace">
                             <Switch id="auto-commit-rewind-on-backspace" checked={generalValue.auto_commit_rewind_on_backspace} onCheckedChange={(value) => void updateGeneralConfig("auto_commit_rewind_on_backspace", value)} />
                         </SettingsRow>

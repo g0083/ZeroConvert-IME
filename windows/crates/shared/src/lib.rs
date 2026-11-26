@@ -254,10 +254,6 @@ pub const LIVE_CONVERSION_READING_VERTICAL_ADJUSTMENT_DEFAULT: i32 = 4;
 /// respawn loop.
 pub const UIACCESS_HANDOFF_EXIT_CODE: i32 = 0x5A;
 
-fn default_auto_commit_live_conversion() -> bool {
-    true
-}
-
 fn default_copy_translation_popup() -> bool {
     true
 }
@@ -724,8 +720,8 @@ pub struct GeneralConfig {
     pub experimental_ai_engine: String,
     #[serde(default = "default_ai_engine_port")]
     pub experimental_ai_engine_port: u16,
-    #[serde(default = "default_auto_commit_live_conversion")]
-    pub auto_commit_live_conversion: bool,
+    #[serde(default, deserialize_with = "deserialize_auto_commit_live_conversion")]
+    pub auto_commit_live_conversion: conversion_policy::AutoCommitLiveConversionMode,
     #[serde(default)]
     pub auto_commit_rewind_on_backspace: bool,
     #[serde(default = "default_theme_color")]
@@ -765,7 +761,7 @@ impl Default for GeneralConfig {
             translation_keep_alive: false,
             experimental_ai_engine: default_ai_engine(),
             experimental_ai_engine_port: default_ai_engine_port(),
-            auto_commit_live_conversion: true,
+            auto_commit_live_conversion: conversion_policy::AutoCommitLiveConversionMode::Standard,
             auto_commit_rewind_on_backspace: false,
             theme_color: default_theme_color(),
             follow_input_scope_mode: false,
@@ -873,7 +869,10 @@ mod tests {
         });
         let with_tuning = serde_json::to_string(&restored).unwrap();
         let reparsed: super::AppConfig = serde_json::from_str(&with_tuning).unwrap();
-        assert_eq!(reparsed.zenzai.cpu_runtime_tuning, restored.zenzai.cpu_runtime_tuning);
+        assert_eq!(
+            reparsed.zenzai.cpu_runtime_tuning,
+            restored.zenzai.cpu_runtime_tuning
+        );
     }
 
     #[test]
@@ -1255,6 +1254,55 @@ mod tests {
         ] {
             let parsed: GeneralConfig = serde_json::from_str(raw).unwrap();
             assert_eq!(parsed.auto_typo_correction, expected);
+        }
+    }
+
+    #[test]
+    fn auto_commit_live_conversion_defaults_to_standard_and_migrates_legacy_bool() {
+        use crate::conversion_policy::AutoCommitLiveConversionMode;
+
+        let default_config = GeneralConfig::default();
+        assert_eq!(
+            default_config.auto_commit_live_conversion,
+            AutoCommitLiveConversionMode::Standard
+        );
+
+        let deserialized: GeneralConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            deserialized.auto_commit_live_conversion,
+            AutoCommitLiveConversionMode::Standard
+        );
+
+        let legacy_disabled: GeneralConfig =
+            serde_json::from_str(r#"{"auto_commit_live_conversion":false}"#).unwrap();
+        assert_eq!(
+            legacy_disabled.auto_commit_live_conversion,
+            AutoCommitLiveConversionMode::Off
+        );
+
+        let legacy_enabled: GeneralConfig =
+            serde_json::from_str(r#"{"auto_commit_live_conversion":true}"#).unwrap();
+        assert_eq!(
+            legacy_enabled.auto_commit_live_conversion,
+            AutoCommitLiveConversionMode::Standard
+        );
+
+        for (raw, expected) in [
+            (
+                r#"{"auto_commit_live_conversion":"off"}"#,
+                AutoCommitLiveConversionMode::Off,
+            ),
+            (
+                r#"{"auto_commit_live_conversion":"standard"}"#,
+                AutoCommitLiveConversionMode::Standard,
+            ),
+            (
+                r#"{"auto_commit_live_conversion":"fast"}"#,
+                AutoCommitLiveConversionMode::Fast,
+            ),
+        ] {
+            let parsed: GeneralConfig = serde_json::from_str(raw).unwrap();
+            assert_eq!(parsed.auto_commit_live_conversion, expected);
         }
     }
 
@@ -1976,6 +2024,30 @@ where
         Some(Value::Str(s)) => Ok(assist_policy::AutoTypoCorrectionStrength::from_str_lossy(
             &s,
         )),
+    }
+}
+
+fn deserialize_auto_commit_live_conversion<'de, D>(
+    deserializer: D,
+) -> Result<conversion_policy::AutoCommitLiveConversionMode, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Bool(bool),
+        Str(String),
+    }
+
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::Bool(false)) => Ok(conversion_policy::AutoCommitLiveConversionMode::Off),
+        Some(Value::Bool(true)) | None => {
+            Ok(conversion_policy::AutoCommitLiveConversionMode::Standard)
+        }
+        Some(Value::Str(s)) => {
+            Ok(conversion_policy::AutoCommitLiveConversionMode::from_str_lossy(&s))
+        }
     }
 }
 

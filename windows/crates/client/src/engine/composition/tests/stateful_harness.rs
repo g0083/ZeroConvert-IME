@@ -453,6 +453,7 @@ fn candidates_owned(
         hiragana,
         corresponding_count,
         candidate_ids,
+        top_token_margins: Default::default(),
     }
 }
 

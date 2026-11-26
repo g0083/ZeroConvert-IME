@@ -2010,7 +2010,8 @@ private func testCandidate(
             subtext: subtext,
             hiragana: hiragana,
             correspondingCount: 1,
-            candidateId: 1, predictionReading: nil
+            candidateId: 1, predictionReading: nil,
+            tokenMargins: nil
         )
     ]
 
@@ -2024,7 +2025,8 @@ private func testCandidate(
             subtext: nilHiraganaSubtext,
             hiragana: nil,
             correspondingCount: 1,
-            candidateId: 2, predictionReading: nil
+            candidateId: 2, predictionReading: nil,
+            tokenMargins: nil
         )
     ]
 
@@ -2040,7 +2042,8 @@ private func testCandidate(
             subtext: firstLegacySubtext,
             hiragana: firstLegacyHiragana,
             correspondingCount: 1,
-            candidateId: 3, predictionReading: nil
+            candidateId: 3, predictionReading: nil,
+            tokenMargins: nil
         )
     )
 
@@ -2053,7 +2056,8 @@ private func testCandidate(
             subtext: secondLegacySubtext,
             hiragana: nil,
             correspondingCount: 1,
-            candidateId: 4, predictionReading: nil
+            candidateId: 4, predictionReading: nil,
+            tokenMargins: nil
         )
     )
 

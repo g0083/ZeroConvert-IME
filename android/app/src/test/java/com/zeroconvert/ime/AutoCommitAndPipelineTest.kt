@@ -191,4 +191,56 @@ class AutoCommitAndPipelineTest {
         assertEquals(AutoCommitRewind.Result.UNCHANGED, AutoCommitRewind.restore(record, "いく", "行く", failed))
         assertEquals("東京に行く", failed.committed + failed.composing)
     }
+
+    @Test fun autoCommitModeReadFromMigratesLegacyBoolAndStringPresets() {
+        fun stubPrefs(values: Map<String, Any>): android.content.SharedPreferences =
+            java.lang.reflect.Proxy.newProxyInstance(
+                android.content.SharedPreferences::class.java.classLoader,
+                arrayOf(android.content.SharedPreferences::class.java),
+            ) { _, method, args ->
+                when (method.name) {
+                    "contains" -> values.containsKey(args!![0] as String)
+                    "getBoolean" -> values[args!![0] as String] as? Boolean ?: (args[1] as Boolean)
+                    "getString" -> values[args!![0] as String] as? String ?: (args[1] as? String)
+                    else -> error("Unexpected SharedPreferences call: ${method.name}")
+                }
+            } as android.content.SharedPreferences
+
+        assertEquals(
+            AutoCommitMode.STANDARD,
+            AutoCommitMode.readFrom(stubPrefs(emptyMap()), "mode", "legacy")
+        )
+        assertEquals(
+            AutoCommitMode.OFF,
+            AutoCommitMode.readFrom(stubPrefs(mapOf("legacy" to false)), "mode", "legacy")
+        )
+        assertEquals(
+            AutoCommitMode.STANDARD,
+            AutoCommitMode.readFrom(stubPrefs(mapOf("legacy" to true)), "mode", "legacy")
+        )
+        assertEquals(
+            AutoCommitMode.FAST,
+            AutoCommitMode.readFrom(
+                stubPrefs(mapOf("legacy" to false, "mode" to "fast")),
+                "mode",
+                "legacy"
+            )
+        )
+        assertEquals(
+            AutoCommitMode.OFF,
+            AutoCommitMode.readFrom(
+                stubPrefs(mapOf("legacy" to true, "mode" to "off")),
+                "mode",
+                "legacy"
+            )
+        )
+        assertEquals(
+            AutoCommitMode.STANDARD,
+            AutoCommitMode.readFrom(
+                stubPrefs(mapOf("mode" to "unknown")),
+                "mode",
+                "legacy"
+            )
+        )
+    }
 }

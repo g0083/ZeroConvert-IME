@@ -41,7 +41,7 @@
     "live_conversion_reading_vertical_adjustment": 4,
     "experimental_typo_correction": true,
     "auto_typo_correction": "standard",
-    "auto_commit_live_conversion": true,
+    "auto_commit_live_conversion": "standard",
     "auto_commit_rewind_on_backspace": false,
     "follow_input_scope_mode": false,
     "experimental_ai_assist": true,

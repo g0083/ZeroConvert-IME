@@ -302,7 +302,11 @@ fn append_ai_assist_candidates_with_refinement(
             }
         } else {
             let (found_typo, hybrid_proposal) = ai_assist::corrector::suggest_windows_composition(
-                context, hiragana_text, &first_surface, composing_raw, config,
+                context,
+                hiragana_text,
+                &first_surface,
+                composing_raw,
+                config,
             );
             if let Some(suggestion) = found_typo {
                 let can_auto =
@@ -707,6 +711,7 @@ struct RawComposingText {
 struct ComposedText {
     hiragana: Option<String>,
     suggestions: Vec<Suggestion>,
+    top_token_margins: Vec<shared::proto::TokenMargin>,
 }
 
 #[derive(Debug, Clone)]
@@ -718,6 +723,7 @@ struct FFICandidate {
     corresponding_count: c_int,
     candidate_id: u64,
     prediction_reading: *mut c_char,
+    token_margins: *mut c_char,
 }
 
 unsafe extern "C" {
@@ -1650,6 +1656,7 @@ fn hiragana_boundary_fallback(
             corresponding_count,
             candidate_id: 0,
         }],
+        top_token_margins: Vec::new(),
     })
 }
 
@@ -1924,10 +1931,38 @@ fn compose_after_cursor_aware_mutation(
         None => ComposedText {
             hiragana: Some(String::new()),
             suggestions: Vec::new(),
+            top_token_margins: Vec::new(),
         },
         Some(mode) => get_composed_text_from_mode(mode, request_id)?,
     };
     Ok((composed_text, raw_input, is_at_end))
+}
+
+fn parse_token_logit_margins(raw: &str) -> Vec<shared::proto::TokenMargin> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut margins = Vec::new();
+    let mut prev_end = 0u32;
+    for entry in trimmed.split(',') {
+        let Some((end_str, milli_str)) = entry.split_once(':') else {
+            return Vec::new();
+        };
+        let (Ok(byte_end), Ok(margin_milli)) = (end_str.parse::<u32>(), milli_str.parse::<u32>())
+        else {
+            return Vec::new();
+        };
+        if byte_end <= prev_end {
+            return Vec::new();
+        }
+        prev_end = byte_end;
+        margins.push(shared::proto::TokenMargin {
+            byte_end,
+            margin_milli,
+        });
+    }
+    margins
 }
 
 fn get_composed_text_from_mode(
@@ -1973,6 +2008,7 @@ fn get_composed_text_from_mode(
 
     let mut suggestions = Vec::with_capacity(length);
     let mut hiragana = None;
+    let mut top_token_margins = Vec::new();
     let mut seen_texts = HashSet::with_capacity(length);
     let performance_enabled = should_log_performance();
     let mut cstr_decode_ms = 0;
@@ -2035,6 +2071,11 @@ fn get_composed_text_from_mode(
         add_elapsed_ms(&mut cstr_decode_ms, subtext_decode_start);
         let corresponding_count = candidate.corresponding_count;
 
+        if index == 0 && !candidate.token_margins.is_null() {
+            let raw_margins = unsafe { CStr::from_ptr(candidate.token_margins) }.to_string_lossy();
+            top_token_margins = parse_token_logit_margins(&raw_margins);
+        }
+
         let suggestion = Suggestion {
             text,
             subtext,
@@ -2068,13 +2109,18 @@ fn get_composed_text_from_mode(
         suggestions.len()
     );
     candidates.free_with_performance(request_id, operation);
+    let top_text_before_promote = suggestions.first().map(|s| s.text.clone());
     if matches!(mode, ComposedTextQueryMode::Full) {
         promote_full_composition_top_candidate(&mut suggestions, hiragana.as_deref());
+    }
+    if suggestions.first().map(|s| s.text.as_str()) != top_text_before_promote.as_deref() {
+        top_token_margins.clear();
     }
 
     Ok(ComposedText {
         hiragana,
         suggestions,
+        top_token_margins,
     })
 }
 
@@ -2669,6 +2715,7 @@ impl AzookeyService for MyAzookeyService {
         );
 
         let mut final_suggestions = composed_text.suggestions;
+        let top_before_macro = final_suggestions.first().map(|s| s.text.clone());
         if is_at_end && !composing_text.text.is_empty() {
             let full_count = final_suggestions
                 .iter()
@@ -2684,6 +2731,12 @@ impl AzookeyService for MyAzookeyService {
                 &mut final_suggestions,
             );
         }
+        let top_token_margins =
+            if final_suggestions.first().map(|s| s.text.as_str()) == top_before_macro.as_deref() {
+                composed_text.top_token_margins
+            } else {
+                Vec::new()
+            };
         let hiragana_text = composed_text
             .hiragana
             .unwrap_or_else(|| composing_text.text.clone());
@@ -2692,6 +2745,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana: hiragana_text,
                 suggestions: final_suggestions,
+                top_token_margins,
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
@@ -2769,6 +2823,7 @@ impl AzookeyService for MyAzookeyService {
         );
 
         let mut final_suggestions = composed_text.suggestions;
+        let top_before_macro = final_suggestions.first().map(|s| s.text.clone());
         if is_at_end && !composing_text.text.is_empty() {
             let full_count = final_suggestions
                 .iter()
@@ -2784,6 +2839,12 @@ impl AzookeyService for MyAzookeyService {
                 &mut final_suggestions,
             );
         }
+        let top_token_margins =
+            if final_suggestions.first().map(|s| s.text.as_str()) == top_before_macro.as_deref() {
+                composed_text.top_token_margins
+            } else {
+                Vec::new()
+            };
         let hiragana_text = composed_text
             .hiragana
             .unwrap_or_else(|| composing_text.text.clone());
@@ -2792,6 +2853,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana: hiragana_text,
                 suggestions: final_suggestions,
+                top_token_margins,
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
@@ -2929,6 +2991,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana,
                 suggestions,
+                top_token_margins: Vec::new(),
             }),
             server_session_id: server_session_id(),
             selection_index,
@@ -2994,6 +3057,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana: composed_text.hiragana.unwrap_or(composing_text.text),
                 suggestions: composed_text.suggestions,
+                top_token_margins: composed_text.top_token_margins,
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
@@ -3059,6 +3123,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana: composed_text.hiragana.unwrap_or(composing_text.text),
                 suggestions: composed_text.suggestions,
+                top_token_margins: composed_text.top_token_margins,
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
@@ -3124,6 +3189,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana: composed_text.hiragana.unwrap_or(composing_text.text),
                 suggestions: composed_text.suggestions,
+                top_token_margins: composed_text.top_token_margins,
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
@@ -3275,6 +3341,7 @@ impl AzookeyService for MyAzookeyService {
                 composing_text: Some(ComposingText {
                     hiragana: composed_text.hiragana.unwrap_or(adjustment.text),
                     suggestions: composed_text.suggestions,
+                    top_token_margins: composed_text.top_token_margins,
                 }),
                 applied: true,
                 adjusted_input_count: adjustment.adjusted_input_count,
@@ -3427,6 +3494,7 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana: composed_text.hiragana.unwrap_or(composing_text.text),
                 suggestions: composed_text.suggestions,
+                top_token_margins: composed_text.top_token_margins,
             }),
             server_session_id: server_session_id(),
             raw_input: Some(raw_input),
@@ -3484,6 +3552,7 @@ impl AzookeyService for MyAzookeyService {
             let navigation_composing_text = ComposingText {
                 hiragana: navigation_composed.hiragana.unwrap_or(navigation_text.text),
                 suggestions: navigation_composed.suggestions,
+                top_token_margins: navigation_composed.top_token_margins,
             };
             snapshot_rollback.commit();
             performance_event_lazy!(
@@ -3502,6 +3571,7 @@ impl AzookeyService for MyAzookeyService {
             shrunk_text: Some(ComposingText {
                 hiragana: shrunk_text.text,
                 suggestions: Vec::new(),
+                top_token_margins: Vec::new(),
             }),
             navigation_text: Some(navigation_composing_text),
             server_session_id: server_session_id(),
@@ -3575,11 +3645,13 @@ impl AzookeyService for MyAzookeyService {
                     let navigation_composing_text = ComposingText {
                         hiragana: navigation_composed.hiragana.unwrap_or(navigation_text.text),
                         suggestions: navigation_composed.suggestions,
+                        top_token_margins: navigation_composed.top_token_margins,
                     };
                     advances.push(PreparedClauseAdvance {
                         shrunk_text: Some(ComposingText {
                             hiragana: shrunk_text.text,
                             suggestions: Vec::new(),
+                            top_token_margins: Vec::new(),
                         }),
                         navigation_text: Some(navigation_composing_text),
                     });
@@ -4492,15 +4564,17 @@ fn maybe_spawn_idle_cpu_tuning_probe(service: MyAzookeyService) {
                 };
                 let _write_guard = shared::ConfigWriteGuard::acquire().ok()?;
                 let mut latest = AppConfig::read().ok()?;
-                let latest_model =
-                    shared::runtime_assets::canonical_model_id(&latest.zenzai.model)
-                        .unwrap_or(&latest.zenzai.model);
+                let latest_model = shared::runtime_assets::canonical_model_id(&latest.zenzai.model)
+                    .unwrap_or(&latest.zenzai.model);
                 if latest.zenzai.backend != "cpu" || latest_model != expected_model {
                     return None;
                 }
-                if latest.zenzai.cpu_runtime_tuning.as_ref().is_some_and(|cur| {
-                    cur.is_valid_for(&expected_model, &expected_topology)
-                }) {
+                if latest
+                    .zenzai
+                    .cpu_runtime_tuning
+                    .as_ref()
+                    .is_some_and(|cur| cur.is_valid_for(&expected_model, &expected_topology))
+                {
                     return None;
                 }
                 latest.zenzai.cpu_runtime_tuning = Some(tuned.clone());
@@ -5627,5 +5701,23 @@ mod english_learning_rpc_tests {
             ),
             (0, 0)
         );
+    }
+
+    #[test]
+    fn parse_token_logit_margins_validates_format_and_monotonic_offsets() {
+        let parsed = super::parse_token_logit_margins("3:4200,9:1850,15:3100");
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].byte_end, 3);
+        assert_eq!(parsed[0].margin_milli, 4200);
+        assert_eq!(parsed[1].byte_end, 9);
+        assert_eq!(parsed[1].margin_milli, 1850);
+        assert_eq!(parsed[2].byte_end, 15);
+        assert_eq!(parsed[2].margin_milli, 3100);
+
+        assert!(super::parse_token_logit_margins("").is_empty());
+        assert!(super::parse_token_logit_margins("3:4200,3:1850").is_empty());
+        assert!(super::parse_token_logit_margins("6:4200,3:1850").is_empty());
+        assert!(super::parse_token_logit_margins("3:bad").is_empty());
+        assert!(super::parse_token_logit_margins("invalid").is_empty());
     }
 }
