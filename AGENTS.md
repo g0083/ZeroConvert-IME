@@ -19,7 +19,7 @@
 
 ## ドキュメント・レポートの配置原則
 
-詳細な作成・更新・リンク規約は [ドキュメント作成・管理ルール](docs/documentation-guide.md) を参照する。
+詳細な作成・更新・リンク規約は [ドキュメント作成・管理ルール](docs/documentation-guide.md) を参照する。公開面は性能の結果のみを記載し、詳細は（内部）に保存する。
 
 - **`docs/`（現行仕様・運用ガイド）**: システム設計、アーキテクチャ、セットアップ・開発手順など、継続的に参照・保守される恒久文書のみを配置する（一覧: [docs/README.md](docs/README.md)）。
   - `docs/investigations/`: 個別機能の設計メモ、実装計画（冒頭に状態を明記）、特定バージョンでの不具合解析などを配置する（一覧: [docs/investigations/README.md](docs/investigations/README.md)）。

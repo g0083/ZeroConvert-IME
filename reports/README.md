@@ -2,6 +2,8 @@
 
 各機能・モデル開発・移植フェーズ・Web 検証において作成されたレポートや調査記録を格納するディレクトリです。記載・分類ルールは [docs/documentation-guide.md](../docs/documentation-guide.md) を参照してください。
 
+公開レポートは性能の結果のみを記載し、詳細は（内部）に保存します。
+
 ## ディレクトリ構成
 
 - **`models/`**（[索引](models/README.md)）: ZeroCon Model の性能比較レポート

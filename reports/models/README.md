@@ -2,7 +2,9 @@
 
 ZeroCon Model の性能比較（共通候補生成・モデル推論のみ・CPU実行）の公開用レポートです。現行配布モデルの正本仕様は [docs/model-assets.md](../../docs/model-assets.md) を参照してください。
 
-学習・蒸留・量子化・研究の詳細記録は公開していません。
+## 公開原則
+
+このディレクトリのレポートは**性能の結果だけ**を掲載します（[docs/documentation-guide.md §5](../../docs/documentation-guide.md#5-公開面の原則)）。詳細は（内部）に保存します。
 
 ## 840問ベンチマーク
 
