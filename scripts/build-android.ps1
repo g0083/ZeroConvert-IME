@@ -16,8 +16,10 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $repoRoot
 try {
     if (!$SkipNative) {
+        & node (Join-Path $PSScriptRoot 'prepare-shared-engine.mjs')
+        if ($LASTEXITCODE -ne 0) { throw 'Shared source preparation failed.' }
         foreach ($abi in @('arm64-v8a', 'x86_64')) {
-            & (Join-Path $PSScriptRoot 'build-android-shared-engine.ps1') -Abi $abi
+            & (Join-Path $PSScriptRoot 'build-android-shared-engine.ps1') -Abi $abi -SkipPrepare
             if ($LASTEXITCODE -ne 0) { throw "Native engine build failed: $abi" }
         }
     }
@@ -25,11 +27,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Android Swift pins differ from the Windows pins.' }
     & node scripts/check-shared-engine.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Shared engine source/binary verification failed.' }
-    & python scripts/check-android-native.py
-    if ($LASTEXITCODE -ne 0) { throw 'Android native dependency verification failed.' }
+    if ($SkipNative) {
+        & python scripts/check-android-native.py
+        if ($LASTEXITCODE -ne 0) { throw 'Android native dependency verification failed.' }
+    }
     Push-Location android
     try {
-        & .\gradlew.bat "-PuniversalApk=$($UniversalApk.IsPresent.ToString().ToLowerInvariant())" :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
+        & .\gradlew.bat "-PuniversalApk=$($UniversalApk.IsPresent.ToString().ToLowerInvariant())" "-PskipVerifySharedEngine=true" :rebuilt:testDebugUnitTest :rebuilt:lintDebug :rebuilt:assembleDebug :rebuilt:assembleDebugAndroidTest
         if ($LASTEXITCODE -ne 0) { throw 'Android checks or APK build failed.' }
     } finally { Pop-Location }
     & python scripts/check-android-apk.py

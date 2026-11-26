@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Get-ArtifactProcessPath([int]$ProcessId) {
@@ -56,11 +56,59 @@ public static class ZeroConDistributionProcess {
     [ZeroConDistributionProcess]::ImagePath($ProcessId)
 }
 
+if (-not ('ZeroConArtifactCrypto' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
+
+public static class ZeroConArtifactCrypto {
+    private const int BufferSize = 1048576;
+
+    public static string HashFile(string path) {
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan))
+        using (var sha = SHA256.Create()) {
+            return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+        }
+    }
+
+    public static string[] HashFilesParallel(string[] paths) {
+        if (paths == null || paths.Length == 0) return new string[0];
+        var results = new string[paths.Length];
+        if (paths.Length == 1) {
+            results[0] = HashFile(paths[0]);
+            return results;
+        }
+        Parallel.For(0, paths.Length, i => {
+            results[i] = HashFile(paths[i]);
+        });
+        return results;
+    }
+
+    public static string CopyAndHash(string source, string destination, out long totalBytes) {
+        var buffer = new byte[BufferSize];
+        long total = 0;
+        using (var src = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.SequentialScan))
+        using (var dst = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, BufferSize))
+        using (var sha = SHA256.Create()) {
+            int read;
+            while ((read = src.Read(buffer, 0, buffer.Length)) > 0) {
+                sha.TransformBlock(buffer, 0, read, null, 0);
+                dst.Write(buffer, 0, read);
+                total += read;
+            }
+            sha.TransformFinalBlock(new byte[0], 0, 0);
+            totalBytes = total;
+            return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant();
+        }
+    }
+}
+'@
+}
+
 function Get-ArtifactHash([string]$Path) {
-    $stream = [IO.File]::OpenRead($Path)
-    $algorithm = [Security.Cryptography.SHA256]::Create()
-    try { [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
-    finally { $stream.Dispose(); $algorithm.Dispose() }
+    [ZeroConArtifactCrypto]::HashFile($Path)
 }
 
 function Get-ArtifactPath([string]$Root, [string]$RelativePath) {
@@ -76,8 +124,8 @@ function Get-ArtifactPath([string]$Root, [string]$RelativePath) {
     # Do not traverse junctions/symlinks when reading or deploying artifacts.
     $cursor = $path
     while ($cursor) {
-        if ((Test-Path -LiteralPath $cursor) -and
-            ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        if (([IO.File]::Exists($cursor) -or [IO.Directory]::Exists($cursor)) -and
+            ([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint)) {
             throw "Artifact uses a reparse point: $cursor"
         }
         $cursor = Split-Path -Parent $cursor
@@ -97,6 +145,7 @@ function Get-ArtifactEntries([string]$Root, [string[]]$Exclude = @(), [switch]$N
     # Reject directory links before recursive enumeration.
     $pending = New-Object 'Collections.Generic.Queue[string]'
     $pending.Enqueue($base)
+    $collected = New-Object 'Collections.Generic.List[object]'
     while ($pending.Count) {
         foreach ($item in Get-ChildItem -LiteralPath $pending.Dequeue() -Force) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point: $($item.FullName)" }
@@ -104,7 +153,15 @@ function Get-ArtifactEntries([string]$Root, [string[]]$Exclude = @(), [switch]$N
             $relative = $item.FullName.Substring($base.Length + 1).Replace('\', '/')
             if ($relative -in $Exclude) { continue }
             if ($NamesOnly) { $relative; continue }
-            [pscustomobject]@{ path = $relative; bytes = $item.Length; sha256 = Get-ArtifactHash $item.FullName }
+            $collected.Add([pscustomobject]@{ path = $relative; fullName = $item.FullName; bytes = $item.Length })
+        }
+    }
+    if (-not $NamesOnly -and $collected.Count -gt 0) {
+        [string[]]$paths = @($collected | ForEach-Object { $_.fullName })
+        $hashes = [ZeroConArtifactCrypto]::HashFilesParallel($paths)
+        for ($i = 0; $i -lt $collected.Count; $i++) {
+            $entry = $collected[$i]
+            [pscustomobject]@{ path = $entry.path; bytes = $entry.bytes; sha256 = $hashes[$i] }
         }
     }
 }
@@ -112,13 +169,158 @@ function Get-ArtifactEntries([string]$Root, [string[]]$Exclude = @(), [switch]$N
 function Test-ArtifactEntries([string]$Root, $Entries) {
     # PowerShell hashtables use culture comparisons, which can conflate distinct kana filenames.
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $toHash = New-Object 'Collections.Generic.List[object]'
     foreach ($entry in $Entries) {
         $path = Get-ArtifactPath $Root $entry.path
         $key = $entry.path.Replace('\', '/')
         if (-not $seen.Add($key)) { throw "Duplicate artifact: $key" }
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
-            (Get-Item -LiteralPath $path).Length -ne $entry.bytes -or
-            (Get-ArtifactHash $path) -ne $entry.sha256) { throw "Artifact mismatch: $($entry.path)" }
+        $info = [IO.FileInfo]::new($path)
+        if (-not $info.Exists -or $info.Length -ne $entry.bytes) { throw "Artifact mismatch: $($entry.path)" }
+        $toHash.Add([pscustomobject]@{ path = $entry.path; fullName = $path; sha256 = $entry.sha256 })
+    }
+    if ($toHash.Count -gt 0) {
+        [string[]]$paths = @($toHash | ForEach-Object { $_.fullName })
+        $hashes = [ZeroConArtifactCrypto]::HashFilesParallel($paths)
+        for ($i = 0; $i -lt $toHash.Count; $i++) {
+            if ($hashes[$i] -ne $toHash[$i].sha256) { throw "Artifact mismatch: $($toHash[$i].path)" }
+        }
+    }
+}
+
+function Copy-ArtifactFileVerified([string]$Source, [string]$Destination, [string]$ExpectedSha256 = $null) {
+    $parent = Split-Path -Parent $Destination
+    if ($parent) { $null = [IO.Directory]::CreateDirectory($parent) }
+    $beforeInfo = [IO.FileInfo]::new($Source)
+    if (-not $beforeInfo.Exists) { throw "Source artifact missing: $Source" }
+    $beforeLength = $beforeInfo.Length
+    $beforeTicks = $beforeInfo.LastWriteTimeUtc.Ticks
+    [long]$bytes = 0
+    $hash = [ZeroConArtifactCrypto]::CopyAndHash($Source, $Destination, [ref]$bytes)
+    if ($ExpectedSha256) {
+        if ($hash -ne $ExpectedSha256) {
+            if ([IO.File]::Exists($Destination)) { [IO.File]::Delete($Destination) }
+            throw "Runtime changed during snapshot; retry after deployment finishes: $Source"
+        }
+    } else {
+        $afterInfo = [IO.FileInfo]::new($Source)
+        if (-not $afterInfo.Exists -or $afterInfo.Length -ne $beforeLength -or $afterInfo.LastWriteTimeUtc.Ticks -ne $beforeTicks) {
+            if (-not $afterInfo.Exists -or [ZeroConArtifactCrypto]::HashFile($Source) -ne $hash) {
+                if ([IO.File]::Exists($Destination)) { [IO.File]::Delete($Destination) }
+                throw "Runtime changed during snapshot; retry after deployment finishes: $Source"
+            }
+        }
+    }
+    [pscustomobject]@{ bytes = $bytes; sha256 = $hash }
+}
+
+function Copy-ArtifactIfChanged([string]$Source, [string]$Destination) {
+    $srcInfo = [IO.FileInfo]::new($Source)
+    $dstInfo = [IO.FileInfo]::new($Destination)
+    if ($dstInfo.Exists -and $srcInfo.Exists -and $dstInfo.Length -eq $srcInfo.Length) {
+        if ([ZeroConArtifactCrypto]::HashFile($Source) -eq [ZeroConArtifactCrypto]::HashFile($Destination)) {
+            return $false
+        }
+    }
+    $parent = Split-Path -Parent $Destination
+    if ($parent) { $null = [IO.Directory]::CreateDirectory($parent) }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    return $true
+}
+
+function Enable-FastRustLinker {
+    if (Get-Command 'lld-link.exe' -ErrorAction SilentlyContinue) {
+        if (-not $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER) {
+            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = 'lld-link'
+        }
+        if (-not $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER) {
+            $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = 'lld-link'
+        }
+    }
+}
+
+function Format-ProcessArgument([string]$Arg) {
+    if ($null -eq $Arg) { return '""' }
+    if ($Arg.Length -eq 0) { return '""' }
+    if ($Arg -notmatch '[\s"]') { return $Arg }
+    $sb = New-Object Text.StringBuilder
+    $null = $sb.Append('"')
+    $backslashes = 0
+    for ($i = 0; $i -lt $Arg.Length; $i++) {
+        $ch = $Arg[$i]
+        if ($ch -eq '\') {
+            $backslashes++
+        } elseif ($ch -eq '"') {
+            if ($backslashes -gt 0) { $null = $sb.Append('\', $backslashes * 2) }
+            $backslashes = 0
+            $null = $sb.Append('\"')
+        } else {
+            if ($backslashes -gt 0) { $null = $sb.Append('\', $backslashes) }
+            $backslashes = 0
+            $null = $sb.Append($ch)
+        }
+    }
+    if ($backslashes -gt 0) { $null = $sb.Append('\', $backslashes * 2) }
+    $null = $sb.Append('"')
+    return $sb.ToString()
+}
+
+function Invoke-ParallelBuildSteps([object[]]$Steps) {
+    if (-not $Steps -or $Steps.Count -eq 0) { return }
+    $running = New-Object 'Collections.Generic.List[object]'
+    try {
+        foreach ($step in $Steps) {
+            $resolved = (Get-Command $step.Command -ErrorAction Stop).Source
+            $argList = @($step.Arguments)
+            $escapedArgs = ($argList | ForEach-Object { Format-ProcessArgument ([string]$_) }) -join ' '
+            Write-Host ("Build [parallel:$($step.Name)]: $($step.Command) " + ($argList -join ' '))
+            $psi = New-Object Diagnostics.ProcessStartInfo
+            if ($resolved -match '\.(cmd|bat)$') {
+                $psi.FileName = 'cmd.exe'
+                $cmdLine = if ($escapedArgs) { "`"$resolved`" $escapedArgs" } else { "`"$resolved`"" }
+                $psi.Arguments = "/d /c `"$cmdLine`""
+            } else {
+                $psi.FileName = $resolved
+                $psi.Arguments = $escapedArgs
+            }
+            $psi.WorkingDirectory = $step.Directory
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+            $proc = New-Object Diagnostics.Process
+            $proc.StartInfo = $psi
+            $null = $proc.Start()
+            $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+            $stderrTask = $proc.StandardError.ReadToEndAsync()
+            $running.Add([pscustomobject]@{
+                Step = $step
+                Process = $proc
+                Stdout = $stdoutTask
+                Stderr = $stderrTask
+            })
+        }
+        $failed = $null
+        foreach ($item in $running) {
+            $item.Process.WaitForExit()
+            $outText = $item.Stdout.GetAwaiter().GetResult()
+            $errText = $item.Stderr.GetAwaiter().GetResult()
+            Write-Host "=== [$($item.Step.Name)] ==="
+            if ($outText) { Write-Host $outText.TrimEnd("`r", "`n") }
+            if ($errText) { Write-Host $errText.TrimEnd("`r", "`n") }
+            if ($item.Process.ExitCode -ne 0 -and -not $failed) {
+                $failed = "Build failed ($($item.Process.ExitCode)): $($item.Step.Command) $($item.Step.Arguments -join ' ')"
+            }
+        }
+        if ($failed) { throw $failed }
+    } finally {
+        foreach ($item in $running) {
+            if ($item.Process -and -not $item.Process.HasExited) {
+                try { $item.Process.WaitForExit() } catch {}
+            }
+            if ($item.Process) { $item.Process.Dispose() }
+        }
     }
 }
 
@@ -173,4 +375,4 @@ function Assert-DefaultTrialPackageIsCurrent([string]$TrialDirectory, $Package) 
     }
 }
 
-Export-ModuleMember -Function *-Artifact*, Read-PreparedPackage, Get-LatestPackageDirectory, Assert-DefaultTrialPackageIsCurrent
+Export-ModuleMember -Function *-Artifact*, Read-PreparedPackage, Get-LatestPackageDirectory, Assert-DefaultTrialPackageIsCurrent, Enable-FastRustLinker, Invoke-ParallelBuildSteps

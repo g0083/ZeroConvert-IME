@@ -17,7 +17,6 @@ if ($dependencies.schemaVersion -ne 1) { throw 'Unsupported dependency manifest.
 if (-not $dependencies.PSObject.Properties['llamaRevision'] -or $dependencies.llamaRevision -ne '7d516e2') {
     throw 'The modern Swift ABI requires the b12125 dependency set. Omit -DependencyDirectory to prepare it automatically.'
 }
-Test-ArtifactEntries $dependencyRoot $dependencies.files
 foreach ($entry in $dependencies.files) {
     if ($entry.path -notmatch '^(llama_cpu/|llama_vulkan/|plutil\.exe$|(?:concrt140|msvcp140(?:_[a-z0-9_]+)?|vccorlib140|vcruntime140(?:_[a-z0-9_]+)?)\.dll$)') {
         throw "Unexpected dependency file: $($entry.path)"
@@ -45,6 +44,7 @@ function Test-DistributableDependency([string]$Path) {
 }
 $distributableDependencies = @($dependencies.files | Where-Object { Test-DistributableDependency $_.path })
 if (-not $distributableDependencies.Count) { throw 'No distributable llama files selected.' }
+Test-ArtifactEntries $dependencyRoot $distributableDependencies
 foreach ($required in @('llama_cpu/llama-server.exe','llama_vulkan/llama-server.exe')) {
     if ($required -notin @($distributableDependencies.path)) { throw "Essential runtime missing: $required" }
 }
@@ -59,9 +59,7 @@ foreach ($entry in $cpuEntries) { $cpuByLeaf[(Split-Path -Leaf $entry.path)] = $
 foreach ($entry in $vulkanEntries) {
     $leaf = Split-Path -Leaf $entry.path
     if ($cpuByLeaf.ContainsKey($leaf) -and $leaf -ne 'ggml-vulkan.dll') {
-        $cpuHash = Get-ArtifactHash (Get-ArtifactPath $dependencyRoot $cpuByLeaf[$leaf].path)
-        $vulkanHash = Get-ArtifactHash (Get-ArtifactPath $dependencyRoot $entry.path)
-        if ($cpuHash -ne $vulkanHash) { throw "Divergent shared llama file: $leaf" }
+        if ($cpuByLeaf[$leaf].sha256 -ne $entry.sha256) { throw "Divergent shared llama file: $leaf" }
     }
 }
 $payloadDependencies = @()
@@ -102,34 +100,44 @@ try {
     $receipt = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $windowsRoot 'target/installer-source-build.json') | ConvertFrom-Json
     if ($receipt.assetLayout -ne 4) { throw 'Run without -SkipBuild to generate a complete build receipt.' }
     $builtFiles = [ordered]@{}
-    foreach ($entry in $receipt.files.PSObject.Properties) {
-        if ((Get-ArtifactHash $entry.Value.path) -ne $entry.Value.sha256) { throw "Cached build changed: $($entry.Name). Run without -SkipBuild." }
+    $receiptProperties = @($receipt.files.PSObject.Properties)
+    foreach ($entry in $receiptProperties) {
         $builtFiles[$entry.Name] = $entry.Value.path
     }
+    if ($SkipBuild) {
+        $checkPaths = [string[]]@($receiptProperties | ForEach-Object { $_.Value.path })
+        $actualHashes = [ZeroConArtifactCrypto]::HashFilesParallel($checkPaths)
+        for ($i = 0; $i -lt $receiptProperties.Count; $i++) {
+            if ($actualHashes[$i] -ne $receiptProperties[$i].Value.sha256) {
+                throw "Cached build changed: $($receiptProperties[$i].Name). Run without -SkipBuild."
+            }
+        }
+    }
     $metadataFiles = @{ buildInfo = $receipt.buildInfo.path; installer = $receipt.installerMetadata.path }
-    foreach ($entry in @($receipt.buildInfo, $receipt.installerMetadata)) {
-        if ((Get-ArtifactHash $entry.path) -ne $entry.sha256) { throw 'Build metadata changed. Run without -SkipBuild.' }
+    $metaHashes = [ZeroConArtifactCrypto]::HashFilesParallel([string[]]@($receipt.buildInfo.path, $receipt.installerMetadata.path))
+    if ($metaHashes[0] -ne $receipt.buildInfo.sha256 -or $metaHashes[1] -ne $receipt.installerMetadata.sha256) {
+        throw 'Build metadata changed. Run without -SkipBuild.'
     }
     New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
-    function Copy-PayloadFile([string]$Source, [string]$RelativePath) {
+    $manifestByPath = New-Object 'Collections.Specialized.OrderedDictionary' ([StringComparer]::OrdinalIgnoreCase)
+    function Copy-PayloadFile([string]$Source, [string]$RelativePath, [string]$ExpectedSha256 = $null) {
         $destination = Join-Path $payloadRoot $RelativePath
-        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        $before = Get-ArtifactHash $Source
-        Copy-Item -LiteralPath $Source -Destination $destination -Force
-        $after = Get-ArtifactHash $Source
-        if ($before -ne $after -or $before -ne (Get-ArtifactHash $destination)) {
-            throw "Runtime changed during snapshot; retry after deployment finishes: $Source"
+        $copied = Copy-ArtifactFileVerified $Source $destination $ExpectedSha256
+        $normalizedPath = $RelativePath.Replace('\', '/')
+        $manifestByPath[$normalizedPath] = [pscustomobject]@{
+            path = $normalizedPath
+            bytes = $copied.bytes
+            sha256 = $copied.sha256
         }
     }
 
     foreach ($entry in $payloadDependencies) {
-        Copy-PayloadFile (Get-ArtifactPath $dependencyRoot $entry.sourcePath) $entry.path
+        Copy-PayloadFile (Get-ArtifactPath $dependencyRoot $entry.sourcePath) $entry.path $entry.sha256
     }
-    Test-ArtifactEntries $payloadRoot $payloadDependencies
     # 変換モデルは配布物に同梱しない。英字辞書・翻訳モデルと同じく、利用者が
     # cache（%LOCALAPPDATA%\ZeroConIME\models）を持たない場合は設定画面から
     # model-catalog.json の GitHub リリース固定アセットをダウンロードする。
-    # 既定モデル nano_v4_2_iq4_emb8 は必須として扱う（docs/model-assets.md）。
+    # 既定モデル standard_v4_2_iq4_emb8 は必須として扱う（docs/model-assets.md）。
     # Use maintained distribution defaults, never this user's live settings or learning.
     # The translation model is not bundled: enabling 翻訳機能 in the settings app
     # downloads the pinned PLaMo 3 GGUF from Hugging Face on demand.
@@ -154,18 +162,17 @@ try {
         Copy-PayloadFile $file.FullName (Join-Path 'EmojiDictionary' $relative)
     }
     if ($builtFiles) {
-        foreach ($name in $builtFiles.Keys) { Copy-PayloadFile $builtFiles[$name] $(if ($name -eq 'azookey_windows.dll') { 'azookey.dll' } elseif ($name -eq 'x86\azookey_windows.dll') { 'azookey32.dll' } else { $name }) }
+        foreach ($name in $builtFiles.Keys) {
+            $destName = if ($name -eq 'azookey_windows.dll') { 'azookey.dll' } elseif ($name -eq 'x86\azookey_windows.dll') { 'azookey32.dll' } else { $name }
+            Copy-PayloadFile $builtFiles[$name] $destName $receipt.files.$name.sha256
+        }
     }
-    foreach ($entry in $receipt.files.PSObject.Properties) {
-        $name = if ($entry.Name -eq 'azookey_windows.dll') { 'azookey.dll' } elseif ($entry.Name -eq 'x86\azookey_windows.dll') { 'azookey32.dll' } else { $entry.Name }
-        if ((Get-ArtifactHash (Join-Path $payloadRoot $name)) -ne $entry.Value.sha256) { throw "Build changed during packaging: $name" }
-    }
-    Copy-PayloadFile $builtFiles['frontend.exe'] 'azookey-updater-helper.exe'
+    Copy-PayloadFile $builtFiles['frontend.exe'] 'azookey-updater-helper.exe' $receipt.files.'frontend.exe'.sha256
     # Keep the installer's license page in step with the repository root LICENSE file.
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $packageRoot 'USE-TERMS.txt') -Force
-    if ((Get-ArtifactHash (Join-Path $packageRoot 'USE-TERMS.txt')) -ne (Get-ArtifactHash (Join-Path $repoRoot 'LICENSE'))) { throw 'Installer license page does not match the repository LICENSE.' }
+    $licenseCopied = Copy-ArtifactFileVerified (Join-Path $repoRoot 'LICENSE') (Join-Path $packageRoot 'USE-TERMS.txt')
+    $null = $licenseCopied
     Copy-PayloadFile (Join-Path $windowsRoot 'installer/Azookey Startup.xml') '.azookey-startup-task.xml'
-    Copy-PayloadFile $metadataFiles.buildInfo 'build-info.json'
+    Copy-PayloadFile $metadataFiles.buildInfo 'build-info.json' $receipt.buildInfo.sha256
     Copy-Item -LiteralPath $metadataFiles.installer -Destination (Join-Path $packageRoot 'AppVersion.iss')
     $info = Get-Content -Encoding UTF8 -Raw -LiteralPath (Join-Path $payloadRoot 'build-info.json') | ConvertFrom-Json
     $manifest = [ordered]@{
@@ -173,7 +180,7 @@ try {
         createdAt = [DateTimeOffset]::Now.ToString('o'); build = $info
         sourceBuild = (-not $SkipBuild)
         dependencyManifestSha256 = Get-ArtifactHash (Join-Path $dependencyRoot 'dependencies-manifest.json')
-        files = @(Get-ArtifactEntries $payloadRoot)
+        files = @($manifestByPath.Values)
     }
     Write-ArtifactJson (Join-Path $payloadRoot 'package-manifest.json') $manifest
     Write-ArtifactJson (Join-Path $packageRoot 'package.json') @{

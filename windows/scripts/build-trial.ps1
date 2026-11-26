@@ -1,4 +1,4 @@
-# Fast local development loop. Distribution builds remain separate and complete.
+﻿# Fast local development loop. Distribution builds remain separate and complete.
 [CmdletBinding(SupportsShouldProcess)]
 param([switch]$Force, [switch]$NoRestart, [string]$AdditionalDictionaryDirectory, [switch]$DictionaryOnly, [switch]$BaseDictionary)
 $ErrorActionPreference = 'Stop'
@@ -45,6 +45,7 @@ if (@($plan | Where-Object { $_ -in @('runtime','swift','keyboard') }).Count) {
     . (Join-Path $PSScriptRoot 'modern-llama.ps1')
     $modernLlama = Initialize-ModernLlama
 }
+Enable-FastRustLinker
 function Invoke-TrialStep([string]$Directory, [string]$Command, [string[]]$Arguments) {
     Write-Host ("Build: $Command " + ($Arguments -join ' '))
     Push-Location $Directory
@@ -91,29 +92,60 @@ while ($true) {
         }
     }
     $swiftRuntime = $null
-    if ('keyboard' -in $plan) {
-        $keyboardWorker = & (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1')
-        Add-TrialOutput 'keyboard' $keyboardWorker 'keyboard-prior.exe'
-    }
-    if ('swift' -in $plan) {
-        if ($env:SDKROOT -notmatch '^(.*)[\\/]Platforms[\\/]([^\\/]+)[\\/]Windows\.platform[\\/]') { throw 'SDKROOT must identify the Swift Windows SDK.' }
-        $swiftRuntime = Join-Path $Matches[1] ('Runtimes\' + $Matches[2] + '\usr\bin')
-        Invoke-TrialStep (Join-Path $windowsRoot 'server-swift') 'swift.exe' @('build','--scratch-path','.build-modern','-c','release','-Xcc','-D_CRT_USE_C_COMPLEX_H','-Xcxx','-D_CRT_USE_C_COMPLEX_H')
-        Push-Location (Join-Path $windowsRoot 'server-swift')
-        try { $swiftBin = (& swift.exe build --scratch-path .build-modern -c release --show-bin-path | Select-Object -Last 1).Trim(); if ($LASTEXITCODE -ne 0) { throw 'Swift output lookup failed.' } }
-        finally { Pop-Location }
-        New-Item -ItemType Directory -Path (Join-Path $windowsRoot 'crates/server/target') -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $swiftBin 'azookey-server.lib') -Destination (Join-Path $windowsRoot 'crates/server/target/azookey-server.lib') -Force
-        Add-TrialOutput 'swift' (Join-Path $swiftBin 'azookey-server.dll') 'azookey-server.dll'
-        foreach ($file in Get-ChildItem -LiteralPath $swiftRuntime -Filter '*.dll' -File) { Add-TrialOutput 'swift' $file.FullName $file.Name }
-    }
+    $builtClientX86 = $false
+    $builtRustX64 = $false
     $packages = @()
     foreach ($mapping in @(@('client','azookey-windows'),@('server','azookey-server'),@('ui','ui'),@('launcher','launcher'))) {
         if ($mapping[0] -in $plan) { $packages += @('-p',$mapping[1]) }
     }
-    if ($packages.Count) { Invoke-TrialStep $windowsRoot 'cargo.exe' (@('build','--release','--locked') + $packages) }
+    $llamaCpuDir = if ($modernLlama) { Join-Path $modernLlama.runtime 'llama_cpu' } else { $null }
+    $psExe = (Get-Process -Id $PID).Path
+    if ('swift' -in $plan) {
+        if ($env:SDKROOT -notmatch '^(.*)[\\/]Platforms[\\/]([^\\/]+)[\\/]Windows\.platform[\\/]') { throw 'SDKROOT must identify the Swift Windows SDK.' }
+        $swiftRuntime = Join-Path $Matches[1] ('Runtimes\' + $Matches[2] + '\usr\bin')
+        $swiftArgs = @('build','--scratch-path','.build-modern','-c','release','--product','azookey-server','-Xcc','-D_CRT_USE_C_COMPLEX_H','-Xcxx','-D_CRT_USE_C_COMPLEX_H')
+        $wave1 = New-Object 'Collections.Generic.List[object]'
+        $wave1.Add(@{ Name='swift'; Directory=(Join-Path $windowsRoot 'server-swift'); Command='swift.exe'; Arguments=$swiftArgs })
+        if ('client' -in $plan) {
+            $wave1.Add(@{ Name='client-x86'; Directory=$windowsRoot; Command='cargo.exe'; Arguments=@('build','--release','--locked','-p','azookey-windows','--target','i686-pc-windows-msvc') })
+            $builtClientX86 = $true
+        }
+        if ('keyboard' -in $plan) {
+            $wave1.Add(@{ Name='keyboard-prior'; Directory=$windowsRoot; Command=$psExe; Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build-keyboard-prior.ps1'),'-RuntimeDirectory',$llamaCpuDir) })
+        }
+        if ($wave1.Count -gt 1) {
+            Invoke-ParallelBuildSteps $wave1.ToArray()
+        } else {
+            Invoke-TrialStep (Join-Path $windowsRoot 'server-swift') 'swift.exe' $swiftArgs
+        }
+        if ('keyboard' -in $plan) {
+            $keyboardWorker = & (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1') -RuntimeDirectory $llamaCpuDir
+            Add-TrialOutput 'keyboard' $keyboardWorker 'keyboard-prior.exe'
+        }
+        Push-Location (Join-Path $windowsRoot 'server-swift')
+        try { $swiftBin = (& swift.exe build --scratch-path .build-modern -c release --product azookey-server --show-bin-path | Select-Object -Last 1).Trim(); if ($LASTEXITCODE -ne 0) { throw 'Swift output lookup failed.' } }
+        finally { Pop-Location }
+        $null = Copy-ArtifactIfChanged (Join-Path $swiftBin 'azookey-server.lib') (Join-Path $windowsRoot 'crates/server/target/azookey-server.lib')
+        Add-TrialOutput 'swift' (Join-Path $swiftBin 'azookey-server.dll') 'azookey-server.dll'
+        foreach ($file in Get-ChildItem -LiteralPath $swiftRuntime -Filter '*.dll' -File) { Add-TrialOutput 'swift' $file.FullName $file.Name }
+    } elseif ('keyboard' -in $plan) {
+        if ($packages.Count) {
+            Invoke-ParallelBuildSteps @(
+                @{ Name='keyboard-prior'; Directory=$windowsRoot; Command=$psExe; Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build-keyboard-prior.ps1'),'-RuntimeDirectory',$llamaCpuDir) },
+                @{ Name='rust-x64'; Directory=$windowsRoot; Command='cargo.exe'; Arguments=(@('build','--release','--locked') + $packages) }
+            )
+            $builtRustX64 = $true
+            $keyboardWorker = & (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1') -RuntimeDirectory $llamaCpuDir
+        } else {
+            $keyboardWorker = & (Join-Path $PSScriptRoot 'build-keyboard-prior.ps1') -RuntimeDirectory $llamaCpuDir
+        }
+        Add-TrialOutput 'keyboard' $keyboardWorker 'keyboard-prior.exe'
+    }
+    if ($packages.Count -and -not $builtRustX64) { Invoke-TrialStep $windowsRoot 'cargo.exe' (@('build','--release','--locked') + $packages) }
     if ('client' -in $plan) {
-        Invoke-TrialStep $windowsRoot 'cargo.exe' @('build','--release','--locked','-p','azookey-windows','--target','i686-pc-windows-msvc')
+        if (-not $builtClientX86) {
+            Invoke-TrialStep $windowsRoot 'cargo.exe' @('build','--release','--locked','-p','azookey-windows','--target','i686-pc-windows-msvc')
+        }
         Add-TrialOutput 'client' (Join-Path $windowsRoot 'target/release/azookey_windows.dll') 'azookey.dll'
         Add-TrialOutput 'client' (Join-Path $windowsRoot 'target/i686-pc-windows-msvc/release/azookey_windows.dll') 'azookey32.dll'
         Add-TrialOutput 'client' (Join-Path $windowsRoot 'crates/client/res/zeroconvert.ico') 'zeroconvert.ico'

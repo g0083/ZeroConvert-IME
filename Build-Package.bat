@@ -22,7 +22,12 @@ shift
 goto arg_loop
 :arg_done
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%windows\scripts\prepare-distribution.ps1"%PASSTHROUGH_ARGS%
+where pwsh >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%windows\scripts\prepare-distribution.ps1"%PASSTHROUGH_ARGS%
+) else (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%windows\scripts\prepare-distribution.ps1"%PASSTHROUGH_ARGS%
+)
 set "buildResult=%ERRORLEVEL%"
 if "%NO_PAUSE%"=="0" pause
 exit /b %buildResult%

@@ -172,10 +172,13 @@ val verifyAssistAssets by tasks.registering {
 tasks.named("preBuild").configure { dependsOn(verifyAssistAssets, sharedHostAssets, sharedEngineAssets) }
 
 val verifySharedEngine by tasks.registering {
+    val skipNodeCheck = providers.gradleProperty("skipVerifySharedEngine").orNull == "true"
     doLast {
-        exec {
-            workingDir(rootProject.file(".."))
-            commandLine("node", "scripts/check-shared-engine.mjs")
+        if (!skipNodeCheck) {
+            exec {
+                workingDir(rootProject.file(".."))
+                commandLine("node", "scripts/check-shared-engine.mjs")
+            }
         }
         val nativeRoot = rootProject.file("../engine/build/jniLibs")
         for (abi in listOf("arm64-v8a", "x86_64")) {

@@ -9,6 +9,72 @@ import { NATIVE_INPUTS, SHARED_INPUTS, SKIPPED_SOURCE_NAMES } from './shared-eng
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cp = (source, destination, options = {}) => copy(source, destination, { preserveTimestamps: true, ...options });
 const stage = path.join(root, 'engine/build/swift');
+
+async function writeFileIfChanged(filePath, content) {
+  const next = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+  const existing = await readFile(filePath).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (existing && existing.equals(next)) return false;
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, next);
+  return true;
+}
+
+async function copyFileIfChanged(source, destination) {
+  const [srcStat, dstStat] = await Promise.all([
+    lstat(source),
+    lstat(destination).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }),
+  ]);
+  if (dstStat && !dstStat.isSymbolicLink() && dstStat.isFile() && dstStat.size === srcStat.size) {
+    if (Math.trunc(dstStat.mtimeMs) === Math.trunc(srcStat.mtimeMs)) {
+      return false;
+    }
+    if (srcStat.size <= 1048576) {
+      const [srcBuf, dstBuf] = await Promise.all([readFile(source), readFile(destination)]);
+      if (srcBuf.equals(dstBuf)) return false;
+    }
+  }
+  await mkdir(path.dirname(destination), { recursive: true });
+  await cp(source, destination);
+  return true;
+}
+
+async function syncDirIfChanged(sourceDir, destinationDir, filter = null) {
+  if (filter && !filter(sourceDir)) return;
+  await mkdir(destinationDir, { recursive: true });
+  const entries = await readdir(sourceDir, { withFileTypes: true });
+  const tasks = [];
+  for (const entry of entries) {
+    const srcPath = path.join(sourceDir, entry.name);
+    if (filter && !filter(srcPath)) continue;
+    const dstPath = path.join(destinationDir, entry.name);
+    if (entry.isDirectory()) {
+      tasks.push(syncDirIfChanged(srcPath, dstPath, filter));
+    } else if (entry.isFile()) {
+      tasks.push(copyFileIfChanged(srcPath, dstPath));
+    }
+  }
+  await Promise.all(tasks);
+}
+
+async function hashFilesInPool(filePaths, concurrency = 32) {
+  const results = new Array(filePaths.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, filePaths.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < filePaths.length) {
+      const index = nextIndex++;
+      const data = await readFile(filePaths[index]);
+      results[index] = createHash('sha256').update(data).digest('hex');
+    }
+  }));
+  return results;
+}
 // The Windows converter is a vendored, checksum-pinned artifact. Resolve it
 // through the same preparation entry point the Windows build uses, so Android
 // always stages the exact converter revision Windows compiles with.
@@ -51,13 +117,15 @@ async function pruneStaleFiles(destination, source, generatedRoot = stage) {
 }
 await pruneStaleFiles(path.join(stage, 'Sources'), path.join(root, 'windows/server-swift/Sources'));
 await pruneStaleFiles(path.join(stage, 'converter'), converterSource);
-await cp(path.join(root, 'windows/server-swift/Sources'), path.join(stage, 'Sources'), { recursive: true });
-await cp(path.join(root, 'engine/swift/AndroidBridge.swift'), path.join(stage, 'Sources/azookey-server/AndroidBridge.swift'));
-await cp(path.join(root, 'engine/native/inference_control.h'), path.join(stage, 'Sources/ffi/include/inference_control.h'));
-await writeFile(path.join(stage, 'Sources/ffi/include/android-host.h'), '#include "ffi.h"\n#include "inference_control.h"\n');
-await cp(converterSource, path.join(stage, 'converter'), {
-  recursive: true, filter: source => !['.git', '.build', '.swiftpm', 'Tests', '.github'].includes(path.basename(source)),
-});
+await syncDirIfChanged(path.join(root, 'windows/server-swift/Sources'), path.join(stage, 'Sources'));
+await copyFileIfChanged(path.join(root, 'engine/swift/AndroidBridge.swift'), path.join(stage, 'Sources/azookey-server/AndroidBridge.swift'));
+await copyFileIfChanged(path.join(root, 'engine/native/inference_control.h'), path.join(stage, 'Sources/ffi/include/inference_control.h'));
+await writeFileIfChanged(path.join(stage, 'Sources/ffi/include/android-host.h'), '#include "ffi.h"\n#include "inference_control.h"\n');
+await syncDirIfChanged(
+  converterSource,
+  path.join(stage, 'converter'),
+  source => !['.git', '.build', '.swiftpm', 'Tests', '.github'].includes(path.basename(source)),
+);
 const llama = path.join(stage, 'converter/Sources/llama.cpp');
 const native = path.join(root, 'android/app/src/main/cpp/llama.cpp');
 // Android resolves its Swift dependencies from this committed file, not from
@@ -67,16 +135,16 @@ const pins = JSON.parse(await readFile(path.join(root, 'engine/Package.resolved'
 const pinnedDependencies = pins.filter(pin => pin.identity !== 'azookeykanakanjiconverter').map(pin =>
   `.package(url: ${JSON.stringify(pin.location)}, ${pin.state.version ? `exact: ${JSON.stringify(pin.state.version)}` : `revision: ${JSON.stringify(pin.state.revision)}`})`
 ).join(',\n');
-await cp(path.join(native, 'include/llama.h'), path.join(llama, 'llama-current.h'));
-await cp(path.join(root, 'engine/swift/llama-compat.h'), path.join(llama, 'llama.h'));
-await cp(path.join(root, 'engine/swift/LlamaCompatibility.swift'), path.join(stage, 'converter/Sources/KanaKanjiConverterModule/LlamaCompatibility.swift'));
+await copyFileIfChanged(path.join(native, 'include/llama.h'), path.join(llama, 'llama-current.h'));
+await copyFileIfChanged(path.join(root, 'engine/swift/llama-compat.h'), path.join(llama, 'llama.h'));
+await copyFileIfChanged(path.join(root, 'engine/swift/LlamaCompatibility.swift'), path.join(stage, 'converter/Sources/KanaKanjiConverterModule/LlamaCompatibility.swift'));
 for (const file of await readdir(path.join(native, 'ggml/include'))) {
-  if (file.endsWith('.h')) await cp(path.join(native, 'ggml/include', file), path.join(llama, file));
+  if (file.endsWith('.h')) await copyFileIfChanged(path.join(native, 'ggml/include', file), path.join(llama, file));
 }
 // ffi's checked-in modulemap is designed for the Windows compiler include path.
-await writeFile(path.join(stage, 'Sources/ffi/module.modulemap'), 'module ffi { header "include/android-host.h" export * }\n');
-await writeFile(path.join(stage, 'Sources/ffi/include/module.modulemap'), 'module ffi { header "android-host.h" export * }\n');
-await writeFile(path.join(stage, 'Package.swift'), `// swift-tools-version: 6.1
+await writeFileIfChanged(path.join(stage, 'Sources/ffi/module.modulemap'), 'module ffi { header "include/android-host.h" export * }\n');
+await writeFileIfChanged(path.join(stage, 'Sources/ffi/include/module.modulemap'), 'module ffi { header "android-host.h" export * }\n');
+await writeFileIfChanged(path.join(stage, 'Package.swift'), `// swift-tools-version: 6.1
 import PackageDescription
 let package = Package(name: "ZeroConEmbedded", products: [
     .library(name: "zerocon_swift", type: .dynamic, targets: ["azookey-server"])
@@ -89,29 +157,39 @@ let package = Package(name: "ZeroConEmbedded", products: [
 `);
 const assets = path.join(root, 'engine/build/assets/shared-engine');
 await mkdir(assets, { recursive: true });
-execFileSync('python', [path.join(root, 'scripts/prepare_dictionary.py'),
-  '--output', path.join(assets, 'Dictionary')], { stdio: 'inherit' });
 await mkdir(path.join(assets, 'EmojiDictionary'), { recursive: true });
-await cp(path.join(root, 'android/app/src/main/assets/emoji_all_E15.1.txt'), path.join(assets, 'EmojiDictionary/emoji_all_E15.1.txt'));
-const sourceFiles = [];
-async function fingerprint(dir, relative) {
+await copyFileIfChanged(path.join(root, 'android/app/src/main/assets/emoji_all_E15.1.txt'), path.join(assets, 'EmojiDictionary/emoji_all_E15.1.txt'));
+const pendingEntries = [];
+async function collectFingerprints(dir, relative) {
   for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a,b) => a.name.localeCompare(b.name))) {
     if (SKIPPED_SOURCE_NAMES.includes(entry.name)) continue;
     const rel = `${relative}/${entry.name}`;
-    if (entry.isDirectory()) await fingerprint(path.join(dir, entry.name), rel);
-    else sourceFiles.push({ path: rel, sha256: createHash('sha256').update(await readFile(path.join(dir, entry.name))).digest('hex') });
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) await collectFingerprints(full, rel);
+    else pendingEntries.push({ abs: full, rel });
   }
 }
-await fingerprint(path.join(root, 'windows/server-swift/Sources'), 'windows/server-swift/Sources');
-await fingerprint(path.join(root, 'windows/crates/server/src/ai_assist'), 'windows/crates/server/src/ai_assist');
-await fingerprint(path.join(converterSource, 'Sources/KanaKanjiConverterModule'), `${converterRelative}/Sources/KanaKanjiConverterModule`);
-await fingerprint(path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), 'windows/server-swift/azooKey_dictionary_storage/Dictionary');
-await fingerprint(path.join(root, 'data/dictionary'), 'data/dictionary');
-for (const directory of ['engine/swift', 'engine/native', 'engine/rust/src']) await fingerprint(path.join(root, directory), directory);
+await collectFingerprints(path.join(root, 'windows/server-swift/Sources'), 'windows/server-swift/Sources');
+await collectFingerprints(path.join(root, 'windows/crates/server/src/ai_assist'), 'windows/crates/server/src/ai_assist');
+await collectFingerprints(path.join(converterSource, 'Sources/KanaKanjiConverterModule'), `${converterRelative}/Sources/KanaKanjiConverterModule`);
+await collectFingerprints(path.join(root, 'windows/server-swift/azooKey_dictionary_storage/Dictionary'), 'windows/server-swift/azooKey_dictionary_storage/Dictionary');
+await collectFingerprints(path.join(root, 'data/dictionary'), 'data/dictionary');
+for (const directory of ['engine/swift', 'engine/native', 'engine/rust/src']) await collectFingerprints(path.join(root, directory), directory);
 for (const file of [...NATIVE_INPUTS, ...SHARED_INPUTS]) {
-  sourceFiles.push({ path: file, sha256: createHash('sha256').update(await readFile(path.join(root, file))).digest('hex') });
+  pendingEntries.push({ abs: path.join(root, file), rel: file });
 }
-await writeFile(path.join(assets, 'sources.json'), JSON.stringify({ schema: 1, sourceFiles }, null, 2) + '\n');
+const extraToHash = [
+  path.join(root, 'scripts/prepare_dictionary.py'),
+  path.join(root, 'windows/scripts/generate-reverse-dictionary.mjs'),
+  path.join(root, 'windows/scripts/converter_patch.py'),
+  path.join(root, 'engine/Package.resolved'),
+  path.join(root, 'engine/rust/Cargo.lock'),
+];
+const allDigests = await hashFilesInPool([...pendingEntries.map(e => e.abs), ...extraToHash]);
+const sourceFiles = pendingEntries.map((entry, idx) => ({ path: entry.rel, sha256: allDigests[idx] }));
+const [prepareDictDigest, reverseDictDigest, converterPatchDigest, swiftPinsDigest, rustLockDigest] =
+  allDigests.slice(pendingEntries.length);
+await writeFileIfChanged(path.join(assets, 'sources.json'), JSON.stringify({ schema: 1, sourceFiles }, null, 2) + '\n');
 
 // One committed record of the engine revision an APK was built from. The
 // per-file manifest above decides rebuilds; this digest set is what a packaged
@@ -119,23 +197,45 @@ await writeFile(path.join(assets, 'sources.json'), JSON.stringify({ schema: 1, s
 const digestOf = entries => createHash('sha256')
   .update(entries.map(entry => `${entry.path}:${entry.sha256}`).join('\n')).digest('hex');
 const group = prefix => sourceFiles.filter(entry => entry.path.startsWith(prefix));
-const fileDigest = async file => createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
+const dictionaryDigest = digestOf([
+  ...group('windows/server-swift/azooKey_dictionary_storage/Dictionary/'),
+  ...group('data/dictionary/'),
+]);
+const dictStampValue = createHash('sha256').update(JSON.stringify({
+  dictionaryDigest,
+  prepareDictDigest,
+  reverseDictDigest,
+})).digest('hex');
+const dictStampPath = path.join(root, 'engine/build/.dictionary-stamp.json');
+const existingDictStamp = await readFile(dictStampPath, 'utf8').then(t => JSON.parse(t)).catch(() => null);
+const dictDir = path.join(assets, 'Dictionary');
+const dictReady = existingDictStamp?.stamp === dictStampValue && (await Promise.all([
+  lstat(path.join(dictDir, 'Reverse/reverse-v2.bin')).then(s => s.isFile()).catch(() => false),
+  lstat(path.join(dictDir, 'louds/charID.chid')).then(s => s.isFile()).catch(() => false),
+  lstat(path.join(dictDir, 'mm.binary')).then(s => s.isFile()).catch(() => false),
+])).every(Boolean);
+if (!dictReady) {
+  execFileSync('python', [path.join(root, 'scripts/prepare_dictionary.py'),
+    '--output', dictDir], { stdio: 'inherit' });
+  await writeFileIfChanged(dictStampPath, JSON.stringify({ stamp: dictStampValue }) + '\n');
+}
+
 const lock = {
   schema: 1,
   converterRevision: pinnedRevision,
-  converterPatch: await fileDigest('windows/scripts/converter_patch.py'),
-  swiftPins: await fileDigest('engine/Package.resolved'),
-  rustLock: await fileDigest('engine/rust/Cargo.lock'),
+  converterPatch: converterPatchDigest,
+  swiftPins: swiftPinsDigest,
+  rustLock: rustLockDigest,
   swiftSources: digestOf(group('windows/server-swift/Sources/')),
   converterSources: digestOf(group(`${converterRelative}/Sources/KanaKanjiConverterModule/`)),
-  dictionary: digestOf([...group('windows/server-swift/azooKey_dictionary_storage/Dictionary/'), ...group('data/dictionary/')]),
+  dictionary: dictionaryDigest,
   engineSources: digestOf([
     ...group('engine/swift/'), ...group('engine/native/'), ...group('engine/rust/src/'),
   ]),
   nativeSources: digestOf(group('android/app/src/main/cpp/')),
 };
 const lockText = JSON.stringify(lock, null, 2) + '\n';
-await writeFile(path.join(root, 'engine/shared-engine.lock.json'), lockText);
-await writeFile(path.join(assets, 'lock.json'), lockText);
+await writeFileIfChanged(path.join(root, 'engine/shared-engine.lock.json'), lockText);
+await writeFileIfChanged(path.join(assets, 'lock.json'), lockText);
 console.log('Staged Windows Swift sources, native header adapter, dictionary and source fingerprints.');
 console.log(`Shared engine lock: converter ${lock.converterRevision}, swift ${lock.swiftSources.slice(0, 12)}.`);

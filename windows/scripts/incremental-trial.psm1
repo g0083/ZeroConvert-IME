@@ -65,6 +65,7 @@ function Get-TrialInputSnapshot([string]$Root, $Previous = $null, [string]$Addit
             foreach ($entry in $Previous.$group.files) { $prior[$entry.path] = $entry }
         }
         $files = New-Object 'Collections.Generic.List[object]'
+        $toHash = New-Object 'Collections.Generic.List[object]'
         foreach ($relative in $groups[$group]) {
             if ($relative -eq 'data/dictionary' -and ($BaseDictionary -or $AdditionalDictionaryDirectory)) { continue }
             $inputPath = Join-Path $Root $relative
@@ -79,8 +80,18 @@ function Get-TrialInputSnapshot([string]$Root, $Previous = $null, [string]$Addit
                 # Large data directories use a stat cache; ordinary source is always content-hashed.
                 $cached = $group -in @('dictionary','emoji','models','translation-model') -and $prior.ContainsKey($name) -and
                     $prior[$name].bytes -eq $item.Length -and $prior[$name].ticks -eq $ticks
-                $hash = if ($cached) { $prior[$name].sha256 } else { Get-ArtifactHash $item.FullName }
-                $files.Add([pscustomobject]@{ path=$name; bytes=$item.Length; ticks=$ticks; sha256=$hash })
+                $entry = [pscustomobject]@{ path=$name; bytes=$item.Length; ticks=$ticks; sha256=$(if ($cached) { $prior[$name].sha256 } else { $null }) }
+                $files.Add($entry)
+                if (-not $cached) {
+                    $toHash.Add([pscustomobject]@{ entry=$entry; fullName=$item.FullName })
+                }
+            }
+        }
+        if ($toHash.Count -gt 0) {
+            [string[]]$paths = @($toHash | ForEach-Object { $_.fullName })
+            $hashes = [ZeroConArtifactCrypto]::HashFilesParallel($paths)
+            for ($i = 0; $i -lt $toHash.Count; $i++) {
+                $toHash[$i].entry.sha256 = $hashes[$i]
             }
         }
         if ($group -eq 'dictionary' -and $AdditionalDictionaryDirectory) {
