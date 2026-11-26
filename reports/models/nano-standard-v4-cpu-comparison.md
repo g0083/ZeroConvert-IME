@@ -32,6 +32,5 @@ CPU実行器SHA-256：`f5be4f24df220630af9426e67577669d00d4e04c95c67ca113287fa05
 - `artifacts/results/nano_standard_v4_cpu_250hard.json`
 - `artifacts/results/nano_standard_v4_cpu_summary.json`
 
-`python scripts/run.py benchmarks/research/benchmark_kana_kanji_models.py --backend cpu --n-gpu-layers 0 --models "名前=GGUFパス" ... --base-port 8470 --out <新しいJSON>`で実行する。高難度側は`--testset data/kana_kanji_hard_context_testset.jsonl`を追加。Pythonは`.venv_train/Scripts/python.exe`を使用した。モデルの絶対パスとハッシュは各結果JSONに記録。localhost接続が必要なため、許可された制限外コマンドで測定した。
 
 実IME適用・入力アプリでの確認・インストーラー更新・コミット/pushは未実施。既存ソース・モデル・個人設定は保持した。
