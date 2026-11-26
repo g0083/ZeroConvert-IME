@@ -6,26 +6,66 @@
 
 | 項目 | 値 |
 | --- | --- |
-| 配布元 | GitHub リリース `dictionary-v1` の固定アセット（`https://github.com/g0083/ZeroConvert-IME/releases/download/dictionary-v1/zerocon-dictionary-azookey-expanded.zip`） |
+| 取得先 | GitHub Releasesの `dictionary-v2` 固定アセット |
 | ファイル名 | `zerocon-dictionary-azookey-expanded.zip` |
-| サイズ | 23,357,023 bytes（展開後 55,094,243 bytes / 3,621ファイル） |
-| 収録内容 | `Dictionary/louds`・`Dictionary/Reverse/reverse-v2.bin`（629,045組）・`cb`・`p`・`mm.binary`・`AdditionalDictionaryNotices` |
+| サイズ | 60,975,173 bytes（展開後197,378,811 bytes、5,230ファイル） |
+| 収録内容 | `Dictionary/louds`・`Dictionary/Reverse/reverse-v2.bin`（1,618,968組）・`cb`・`p`・`mm.binary`・`AdditionalDictionaryNotices` |
 | 検証 | SHA-256（正本は下記カタログ）＋ファイル数＋`louds/charID.chid` の存在 |
 
-正本は [windows/deployment/dictionary-catalog.json](../windows/deployment/dictionary-catalog.json)。zip は Git 管理外で、カタログだけをコミットする。生成は次のとおり。
+公開版の正本は [windows/deployment/dictionary-catalog.json](../windows/deployment/dictionary-catalog.json)。ZIPはGit管理外で、カタログをコミットする。公開前のZIP生成は [町字辞書の生成手順](#全国の町名大字丁目小字の更新) のように `--catalog-output` で作業用のカタログを指定する。
+
+入力は `python scripts/run.py scripts/prepare_dictionary.py --output <dir>` が作る検証済み辞書一式（azooKey固定リビジョン＋`data/dictionary/additional-louds.zip`＋逆引き辞書）。スクリプトは zip を作り直したうえで、サイズ・SHA-256・ファイル数・逆引き組数をカタログへ書き戻す。配布用アセットを更新するときは、カタログの反映先（下記）も同時に更新する。
+
+## 都道府県・市区町村名の更新
+
+デジタル庁の全国市区町村マスターから、都道府県名、市区町村名、政令指定都市の区名と市名付き区名を読みと組にして取り込む。基準日に有効な行を使い、既存の表記と読みの組はそのまま使う。新しい組には固有名詞のスコアを付ける。同じ読みの候補がある場合、新しい組の辞書スコアは既存候補の最高スコアを下回る。 [データの出典と利用条件](../data/dictionary/AdditionalDictionaryNotices/AddressBaseRegistry.txt)
+
+2026年11月26日の取り込みに使った `mt_city_all.csv.zip` の SHA-256 は `c719e7394489907c6192f58837d7f61274c05feb72ebec2543995d0d6cb08b5e`。基準にした629,045組版の生成先には `Dictionary/`、`entries.json`、`additional-dictionary.json` が揃っている必要がある。Swiftのビルダーと依存ライブラリの用意は [Windows追加辞書の生成と比較](investigations/additional-dictionary-plan.md) を参照する。
 
 ```powershell
-python scripts/run.py scripts/build-dictionary-asset.py `
-    --dictionary windows/target/trial-dictionary/Dictionary `
-    --output artifacts/build/dictionary-asset/zerocon-dictionary-azookey-expanded.zip
+python scripts/run.py windows/scripts/add_municipalities.py `
+    --previous artifacts/build/additional-dictionary/trial-20260723-plus100000 `
+    --archive artifacts/downloads/address-base-registry/mt_city_all.csv.zip `
+    --as-of 2026-11-26 --builder $builder `
+    --output artifacts/build/additional-dictionary/trial-municipalities-20261126
 ```
 
-入力は `python scripts/run.py scripts/prepare_dictionary.py --output <dir>` が作る検証済み辞書一式（azooKey固定リビジョン＋`data/dictionary/additional-louds.zip`＋逆引き辞書）。スクリプトは zip を作り直したうえで、サイズ・SHA-256・ファイル数・逆引き組数をカタログへ書き戻す。辞書を更新したら、カタログの反映先（下記）も同時に更新する。
+市区町村までの辞書は629,503組で、次の町字辞書の土台になる。
+
+## 全国の町名・大字・丁目・小字の更新
+
+全国町字マスターの基準日に有効な全行から、町名・大字、丁目、小字を取り込む。町名と丁目、小字の組み合わせも、エンジンで一語として扱える20文字以内の読みなら登録する。数字のある読みは数字のまま打てる形と、「１１丁目」を「じゅういっちょうめ」と打てる形を収録する。読みが空欄の場合は同じ自治体・同じ町字名の公的データを照合し、読みが一意のものを補う。表記がかなの地名はかなから読みを作る。登録できなかった町字は自治体コードと町字ID付きのTSVに出力する。 [データの出典と利用条件](../data/dictionary/AdditionalDictionaryNotices/AddressBaseRegistry.txt)
+
+2026年11月26日の生成では、全国727,535行から989,465組を追加し、固定辞書は1,618,968組となった。使用した入力のSHA-256は次のとおり。
+
+| 入力 | SHA-256 |
+| --- | --- |
+| 全国町字マスター `mt_town_all.csv.zip` | `a04309d2dfd4211d57402441bde7a60b7b1aa18da53f2ab51d9f59a0b7ac4e9f` |
+| 日本郵便 `utf_ken_all.zip` | `db92fcf624bb7280e6f51900aebe03adeafbd168796e59412dbc22a80abb85b9` |
+
+```powershell
+$townTrial = 'artifacts/build/additional-dictionary/trial-town-names-20261126'
+$asset = 'artifacts/build/dictionary-asset/town-names-20261126'
+python scripts/run.py windows/scripts/add_town_names.py `
+    --previous artifacts/build/additional-dictionary/trial-municipalities-20261126 `
+    --archive artifacts/downloads/address-base-registry/mt_town_all.csv.zip `
+    --postal artifacts/downloads/address-base-registry/utf_ken_all.zip `
+    --as-of 2026-11-26 --builder $builder --output $townTrial `
+    --unresolved artifacts/results/address-dictionary-20261126/unresolved-town-names.tsv
+python scripts/run.py scripts/prepare_dictionary.py --freeze-trial $townTrial
+python scripts/run.py scripts/prepare_dictionary.py --output "$asset/Dictionary"
+python scripts/run.py scripts/build-dictionary-asset.py `
+    --dictionary "$asset/Dictionary" `
+    --output "$asset/zerocon-dictionary-azookey-expanded.zip" `
+    --catalog-output "$asset/dictionary-catalog.json" --release-tag dictionary-v2
+```
+
+Windowsの試験IMEには `Build-Trial.bat -DictionaryOnly` で適用できる。WindowsとAndroidの取得設定が同じ `dictionary-v2` を参照する。配布版への適用時は、共通ZIPを先に公開して取得設定と照合する。
 
 ## 保存先と解決順
 
-- **Windows**: `%LOCALAPPDATA%\ZeroConIME\dictionary\Dictionary\`。同じ階層の `.complete` を展開完了の印とし、これが無い間はキャッシュとして扱わない。
-- **Android**: `filesDir/dictionary/Dictionary/`。同じ `.complete` 判定を使う。
+- **Windows**は `%LOCALAPPDATA%\ZeroConIME\dictionary\Dictionary\` に展開する。設定画面は同じ階層の `.complete` に記録されたSHA-256を照合し、旧版なら現在の辞書を取得する。変換サーバーは、再取得中も展開済みの旧辞書を使用できる。
+- **Android**は `filesDir/dictionary/Dictionary/` に展開する。`.complete` のSHA-256が取得設定と一致すると準備完了になる。補正・先読み用の逆引き索引はファイルのままメモリマップする。
 - 変換サーバー（Swift）の解決順は `ZEROCON_DICTIONARY_DIR` → 実行ファイル横の `Dictionary\` → 取得済みキャッシュ。
   - `ZEROCON_DICTIONARY_DIR` は Android の JNI（`nativeSetDictionaryRoot`）だけが設定する。
   - 実行ファイル横を優先するのは `Build-Trial.bat -DictionaryOnly` の辞書比較をそのまま使うため。配布版はインストーラーが `Dictionary\` を同梱せず、更新時に削除するので、実際にはキャッシュだけが存在する。

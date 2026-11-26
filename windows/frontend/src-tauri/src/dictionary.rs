@@ -2,7 +2,7 @@
 //!
 //! 辞書はインストーラーに同梱しない。初回起動時に `dictionary-catalog.json` の
 //! 固定アセット（zip）を取得し、`%LOCALAPPDATA%\ZeroConIME\dictionary\` へ
-//! 展開する。取得済みキャッシュがあれば何もしない（変換モデル・英字辞書と同じ扱い）。
+//! 展開する。取得済みキャッシュのSHA-256が旧版なら再取得する。
 //!
 //! 展開は「ステージング→置き換え→`.complete`」の順で行い、変換サーバーが
 //! 半端な辞書ディレクトリを読むことがないようにする。
@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
-/// 展開後の上限。実測は約55MBで、破損アセットの無限展開を防ぐ。
+/// 破損アセットの無限展開を防ぐ上限。
 const MAX_EXTRACTED_BYTES: u64 = 512 * 1024 * 1024;
 
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
@@ -43,14 +43,12 @@ pub struct Status {
     pub sha256: String,
 }
 
-/// 辞書が揃っているかは変換サーバーと同じ解決順で判定する。
-/// キャッシュが無くてもインストール先に `Dictionary\` がある試験ビルドは準備済み。
+/// 試験ビルドの辞書か、現行の配布アセットを取得済みなら準備済みと判定する。
 pub fn status(install_dir: &Path) -> Status {
-    let dictionary = shared::runtime_assets::dictionary_dir(install_dir);
-    let installed = dictionary.join("louds").join("charID.chid").is_file();
+    let dictionary = shared::runtime_assets::current_dictionary_dir(install_dir);
     Status {
-        installed,
-        path: installed.then(|| dictionary.to_string_lossy().into_owned()),
+        installed: dictionary.is_some(),
+        path: dictionary.map(|path| path.to_string_lossy().into_owned()),
         download_url: shared::runtime_assets::dictionary_download_url(),
         size_bytes: shared::runtime_assets::DICTIONARY_ASSET_BYTES,
         files: shared::runtime_assets::DICTIONARY_ASSET_FILES,
@@ -242,7 +240,6 @@ fn extract_with(
     if staging.exists() {
         std::fs::remove_dir_all(&staging).context("前回の展開途中のデータを削除できません")?;
     }
-    let _ = std::fs::remove_file(&complete);
     std::fs::create_dir_all(&staging).context("辞書の展開先を作成できません")?;
 
     let file = std::fs::File::open(archive).context("辞書アセットを開けません")?;
@@ -284,12 +281,37 @@ fn extract_with(
         bail!("辞書アセットに louds/charID.chid がありません");
     }
 
-    if target.exists() {
-        std::fs::remove_dir_all(&target).context("既存の辞書を置き換えられません")?;
+    let previous = root.join("Dictionary.previous");
+    if previous.is_dir() {
+        if target.exists() {
+            std::fs::remove_dir_all(&previous).context("前回の辞書更新の退避を削除できません")?;
+        } else {
+            std::fs::rename(&previous, &target).context("前回の辞書を復元できません")?;
+        }
     }
-    std::fs::rename(&staging, &target).context("辞書を配置できませんでした")?;
-    std::fs::write(&complete, shared::runtime_assets::DICTIONARY_ASSET_SHA256)
+
+    let marker = root.join(".complete.staging");
+    std::fs::write(&marker, shared::runtime_assets::DICTIONARY_ASSET_SHA256)
         .context("辞書の完了マーカーを書き込めません")?;
+    if target.exists() {
+        std::fs::rename(&target, &previous).context("既存の辞書を退避できません")?;
+    }
+    if let Err(error) = std::fs::rename(&staging, &target) {
+        if previous.is_dir() {
+            std::fs::rename(&previous, &target).context("旧辞書を復元できません")?;
+        }
+        return Err(error).context("辞書を配置できませんでした");
+    }
+    if let Err(error) = std::fs::rename(&marker, &complete) {
+        std::fs::rename(&target, &staging).context("辞書更新を取り消せません")?;
+        if previous.is_dir() {
+            std::fs::rename(&previous, &target).context("旧辞書を復元できません")?;
+        }
+        return Err(error).context("辞書の完了マーカーを更新できません");
+    }
+    if previous.is_dir() {
+        let _ = std::fs::remove_dir_all(&previous);
+    }
     Ok(())
 }
 
@@ -411,6 +433,7 @@ mod tests {
         let stale = root.join("Dictionary").join("stale.bin");
         std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
         std::fs::write(&stale, b"old").unwrap();
+        std::fs::write(root.join(".complete"), "old-sha256").unwrap();
 
         let mut reports = 0;
         extract_with(&archive, &root, 3, |_, _| reports += 1).unwrap();
@@ -424,16 +447,24 @@ mod tests {
             b"mm"
         );
         assert!(!root.join("Dictionary.staging").exists());
+        assert!(!root.join("Dictionary.previous").exists());
         assert!(shared::runtime_assets::cached_dictionary_dir_at(&root).is_some());
+        assert_eq!(
+            std::fs::read_to_string(root.join(".complete")).unwrap(),
+            shared::runtime_assets::DICTIONARY_ASSET_SHA256
+        );
         assert_eq!(
             reports, 0,
             "fewer than 256 files report no intermediate progress"
         );
 
-        // A wrong file count leaves neither a partial dictionary nor a marker.
+        // A rejected archive leaves the installed dictionary and its marker usable.
         assert!(extract_with(&archive, &root, 4, |_, _| {}).is_err());
         assert!(!root.join("Dictionary.staging").exists());
-        assert!(!root.join(".complete").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join(".complete")).unwrap(),
+            shared::runtime_assets::DICTIONARY_ASSET_SHA256
+        );
         assert_eq!(
             std::fs::read(root.join("Dictionary/mm.binary")).unwrap(),
             b"mm"

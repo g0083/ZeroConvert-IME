@@ -1,10 +1,13 @@
 import json
 import tempfile
 import unittest
+from zipfile import ZipFile
 from collections import Counter
 from pathlib import Path
 
 import additional_dictionary as dictionary
+from add_municipalities import name_pairs
+from add_town_names import clean_reading, locality_key, postal_readings, reading_variants, resolve_reading
 
 
 def reading_statement(value, qualifiers=None):
@@ -17,6 +20,54 @@ def reading_statement(value, qualifiers=None):
 
 
 class AdditionalDictionaryTest(unittest.TestCase):
+    def test_town_readings_keep_digits_and_offer_kana_for_chome(self):
+        self.assertEqual(list(reading_variants(clean_reading("おおどおりにし１１ちょうめ"))),
+                         ["オオドオリニシ11チョウメ", "オオドオリニシジュウイッチョウメ"])
+        self.assertEqual(clean_reading("北１条西２丁目"), "")
+        self.assertEqual(list(reading_variants(clean_reading("キタ１ジョウニシ８チョウメ"))),
+                         ["キタ1ジョウニシ8チョウメ", "キタイチジョウニシハッチョウメ"])
+        self.assertEqual(clean_reading("グリ-ンタウン"), "グリーンタウン")
+        characters = set("1チョウメ")
+        self.assertTrue(dictionary.valid_word("1チョウメ", "１丁目", characters, Counter(), allow_digits=True))
+        self.assertFalse(dictionary.valid_word("1チョウメ", "１丁目", characters, Counter()))
+
+    def test_town_readings_use_only_unambiguous_local_or_postal_matches(self):
+        row = {"lg_code": "011011", "machiaza_id": "0123001", "oaza_cho": "大通西",
+               "oaza_cho_kana": "", "koaza": "上野", "koaza_kana": ""}
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder) / "postal.zip"
+            with ZipFile(archive, "w") as source:
+                source.writestr("utf_ken_all.csv", "\n".join([
+                    "01101,,,ホッカイドウ,サッポロシ,オオドオリニシ（１−１９チョウメ）,北海道,札幌市,大通西（１〜１９丁目）",
+                    "01207,,,ホッカイドウ,オビヒロシ,オオトオリニシ,北海道,帯広市,大通西",
+                ]))
+            postal = postal_readings(archive)
+        self.assertEqual(resolve_reading(row, "oaza_cho", {}, postal), ("オオドオリニシ", "japanPost"))
+        local = {locality_key(row, "koaza"): {"ウエノ"}}
+        self.assertEqual(resolve_reading(row, "koaza", local, postal), ("ウエノ", "addressBaseRegistryMatch"))
+        local[locality_key(row, "koaza")].add("カミノ")
+        self.assertEqual(resolve_reading(row, "koaza", local, postal)[0], "")
+        self.assertEqual(resolve_reading(dict(row, koaza="字トイヨイ"), "koaza", local, postal),
+                         ("アザトイヨイ", "literalKana"))
+
+    def test_municipal_names_use_current_official_readings_and_include_city_wards(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder) / "cities.zip"
+            with ZipFile(archive, "w") as source:
+                source.writestr("mt_city_all.csv", "\n".join([
+                    "lg_code,pref,pref_kana,city,city_kana,ward,ward_kana,efct_date,ablt_date",
+                    "011002,北海道,ホッカイドウ,札幌市,サッポロシ,,,1947-04-17,",
+                    "011011,北海道,ホッカイドウ,札幌市,サッポロシ,中央区,チュウオウク,2026-11-26,",
+                    "011029,北海道,ホッカイドウ,札幌市,サッポロシ,北区,キタク,1947-04-17,2026-11-26",
+                    "011037,北海道,ホッカイドウ,札幌市,サッポロシ,東区,ヒガシク,2026-11-27,",
+                ]))
+            self.assertEqual(name_pairs(archive, "2026-11-26"), {
+                ("ホッカイドウ", "北海道"): {"pref"},
+                ("サッポロシ", "札幌市"): {"city"},
+                ("チュウオウク", "中央区"): {"ward"},
+                ("サッポロシチュウオウク", "札幌市中央区"): {"city+ward"},
+            })
+
     def test_reading_and_surface_validation(self):
         excluded = Counter()
         self.assertEqual(dictionary.katakana(" がっこう "), "ガッコウ")

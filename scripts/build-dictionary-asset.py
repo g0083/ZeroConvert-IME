@@ -96,7 +96,7 @@ def additional_pairs():
         return json.loads(archive.read('manifest.json'))['additionalPairs']
 
 
-def build(dictionary, output, identifier, release_tag):
+def build(dictionary, output, identifier, release_tag, catalog_output=CATALOG):
     files, expanded = validate(dictionary)
     write_archive(dictionary, files, output)
     pairs = reverse_pairs(dictionary / REVERSE)
@@ -118,18 +118,19 @@ def build(dictionary, output, identifier, release_tag):
         'downloadBaseUrl': f'https://github.com/g0083/ZeroConvert-IME/releases/download/{release_tag}',
         'dictionary': entry,
     }
-    CATALOG.parent.mkdir(parents=True, exist_ok=True)
-    CATALOG.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    catalog_output.parent.mkdir(parents=True, exist_ok=True)
+    catalog_output.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(f'{output}: {entry["bytes"]:,} bytes ({entry["files"]:,} files, {pairs:,} reverse pairs)')
-    print(f'Wrote {CATALOG.relative_to(ROOT).as_posix()}')
+    print(f'Wrote {catalog_output}')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--dictionary', type=Path, required=True, help='Prepared Dictionary directory')
     parser.add_argument('--output', type=Path, required=True, help='Destination zip path')
+    parser.add_argument('--catalog-output', type=Path, default=CATALOG, help='Destination catalog JSON path')
     parser.add_argument('--id', default='azookey-expanded', help='Stable dictionary identifier recorded in the catalog')
-    parser.add_argument('--release-tag', default='dictionary-v1', help='GitHub release tag that will host the zip')
+    parser.add_argument('--release-tag', default='dictionary-v2', help='GitHub release tag that will host the zip')
     args = parser.parse_args()
 
     dictionary = args.dictionary.resolve()
@@ -141,8 +142,11 @@ def main():
         parser.error('--output must be a .zip path')
     if output.is_relative_to(dictionary):
         parser.error('--output must be outside the dictionary directory')
+    catalog_output = args.catalog_output.resolve()
+    if catalog_output.suffix != '.json' or catalog_output.is_relative_to(dictionary):
+        parser.error('--catalog-output must be a .json file outside the dictionary directory')
     try:
-        build(dictionary, output, args.id, args.release_tag)
+        build(dictionary, output, args.id, args.release_tag, catalog_output)
     except ValueError as failure:
         print(failure, file=sys.stderr)
         sys.exit(1)

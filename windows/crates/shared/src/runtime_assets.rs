@@ -69,11 +69,11 @@ pub fn model_size_bytes(id: &str) -> Option<u64> {
 /// （生成は `scripts/build-dictionary-asset.py`）。
 pub const DICTIONARY_ASSET_FILENAME: &str = "zerocon-dictionary-azookey-expanded.zip";
 pub const DICTIONARY_ASSET_SHA256: &str =
-    "9f406888dd17b8e9ab1aff60891a1786f40966898f90368d9e6e62d30d59d29b";
-pub const DICTIONARY_ASSET_BYTES: u64 = 23_357_023;
-pub const DICTIONARY_ASSET_FILES: u64 = 3_621;
+    "e0a5366edfccd7b1481c30211635b90c49a8b4b93830a077e24e68286138d030";
+pub const DICTIONARY_ASSET_BYTES: u64 = 60_975_173;
+pub const DICTIONARY_ASSET_FILES: u64 = 5_230;
 pub const DICTIONARY_RELEASE_REPOSITORY: &str = "g0083/ZeroConvert-IME";
-pub const DICTIONARY_RELEASE_TAG: &str = "dictionary-v1";
+pub const DICTIONARY_RELEASE_TAG: &str = "dictionary-v2";
 /// 展開後の `Dictionary` ディレクトリを置くサブディレクトリ名。
 pub const DICTIONARY_DIR: &str = "Dictionary";
 
@@ -107,6 +107,24 @@ pub fn cached_dictionary_dir_at(cache_root: &Path) -> Option<PathBuf> {
     let dictionary = cache_root.join(DICTIONARY_DIR);
     let marker = dictionary.join("louds").join("charID.chid");
     marker.is_file().then_some(dictionary)
+}
+
+/// 設定画面が再取得の要否を判定する。試験辞書は実行ファイル横から使用できる。
+pub fn current_dictionary_dir(install: &Path) -> Option<PathBuf> {
+    current_dictionary_dir_at(install, &dictionary_download_root())
+}
+
+fn current_dictionary_dir_at(install: &Path, cache_root: &Path) -> Option<PathBuf> {
+    let installed = install.join(DICTIONARY_DIR);
+    if installed.join("louds/charID.chid").is_file() {
+        return Some(installed);
+    }
+    let cached = cached_dictionary_dir_at(cache_root)?;
+    let sha256 = std::fs::read_to_string(cache_root.join(".complete")).ok()?;
+    sha256
+        .trim()
+        .eq_ignore_ascii_case(DICTIONARY_ASSET_SHA256)
+        .then_some(cached)
 }
 
 /// 変換サーバーが使う辞書ディレクトリ。インストール先の `Dictionary\` を
@@ -468,13 +486,49 @@ mod tests {
 
     #[test]
     fn dictionary_download_url_is_pinned_to_the_release_asset() {
-        let url = dictionary_download_url();
-        assert!(url.starts_with(&format!(
-            "https://github.com/{DICTIONARY_RELEASE_REPOSITORY}/releases/download/{DICTIONARY_RELEASE_TAG}/"
-        )));
-        assert!(url.ends_with(DICTIONARY_ASSET_FILENAME));
-        assert_eq!(DICTIONARY_ASSET_SHA256.len(), 64);
-        assert!(DICTIONARY_ASSET_BYTES > 0);
-        assert!(DICTIONARY_ASSET_FILES > 0);
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../deployment/dictionary-catalog.json"))
+                .unwrap();
+        let asset = &catalog["dictionary"];
+        assert_eq!(catalog["releaseTag"], DICTIONARY_RELEASE_TAG);
+        assert_eq!(asset["filename"], DICTIONARY_ASSET_FILENAME);
+        assert_eq!(asset["sha256"], DICTIONARY_ASSET_SHA256);
+        assert_eq!(asset["bytes"], DICTIONARY_ASSET_BYTES);
+        assert_eq!(asset["files"], DICTIONARY_ASSET_FILES);
+        assert_eq!(
+            dictionary_download_url(),
+            format!(
+                "{}/{}",
+                catalog["downloadBaseUrl"].as_str().unwrap(),
+                DICTIONARY_ASSET_FILENAME
+            )
+        );
+    }
+
+    #[test]
+    fn dictionary_setup_requires_current_hash_but_accepts_a_trial_dictionary() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("install");
+        let cache = root.path().join("cache");
+        let dictionary = cache.join(DICTIONARY_DIR);
+        std::fs::create_dir_all(dictionary.join("louds")).unwrap();
+        std::fs::write(dictionary.join("louds/charID.chid"), []).unwrap();
+        assert_eq!(current_dictionary_dir_at(&install, &cache), None);
+
+        let marker = cache.join(".complete");
+        std::fs::write(&marker, "old-sha256").unwrap();
+        assert_eq!(current_dictionary_dir_at(&install, &cache), None);
+        assert_eq!(resolve_dictionary_dir(&install, &cache), dictionary);
+
+        std::fs::write(marker, DICTIONARY_ASSET_SHA256).unwrap();
+        assert_eq!(
+            current_dictionary_dir_at(&install, &cache),
+            Some(dictionary)
+        );
+
+        let trial = install.join(DICTIONARY_DIR);
+        std::fs::create_dir_all(trial.join("louds")).unwrap();
+        std::fs::write(trial.join("louds/charID.chid"), []).unwrap();
+        assert_eq!(current_dictionary_dir_at(&install, &cache), Some(trial));
     }
 }

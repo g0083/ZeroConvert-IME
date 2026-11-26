@@ -1,11 +1,15 @@
 package com.zeroconvert.ime
 
 import com.zeroconvert.ime.assist.*
+import com.zeroconvert.ime.model.DictionaryDownloadManager
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
+import org.junit.Assume.assumeNotNull
 import org.junit.Test
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
 import java.util.Collections
 
 class ModelAssistTest {
@@ -177,7 +181,7 @@ class ModelAssistTest {
     }
 
     @Test fun packagedReverseDictionarySupportsRealHomophonesAndCompoundWords() {
-        val dictionary = ReverseReadingDictionary(TestAssets.file("dictionary/reverse-v2.bin").readBytes())
+        val dictionary = ReverseReadingDictionary.map(TestAssets.file("dictionary/reverse-v2.bin"))
         assertTrue(dictionary.matches("今日", "きょう"))
         assertTrue(dictionary.matches("今日", "こんにち"))
         assertTrue(dictionary.matches("統一", "とういつ"))
@@ -185,6 +189,33 @@ class ModelAssistTest {
         assertFalse(dictionary.matches("統一", "とういっつ"))
         assertEquals("トウイツ", dictionary.restore("統一"))
         assertEquals("ガッコウヘ", dictionary.restore("学校へ"))
+    }
+
+    @Test fun downloadedDictionaryRequiresTheCurrentAssetHashAndContents() {
+        val root = Files.createTempDirectory("dictionary-test").toFile()
+        try {
+            val marker = root.resolve(".complete")
+            val characters = root.resolve("Dictionary/louds/charID.chid")
+            characters.parentFile?.mkdirs()
+            characters.writeText("charset")
+            assertFalse(DictionaryDownloadManager.isReadyAt(root))
+            marker.writeText("9f406888dd17b8e9ab1aff60891a1786f40966898f90368d9e6e62d30d59d29b")
+            assertFalse(DictionaryDownloadManager.isReadyAt(root))
+            marker.writeText(DictionaryDownloadManager.SHA256)
+            assertTrue(DictionaryDownloadManager.isReadyAt(root))
+            characters.delete()
+            assertFalse(DictionaryDownloadManager.isReadyAt(root))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun expandedAddressIndexReadsChomeAndKoazaFromTheReleaseAsset() {
+        val path = System.getenv("ZEROCON_ANDROID_DICTIONARY_INDEX")
+        assumeNotNull(path)
+        val dictionary = ReverseReadingDictionary.map(File(requireNotNull(path)))
+        assertTrue(dictionary.matches("大通西１１丁目", "おおどおりにしじゅういっちょうめ"))
+        assertTrue(dictionary.matches("大字留萌村字トイヨイ", "おおあざるもいむらあざといよい"))
     }
 
     @Test fun cancelledCorrectionDoesNotLaunchAnOfflineDictionarySearch() {

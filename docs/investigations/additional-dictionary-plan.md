@@ -1,6 +1,6 @@
 # Windows追加辞書の生成と比較
 
-**状態　実装済み。629,045組をWindowsとAndroidの通常ビルドに採用。**
+**状態　実装済み。629,045組をWindowsとAndroidの初回取得用アセットに採用。** 現在の固定辞書と配布状況は [辞書の取得と更新](../dictionary-assets.md) を参照。
 
 SudachiDict Fullの名詞とWikidataの固有名詞を、azooKeyの標準辞書へ追加する。Windowsの試験IMEでは、同じバイナリとZeroCon Modelで標準辞書と追加辞書を比較できる。 [Windows開発・反映手順](../development-workflow.md)
 

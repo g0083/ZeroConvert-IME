@@ -33,20 +33,20 @@ object DictionaryDownloadManager {
     private const val TAG = "DictionaryDownload"
 
     const val REPOSITORY = "g0083/ZeroConvert-IME"
-    const val RELEASE_TAG = "dictionary-v1"
+    const val RELEASE_TAG = "dictionary-v2"
     const val FILENAME = "zerocon-dictionary-azookey-expanded.zip"
     const val DOWNLOAD_URL = "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$FILENAME"
-    const val EXPECTED_BYTES = 23_357_023L
-    const val SHA256 = "9f406888dd17b8e9ab1aff60891a1786f40966898f90368d9e6e62d30d59d29b"
-    const val FILE_COUNT = 3_621
-    const val EXPANDED_BYTES = 55_094_243L
+    const val EXPECTED_BYTES = 60_975_173L
+    const val SHA256 = "e0a5366edfccd7b1481c30211635b90c49a8b4b93830a077e24e68286138d030"
+    const val FILE_COUNT = 5_230
+    const val EXPANDED_BYTES = 197_378_811L
 
     private const val ARCHIVE_ROOT = "Dictionary"
     private const val COMPLETE_MARKER = ".complete"
     private const val PART_SUFFIX = ".part"
     private const val RESERVE_BYTES = 32L * 1024L * 1024L
     private const val REPORT_STEP_BYTES = 2L * 1024L * 1024L
-    // 破損アセットの無限展開を防ぐ上限（実測の約10倍）。
+    // 破損アセットの無限展開を防ぐ上限。
     private const val MAX_EXPANDED_BYTES = 512L * 1024L * 1024L
     private const val MAX_CONNECTION_ROWS = 1_318
     private const val DEFAULT_CONNECTION_COST = -25.0f
@@ -66,11 +66,12 @@ object DictionaryDownloadManager {
     fun reverseDictionary(context: Context): File =
         File(dictionaryDir(context), "Reverse/reverse-v2.bin")
 
-    fun isReady(context: Context): Boolean {
-        val root = root(context)
-        if (!File(root, COMPLETE_MARKER).isFile) return false
-        if (File(root, COMPLETE_MARKER).readText().trim() != SHA256) return false
-        return File(dictionaryDir(context), "louds/charID.chid").isFile
+    fun isReady(context: Context): Boolean = isReadyAt(root(context))
+
+    internal fun isReadyAt(root: File): Boolean {
+        val marker = File(root, COMPLETE_MARKER)
+        val sha256 = runCatching { marker.readText().trim() }.getOrNull()
+        return sha256 == SHA256 && File(root, "$ARCHIVE_ROOT/louds/charID.chid").isFile
     }
 
     fun availableBytes(context: Context): Long = try {
@@ -79,7 +80,7 @@ object DictionaryDownloadManager {
         -1L
     }
 
-    private fun archiveFile(context: Context): File = File(root(context), "dictionary$PART_SUFFIX")
+    private fun archiveFile(context: Context): File = File(root(context), "$RELEASE_TAG$PART_SUFFIX")
 
     suspend fun download(context: Context, onProgress: (Progress) -> Unit = {}): Result<File> =
         downloadMutex.withLock {
@@ -89,14 +90,18 @@ object DictionaryDownloadManager {
                         onProgress(Progress(EXPECTED_BYTES, EXPECTED_BYTES))
                         return@runCatching dictionaryDir(context)
                     }
-                    val available = availableBytes(context)
-                    check(available < 0L || available >= EXPECTED_BYTES + RESERVE_BYTES) {
-                        "空き容量が足りません（約${EXPECTED_BYTES / (1024 * 1024)}MB必要）"
-                    }
                     val root = root(context).apply { mkdirs() }
+                    val staging = File(root, "$ARCHIVE_ROOT.staging")
+                    check(!staging.exists() || staging.deleteRecursively()) { "前回の展開途中のデータを削除できません" }
                     val archive = archiveFile(context)
+                    val remaining = (EXPECTED_BYTES - archive.length()).coerceAtLeast(0L)
+                    val required = remaining + EXPANDED_BYTES + RESERVE_BYTES
+                    val available = availableBytes(context)
+                    check(available < 0L || available >= required) {
+                        "空き容量が足りません（約${(required + 1_048_575) / 1_048_576}MB必要）"
+                    }
                     fetch(archive, onProgress)
-                    extract(archive, root, onProgress)
+                    extract(archive, root, staging, onProgress)
                     archive.delete()
                     check(isReady(context)) { "辞書を展開しましたが、必要なファイルが見つかりません" }
                     onProgress(Progress(EXPECTED_BYTES, EXPECTED_BYTES))
@@ -110,7 +115,11 @@ object DictionaryDownloadManager {
 
     private suspend fun fetch(destination: File, onProgress: (Progress) -> Unit) {
         val existing = if (destination.isFile) destination.length() else 0L
-        if (existing > EXPECTED_BYTES) destination.delete()
+        if (existing == EXPECTED_BYTES && VerifiedModelFile.sha256(destination).equals(SHA256, ignoreCase = true)) {
+            onProgress(Progress(EXPECTED_BYTES, EXPECTED_BYTES))
+            return
+        }
+        if (existing >= EXPECTED_BYTES) check(destination.delete()) { "前回の辞書アーカイブを削除できません" }
         val resumeFrom = if (destination.isFile) destination.length() else 0L
         val connection = (URL(DOWNLOAD_URL).openConnection() as HttpURLConnection).apply {
             connectTimeout = 30_000
@@ -164,10 +173,7 @@ object DictionaryDownloadManager {
      * `Dictionary/` 配下のエントリだけをステージングへ展開し、完了後に置き換える。
      * パスは zip 内の表記に関係なく `Dictionary/` 配下に収まることを検証する。
      */
-    private fun extract(archive: File, root: File, onProgress: (Progress) -> Unit) {
-        val staging = File(root, "$ARCHIVE_ROOT.staging")
-        if (staging.exists() && !staging.deleteRecursively()) error("前回の展開途中のデータを削除できません")
-        File(root, COMPLETE_MARKER).delete()
+    private fun extract(archive: File, root: File, staging: File, onProgress: (Progress) -> Unit) {
         check(staging.mkdirs() || staging.isDirectory) { "辞書の展開先を作成できません" }
 
         var count = 0
@@ -198,11 +204,13 @@ object DictionaryDownloadManager {
             staging.deleteRecursively()
             error("辞書アセットに louds/charID.chid がありません")
         }
+        packConnectionCosts(staging)
         val target = File(root, ARCHIVE_ROOT)
+        val marker = File(root, COMPLETE_MARKER)
+        check(!marker.exists() || marker.delete()) { "辞書の完了マーカーを更新できません" }
         if (target.exists() && !target.deleteRecursively()) error("既存の辞書を置き換えられません")
         check(staging.renameTo(target)) { "辞書を配置できませんでした" }
-        packConnectionCosts(target)
-        File(root, COMPLETE_MARKER).writeText(SHA256)
+        marker.writeText(SHA256)
     }
 
     /** `CBSP` はネイティブ側が float をそのまま `memcpy` するため little-endian で書く。 */

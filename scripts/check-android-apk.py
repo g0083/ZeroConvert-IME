@@ -20,6 +20,7 @@ def main():
     for name, value in (
         ('FILENAME', f'"{dictionary["filename"]}"'),
         ('EXPECTED_BYTES', f'{dictionary["bytes"]}L'),
+        ('EXPANDED_BYTES', f'{dictionary["expandedBytes"]}L'),
         ('SHA256', f'"{dictionary["sha256"]}"'),
         ('FILE_COUNT', str(dictionary['files'])),
         ('RELEASE_TAG', f'"{catalog["releaseTag"]}"'),

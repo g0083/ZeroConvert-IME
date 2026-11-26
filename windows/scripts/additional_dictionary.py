@@ -156,12 +156,13 @@ def katakana(value):
     return "".join(chr(ord(char) + 0x60) if "ぁ" <= char <= "ゖ" else char for char in text)
 
 
-def valid_word(reading, surface, characters, excluded):
+def valid_word(reading, surface, characters, excluded, *, allow_digits=False):
     if not reading or not surface:
         excluded["empty"] += 1
     elif len(reading) > MAX_READING:
         excluded["longReading"] += 1
-    elif any(char not in characters or not ("ァ" <= char <= "ヺ" or char in "ー・ヽヾ")
+    elif any(char not in characters or not ("ァ" <= char <= "ヺ" or char in "ー・ヽヾ"
+                                           or (allow_digits and "0" <= char <= "9"))
              for char in reading):
         excluded["unsupportedReading"] += 1
     elif any(unicodedata.category(char) == "Cc" for char in surface):
@@ -390,7 +391,20 @@ def file_entries(root):
              "sha256": digest(path)} for path in sorted(root.rglob("*")) if path.is_file()]
 
 
-def publish_dictionary(source, builder, output, groups, additions, metadata, records, notices=()):
+def verified_trial(previous):
+    source = previous / "Dictionary"
+    manifest = previous / "additional-dictionary.json"
+    metadata = read_json(manifest)
+    if (metadata["schemaVersion"] != 1 or metadata["kind"] != "additional-trial-dictionary"
+            or metadata["files"] != file_entries(source)):
+        raise ValueError("Baseline dictionary differs from its trial manifest")
+    records = read_json(previous / "entries.json")
+    if len(records) != metadata["counts"]["total"]:
+        raise ValueError("Unexpected count of baseline additions")
+    return source, manifest, metadata, records
+
+
+def publish_dictionary(source, builder, output, groups, additions, metadata, records, notices=(), *, extra_notices=()):
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".additional-dictionary-", dir=output.parent) as temporary:
         stage = Path(temporary) / "result"
@@ -401,14 +415,17 @@ def publish_dictionary(source, builder, output, groups, additions, metadata, rec
         subprocess.run(["node", WINDOWS / "scripts/generate-reverse-dictionary.mjs",
                         "--source", dictionary / "louds", "--output", reverse], check=True)
         verify_reverse(reverse, additions)
+        notice_dir = dictionary / "AdditionalDictionaryNotices"
+        if notices or extra_notices:
+            notice_dir.mkdir(exist_ok=True)
         if notices:
-            notice_dir = dictionary / "AdditionalDictionaryNotices"
-            notice_dir.mkdir()
             for name, source_notice in zip(NOTICES, notices, strict=True):
                 shutil.copyfile(source_notice, notice_dir / name)
             (notice_dir / "Wikidata.txt").write_text(
                 "Wikidata structured data (CC0 1.0)\nhttps://www.wikidata.org/wiki/Wikidata:Licensing\n",
                 encoding="utf-8", newline="\n")
+        for notice in extra_notices:
+            shutil.copyfile(notice, notice_dir / notice.name)
         write_json(stage / "additional-dictionary.json", dict(metadata, files=file_entries(dictionary)))
         write_json(stage / "entries.json", [
             *records,

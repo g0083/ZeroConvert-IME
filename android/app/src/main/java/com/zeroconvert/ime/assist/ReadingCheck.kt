@@ -2,27 +2,40 @@ package com.zeroconvert.ime.assist
 
 import android.content.Context
 import com.zeroconvert.ime.KanaKanjiConverter
+import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.FileChannel
 
 /** Immutable AZR2 index generated from the same Android LOUDS source. */
-internal class ReverseReadingDictionary(private val bytes: ByteArray) {
-    private val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+internal class ReverseReadingDictionary private constructor(data: ByteBuffer) {
+    constructor(bytes: ByteArray) : this(ByteBuffer.wrap(bytes))
+
+    private val buffer = data.asReadOnlyBuffer().order(ByteOrder.LITTLE_ENDIAN)
+    private val size = buffer.limit()
     private val count: Int
     private val header: Int
     init {
-        require(bytes.size >= 12 && bytes.copyOfRange(0, 4).contentEquals("AZR2".toByteArray()))
+        require(size >= 12 && buffer.getInt(0) == 0x32525a41) // AZR2 in little-endian order
         count = buffer.getInt(4)
-        require(count > 0 && count.toLong() * 4 + 12 <= bytes.size)
+        require(count > 0 && count.toLong() * 4 + 12 <= size)
         header = 12 + count * 4
-        require(buffer.getInt(8) == header && buffer.getInt(header - 4) == bytes.size)
+        require(buffer.getInt(8) == header && buffer.getInt(header - 4) == size)
         var last = header
         for (index in 0..count) {
             val offset = buffer.getInt(8 + index * 4)
-            require(offset >= last && offset <= bytes.size)
+            require(offset >= last && offset <= size)
             last = offset
         }
     }
+
+    companion object {
+        fun map(file: File): ReverseReadingDictionary = FileInputStream(file).channel.use { channel ->
+            ReverseReadingDictionary(channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size()))
+        }
+    }
+
     private fun record(index: Int): Pair<Int, Int>? {
         if (index !in 0 until count) return null
         val start = buffer.getInt(8 + index * 4)
@@ -36,7 +49,7 @@ internal class ReverseReadingDictionary(private val bytes: ByteArray) {
     private fun compare(index: Int, query: ByteArray): Int {
         val (start, size) = record(index) ?: return 1
         for (pos in 0 until minOf(size, query.size)) {
-            val difference = (bytes[start + 8 + pos].toInt() and 255) - (query[pos].toInt() and 255)
+            val difference = (buffer.get(start + 8 + pos).toInt() and 255) - (query[pos].toInt() and 255)
             if (difference != 0) return difference
         }
         return size - query.size
@@ -53,7 +66,9 @@ internal class ReverseReadingDictionary(private val bytes: ByteArray) {
             if (compare(index, query) != 0) break
             val (start, size) = record(index) ?: break
             val readingSize = buffer.getShort(start + 2).toInt() and 65535
-            result.add(String(bytes, start + 8 + size, readingSize, Charsets.UTF_8))
+            val bytes = ByteArray(readingSize)
+            buffer.asReadOnlyBuffer().apply { position(start + 8 + size); get(bytes) }
+            result.add(String(bytes, Charsets.UTF_8))
         }
         return result
     }
@@ -107,12 +122,12 @@ object ReadingCheck {
     fun load(context: Context) {
         if (dictionary != null) return
         dictionary = try {
-            val downloaded = java.io.File(
+            val downloaded = File(
                 context.filesDir,
                 "dictionary/Dictionary/Reverse/reverse-v2.bin"
             )
             if (downloaded.isFile) {
-                ReverseReadingDictionary(downloaded.readBytes())
+                ReverseReadingDictionary.map(downloaded)
             } else {
                 val asset = if (com.zeroconvert.ime.BuildConfig.WINDOWS_ENGINE)
                     "shared-engine/Dictionary/Reverse/reverse-v2.bin" else "dictionary/reverse-v2.bin"

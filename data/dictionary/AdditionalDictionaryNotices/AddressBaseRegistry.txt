@@ -1,0 +1,12 @@
+出典　デジタル庁「アドレス・ベース・レジストリ」全国 市区町村マスター・全国 町字マスター
+https://www.digital.go.jp/policies/base_registry_address
+https://data.address-br.digital.go.jp/mt_city/mt_city_all.csv.zip
+https://data.address-br.digital.go.jp/mt_town/mt_town_all.csv.zip
+
+ZeroConvert-IME が都道府県名・市区町村名・政令指定都市の行政区名・町名・大字・丁目・小字とその読みを抽出・加工し、変換辞書を作成しました。
+アドレス・ベース・レジストリの利用規約（公共データ利用規約 第1.0版）
+https://www.digital.go.jp/policies/base_registry_address_tos
+
+読み仮名の補完には、日本郵便株式会社「住所の郵便番号（1レコード1行、UTF-8形式）」を使用しました。
+https://www.post.japanpost.jp/service/search/zipcode/download/utf-zip.html
+https://www.post.japanpost.jp/service/search/zipcode/download/utf-readme.html
