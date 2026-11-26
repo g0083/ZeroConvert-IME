@@ -26,7 +26,11 @@ pub fn reading_change_distance(input: &str, surface: &str) -> Option<usize> {
         input.to_owned()
     };
     if surface.chars().all(|c| {
-        ('ぁ'..='ゖ').contains(&c) || ('ァ'..='ヶ').contains(&c) || "ー、。！？!?・".contains(c)
+        ('ぁ'..='ゖ').contains(&c)
+            || ('ァ'..='ヶ').contains(&c)
+            || "ー、。！？!?・".contains(c)
+            || c.is_ascii_digit()
+            || ('０'..='９').contains(&c)
     }) {
         Some(super::damerau_levenshtein_distance(
             &katakana_to_hiragana(&source_reading),
@@ -56,7 +60,7 @@ pub(super) fn explicit_typo_surface(input: &str) -> Option<&'static str> {
     })
 }
 
-fn known_reading(input: &str) -> bool {
+pub(super) fn known_reading(input: &str) -> bool {
     let hira = katakana_to_hiragana(input);
     STANDARD_VOCAB.iter().any(|(reading, _)| *reading == hira)
         || super::typo_variant::lookup_surface(&hira).is_some()
@@ -169,12 +173,17 @@ pub fn suggest_windows_composition(
     raw: &str,
     config: &AiAssistConfig,
 ) -> (Option<TypoSuggestion>, bool) {
-    let hybrid = super::keyboard_hybrid::suggest(context, input, raw, config);
+    let hybrid = super::keyboard_hybrid::suggest(context, input, raw, config).map(|opt| {
+        opt.filter(|s| {
+            !super::reading_check::has_same_reading(&s.surface, input)
+                && supported_reading_change(input, &s.surface)
+        })
+    });
     let hybrid_proposal = hybrid.as_ref().is_some_and(Option::is_some);
     let allow_channel_repair = hybrid.is_none();
     let suggestion = hybrid.flatten().or_else(|| {
         if allow_channel_repair {
-            suggest_composition(context, input, baseline, config)
+            suggest_composition_with_input_hints(context, input, baseline, raw, "", "", config)
         } else {
             suggest_composition_heuristic(context, input, baseline, config)
         }

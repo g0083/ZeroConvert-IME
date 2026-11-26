@@ -164,6 +164,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_zeroconvert_ime_benchmark_BenchmarkSession_nativeConfigureCandidates(
         JNIEnv *, jobject, jint decode_threads, jint batch_threads, jint direct_model_first_mode) {
     ZeroConConfigureRuntimeTuning(decode_threads, batch_threads, direct_model_first_mode);
+    keyboard_assist_configure_threads(decode_threads, batch_threads);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

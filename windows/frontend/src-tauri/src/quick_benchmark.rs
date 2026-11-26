@@ -126,6 +126,7 @@ fn measure(
         scope,
         Some(BACKEND_TIMEOUT),
         None,
+        None,
     )?;
     measure_with_worker(&mut worker, warmup, cases, report_batch)
 }
@@ -188,7 +189,13 @@ fn measure_tuned_cpu(
     warmup: &[Case],
     cases: &[Case],
     report_batch: impl FnMut(usize),
-) -> Result<(Vec<CaseResult>, Option<shared::cpu_tuning::CpuRuntimeTuningConfig>), String> {
+) -> Result<
+    (
+        Vec<CaseResult>,
+        Option<shared::cpu_tuning::CpuRuntimeTuningConfig>,
+    ),
+    String,
+> {
     let scope = ConversionScope::Candidates;
     let (executable, runtime, _) = crate::benchmark_worker_paths("cpu", scope)?;
     let mut worker = Worker::start(
@@ -199,6 +206,7 @@ fn measure_tuned_cpu(
         0,
         scope,
         Some(BACKEND_TIMEOUT),
+        None,
         None,
     )?;
     let tuned = {
@@ -248,6 +256,7 @@ pub(crate) fn run_single(
             gpu_layers,
             ConversionScope::Candidates,
             Some(BACKEND_TIMEOUT),
+            None,
             None,
         )?;
         let model_id = active_canonical_model_id(config);
@@ -325,21 +334,14 @@ pub(crate) fn run(
             } else if backend == "vulkan" && layers == 0 {
                 Err("GPUに載せる層数が0のため、GPU推論を測定できません".into())
             } else if backend == "cpu" {
-                match measure_tuned_cpu(
-                    &model_id,
-                    &model,
-                    &dictionary,
-                    &warmup,
-                    &cases,
-                    |count| {
-                        completed += count;
-                        report(Progress {
-                            backend,
-                            completed,
-                            total,
-                        });
-                    },
-                ) {
+                match measure_tuned_cpu(&model_id, &model, &dictionary, &warmup, &cases, |count| {
+                    completed += count;
+                    report(Progress {
+                        backend,
+                        completed,
+                        total,
+                    });
+                }) {
                     Ok((rows, tuned)) => {
                         cpu_tuning = tuned;
                         Ok(rows)

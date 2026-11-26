@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -68,6 +69,22 @@ int benchmark_worker() {
   }
   return 0;
 }
+
+double fast_logsumexp(const float *logits, int nv) {
+  float max_value = logits[0];
+  for (int j = 1; j < nv; ++j) {
+    if (logits[j] > max_value)
+      max_value = logits[j];
+  }
+  const float cutoff = max_value - 20.0f;
+  double denom = 0.0;
+  for (int j = 0; j < nv; ++j) {
+    const float v = logits[j];
+    if (v > cutoff)
+      denom += double(std::expf(v - max_value));
+  }
+  return double(max_value) + std::log(denom);
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -118,6 +135,16 @@ int main(int argc, char **argv) {
       env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_GPU_LAYERS", 0, 0, 99);
   auto mp = llama_model_default_params();
   mp.n_gpu_layers = gpu_layers;
+  mp.load_mode = LLAMA_LOAD_MODE_MMAP;
+  ggml_backend_dev_t cpu_devices[2] = {nullptr, nullptr};
+  if (gpu_layers <= 0) {
+    mp.split_mode = LLAMA_SPLIT_MODE_NONE;
+    if (auto *cpu_dev =
+            ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
+      cpu_devices[0] = cpu_dev;
+      mp.devices = cpu_devices;
+    }
+  }
   auto *model =
       llama_model_load_from_file(argv[(hybrid || assist) ? 2 : 1], mp);
   if (!model)
@@ -139,15 +166,15 @@ int main(int argc, char **argv) {
       env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_THREADS", auto_threads, 1, 32);
   const int n_threads_batch = env_int_clamped(
       "AZOOKEY_KEYBOARD_PRIOR_THREADS_BATCH", auto_threads_batch, 1, 64);
-  const int default_batch = (hybrid || assist) ? 512 : 2048;
+  const int default_batch = (hybrid || assist) ? 1024 : 2048;
   const int n_batch =
       env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_BATCH", default_batch, 256, 4096);
   const int n_ubatch =
       env_int_clamped("AZOOKEY_KEYBOARD_PRIOR_UBATCH", 512, 64, n_batch);
 
   auto cp = llama_context_default_params();
-  cp.n_ctx = (hybrid || assist) ? 512 : 4096;
-  cp.n_batch = (hybrid || assist) ? std::min(n_batch, 512) : 4096;
+  cp.n_ctx = (hybrid || assist) ? 1024 : 4096;
+  cp.n_batch = (hybrid || assist) ? std::min(n_batch, 1024) : 4096;
   cp.n_ubatch = std::min(n_ubatch, int(cp.n_batch));
   cp.n_outputs_max = cp.n_batch;
   cp.n_seq_max = 32;
@@ -164,11 +191,21 @@ int main(int argc, char **argv) {
   }
   const auto *vocab = llama_model_get_vocab(model);
   const int nv = llama_vocab_n_tokens(vocab);
+  auto *mem = llama_get_memory(ctx);
   std::vector<llama_token> cached_prefix_tokens;
+  auto reset_prefix_cache = [&] {
+    // Invalidating the KV cells is enough. Decode overwrites their data before
+    // making them visible again.
+    llama_memory_clear(mem, false);
+    cached_prefix_tokens.clear();
+  };
 
   auto score_sequences =
       [&](const std::vector<std::vector<llama_token>> &sequences,
-          const std::vector<int> &prefix_lengths) {
+          const std::vector<int> &prefix_lengths,
+          double *out_seq0_min_tok_lp = nullptr) {
+        if (out_seq0_min_tok_lp)
+          *out_seq0_min_tok_lp = 0.0;
         int active_count = int(sequences.size());
         if (active_count == 0)
           return std::vector<double>();
@@ -247,7 +284,6 @@ int main(int argc, char **argv) {
         if (nodes.empty())
           return std::vector<double>(sequences.size(), 0.0);
 
-        auto *mem = llama_get_memory(ctx);
         int lcp = 0;
         const int cached_limit =
             std::min(shared_unscored_len, int(cached_prefix_tokens.size()));
@@ -255,20 +291,56 @@ int main(int argc, char **argv) {
                cached_prefix_tokens[lcp] == sequences[0][lcp]) {
           ++lcp;
         }
-        if (lcp > 0) {
-          llama_memory_seq_keep(mem, 0);
-          if (!llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(lcp), -1)) {
-            llama_memory_clear(mem, true);
-            cached_prefix_tokens.clear();
+        if (lcp < int(cached_prefix_tokens.size())) {
+          if (lcp == 0 ||
+              !llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(lcp), -1)) {
+            reset_prefix_cache();
             lcp = 0;
           }
-        } else {
-          llama_memory_clear(mem, true);
-          cached_prefix_tokens.clear();
         }
 
-        if (shared_unscored_len > 0) {
-          const int delta = shared_unscored_len - lcp;
+        const int delta = shared_unscored_len - lcp;
+        const int n_batch_limit = int(llama_n_batch(ctx));
+        const bool merge_prefix_and_tree =
+            delta > 0 && delta + int(nodes.size()) <= n_batch_limit;
+        int node_logits_offset = 0;
+
+        if (merge_prefix_and_tree) {
+          if (lcp > 0) {
+            for (int s = 1; s < active_count; ++s) {
+              llama_memory_seq_cp(mem, 0, s, 0, static_cast<llama_pos>(lcp));
+            }
+          }
+          auto batch =
+              llama_batch_init(delta + int(nodes.size()), 0, active_count);
+          for (int k = 0; k < delta; ++k) {
+            const int pos = lcp + k;
+            const int at = batch.n_tokens++;
+            batch.token[at] = sequences[0][pos];
+            batch.pos[at] = pos;
+            batch.n_seq_id[at] = active_count;
+            for (int s = 0; s < active_count; ++s)
+              batch.seq_id[at][s] = s;
+            batch.logits[at] = 0;
+          }
+          node_logits_offset = batch.n_tokens;
+          for (const auto &node : nodes) {
+            const int at = batch.n_tokens++;
+            batch.token[at] = node.token;
+            batch.pos[at] = node.pos;
+            batch.n_seq_id[at] = int(node.owners.size());
+            std::copy(node.owners.begin(), node.owners.end(), batch.seq_id[at]);
+            batch.logits[at] = node.need_logits ? 1 : 0;
+          }
+          llama_set_n_threads(ctx, n_threads,
+                              batch.n_tokens <= 4 ? n_threads : n_threads_batch);
+          const int rc = llama_decode(ctx, batch);
+          llama_batch_free(batch);
+          if (rc != 0) {
+            reset_prefix_cache();
+            throw std::runtime_error("llama_decode failed");
+          }
+        } else {
           if (delta > 0) {
             llama_set_n_threads(ctx, n_threads,
                                 delta <= 4 ? n_threads : n_threads_batch);
@@ -285,73 +357,79 @@ int main(int argc, char **argv) {
             const int pfx_rc = llama_decode(ctx, pfx_batch);
             llama_batch_free(pfx_batch);
             if (pfx_rc != 0) {
-              llama_memory_clear(mem, true);
-              cached_prefix_tokens.clear();
+              reset_prefix_cache();
               throw std::runtime_error("llama_decode prefix failed");
             }
           }
-          for (int s = 1; s < active_count; ++s) {
-            llama_memory_seq_cp(mem, 0, s, 0,
-                                static_cast<llama_pos>(shared_unscored_len));
+          if (shared_unscored_len > 0) {
+            for (int s = 1; s < active_count; ++s) {
+              llama_memory_seq_cp(mem, 0, s, 0,
+                                  static_cast<llama_pos>(shared_unscored_len));
+            }
           }
-          cached_prefix_tokens.assign(
-              sequences[0].begin(), sequences[0].begin() + shared_unscored_len);
-        } else {
-          cached_prefix_tokens.clear();
-        }
 
-        auto batch = llama_batch_init(int(nodes.size()), 0, active_count);
-        for (const auto &node : nodes) {
-          const int at = batch.n_tokens++;
-          batch.token[at] = node.token;
-          batch.pos[at] = node.pos;
-          batch.n_seq_id[at] = int(node.owners.size());
-          std::copy(node.owners.begin(), node.owners.end(), batch.seq_id[at]);
-          batch.logits[at] = node.need_logits ? 1 : 0;
-        }
-        llama_set_n_threads(ctx, n_threads,
-                            batch.n_tokens <= 4 ? n_threads : n_threads_batch);
-        const int rc = llama_decode(ctx, batch);
-        llama_batch_free(batch);
-        if (rc != 0) {
-          llama_memory_clear(mem, true);
-          cached_prefix_tokens.clear();
-          throw std::runtime_error("llama_decode failed");
+          auto batch = llama_batch_init(int(nodes.size()), 0, active_count);
+          for (const auto &node : nodes) {
+            const int at = batch.n_tokens++;
+            batch.token[at] = node.token;
+            batch.pos[at] = node.pos;
+            batch.n_seq_id[at] = int(node.owners.size());
+            std::copy(node.owners.begin(), node.owners.end(), batch.seq_id[at]);
+            batch.logits[at] = node.need_logits ? 1 : 0;
+          }
+          llama_set_n_threads(ctx, n_threads,
+                              batch.n_tokens <= 4 ? n_threads : n_threads_batch);
+          const int rc = llama_decode(ctx, batch);
+          llama_batch_free(batch);
+          if (rc != 0) {
+            reset_prefix_cache();
+            throw std::runtime_error("llama_decode failed");
+          }
         }
         std::vector<double> scores(sequences.size(), -1e9);
         for (int i = 0; i < active_count; ++i)
           scores[i] = 0.0;
-        std::vector<double> normalizers(nodes.size(), 0.0);
+        struct LogitRow {
+          const float *values;
+          double normalizer;
+        };
+        std::vector<LogitRow> rows(nodes.size());
         for (int i = 0; i < int(nodes.size()); ++i) {
           if (!nodes[i].need_logits)
             continue;
-          const float *logits = llama_get_logits_ith(ctx, i);
+          const float *logits =
+              llama_get_logits_ith(ctx, node_logits_offset + i);
           if (!logits) {
-            llama_memory_clear(mem, true);
-            cached_prefix_tokens.clear();
+            reset_prefix_cache();
             throw std::runtime_error("missing logits");
           }
-          const float max_value = *std::max_element(logits, logits + nv);
-          double denom = 0.0;
-          for (int j = 0; j < nv; ++j)
-            denom += double(std::expf(logits[j] - max_value));
-          normalizers[i] = double(max_value) + std::log(denom);
+          rows[i] = {logits, fast_logsumexp(logits, nv)};
         }
+        double seq0_min_lp = 0.0;
+        bool seq0_has_tok = false;
         for (const auto &edge : edges) {
-          const float *logits = llama_get_logits_ith(ctx, edge.node);
-          scores[edge.owner] +=
-              double(logits[edge.next]) - normalizers[edge.node];
+          const auto &row = rows[edge.node];
+          const double tok_lp = double(row.values[edge.next]) - row.normalizer;
+          scores[edge.owner] += tok_lp;
+          if (edge.owner == 0) {
+            seq0_min_lp =
+                seq0_has_tok ? std::min(seq0_min_lp, tok_lp) : tok_lp;
+            seq0_has_tok = true;
+          }
         }
+        if (out_seq0_min_tok_lp)
+          *out_seq0_min_tok_lp = seq0_has_tok ? seq0_min_lp : 0.0;
         if (shared_unscored_len > 0) {
           llama_memory_seq_keep(mem, 0);
           if (!llama_memory_seq_rm(
                   mem, 0, static_cast<llama_pos>(shared_unscored_len), -1)) {
-            llama_memory_clear(mem, true);
-            cached_prefix_tokens.clear();
+            reset_prefix_cache();
+          } else {
+            cached_prefix_tokens.assign(
+                sequences[0].begin(), sequences[0].begin() + shared_unscored_len);
           }
         } else {
-          llama_memory_clear(mem, true);
-          cached_prefix_tokens.clear();
+          reset_prefix_cache();
         }
         return scores;
       };
@@ -447,24 +525,16 @@ int main(int argc, char **argv) {
         // Small prefix prefills use separate kernels. Start each with an empty
         // cache so the full prefix length is decoded, not just its last token.
         for (int prefix_tokens = 1; prefix_tokens <= 8; ++prefix_tokens) {
-          cached_prefix_tokens.clear();
+          reset_prefix_cache();
           warm(2, prefix_tokens + 1, 5);
         }
         warm(3, 5, 10);
         warm(8, 17, 12);
         warm(24, 49, 16);
-        llama_memory_clear(llama_get_memory(ctx), true);
-        cached_prefix_tokens.clear();
+        reset_prefix_cache();
       }
       std::cout << "ready " << nv << std::endl;
-      std::string line;
-      while (std::getline(std::cin, line)) {
-        if (!line.empty() && line.back() == '\r')
-          line.pop_back();
-        if (line.empty()) {
-          std::cout << "{}" << std::endl;
-          continue;
-        }
+      auto evaluate_repair = [&](const std::string &line) -> std::string {
         std::string raw_keys, input_utf8, context_utf8, touch_hints, mode_str;
         const size_t tab1 = line.find('\t');
         if (tab1 == std::string::npos) {
@@ -508,10 +578,11 @@ int main(int argc, char **argv) {
                                     : roman_decode(raw_keys);
         const auto candidates = assist_candidates(
             raw_keys, input_hira, dictionary, 24, touch_hints, input_mode);
+        std::ostringstream reply;
         if (candidates.size() <= 1) {
-          std::cout << "{\"observed\":" << json_string(encode_utf8(input_hira))
-                    << "}" << std::endl;
-          continue;
+          reply << "{\"observed\":" << json_string(encode_utf8(input_hira))
+                << "}";
+          return reply.str();
         }
         std::u32string ctx_u32;
         if (!context_utf8.empty()) {
@@ -529,14 +600,16 @@ int main(int argc, char **argv) {
         const auto windows =
             build_scoring_windows(orig.reading, ctx_u32, candidates, dictionary);
         if (windows.empty()) {
-          std::cout << "{\"observed\":"
-                    << json_string(encode_utf8(orig.reading)) << "}"
-                    << std::endl;
-          continue;
+          reply << "{\"observed\":" << json_string(encode_utf8(orig.reading))
+                << "}";
+          return reply.str();
         }
         struct RankedCandidate {
           double stage1_delta;
           double final_score;
+          double surf_delta;
+          bool stage2_evaluated;
+          bool borderline_promoted;
           size_t index;
           size_t win_idx;
           size_t member_idx;
@@ -544,40 +617,125 @@ int main(int argc, char **argv) {
           std::vector<llama_token> cand_tokens;
         };
         std::vector<RankedCandidate> ranked;
+        std::vector<int> win_orig_tokens(windows.size(), 0);
         for (size_t w = 0; w < windows.size(); ++w) {
           const auto &win = windows[w];
+          if (win.members.empty())
+            continue;
+          std::vector<size_t> member_order(win.members.size());
+          for (size_t j = 0; j < member_order.size(); ++j)
+            member_order[j] = j;
+          std::sort(member_order.begin(), member_order.end(),
+                    [&](size_t a, size_t b) {
+                      const auto &ca =
+                          candidates[win.members[a].candidate_index];
+                      const auto &cb =
+                          candidates[win.members[b].candidate_index];
+                      const double ra = ca.local_delta - ca.penalty * 4.0;
+                      const double rb = cb.local_delta - cb.penalty * 4.0;
+                      return ra != rb ? ra > rb : a < b;
+                    });
+          const auto masked_ctx = mask_digits_nam_u32(win.left_context);
           const std::u32string prompt_prefix =
-              win.left_context.empty()
-                  ? U"\uee00"
-                  : (U"\uee02" + win.left_context + U"\uee00");
+              masked_ctx.empty() ? U"\uee00"
+                                 : (U"\uee02" + masked_ctx + U"\uee00");
           const auto pfx_tokens = tokenize(encode_utf8(prompt_prefix));
-          std::vector<std::vector<llama_token>> sequences;
-          sequences.reserve(1 + win.members.size());
-          sequences.push_back(tokenize(encode_utf8(
-              prompt_prefix + katakana(win.orig_slice) + U"\uee01")));
-          for (const auto &m : win.members) {
-            sequences.push_back(tokenize(encode_utf8(
-                prompt_prefix + katakana(m.cand_slice) + U"\uee01")));
+          const int pfx_len = int(pfx_tokens.size());
+          const bool orig_has_ascii = std::any_of(
+              win.orig_slice.begin(), win.orig_slice.end(), [](char32_t c) {
+                return (c >= U'a' && c <= U'z') ||
+                       (c >= U'A' && c <= U'Z') ||
+                       (c >= U'ａ' && c <= U'ｚ') ||
+                       (c >= U'Ａ' && c <= U'Ｚ');
+              });
+
+          constexpr size_t kTier1 = 8;
+          const size_t tier1_n = std::min(member_order.size(), kTier1);
+          std::vector<std::vector<llama_token>> tier1_seqs;
+          tier1_seqs.reserve(1 + tier1_n);
+          tier1_seqs.push_back(tokenize(encode_utf8(
+              prompt_prefix + mask_digits_nam_u32(katakana(win.orig_slice)) +
+              U"\uee01")));
+          for (size_t t = 0; t < tier1_n; ++t) {
+            const auto &m = win.members[member_order[t]];
+            tier1_seqs.push_back(tokenize(encode_utf8(
+                prompt_prefix + mask_digits_nam_u32(katakana(m.cand_slice)) +
+                U"\uee01")));
           }
-          std::vector<int> lengths(sequences.size(), int(pfx_tokens.size()));
-          const auto scores = score_sequences(sequences, lengths);
-          const double baseline = win.orig_path.score + 8.0 * scores[0];
-          const int orig_tokens = int(sequences[0].size());
-          for (size_t j = 0; j < win.members.size(); ++j) {
+          std::vector<int> tier1_lengths(tier1_seqs.size(), pfx_len);
+          double orig_min_tok_lp = 0.0;
+          const auto tier1_scores =
+              score_sequences(tier1_seqs, tier1_lengths, &orig_min_tok_lp);
+          const double baseline = win.orig_path.score + 8.0 * tier1_scores[0];
+          const int orig_tokens = int(tier1_seqs[0].size());
+          win_orig_tokens[w] = orig_tokens;
+
+          auto score_member_delta = [&](size_t j,
+                                        std::vector<llama_token> &cand_tokens,
+                                        double lm_score) {
             const auto &m = win.members[j];
             const auto &cand = candidates[m.candidate_index];
-            const int token_diff = int(sequences[j + 1].size()) - orig_tokens;
-            const double len_comp =
-                (m.cand_slice.size() >= win.orig_slice.size() &&
-                 token_diff > 0 && m.cand_path.score > win.orig_path.score + 3.5)
-                    ? 6.0 * std::min(token_diff, 2)
-                    : 0.0;
-            const double total = m.cand_path.score + 8.0 * scores[j + 1] +
-                                 len_comp - cand.penalty * 3.0;
+            const int token_diff = int(cand_tokens.size()) - orig_tokens;
+            double len_comp = 0.0;
+            if (token_diff > 0 &&
+                m.cand_slice.size() >= win.orig_slice.size() &&
+                m.cand_path.score > win.orig_path.score + 2.0) {
+              len_comp = 11.0 * std::min(token_diff, 2);
+            } else if (token_diff < 0 &&
+                       m.cand_slice.size() < win.orig_slice.size()) {
+              const double short_unit = orig_has_ascii ? 5.0 : 10.0;
+              len_comp = -short_unit * std::min(-token_diff, 2);
+            }
+            const double total =
+                m.cand_path.score + 8.0 * lm_score + len_comp - cand.penalty * 3.0;
             const double delta = total - baseline;
-            if (delta >= 34.0) {
-              ranked.push_back({delta, delta, m.candidate_index, w, j,
-                                prompt_prefix, std::move(sequences[j + 1])});
+            if (delta >= 28.0) {
+              ranked.push_back({delta, delta, 0.0, false, false,
+                                m.candidate_index, w, j, prompt_prefix,
+                                std::move(cand_tokens)});
+            }
+            return delta;
+          };
+
+          double tier1_best_delta = -1e9;
+          bool tier1_best_non_shrinking = false;
+          for (size_t t = 0; t < tier1_n; ++t) {
+            const size_t j = member_order[t];
+            const double delta = score_member_delta(
+                j, tier1_seqs[t + 1], tier1_scores[t + 1]);
+            if (delta > tier1_best_delta) {
+              tier1_best_delta = delta;
+              tier1_best_non_shrinking =
+                  win.members[j].cand_slice.size() >= win.orig_slice.size();
+            }
+          }
+
+          if (tier1_n < member_order.size()) {
+            const bool clear_win =
+                (tier1_best_delta >= 75.0 && tier1_best_non_shrinking) ||
+                tier1_best_delta >= 115.0;
+            const double clean_score_floor =
+                -4.0 * double(win.orig_slice.size());
+            const bool clean_ok =
+                tier1_best_delta < 20.0 && orig_min_tok_lp > -6.8 &&
+                win.orig_path.score >= clean_score_floor;
+            if (!clear_win && !clean_ok) {
+              const size_t tier2_n = member_order.size() - tier1_n;
+              std::vector<std::vector<llama_token>> tier2_seqs;
+              tier2_seqs.reserve(tier2_n);
+              for (size_t t = tier1_n; t < member_order.size(); ++t) {
+                const auto &m = win.members[member_order[t]];
+                tier2_seqs.push_back(tokenize(encode_utf8(
+                    prompt_prefix +
+                    mask_digits_nam_u32(katakana(m.cand_slice)) + U"\uee01")));
+              }
+              std::vector<int> tier2_lengths(tier2_seqs.size(), pfx_len);
+              const auto tier2_scores =
+                  score_sequences(tier2_seqs, tier2_lengths);
+              for (size_t t = 0; t < tier2_n; ++t) {
+                score_member_delta(member_order[tier1_n + t], tier2_seqs[t],
+                                   tier2_scores[t]);
+              }
             }
           }
         }
@@ -585,77 +743,178 @@ int main(int argc, char **argv) {
                   [](const RankedCandidate &a, const RankedCandidate &b) {
                     return a.stage1_delta > b.stage1_delta;
                   });
-        if (ranked.empty() || ranked[0].stage1_delta < 37.0) {
-          std::cout << "{\"observed\":"
-                    << json_string(encode_utf8(orig.reading)) << "}"
-                    << std::endl;
+        if (ranked.empty() || ranked[0].stage1_delta < 28.0) {
+          reply << "{\"observed\":" << json_string(encode_utf8(orig.reading))
+                << "}";
         } else {
           const size_t top_win = ranked[0].win_idx;
+          const auto &win = windows[top_win];
           std::vector<size_t> win_ranked;
           for (size_t k = 0; k < ranked.size() && win_ranked.size() < 3; ++k) {
             if (ranked[k].win_idx == top_win)
               win_ranked.push_back(k);
           }
-          if (win_ranked.size() >= 2 &&
-              (ranked[win_ranked[0]].stage1_delta -
-                   ranked[win_ranked[1]].stage1_delta <
-               assist_rerank_margin)) {
+          const bool is_borderline = ranked[0].stage1_delta < 37.0;
+          auto non_shrinking_ok = [&](size_t pos) {
+            const auto &m = win.members[ranked[pos].member_idx];
+            return m.cand_slice.size() >= win.orig_slice.size() &&
+                   m.cand_path.score >= win.orig_path.score - 2.0;
+          };
+          bool run_stage2 = false;
+          if (!is_borderline) {
+            run_stage2 = win_ranked.size() >= 2 &&
+                         (ranked[win_ranked[0]].stage1_delta -
+                              ranked[win_ranked[1]].stage1_delta <
+                          20.0);
+          } else {
+            run_stage2 = win.orig_slice.size() >= 6 &&
+                         std::any_of(win_ranked.begin(), win_ranked.end(),
+                                     non_shrinking_ok);
+          }
+          if (run_stage2) {
+            const llama_token eos_tok = llama_vocab_eos(vocab);
+            const int orig_pfx_len = win_orig_tokens[top_win];
             std::vector<std::vector<llama_token>> surf_sequences;
             std::vector<int> surf_prefixes;
             std::vector<size_t> valid_pos;
-            const auto &win = windows[top_win];
-            for (size_t pos : win_ranked) {
-              const auto &rc = ranked[pos];
-              const auto &m = win.members[rc.member_idx];
-              if (m.cand_path.surface.empty())
-                continue;
-              auto full_seq = tokenize(encode_utf8(
-                  rc.prompt_prefix + katakana(m.cand_slice) + U"\uee01" +
-                  decode_utf8(m.cand_path.surface)));
-              const int pfx_len = int(rc.cand_tokens.size());
-              if (int(full_seq.size()) > pfx_len) {
-                surf_sequences.push_back(std::move(full_seq));
-                surf_prefixes.push_back(pfx_len);
-                valid_pos.push_back(pos);
+            if (!win.orig_path.surface.empty() && orig_pfx_len > 0) {
+              auto orig_full = tokenize(encode_utf8(
+                  ranked[win_ranked[0]].prompt_prefix +
+                  mask_digits_nam_u32(katakana(win.orig_slice)) + U"\uee01" +
+                  mask_digits_nam_u32(decode_utf8(win.orig_path.surface))));
+              if (eos_tok >= 0 && !orig_full.empty())
+                orig_full.push_back(eos_tok);
+              if (int(orig_full.size()) > orig_pfx_len) {
+                surf_sequences.push_back(std::move(orig_full));
+                surf_prefixes.push_back(orig_pfx_len);
+                for (size_t pos : win_ranked) {
+                  if (is_borderline && !non_shrinking_ok(pos))
+                    continue;
+                  const auto &rc = ranked[pos];
+                  const auto &m = win.members[rc.member_idx];
+                  if (m.cand_path.surface.empty())
+                    continue;
+                  auto full_seq = tokenize(encode_utf8(
+                      rc.prompt_prefix +
+                      mask_digits_nam_u32(katakana(m.cand_slice)) + U"\uee01" +
+                      mask_digits_nam_u32(decode_utf8(m.cand_path.surface))));
+                  if (eos_tok >= 0 && !full_seq.empty())
+                    full_seq.push_back(eos_tok);
+                  const int pfx_len = int(rc.cand_tokens.size());
+                  if (int(full_seq.size()) > pfx_len) {
+                    surf_sequences.push_back(std::move(full_seq));
+                    surf_prefixes.push_back(pfx_len);
+                    valid_pos.push_back(pos);
+                  }
+                }
               }
             }
-            if (surf_sequences.size() >= 2) {
+            if (surf_sequences.size() >= 2 && !valid_pos.empty()) {
               const auto surf_scores =
                   score_sequences(surf_sequences, surf_prefixes);
+              const int n_orig_surf =
+                  int(surf_sequences[0].size()) - surf_prefixes[0];
+              const double orig_surf_mean =
+                  surf_scores[0] / std::max(1, n_orig_surf);
+              const double clamp_hi = is_borderline ? 2.0 : 1.5;
+              const double weight = is_borderline ? 10.0 : 6.0;
               for (size_t j = 0; j < valid_pos.size(); ++j) {
                 const size_t pos = valid_pos[j];
-                const int n_surf =
-                    int(surf_sequences[j].size()) - surf_prefixes[j];
-                const double surf_mean = surf_scores[j] / std::max(1, n_surf);
+                const int n_cand_surf =
+                    int(surf_sequences[j + 1].size()) - surf_prefixes[j + 1];
+                const double cand_surf_mean =
+                    surf_scores[j + 1] / std::max(1, n_cand_surf);
+                const double surf_delta =
+                    std::clamp(cand_surf_mean - orig_surf_mean, -1.0, clamp_hi);
+                ranked[pos].surf_delta = surf_delta;
+                ranked[pos].stage2_evaluated = true;
                 ranked[pos].final_score =
-                    ranked[pos].stage1_delta + 5.0 * surf_mean;
+                    ranked[pos].stage1_delta + weight * surf_delta;
+                if (is_borderline && win.orig_slice.size() >= 6 &&
+                    non_shrinking_ok(pos) && cand_surf_mean >= -1.2 &&
+                    surf_delta >= 0.85 && ranked[pos].final_score >= 37.0) {
+                  ranked[pos].borderline_promoted = true;
+                }
               }
-              std::vector<RankedCandidate> reordered;
-              reordered.reserve(valid_pos.size());
-              for (size_t pos : valid_pos)
-                reordered.push_back(ranked[pos]);
-              std::sort(reordered.begin(), reordered.end(),
-                        [](const RankedCandidate &a, const RankedCandidate &b) {
-                          return a.final_score > b.final_score;
-                        });
-              for (size_t j = 0; j < valid_pos.size(); ++j)
-                ranked[valid_pos[j]] = std::move(reordered[j]);
+              if (!is_borderline) {
+                std::vector<RankedCandidate> reordered;
+                reordered.reserve(valid_pos.size());
+                for (size_t pos : valid_pos)
+                  reordered.push_back(ranked[pos]);
+                std::sort(reordered.begin(), reordered.end(),
+                          [](const RankedCandidate &a,
+                             const RankedCandidate &b) {
+                            return a.final_score > b.final_score;
+                          });
+                for (size_t j = 0; j < valid_pos.size(); ++j)
+                  ranked[valid_pos[j]] = std::move(reordered[j]);
+              } else {
+                size_t best_pos = ranked.size();
+                for (size_t pos : valid_pos) {
+                  if (ranked[pos].borderline_promoted &&
+                      (best_pos == ranked.size() ||
+                       ranked[pos].final_score > ranked[best_pos].final_score)) {
+                    best_pos = pos;
+                  }
+                }
+                if (best_pos < ranked.size() && best_pos != 0)
+                  std::swap(ranked[0], ranked[best_pos]);
+              }
             }
           }
-          const size_t best = ranked[0].index;
-          const double best_delta = std::max(37.0, ranked[0].stage1_delta);
-          std::cout << "{\"observed\":"
-                    << json_string(encode_utf8(orig.reading)) << ",\"reading\":"
-                    << json_string(encode_utf8(candidates[best].reading));
-          if (ranked.size() >= 2 && ranked[1].stage1_delta >= 35.0) {
-            const size_t alt = ranked[1].index;
-            std::cout << ",\"alt_reading\":"
-                      << json_string(encode_utf8(candidates[alt].reading));
-            if (has_clear_assist_lead(ranked))
-              std::cout << ",\"clear_lead\":true";
+          const auto &top = ranked[0];
+          const bool accepted =
+              !is_borderline || (top.stage2_evaluated && top.borderline_promoted);
+          if (!accepted) {
+            reply << "{\"observed\":" << json_string(encode_utf8(orig.reading))
+                  << "}";
+          } else {
+            const size_t best = top.index;
+            const double best_delta = std::max(37.0, top.final_score);
+            reply << "{\"observed\":" << json_string(encode_utf8(orig.reading))
+                  << ",\"reading\":"
+                  << json_string(encode_utf8(candidates[best].reading));
+            if (ranked.size() >= 2 && ranked[1].final_score >= 35.0) {
+              const size_t alt = ranked[1].index;
+              reply << ",\"alt_reading\":"
+                    << json_string(encode_utf8(candidates[alt].reading));
+              if (has_clear_assist_lead(ranked))
+                reply << ",\"clear_lead\":true";
+            }
+            reply << ",\"gain\":" << std::setprecision(14) << best_delta
+                  << "}";
           }
-          std::cout << ",\"gain\":" << std::setprecision(14) << best_delta
-                    << "}" << std::endl;
+        }
+        return reply.str();
+      };
+
+      // The native result depends only on the complete request and the
+      // worker's fixed model and dictionary. Backspace and retyping often
+      // return to a recently scored request.
+      constexpr size_t recent_limit = 8;
+      constexpr size_t request_size_limit = 1024;
+      std::deque<std::pair<std::string, std::string>> recent;
+      std::string line;
+      while (std::getline(std::cin, line)) {
+        if (!line.empty() && line.back() == '\r')
+          line.pop_back();
+        if (line.empty()) {
+          std::cout << "{}" << std::endl;
+          continue;
+        }
+        const auto cached = std::find_if(
+            recent.begin(), recent.end(),
+            [&](const auto &entry) { return entry.first == line; });
+        if (cached != recent.end()) {
+          std::cout << cached->second << std::endl;
+          continue;
+        }
+        auto reply = evaluate_repair(line);
+        std::cout << reply << std::endl;
+        if (line.size() <= request_size_limit) {
+          if (recent.size() == recent_limit)
+            recent.pop_front();
+          recent.emplace_back(std::move(line), std::move(reply));
         }
       }
     } else {

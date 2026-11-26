@@ -9,6 +9,7 @@ struct llama_model;
 void keyboard_assist_attach(llama_model *model);
 void keyboard_assist_detach();
 void keyboard_assist_preload_dictionary(const char *path);
+void keyboard_assist_configure_threads(int decode_threads, int batch_threads);
 
 // `payload` is the flat JSON built by the Rust bridge (no escapes inside values).
 // Returns the worker's reply JSON object, or "null" when no answer is available

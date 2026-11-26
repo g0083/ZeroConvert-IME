@@ -23,6 +23,8 @@ struct WorkerSpec {
     model: PathBuf,
     runtime_dir: PathBuf,
     gpu_layers: u32,
+    decode_threads: Option<u32>,
+    batch_threads: Option<u32>,
 }
 
 struct Worker {
@@ -142,11 +144,71 @@ fn resolve_runtime_preferences_from_str(settings_json: &str) -> (String, String,
     (model, backend, gpu_layers)
 }
 
-fn read_runtime_preferences() -> (String, String, u32) {
+fn canonical_model_key(raw: &str) -> &str {
+    shared::runtime_assets::canonical_model_id(raw).unwrap_or_else(|| raw.trim())
+}
+
+fn resolve_cpu_tuning_threads_from_str(
+    settings_json: &str,
+    selected_model: &str,
+    backend: &str,
+) -> (Option<u32>, Option<u32>) {
+    if backend != "cpu" {
+        return (None, None);
+    }
+    let value = serde_json::from_str::<Value>(settings_json).ok();
+    let Some(tuning) = value
+        .as_ref()
+        .and_then(|v| v.get("zenzai"))
+        .and_then(|z| z.get("cpu_runtime_tuning"))
+    else {
+        return (None, None);
+    };
+    let tuning_version = tuning
+        .get("tuning_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if tuning_version < 2 {
+        return (None, None);
+    }
+    let Some(tuned_model) = tuning.get("model_id").and_then(Value::as_str) else {
+        return (None, None);
+    };
+    if canonical_model_key(tuned_model) != canonical_model_key(selected_model) {
+        return (None, None);
+    }
+    let Some(decode_raw) = tuning.get("decode_threads").and_then(Value::as_u64) else {
+        return (None, None);
+    };
+    let Ok(decode_u32) = u32::try_from(decode_raw) else {
+        return (None, None);
+    };
+    if !(1..=32).contains(&decode_u32) {
+        return (None, None);
+    }
+    let batch_u32 = tuning
+        .get("batch_threads")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .map(|n| n.clamp(1, 64))
+        .unwrap_or(decode_u32);
+    (Some(decode_u32), Some(batch_u32))
+}
+
+fn read_runtime_preferences_with_tuning() -> (String, String, u32, Option<u32>, Option<u32>) {
     let settings_json = runtime::settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
-    resolve_runtime_preferences_from_str(&settings_json)
+    let (model, backend, configured_layers) = resolve_runtime_preferences_from_str(&settings_json);
+    let (decode_threads, batch_threads) =
+        resolve_cpu_tuning_threads_from_str(&settings_json, &model, &backend);
+    (
+        model,
+        backend,
+        configured_layers,
+        decode_threads,
+        batch_threads,
+    )
 }
 
 fn find_runtime_dir_and_layers(
@@ -248,14 +310,22 @@ fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
 }
 
 fn resolve_worker_spec(root: &Path, executable: &Path) -> Option<WorkerSpec> {
-    let (model_id, backend, configured_layers) = read_runtime_preferences();
+    let (model_id, backend, configured_layers, cfg_decode, cfg_batch) =
+        read_runtime_preferences_with_tuning();
     let model = resolve_active_model(root, &model_id)?;
     let (runtime_dir, gpu_layers) =
         find_runtime_dir_and_layers(root, executable, &backend, configured_layers);
+    let (decode_threads, batch_threads) = if gpu_layers == 0 {
+        (cfg_decode, cfg_batch)
+    } else {
+        (None, None)
+    };
     Some(WorkerSpec {
         model,
         runtime_dir,
         gpu_layers,
+        decode_threads,
+        batch_threads,
     })
 }
 
@@ -289,6 +359,12 @@ impl Worker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        if let Some(threads) = spec.decode_threads {
+            command.env("AZOOKEY_KEYBOARD_PRIOR_THREADS", threads.to_string());
+        }
+        if let Some(threads) = spec.batch_threads {
+            command.env("AZOOKEY_KEYBOARD_PRIOR_THREADS_BATCH", threads.to_string());
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -368,10 +444,21 @@ impl BenchmarkKeyboard {
         gpu_layers: u32,
     ) -> Option<Self> {
         let executable = find_worker_executable(&exe_root()?)?;
+        let env_thread = |name: &str, lo: u32, hi: u32| -> Option<u32> {
+            if gpu_layers != 0 {
+                return None;
+            }
+            std::env::var(name)
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .map(|n| n.clamp(lo, hi))
+        };
         let spec = WorkerSpec {
             model,
             runtime_dir,
             gpu_layers,
+            decode_threads: env_thread("AZOOKEY_KEYBOARD_PRIOR_THREADS", 1, 32),
+            batch_threads: env_thread("AZOOKEY_KEYBOARD_PRIOR_THREADS_BATCH", 1, 64),
         };
         Worker::start_with_spec(&executable, spec, dictionary).map(Self)
     }
@@ -444,9 +531,12 @@ fn normalize_reading(text: &str) -> String {
 fn is_valid_reading_str(reading: &str, observed: &str) -> bool {
     reading != observed
         && (2..=128).contains(&reading.chars().count())
-        && reading
-            .chars()
-            .all(|c| ('ぁ'..='ゖ').contains(&c) || "ー、。！？!?".contains(c))
+        && reading.chars().all(|c| {
+            ('ぁ'..='ゖ').contains(&c)
+                || "ー、。！？!?".contains(c)
+                || c.is_ascii_digit()
+                || ('０'..='９').contains(&c)
+        })
 }
 
 /// Validated top repair reading and ranking confidence returned by `keyboard-prior`.
@@ -523,6 +613,13 @@ pub fn repair_readings(
     repair_readings_with_hints(context, input, raw, "", "", wait_for_worker)
 }
 
+fn is_valid_raw_keys(raw: &str) -> bool {
+    (4..=192).contains(&raw.len())
+        && raw
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || matches!(c, b'-' | b',' | b'.' | b'?' | b'!'))
+}
+
 /// Like [`repair_readings`], returning the validated top repair candidate and confidence metadata.
 pub fn repair_candidate_with_hints(
     context: &str,
@@ -543,14 +640,9 @@ pub fn repair_candidate_with_hints(
     {
         return None;
     }
-    let valid_raw = if (4..=192).contains(&raw.len())
-        && raw.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
-    {
-        raw
-    } else {
-        ""
-    };
-    let (masked_context, _) = super::corrector::mask_digits_with_nam(context);
+    let valid_raw = if is_valid_raw_keys(raw) { raw } else { "" };
+    let normalized_context = context.replace(' ', "\u{3000}");
+    let (masked_context, _) = super::corrector::mask_digits_with_nam(&normalized_context);
     let response = if let Some(hosted) = runtime::keyboard_repair_override_with_hints(
         valid_raw,
         &norm,
@@ -645,8 +737,9 @@ pub fn suggest(
 ) -> Option<Option<TypoSuggestion>> {
     if !config.enabled
         || config.engine != "embedded"
-        || !(4..=64).contains(&raw.len())
-        || !raw.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
+        || !is_valid_raw_keys(raw)
+        || super::reading_check::user_dictionary_contains_reading(input)
+        || corrector::known_reading(input)
         || super::lookup_learned_typo(input).is_some()
         || corrector::explicit_typo_surface(input).is_some()
         || legacy_full_word_repair(input)
@@ -822,6 +915,109 @@ mod tests {
             ))
         );
     }
+
+    #[test]
+    fn context_spaces_normalize_and_user_dict_or_known_reading_skip_worker() {
+        let _dict_guard = super::super::USER_DICTIONARY_TEST_LOCK.lock().unwrap();
+        struct CaptureBackend(std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>);
+        impl super::runtime::CompletionBackend for CaptureBackend {
+            fn allow_native_worker(&self) -> bool {
+                true
+            }
+            fn complete(&self, _: u16, _: &str, _: &Value, _: u64) -> Option<Value> {
+                None
+            }
+            fn keyboard_repair_with_hints(
+                &self,
+                raw: &str,
+                _input: &str,
+                context: &str,
+                _touch_hints: &str,
+                _input_mode: &str,
+                _timeout_ms: u64,
+            ) -> Option<Option<Value>> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((raw.to_owned(), context.to_owned()));
+                Some(None)
+            }
+        }
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let config = AiAssistConfig {
+            enabled: true,
+            corrector_port: super::runtime::PREDICTION_SERVER_PORT,
+            ..AiAssistConfig::default()
+        };
+        let long_raw = format!("{}a!", "ka".repeat(33));
+        let long_input = format!("{}あ！", "か".repeat(33));
+
+        super::super::set_user_dictionary_vocabulary([("きんにちわ", "登録語")]);
+        super::runtime::with_backend(Box::new(CaptureBackend(calls.clone())), || {
+            assert!(suggest("今日は 晴れ", "きんにちわ", "kinnitiwa", &config).is_none());
+            assert!(suggest(
+                "今日は 晴れ",
+                "ありがとうございます",
+                "arigatougozaimasu",
+                &config
+            )
+            .is_none());
+            assert!(calls.lock().unwrap().is_empty());
+
+            let _ = suggest("API key ", &long_input, &long_raw, &config);
+            #[cfg(windows)]
+            let _ = corrector::suggest_windows_composition(
+                "API key ",
+                "おせわになております。",
+                "お世話になております。",
+                "osewaninateorimasu.",
+                &config,
+            );
+        });
+        super::super::set_user_dictionary_vocabulary(std::iter::empty());
+
+        let recorded = calls.lock().unwrap();
+        assert_eq!(recorded[0], (long_raw, "API\u{3000}key\u{3000}".to_owned()));
+        #[cfg(windows)]
+        assert_eq!(
+            recorded[1],
+            (
+                "osewaninateorimasu.".to_owned(),
+                "API\u{3000}key\u{3000}".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn mixed_digit_readings_pass_validation_and_reading_distance() {
+        let halfwidth = serde_json::json!({
+            "observed": "10じにかいぐ",
+            "reading": "10じにかいぎ",
+            "gain": 50.0
+        });
+        assert_eq!(
+            validated_reading(&halfwidth, "10じにかいぐ"),
+            Some("10じにかいぎ".into())
+        );
+        let fullwidth = serde_json::json!({
+            "observed": "２０２６ねんてそと",
+            "reading": "２０２６ねんてすと",
+            "gain": 50.0
+        });
+        assert_eq!(
+            validated_reading(&fullwidth, "２０２６ねんてそと"),
+            Some("２０２６ねんてすと".into())
+        );
+        assert_eq!(
+            corrector::reading_change_distance("10じにかいぐ", "10じにかいぎ"),
+            Some(1)
+        );
+        assert_eq!(
+            corrector::reading_change_distance("２０２６ねんてそと", "２０２６ねんてすと"),
+            Some(1)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -880,6 +1076,44 @@ mod deployment_tests {
         assert_eq!(parsed_model, "nano_v4_2_q8");
         assert_eq!(parsed_backend, "vulkan");
         assert_eq!(parsed_layers, 16);
+
+        let tuned_json = r#"{
+            "zenzai": {
+                "backend": "cpu",
+                "model": "nano_v4_2_iq4_emb8",
+                "cpu_runtime_tuning": {
+                    "tuning_version": 2,
+                    "model_id": "nano_v4_2_iq4_emb8",
+                    "decode_threads": 4,
+                    "batch_threads": 6
+                }
+            }
+        }"#;
+        assert_eq!(
+            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2_iq4_emb8", "cpu"),
+            (Some(4), Some(6))
+        );
+        assert_eq!(
+            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2_q8", "cpu"),
+            (None, None)
+        );
+        assert_eq!(
+            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2_iq4_emb8", "vulkan"),
+            (None, None)
+        );
+        let legacy_json = r#"{
+            "zenzai": {
+                "cpu_runtime_tuning": {
+                    "tuning_version": 1,
+                    "model_id": "nano_v4_2_iq4_emb8",
+                    "decode_threads": 4
+                }
+            }
+        }"#;
+        assert_eq!(
+            resolve_cpu_tuning_threads_from_str(legacy_json, "nano_v4_2_iq4_emb8", "cpu"),
+            (None, None)
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

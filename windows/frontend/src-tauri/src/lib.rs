@@ -865,10 +865,7 @@ fn benchmark_worker_paths(
         .ok_or_else(|| "ベンチマーク用の実行ファイルが見つかりません。".into())
 }
 
-fn persist_cpu_runtime_tuning(
-    state: &AppState,
-    tuned: shared::cpu_tuning::CpuRuntimeTuningConfig,
-) {
+fn persist_cpu_runtime_tuning(state: &AppState, tuned: shared::cpu_tuning::CpuRuntimeTuningConfig) {
     let Ok(_update_guard) = state.config_update_lock.lock() else {
         return;
     };
@@ -880,8 +877,8 @@ fn persist_cpu_runtime_tuning(
         Err(_) => state.settings.lock().unwrap().clone(),
     };
     let current_model = crate::quick_benchmark::active_canonical_model_id(&current);
-    let tuned_model = shared::runtime_assets::canonical_model_id(&tuned.model_id)
-        .unwrap_or(&tuned.model_id);
+    let tuned_model =
+        shared::runtime_assets::canonical_model_id(&tuned.model_id).unwrap_or(&tuned.model_id);
     if current.zenzai.backend != "cpu" || current_model != tuned_model {
         return;
     }

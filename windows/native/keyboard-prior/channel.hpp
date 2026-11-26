@@ -41,26 +41,71 @@ inline std::u32string katakana(std::u32string s) {
       c += 96;
   return s;
 }
-inline bool kana(const std::u32string &s) {
+inline bool kana(std::u32string_view s) {
   return !s.empty() && std::all_of(s.begin(), s.end(), [](char32_t c) {
     return (c >= U'ぁ' && c <= U'ゖ') || c == U'ー';
   });
 }
+inline bool is_digit_char(char32_t c) {
+  return (c >= U'0' && c <= U'9') || (c >= U'０' && c <= U'９');
+}
+inline char32_t normalize_digit_ascii(char32_t c) {
+  if (c >= U'０' && c <= U'９')
+    return U'0' + (c - U'０');
+  return c;
+}
+inline std::u32string mask_digits_nam_u32(const std::u32string &text) {
+  std::u32string out;
+  out.reserve(text.size());
+  bool in_digits = false;
+  for (char32_t c : text) {
+    if (is_digit_char(c)) {
+      if (!in_digits) {
+        out += U"nam";
+        in_digits = true;
+      }
+    } else {
+      in_digits = false;
+      out.push_back(c);
+    }
+  }
+  return out;
+}
 inline bool kana_or_punct(const std::u32string &s) {
   return !s.empty() && std::all_of(s.begin(), s.end(), [](char32_t c) {
     return (c >= U'ぁ' && c <= U'ゖ') || c == U'ー' || c == U'、' ||
-           c == U'。' || c == U'！' || c == U'？' || c == U'!' || c == U'?';
+           c == U'。' || c == U'！' || c == U'？' || c == U'!' || c == U'?' ||
+           is_digit_char(c);
   });
+}
+inline const std::unordered_map<std::string_view, std::u32string_view> &
+roman_table_fast() {
+  static const auto *table = [] {
+    auto *m = new std::unordered_map<std::string_view, std::u32string_view>();
+    m->reserve(roman_table.size() * 2);
+    for (const auto &kv : roman_table)
+      m->emplace(std::string_view(kv.first), std::u32string_view(kv.second));
+    return m;
+  }();
+  return *table;
+}
+inline bool is_aeioun_char(char c) {
+  return c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' || c == 'n';
+}
+inline bool is_aiueoy_char(char c) {
+  return c == 'a' || c == 'i' || c == 'u' || c == 'e' || c == 'o' || c == 'y';
 }
 inline std::u32string
 roman_decode_with_map(const std::string &keys, std::vector<size_t> &rom_to_kana,
                       std::vector<bool> &is_raw_ascii) {
+  const auto &fast_rt = roman_table_fast();
   std::u32string result;
+  result.reserve(keys.size());
   rom_to_kana.assign(keys.size(), 0);
   is_raw_ascii.assign(keys.size(), false);
   for (size_t i = 0; i < keys.size();) {
     if (i + 1 < keys.size() && keys[i] == keys[i + 1] &&
-        std::string("aeioun").find(keys[i]) == std::string::npos) {
+        !is_aeioun_char(keys[i])) {
       rom_to_kana[i] = result.size();
       result += U'っ';
       ++i;
@@ -69,12 +114,12 @@ roman_decode_with_map(const std::string &keys, std::vector<size_t> &rom_to_kana,
     bool found = false;
     for (size_t width = std::min(size_t(4), keys.size() - i); width > 0;
          --width) {
-      auto at = roman_table.find(keys.substr(i, width));
-      if (at != roman_table.end() && kana(at->second)) {
+      auto at = fast_rt.find(std::string_view(keys.data() + i, width));
+      if (at != fast_rt.end() && kana(at->second)) {
         const size_t k_idx = result.size();
         for (size_t k = 0; k < width; ++k)
           rom_to_kana[i + k] = k_idx;
-        result += at->second;
+        result.append(at->second.data(), at->second.size());
         i += width;
         found = true;
         break;
@@ -84,8 +129,7 @@ roman_decode_with_map(const std::string &keys, std::vector<size_t> &rom_to_kana,
       continue;
     rom_to_kana[i] = result.size();
     if (keys[i] == 'n' &&
-        (i + 1 == keys.size() ||
-         std::string("aiueoy").find(keys[i + 1]) == std::string::npos))
+        (i + 1 == keys.size() || !is_aiueoy_char(keys[i + 1])))
       result += U'ん';
     else if (keys[i] == '-')
       result += U'ー';
@@ -216,6 +260,8 @@ inline std::string kana_to_romaji(const std::u32string &text,
       out += char(h[i] - 0xfee0);
     else if (h[i] >= U'Ａ' && h[i] <= U'Ｚ')
       out += char(h[i] - 0xfee0 + 32);
+    else if (h[i] >= U'０' && h[i] <= U'９')
+      out += char(h[i] - U'０' + '0');
     else if (h[i] < 128)
       out += char(std::tolower(int(h[i])));
     ++i;
@@ -246,14 +292,21 @@ inline double qwerty_sub_cost(char a, char b) {
   if (!qwerty_key_pos(a, ax, ay) || !qwerty_key_pos(b, bx, by))
     return -1.0;
   const double d = std::hypot(ax - bx, ay - by);
-  if (d > 1.35)
-    return -1.0;
   const bool same_hand = qwerty_left_hand(a) == qwerty_left_hand(b);
-  if (ay == by && std::abs(ax - bx) == 1.0)
-    return same_hand ? 1.1 : 1.5;
-  if (d <= 1.26)
-    return same_hand ? 1.35 : 1.7;
-  return 1.8;
+  if (d <= 1.35) {
+    if (ay == by && std::abs(ax - bx) == 1.0)
+      return same_hand ? 1.1 : 1.5;
+    if (d <= 1.26)
+      return same_hand ? 1.35 : 1.7;
+    return 1.8;
+  }
+  if (ay != by && std::abs(ay - by) == 1.0 && (bx - ax) * (by - ay) > 0.0) {
+    if (d <= 1.65)
+      return same_hand ? 1.75 : 1.95;
+    if (d <= 1.85)
+      return same_hand ? 1.85 : 2.05;
+  }
+  return -1.0;
 }
 inline std::map<char, std::string> make_neighbors() {
   std::map<char, std::pair<double, double>> positions;
@@ -543,7 +596,7 @@ public:
     if (!source)
       throw std::runtime_error("dictionary unavailable");
     const auto size = source.tellg();
-    if (size < 16 || size > 64 * 1024 * 1024)
+    if (size < 16 || size > 256 * 1024 * 1024)
       throw std::runtime_error("invalid dictionary size");
     std::vector<char> bytes(static_cast<size_t>(size));
     source.seekg(0);
@@ -667,11 +720,12 @@ public:
       if (!std::isfinite(out.fwd[start]))
         continue;
       const char32_t first = reading[start];
+      const bool is_dig = is_digit_char(first);
       const bool single_ok =
           (first >= U'ぁ' && first <= U'ゖ') || first == U'ー' ||
           first == U'、' || first == U'。' || first == U'！' ||
-          first == U'？' || first == U'!' || first == U'?';
-      const double fb_w = single_ok ? -22.0 : -40.0;
+          first == U'？' || first == U'!' || first == U'?' || is_dig;
+      const double fb_w = is_dig ? -8.0 : (single_ok ? -22.0 : -40.0);
       const double fb_score = out.fwd[start] + fb_w;
       if (fb_score > out.fwd[start + 1]) {
         out.fwd[start + 1] = fb_score;
@@ -716,12 +770,14 @@ public:
     out.bwd[n] = 0.0;
     for (size_t start = n; start-- > 0;) {
       const char32_t first = reading[start];
+      const bool is_dig = is_digit_char(first);
       const bool single_ok =
           (first >= U'ぁ' && first <= U'ゖ') || first == U'ー' ||
           first == U'、' || first == U'。' || first == U'！' ||
-          first == U'？' || first == U'!' || first == U'?';
+          first == U'？' || first == U'!' || first == U'?' || is_dig;
       if (std::isfinite(out.bwd[start + 1]))
-        out.bwd[start] = (single_ok ? -22.0 : -40.0) + out.bwd[start + 1];
+        out.bwd[start] =
+            (is_dig ? -8.0 : (single_ok ? -22.0 : -40.0)) + out.bwd[start + 1];
       uint32_t node = 0;
       for (size_t end = start; end < std::min(n, start + 40); ++end) {
         const uint32_t next = find_child(node, reading[end]);
@@ -759,7 +815,9 @@ public:
       const double raw = seg_raw_score[cur];
       double anomaly = 0.0;
       if (len == 1) {
-        if (raw <= -39.0)
+        if (is_digit_char(reading[prev]))
+          anomaly = 0.0;
+        else if (raw <= -39.0)
           anomaly = 100.0;
         else if (raw <= -19.0)
           anomaly = 25.0;
@@ -779,12 +837,70 @@ public:
     out.total_score = out.fwd[n] - 2.5 * double(n);
     return out;
   }
+  double score_only(std::u32string_view reading) const {
+    static constexpr std::u32string_view bound_moras = U"っんーぁぃぅぇぉゃゅょゎ";
+    static constexpr std::u32string_view particles =
+        U"はがをにへでとのもやかねよわな、。！？!?";
+    const double missing = -std::numeric_limits<double>::infinity();
+    const size_t n = reading.size();
+    double stack_fwd[132];
+    std::vector<double> heap_fwd;
+    double *fwd = stack_fwd;
+    if (n + 1 > 132) {
+      heap_fwd.assign(n + 1, missing);
+      fwd = heap_fwd.data();
+    } else {
+      std::fill(fwd, fwd + n + 1, missing);
+    }
+    fwd[0] = 0.0;
+    for (size_t start = 0; start < n; ++start) {
+      if (!std::isfinite(fwd[start]))
+        continue;
+      const char32_t first = reading[start];
+      const bool is_dig = is_digit_char(first);
+      const bool single_ok =
+          (first >= U'ぁ' && first <= U'ゖ') || first == U'ー' ||
+          first == U'、' || first == U'。' || first == U'！' ||
+          first == U'？' || first == U'!' || first == U'?' || is_dig;
+      const double fb_w = is_dig ? -8.0 : (single_ok ? -22.0 : -40.0);
+      const double fb_score = fwd[start] + fb_w;
+      if (fb_score > fwd[start + 1])
+        fwd[start + 1] = fb_score;
+      uint32_t node = 0;
+      for (size_t end = start; end < std::min(n, start + 40); ++end) {
+        const uint32_t next = find_child(node, reading[end]);
+        if (next == 0)
+          break;
+        node = next;
+        if (trie[node].has_word) {
+          const size_t len = end - start + 1;
+          double w_score = trie[node].best_score;
+          if (len == 1) {
+            if (bound_moras.find(first) != std::u32string_view::npos) {
+              w_score = -20.0;
+            } else if (particles.find(first) != std::u32string_view::npos) {
+              if (start == 0 && first >= U'ぁ' && first <= U'ゖ')
+                w_score = std::min(w_score, -9.0);
+            } else {
+              w_score = std::min(w_score, -11.0);
+            }
+          } else {
+            w_score += 2.5 * double(std::min<size_t>(len - 1, 4));
+          }
+          const double cand_score = fwd[start] + w_score;
+          if (cand_score > fwd[end + 1])
+            fwd[end + 1] = cand_score;
+        }
+      }
+    }
+    return fwd[n] - 2.5 * double(n);
+  }
   DictionaryPath convert_fast(const std::u32string &reading) const {
     const auto analyzed = analyze(reading);
     return {analyzed.total_score, analyzed.best_surface};
   }
   double score_fast(const std::u32string &reading) const {
-    return convert_fast(reading).score;
+    return score_only(reading);
   }
   DictionaryPath convert(const std::u32string &reading) const {
     const double missing = -std::numeric_limits<double>::infinity();
@@ -813,7 +929,8 @@ public:
           word = {trie[node].best_score, trie[node].best_surface};
         } else {
           const auto piece = reading.substr(start, 1);
-          word = {kana(piece) ? -24. : -40., encode_utf8(piece)};
+          const double fb = is_digit_char(piece[0]) ? -8. : (kana(piece) ? -24. : -40.);
+          word = {fb, encode_utf8(piece)};
         }
         const DictionaryPath next{paths[start].score + word.score,
                                   paths[start].surface + word.surface};
@@ -849,7 +966,7 @@ inline bool has_clear_assist_lead(const std::vector<Ranked> &ranked) {
   return ranked[1].win_idx == winner.win_idx &&
          std::none_of(ranked.begin() + 1, ranked.end(), [&](const auto &other) {
            return other.win_idx == winner.win_idx &&
-                  winner.stage1_delta - other.stage1_delta < assist_rerank_margin;
+                  winner.final_score - other.final_score < assist_rerank_margin;
          });
 }
 inline std::vector<ReadingCandidate>
@@ -904,7 +1021,7 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   if (!std::all_of(orig.begin(), orig.end(), [&](char32_t c) {
         if ((c >= U'ぁ' && c <= U'ゖ') || c == U'ー' || c == U'、' ||
             c == U'。' || c == U'！' || c == U'？' || c == U'!' ||
-            c == U'?')
+            c == U'?' || is_digit_char(c))
           return true;
         if (is_flick_mode &&
             (c == U'（' || c == U'）' || c == U'〜' || c == U'・'))
@@ -915,6 +1032,12 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
                 c == U'-');
       }))
     return {};
+
+  std::vector<char32_t> orig_digits;
+  for (char32_t c : orig) {
+    if (is_digit_char(c))
+      orig_digits.push_back(c);
+  }
 
   const auto orig_analysis = dictionary.analyze(orig);
   auto is_ascii_letter = [](char32_t c) {
@@ -929,7 +1052,7 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
     if (orig_analysis.char_anomaly[k] > max_anomaly)
       max_anomaly = orig_analysis.char_anomaly[k];
   }
-  // Only trigger hotspot pruning for truly long inputs (H > 24) with a real
+  // Only trigger hotspot pruning for truly long inputs (H > 32) with a real
   // anomaly (raw ASCII/fullwidth or OOV/unjoined mora >= 25.0). Common 1-char
   // hiragana words score ~12.0 and must not suppress unrelated positions.
   const bool hard_anomaly = has_ascii_letter || max_anomaly >= 25.0;
@@ -941,7 +1064,7 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
     for (size_t k = lo; k <= hi; ++k)
       active_kana[k] = true;
   };
-  if (H <= 24 || !hard_anomaly) {
+  if (H <= 32 || !hard_anomaly) {
     std::fill(active_kana.begin(), active_kana.end(), true);
   } else {
     if (has_ascii_letter) {
@@ -984,11 +1107,33 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
     for (size_t k = tail_lo; k < H; ++k)
       active_kana[k] = true;
   }
+  for (size_t k = 0; k < H; ++k) {
+    if (is_digit_char(orig[k]))
+      active_kana[k] = false;
+  }
 
-  std::map<std::u32string, double> penalties;
-  auto add = [&](const std::u32string &cand, double pen,
+  std::unordered_map<std::u32string, double> penalties;
+  penalties.reserve(2048);
+  auto add = [&](const std::u32string &raw_cand, double pen,
                  bool no_len_pen = false) {
-    if (cand.empty() || cand == orig)
+    if (raw_cand.empty())
+      return;
+    std::u32string cand = raw_cand;
+    if (!orig_digits.empty()) {
+      size_t d_idx = 0;
+      for (size_t idx = 0; idx < cand.size(); ++idx) {
+        if (is_digit_char(cand[idx])) {
+          if (d_idx >= orig_digits.size() ||
+              normalize_digit_ascii(cand[idx]) !=
+                  normalize_digit_ascii(orig_digits[d_idx]))
+            return;
+          cand[idx] = orig_digits[d_idx++];
+        }
+      }
+      if (d_idx != orig_digits.size())
+        return;
+    }
+    if (cand == orig)
       return;
     const int diff = int(cand.size()) - int(orig.size());
     if (diff < -3 || diff > 3 || !kana_or_punct(cand))
@@ -1583,12 +1728,14 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
     double penalty;
     size_t edit_l;
     size_t edit_r;
-    DictionaryPath path;
+    size_t anchor_l;
+    size_t cand_sub_len;
     std::u32string reading;
   };
   std::unordered_map<uint32_t, double> orig_sub_cache;
   std::vector<ScoredItem> items;
   items.reserve(penalties.size());
+  const std::u32string_view orig_sv(orig);
   for (const auto &kv : penalties) {
     const std::u32string &cand = kv.first;
     if (cand == orig)
@@ -1610,26 +1757,27 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
     size_t anchor_r = std::min(H, orig_r + 6);
     while (anchor_r < max_ar && !orig_analysis.is_boundary[anchor_r])
       ++anchor_r;
-    const uint32_t cache_key = (uint32_t(anchor_l) << 16) | uint32_t(anchor_r);
+    const uint32_t cache_key =
+        (uint32_t(anchor_l) << 16) | uint32_t(anchor_r);
     double orig_sub_score = 0.0;
     auto cache_it = orig_sub_cache.find(cache_key);
     if (cache_it != orig_sub_cache.end()) {
       orig_sub_score = cache_it->second;
     } else {
       orig_sub_score =
-          dictionary.convert_fast(orig.substr(anchor_l, anchor_r - anchor_l))
-              .score;
+          dictionary.score_only(orig_sv.substr(anchor_l, anchor_r - anchor_l));
       orig_sub_cache.emplace(cache_key, orig_sub_score);
     }
-    const int cand_sub_len = int(anchor_r - anchor_l) + int(cand_r) - int(orig_r);
+    const int cand_sub_len =
+        int(anchor_r - anchor_l) + int(cand_r) - int(orig_r);
     if (cand_sub_len <= 0)
       continue;
-    const auto cand_sub =
-        dictionary.convert_fast(cand.substr(anchor_l, size_t(cand_sub_len)));
-    const double local_delta = cand_sub.score - orig_sub_score;
+    const double cand_sub_score = dictionary.score_only(
+        std::u32string_view(cand).substr(anchor_l, size_t(cand_sub_len)));
+    const double local_delta = cand_sub_score - orig_sub_score;
     const double rank_score = local_delta - kv.second * 4.0;
-    items.push_back({rank_score, local_delta, kv.second, l, orig_r,
-                     cand_sub, cand});
+    items.push_back({rank_score, local_delta, kv.second, l, orig_r, anchor_l,
+                     size_t(cand_sub_len), cand});
   }
   std::sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
     return a.rank_score != b.rank_score ? a.rank_score > b.rank_score
@@ -1647,13 +1795,17 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       continue;
     bucket_counts[bucket]++;
     picked[i] = true;
-    out.push_back({items[i].reading, items[i].path, items[i].penalty,
+    const auto cand_sub = dictionary.convert_fast(
+        items[i].reading.substr(items[i].anchor_l, items[i].cand_sub_len));
+    out.push_back({items[i].reading, cand_sub, items[i].penalty,
                    items[i].local_delta, items[i].edit_l, items[i].edit_r});
   }
   for (size_t i = 0; i < items.size() && out.size() < limit; ++i) {
     if (picked[i])
       continue;
-    out.push_back({items[i].reading, items[i].path, items[i].penalty,
+    const auto cand_sub = dictionary.convert_fast(
+        items[i].reading.substr(items[i].anchor_l, items[i].cand_sub_len));
+    out.push_back({items[i].reading, cand_sub, items[i].penalty,
                    items[i].local_delta, items[i].edit_l, items[i].edit_r});
   }
   return out;

@@ -4,7 +4,7 @@
 
 ![実行時間 × 正答率](common-candidates-840-18models-20261123.png)
 
-図の★は、同じモデル（v4.2）を新しいエンジンで測り直した点だ。表と本文の数値は特に断りがない限り旧エンジン（04:34ビルド）のもの。
+図の★は、同じモデル（v4.2）を最新エンジン（18:14 / 18:15ビルド）で測り直した点だ。表と本文の数値は特に断りがない限り旧エンジン（04:34ビルド）のもの。
 
 ## 設定
 
@@ -78,50 +78,34 @@ Zenz v3.2 の2種は ZeroCon 全種の下位に残った。small は75.6秒で86
 
 Nano v3 の弱さも変わらず hard の68.8%に集中する。同じ68%帯に Zenz xsmall がいるが、それ以外の全モデルは hard で83%を超える。
 
-## v4.2 × 新エンジンの組み合わせ
+## v4.2 × 最新エンジンの組み合わせ
 
-上の18種を測ったあと、試験環境の `azookey-server.exe` / `azookey-server.dll` が 07:16 / 07:25 に建て直された。そこで同じ18種を新エンジンでもう一度通した（13:36〜13:42）。v4.2 の4種は差し替え後のGGUFのままで、ハッシュは `bf73bf47…`（Standard IQ4）、`43fcbfae…`（Standard Q8）、`5367df4e…`（Nano IQ4）、`7a613da5…`（Nano Q8）と配布カタログに一致する。したがってこの節は「新しいモデル＋新しいエンジン」の実測にあたる。
+その後、試験環境の `azookey-server.exe` / `azookey-server.dll` が 18:14 / 18:15 にさらに更新された（build `0.8.1-dev.1795180917.ga7edf7ea`）。このため、面の図の★は 07:16 / 07:25 ビルドの値から、最新エンジンで測り直した v4.2 の4種へ差し替えた。モデルGGUFは更新後のまま（`bf73bf47…`（Standard IQ4）、`43fcbfae…`（Standard Q8）、`5367df4e…`（Nano IQ4）、`7a613da5…`（Nano Q8））で、他14種は旧エンジンの点をそのまま残してある。
 
-この4点は面の図に★で重ねてある。表だけが見たい場合は下のとおり。
+この4点は面の図に「★最新エンジン」で重ねてある。表だけが見たい場合は下のとおり。
 
-| モデル | 旧エンジン 正解 | 新エンジン 正解 | 差 | 旧 壁時間 | 新 壁時間 | 短縮 |
-| --- | --- | --- | --- | --- | --- | --- |
-| ZeroCon Standard v4.2 Q8_0 | 836（99.5%） | 837（99.6%） | +1 | 53.9秒 | 34.0秒 | −37% |
-| ZeroCon Standard v4.2 IQ4_NL emb8 | 834（99.3%） | 836（99.5%） | +2 | 48.0秒 | 28.6秒 | −40% |
-| ZeroCon Nano v4.2 Q8_0 | 835（99.4%） | 836（99.5%） | +1 | 24.8秒 | 11.9秒 | −52% |
-| ZeroCon Nano v4.2 IQ4_NL emb8 | 827（98.5%） | 829（98.7%） | +2 | 24.6秒 | 8.4秒 | −66% |
-| ZeroCon Standard v4.1 Q8_0 | 802（95.5%） | 801（95.4%） | −1 | 56.3秒 | 35.2秒 | −37% |
-| ZeroCon Standard v4.1 IQ4_NL emb8 | 793（94.4%） | 794（94.5%） | +1 | 51.0秒 | 23.7秒 | −54% |
-| ZeroCon Nano v4.1 Q8_0 | 783（93.2%） | 783（93.2%） | 0 | 23.9秒 | 12.0秒 | −50% |
-| ZeroCon Nano v4.1 IQ4_NL emb8 | 775（92.3%） | 776（92.4%） | +1 | 24.8秒 | 8.3秒 | −67% |
-| ZeroCon Standard v4 Q8_0 | 777（92.5%） | 775（92.3%） | −2 | 54.1秒 | 36.1秒 | −33% |
-| ZeroCon Standard v3 Q8_0 | 769（91.5%） | 768（91.4%） | −1 | 58.3秒 | 35.3秒 | −39% |
-| ZeroCon Standard v3 IQ4_NL emb8 | 761（90.6%） | 763（90.8%） | +2 | 49.1秒 | 23.9秒 | −51% |
-| ZeroCon Standard v4 IQ4_NL emb8 | 764（91.0%） | 763（90.8%） | −1 | 51.9秒 | 25.1秒 | −52% |
-| ZeroCon Nano v4 Q8_0 | 738（87.9%） | 740（88.1%） | +2 | 25.5秒 | 12.7秒 | −50% |
-| ZeroCon Nano v4 IQ4_NL emb8 | 726（86.4%） | 727（86.5%） | +1 | 25.6秒 | 8.8秒 | −66% |
-| Zenz v3.2 small Q4_K_M | 727（86.5%） | 723（86.1%） | −4 | 75.6秒 | 35.1秒 | −54% |
-| ZeroCon Nano v3 Q6_K | 664（79.0%） | 662（78.8%） | −2 | 28.7秒 | 12.0秒 | −58% |
-| ZeroCon Nano v3 IQ4_NL emb8 | 655（78.0%） | 658（78.3%） | +3 | 26.5秒 | 8.8秒 | −67% |
-| Zenz v3.2 xsmall Q4_K_M | 650（77.4%） | 641（76.3%） | −9 | 29.2秒 | 9.9秒 | −66% |
+| モデル | 旧エンジン 正解 | 最新エンジン 正解 | 差 | 旧 壁時間 | 最新 壁時間 | 変化 | 前回新エンジン 壁時間 | 最新の変化 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ZeroCon Standard v4.2 Q8_0 | 836（99.5%） | 837（99.6%） | +1 | 53.9秒 | 68.7秒 | +27% | 34.0秒 | +102% |
+| ZeroCon Standard v4.2 IQ4_NL emb8 | 834（99.3%） | 836（99.5%） | +2 | 48.0秒 | 35.6秒 | −26% | 28.6秒 | +25% |
+| ZeroCon Nano v4.2 Q8_0 | 835（99.4%） | 836（99.5%） | +1 | 24.8秒 | 19.5秒 | −21% | 11.9秒 | +64% |
+| ZeroCon Nano v4.2 IQ4_NL emb8 | 827（98.5%） | 829（98.7%） | +2 | 24.6秒 | 14.6秒 | −41% | 8.4秒 | +74% |
 
-18種の合計は 731.8秒から 369.8秒へ半減した。短縮幅は IQ4_NL 系で大きく、Standard で −40〜52%、Nano で −50〜67%、Zenz small で −54% だ。Q8_0 の Standard は −33〜39% で、重みの展開と読み込みに時間を取られるぶん伸びが小さい。Nano v4.2 IQ4 は 24.6秒から8.4秒になり、平均レイテンシは 7.8ms/問 だ。
+正答率は前回新エンジンと同数（837・836・836・829問）で、更新による精度の変化はなかった。速度は旧エンジン比では2種が短くなったが、前回新エンジン（07:16 / 07:25 ビルド）比では4種とも遅くなり、Standard Q8 は2倍強になった。今回の単発測定だけでは、この低下がエンジン由来か、同時刻の負荷・温度由来かを切り分けていない。
 
-正答率はほぼ動かない。18種中15種が ±2問以内、最大の振れは Zenz xsmall の −9問（−1.1ポイント）、次いで Zenz small の −4問だ。ZeroCon の16種だけを見れば −2〜+3問で、変換ロジックの入れ替えがZeroCon系の判定を変えていない。v4.2 上位3種は 837・836・836問で、Nano v4.2 Q8 と Standard v4.2 IQ4 が同数になった。
-
-前節の additional_dict の段差は新エンジンでも同じで、v4.2 は 99〜100%、v4.1 は 57〜72%、v3/v4 は 56〜75% に留まる。エンジン側のN-bestやスコアリングを変えても、この差はモデル側で決まっている。
-
-再現に使ったエンジンは `azookey-server.exe` 780a5bea…（4,981,248バイト）、`llama/llama.dll` 5ab313c6… で、値は `summary.json` の `condition.server_sha256` / `condition.llama_dll_sha256` に残した。旧エンジン側は 04:34 ビルドで、測り直し時とは別時刻の1回分だ。倍近い短縮はエンジン更新の効果と見てよいが、同時刻の負荷差までは切り分けていない。
+再現に使った最新エンジンは `azookey-server.exe` 11e53804…（5,319,168バイト）、`llama/llama.dll` 5ab313c6… で、値は `common-candidates-v42-latestengine-20261123/summary.json` の `condition.server_sha256` / `condition.llama_dll_sha256` に残した。07:16 / 07:25 ビルドの18種測定は `common-candidates-840-18models-newengine-20261123/` に残してある。
 
 ```sh
 python scripts/run.py benchmarks/common/run_common_candidates.py \
-  --outdir artifacts/results/common-candidates-840-18models-newengine-20261123
+  --models v4.2 --overwrite \
+  --outdir artifacts/results/common-candidates-v42-latestengine-20261123
 python scripts/run.py benchmarks/common/run_common_candidates_plot.py \
   --outdir artifacts/results/common-candidates-840-18models-20261123 \
-  --overlay artifacts/results/common-candidates-840-18models-newengine-20261123/summary.json
+  --overlay artifacts/results/common-candidates-v42-latestengine-20261123/summary.json \
+  --overlay-label "v4.2 × 最新エンジン" --overlay-tag "★最新エンジン"
 ```
 
-データは旧エンジンの `artifacts/results/common-candidates-840-18models-20261123/`、新エンジンの `artifacts/results/common-candidates-840-18models-newengine-20261123/` にある。`summary.json` が集計、`comparison.csv` が表、`*.jsonl` が問題ごとの候補とtop1・正誤・レイテンシ、`scatter.html` が図と表をまとめたブラウザ版だ。更新前のv4.2値は `summary.pre-v42-update.json`、10種だけの先行スナップショットは `common-candidates-840-10models-20261123.md` に残してある。モデル直結の比較は `common-model-scope-840-18models-20261123.md` を見てほしい。
+データは旧エンジンの `artifacts/results/common-candidates-840-18models-20261123/`、前回新エンジンの `artifacts/results/common-candidates-840-18models-newengine-20261123/`、最新エンジンの `artifacts/results/common-candidates-v42-latestengine-20261123/` にある。`summary.json` が集計、`comparison.csv` が表、`*.jsonl` が問題ごとの候補とtop1・正誤・レイテンシ、`scatter.html` が図と表をまとめたブラウザ版だ。更新前のv4.2値は `summary.pre-v42-update.json`、10種だけの先行スナップショットは `common-candidates-840-10models-20261123.md` に残してある。モデル直結の比較は `common-model-scope-840-18models-20261123.md` を見てほしい。
 
 ## 拾い上げられなかったもの（注意）
 

@@ -73,8 +73,8 @@ impl CpuRuntimeTuningConfig {
         if self.topology_signature != topology_signature || self.model_id.is_empty() {
             return false;
         }
-        let stored = crate::runtime_assets::canonical_model_id(&self.model_id)
-            .unwrap_or(&self.model_id);
+        let stored =
+            crate::runtime_assets::canonical_model_id(&self.model_id).unwrap_or(&self.model_id);
         let expected = crate::runtime_assets::canonical_model_id(canonical_model_id)
             .unwrap_or(canonical_model_id);
         stored == expected
@@ -281,7 +281,8 @@ pub fn probe_cpu_tuning_via_worker(
         let Some(measurements) = measurements else {
             return Ok(None);
         };
-        Ok(select_best(&measurements).map(|winner| build_tuning_config(&winner, model_id, &topology)))
+        Ok(select_best(&measurements)
+            .map(|winner| build_tuning_config(&winner, model_id, &topology)))
     })();
 
     let _ = cancel_tx.send(());
@@ -631,10 +632,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(legacy.tuning_version, 0);
-        assert!(!legacy.is_valid_for(
-            "nano_v4_2_iq4_emb8",
-            "win32_processor_info:20:14:1=6+0=8"
-        ));
+        assert!(!legacy.is_valid_for("nano_v4_2_iq4_emb8", "win32_processor_info:20:14:1=6+0=8"));
 
         let current = CpuRuntimeTuningConfig {
             tuning_version: CURRENT_TUNING_VERSION,
@@ -644,14 +642,8 @@ mod tests {
             model_id: "standard_v4_2".into(),
             topology_signature: "win32_processor_info:20:14:1=6+0=8".into(),
         };
-        assert!(current.is_valid_for(
-            "standard_v4_2_q8",
-            "win32_processor_info:20:14:1=6+0=8"
-        ));
-        assert!(!current.is_valid_for(
-            "nano_v4_2_iq4_emb8",
-            "win32_processor_info:20:14:1=6+0=8"
-        ));
+        assert!(current.is_valid_for("standard_v4_2_q8", "win32_processor_info:20:14:1=6+0=8"));
+        assert!(!current.is_valid_for("nano_v4_2_iq4_emb8", "win32_processor_info:20:14:1=6+0=8"));
         assert!(!current.is_valid_for("standard_v4_2_q8", "win32_processor_info:16:8:0=8"));
     }
 }

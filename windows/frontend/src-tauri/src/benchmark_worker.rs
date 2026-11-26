@@ -65,13 +65,15 @@ impl Worker {
         scope: ConversionScope,
         timeout: Option<Duration>,
         typo_options: Option<&WindowsTypoOptions>,
+        cpu_threads: Option<(u32, u32)>,
     ) -> Result<Self, String> {
         let model = model.to_str().ok_or("invalid benchmark model path")?;
         let path = std::env::join_paths(std::iter::once(runtime.to_owned()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .map_err(|e| e.to_string())?;
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg(match scope {
                 ConversionScope::Model => "--benchmark",
                 ConversionScope::Candidates => "--conversion-benchmark",
@@ -91,7 +93,19 @@ impl Worker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .creation_flags(0x08000000)
+            .creation_flags(0x08000000);
+        if let Some((decode_threads, batch_threads)) = cpu_threads {
+            command
+                .env(
+                    "AZOOKEY_KEYBOARD_PRIOR_THREADS",
+                    decode_threads.clamp(1, 32).to_string(),
+                )
+                .env(
+                    "AZOOKEY_KEYBOARD_PRIOR_THREADS_BATCH",
+                    batch_threads.clamp(1, 64).to_string(),
+                );
+        }
+        let mut child = command
             .spawn()
             .map_err(|e| format!("cannot start benchmark worker: {e}"))?;
         let input = child.stdin.take().expect("piped stdin");
@@ -182,8 +196,11 @@ impl Worker {
         &mut self,
         configs: &[shared::cpu_tuning::RuntimeTuningCandidate],
     ) -> Result<Vec<shared::cpu_tuning::RuntimeTuningMeasurement>, String> {
-        serde_json::to_writer(&mut self.input, &json!({ "op": "probe_tuning", "configs": configs }))
-            .map_err(|error| error.to_string())?;
+        serde_json::to_writer(
+            &mut self.input,
+            &json!({ "op": "probe_tuning", "configs": configs }),
+        )
+        .map_err(|error| error.to_string())?;
         writeln!(self.input).map_err(|error| error.to_string())?;
         let reply = self
             .candidate_line()
@@ -298,6 +315,25 @@ pub fn start_with_cpu_tuning(
     let mut state = lock_idle()?;
     let started = Instant::now();
     benchmark::reset_session();
+    let cpu_threads = match cpu_tuning_config {
+        Some((config, backend, model_id))
+            if backend == "cpu" && layers == 0 && scope == ConversionScope::Typo =>
+        {
+            let topology = shared::cpu_tuning::detect_topology();
+            config
+                .zenzai
+                .cpu_runtime_tuning
+                .as_ref()
+                .filter(|tuned| tuned.is_valid_for(model_id, &topology.signature()))
+                .map(|tuned| {
+                    (
+                        tuned.decode_threads,
+                        tuned.batch_threads.unwrap_or(tuned.decode_threads),
+                    )
+                })
+        }
+        _ => None,
+    };
     let mut worker = Worker::start(
         &executable,
         &runtime,
@@ -307,6 +343,7 @@ pub fn start_with_cpu_tuning(
         scope,
         None,
         typo_options,
+        cpu_threads,
     )?;
     let newly_tuned = match cpu_tuning_config {
         Some((config, backend, model_id))

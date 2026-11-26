@@ -201,7 +201,10 @@ impl ReverseDictionary {
                 // A kana/Latin literal can pass through, a kanji literal cannot.
                 if end == start + 1
                     && katakana_to_hiragana(word).chars().all(|c| {
-                        ('ぁ'..='ん').contains(&c) || c.is_ascii() || "ー、。！？!?・".contains(c)
+                        ('ぁ'..='ん').contains(&c)
+                            || c.is_ascii()
+                            || ('０'..='９').contains(&c)
+                            || "ー、。！？!?・".contains(c)
                     })
                 {
                     choices.push(&literal);
@@ -339,6 +342,8 @@ pub fn min_reading_distance(surface: &str, source_reading: &str) -> Option<usize
             let s = &rest[..ch.len_utf8()];
             if ('ぁ'..='ゖ').contains(&ch)
                 || ('ァ'..='ヶ').contains(&ch)
+                || ch.is_ascii_digit()
+                || ('０'..='９').contains(&ch)
                 || "ー、。！？!?・".contains(ch)
             {
                 reading.push_str(&katakana_to_hiragana(s));
