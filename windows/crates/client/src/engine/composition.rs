@@ -2080,6 +2080,7 @@ impl TextServiceFactory {
         reading: Option<&str>,
         candidate_list_visible: Option<bool>,
         reading_vertical_adjustment: Option<i32>,
+        cursor_position: Option<usize>,
     ) -> Result<()> {
         self.set_text(preview, suffix)?;
         self.sync_candidate_window_update(
@@ -2091,6 +2092,7 @@ impl TextServiceFactory {
             reading,
             candidate_list_visible,
             reading_vertical_adjustment,
+            cursor_position,
         )?;
         Ok(())
     }
@@ -2164,12 +2166,32 @@ impl TextServiceFactory {
         )
     }
 
-    fn build_assist_reading_json(
+    pub(crate) fn resolved_reading_cursor(reading: &str, cursor_position: Option<usize>) -> usize {
+        let len = reading.chars().count();
+        cursor_position.unwrap_or(len).min(len)
+    }
+
+    pub(crate) fn format_plain_reading_with_cursor(
+        reading: &str,
+        cursor_position: Option<usize>,
+    ) -> String {
+        if reading.is_empty() {
+            return String::new();
+        }
+        serde_json::json!({
+            "reading": reading,
+            "cursor": Self::resolved_reading_cursor(reading, cursor_position),
+        })
+        .to_string()
+    }
+
+    pub(super) fn build_assist_reading_json(
         candidates: &Candidates,
         reading: Option<&str>,
         applied: Option<&typo::AppliedCorrection>,
         primary_assist: Option<u64>,
         prediction_continuation: &str,
+        cursor_position: Option<usize>,
     ) -> Option<String> {
         let base_reading = reading.unwrap_or(candidates.hiragana.as_str());
         if let Some(applied) = applied.filter(|applied| {
@@ -2181,6 +2203,7 @@ impl TextServiceFactory {
             return Some(
                 serde_json::json!({
                     "reading": applied.source,
+                    "cursor": Self::resolved_reading_cursor(&applied.source, cursor_position),
                     "assist": {
                         "status": "applied",
                         "source": applied.baseline_surface(),
@@ -2214,6 +2237,7 @@ impl TextServiceFactory {
                 return Some(
                     serde_json::json!({
                         "reading": base_reading,
+                        "cursor": Self::resolved_reading_cursor(base_reading, cursor_position),
                         "assist": {
                             "status": status,
                             "source": source,
@@ -2229,6 +2253,7 @@ impl TextServiceFactory {
         applied.map(|applied| {
             serde_json::json!({
                 "reading": base_reading,
+                "cursor": Self::resolved_reading_cursor(base_reading, cursor_position),
                 "assist": {
                     "status": "applied",
                     "source": applied.baseline_surface(),
@@ -2251,6 +2276,7 @@ impl TextServiceFactory {
         reading: Option<&str>,
         candidate_list_visible: Option<bool>,
         reading_vertical_adjustment: Option<i32>,
+        cursor_position: Option<usize>,
     ) -> Result<()> {
         let (applied, primary_assist, prediction_continuation) = {
             let state = self.borrow()?;
@@ -2267,6 +2293,7 @@ impl TextServiceFactory {
             applied.as_deref(),
             primary_assist,
             &prediction_continuation,
+            cursor_position,
         );
 
         if self.borrow()?.translation_session.is_some() {
@@ -2310,15 +2337,17 @@ impl TextServiceFactory {
 
         // English text already appears in the application. Clear the separate
         // reading overlay on every update, including candidate navigation.
+        let formatted_plain_reading;
         let reading = if IMEState::input_mode()? == InputMode::Latin {
             Some("")
         } else if let Some(ref aug) = augmented_reading {
             Some(aug.as_str())
         } else if let Some(r) = reading {
-            if visible == Some(false) && r.is_empty() {
+            if visible == Some(false) || r.is_empty() {
                 Some("")
             } else {
-                Some(r)
+                formatted_plain_reading = Self::format_plain_reading_with_cursor(r, cursor_position);
+                Some(formatted_plain_reading.as_str())
             }
         } else if visible == Some(false) {
             Some("")
@@ -2502,6 +2531,7 @@ impl TextServiceFactory {
         selection_index: i32,
         app_config: &AppConfig,
         transition: &CompositionState,
+        cursor_position: Option<usize>,
     ) -> Result<()> {
         let temporary_latin = self.borrow()?.borrow_composition()?.temporary_latin
             || IMEState::input_mode()? == InputMode::Latin;
@@ -2556,6 +2586,7 @@ impl TextServiceFactory {
             reading_update,
             candidate_list_visible,
             reading_vertical_adjustment,
+            cursor_position,
         )
     }
 
@@ -6528,6 +6559,7 @@ impl TextServiceFactory {
         if let Err(error) = self.update_lang_bar() {
             tracing::warn!(?error, "Failed to update language bar after reconversion");
         }
+        let cursor_position: Option<usize> = None;
         let app_config = app_config_snapshot.app_config();
         if let Err(error) = self.sync_candidate_window_update(
             &mut ipc_service,
@@ -6546,6 +6578,7 @@ impl TextServiceFactory {
                 &reconversion.candidates,
                 &CompositionState::Previewing,
             ),
+            cursor_position,
         ) {
             tracing::warn!(?error, "Failed to show reconversion candidates");
         }
@@ -7921,7 +7954,7 @@ impl TextServiceFactory {
         &self,
         config_snapshot: &AppConfigSnapshot,
     ) -> Result<()> {
-        let (raw_input, transition, candidates, selection_index, preview) = {
+        let (raw_input, transition, candidates, selection_index, preview, cursor_position) = {
             let text_service = self.borrow()?;
             let mut composition = text_service.borrow_mut_composition()?;
             if composition.state == CompositionState::None || composition.raw_input.is_empty() {
@@ -7942,7 +7975,8 @@ impl TextServiceFactory {
             composition.suffix.clear();
             composition.raw_hiragana = raw_input.clone();
             composition.corresponding_count = raw_input.len() as i32;
-            (raw_input, transition, candidates, 0, preview)
+            let cursor_position = composition.cursor_position;
+            (raw_input, transition, candidates, 0, preview, cursor_position)
         };
         let _ = raw_input;
         self.set_text(&preview, "")?;
@@ -7953,6 +7987,7 @@ impl TextServiceFactory {
                 selection_index,
                 config_snapshot.app_config(),
                 &transition,
+                cursor_position,
             );
             let _ = IMEState::set_ipc_service(ipc_service);
             result?;
@@ -8154,7 +8189,30 @@ impl TextServiceFactory {
                     raw_hiragana = candidates.hiragana.clone();
                     cursor_position = cursor_position.or($default_cursor);
                     render_local_text!();
-                    let _ = self.hide_candidate_window_ui(&mut ipc_service)?;
+                    let reading_update =
+                        Self::live_conversion_reading(app_config, &candidates, &transition);
+                    let suppressed_by_jev = app_config.general.jev_conversion
+                        && !app_config.general.experimental_translation
+                        && transition == CompositionState::Composing
+                        && !temporary_latin;
+                    if reading_update.is_some() && !suppressed_by_jev && mode != InputMode::Latin {
+                        self.sync_candidate_window_update(
+                            &mut ipc_service,
+                            &candidates,
+                            selection_index,
+                            Some(true),
+                            true,
+                            reading_update,
+                            None,
+                            Self::live_conversion_reading_vertical_adjustment_update(
+                                app_config,
+                                reading_update,
+                            ),
+                            cursor_position,
+                        )?;
+                    } else {
+                        let _ = self.hide_candidate_window_ui(&mut ipc_service)?;
+                    }
                 }};
             }
 
@@ -8343,6 +8401,7 @@ impl TextServiceFactory {
                             selection_index,
                             app_config,
                             &transition,
+                            cursor_position,
                         )?;
                     }
                 } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
@@ -8407,17 +8466,45 @@ impl TextServiceFactory {
                     }
                     ClientAction::ShowCandidateWindow => {
                         let position = self.candidate_window_position()?;
+                        let raw_reading = Self::live_conversion_reading_update(
+                            app_config,
+                            &candidates,
+                            &transition,
+                        );
+                        let formatted_reading = {
+                            let (applied, primary_assist, prediction_continuation) = {
+                                let state = self.borrow()?;
+                                let comp = state.borrow_composition()?;
+                                (
+                                    comp.typo.applied.clone(),
+                                    comp.typo.primary_assist,
+                                    comp.typo.prediction_continuation.clone(),
+                                )
+                            };
+                            if IMEState::input_mode()? == InputMode::Latin {
+                                Some(String::new())
+                            } else if let Some(aug) = Self::build_assist_reading_json(
+                                &candidates,
+                                raw_reading,
+                                applied.as_deref(),
+                                primary_assist,
+                                &prediction_continuation,
+                                cursor_position,
+                            ) {
+                                Some(aug)
+                            } else {
+                                raw_reading.map(|r| {
+                                    Self::format_plain_reading_with_cursor(r, cursor_position)
+                                })
+                            }
+                        };
                         let delivery = ipc_service.update_candidate_window_with_reading(
                             Some(true),
                             position,
                             None,
                             None,
                             None,
-                            Self::live_conversion_reading_update(
-                                app_config,
-                                &candidates,
-                                &transition,
-                            ),
+                            formatted_reading.as_deref(),
                             Some(true),
                             Self::live_conversion_reading_vertical_adjustment_for_update(
                                 app_config,
@@ -8654,6 +8741,7 @@ impl TextServiceFactory {
                                     &mut live_conversion_history,
                                     &mut ipc_service,
                                 )?;
+                                cursor_position = ipc_service.latest_composition_sync().cursor;
                             }
                             self.reconcile_typo_applied(
                                 &transition,
@@ -8669,6 +8757,7 @@ impl TextServiceFactory {
                                 selection_index,
                                 app_config,
                                 &transition,
+                                cursor_position,
                             )?;
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
                             apply_cursor_zero_suffix_only!(Some(0));
@@ -8758,6 +8847,7 @@ impl TextServiceFactory {
                                     &mut live_conversion_history,
                                     &mut ipc_service,
                                 )?;
+                                cursor_position = ipc_service.latest_composition_sync().cursor;
                             }
                             self.reconcile_typo_applied(
                                 &transition,
@@ -8773,6 +8863,7 @@ impl TextServiceFactory {
                                 selection_index,
                                 app_config,
                                 &transition,
+                                cursor_position,
                             )?;
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
                             apply_cursor_zero_suffix_only!(Some(0));
@@ -8817,6 +8908,7 @@ impl TextServiceFactory {
                                 selection_index,
                                 app_config,
                                 &transition,
+                                cursor_position,
                             )?;
                             persist_local_state!();
                             continue;
@@ -8900,6 +8992,7 @@ impl TextServiceFactory {
                                     &mut live_conversion_history,
                                     &mut ipc_service,
                                 )?;
+                                cursor_position = ipc_service.latest_composition_sync().cursor;
                             }
                             self.reconcile_typo_applied(
                                 &transition,
@@ -8915,6 +9008,7 @@ impl TextServiceFactory {
                                 selection_index,
                                 app_config,
                                 &transition,
+                                cursor_position,
                             )?;
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
                             apply_cursor_zero_suffix_only!(Some(0));
@@ -9020,6 +9114,7 @@ impl TextServiceFactory {
                                 selection_index,
                                 app_config,
                                 &transition,
+                                cursor_position,
                             )?;
                             persist_local_state!();
                             continue;
@@ -9124,6 +9219,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                         } else if transition != CompositionState::None
                             && candidates.texts.is_empty()
@@ -9192,7 +9288,8 @@ impl TextServiceFactory {
                             let total = raw_input.chars().count();
                             let current = cursor_position.unwrap_or(total).min(total);
                             let next = (current as isize + *offset as isize)
-                                .clamp(0, total as isize) as usize;
+                                .clamp(0, total as isize)
+                                as usize;
                             cursor_position = Some(next);
                             candidates = english::candidates_with_learning(
                                 &raw_input,
@@ -9214,6 +9311,7 @@ impl TextServiceFactory {
                                 selection_index,
                                 app_config,
                                 &transition,
+                                cursor_position,
                             )?;
                             persist_local_state!();
                             continue;
@@ -9289,11 +9387,35 @@ impl TextServiceFactory {
                                 &fixed_prefix,
                                 &clause_snapshots,
                             )?;
+                            let has_ai_assist =
+                                self.borrow()?.borrow_composition()?.typo.applied.is_some()
+                                    || candidates
+                                        .candidate_ids
+                                        .iter()
+                                        .any(|&id| id == 999901 || id == 999902);
+                            let suppressed_by_jev = app_config.general.jev_conversion
+                                && !app_config.general.experimental_translation
+                                && transition == CompositionState::Composing
+                                && !has_ai_assist
+                                && !temporary_latin;
+                            let reading =
+                                Self::live_conversion_reading(app_config, &candidates, &transition);
+                            let visible = if suppressed_by_jev {
+                                Some(false)
+                            } else if !app_config.general.show_candidate_window_after_space
+                                || reading.is_some()
+                                || temporary_latin
+                                || has_ai_assist
+                            {
+                                Some(true)
+                            } else {
+                                None
+                            };
                             self.sync_candidate_window_update(
                                 &mut ipc_service,
                                 &candidates,
                                 selection_index,
-                                None,
+                                visible,
                                 true,
                                 Self::live_conversion_reading_update(
                                     app_config,
@@ -9306,6 +9428,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
                             apply_cursor_zero_suffix_only!(Some(0));
@@ -9434,6 +9557,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             Self::log_clause_action_state(
                                 "after",
@@ -9574,6 +9698,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             Self::log_clause_action_state(
                                 "after",
@@ -9611,6 +9736,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             Self::log_clause_action_state(
                                 "after-deferred",
@@ -9741,6 +9867,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             Self::log_clause_action_state(
                                 "after",
@@ -9917,6 +10044,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             Self::log_clause_action_state(
                                 "after",
@@ -10085,6 +10213,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             true
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
@@ -10234,6 +10363,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             true
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {
@@ -10383,6 +10513,7 @@ impl TextServiceFactory {
                                     &candidates,
                                     &transition,
                                 ),
+                                cursor_position,
                             )?;
                             true
                         } else if candidates.texts.is_empty() && !candidates.hiragana.is_empty() {

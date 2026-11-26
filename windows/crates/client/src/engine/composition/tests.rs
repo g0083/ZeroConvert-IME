@@ -788,6 +788,7 @@ pub(super) fn candidates(
         hiragana: hiragana.to_string(),
         corresponding_count: corresponding_count.to_vec(),
         candidate_ids: (1..=texts.len() as u64).collect(),
+        top_token_margins: Default::default(),
     }
 }
 
@@ -4626,6 +4627,7 @@ fn passthrough_packet_commits_active_composition_in_latin_mode() {
             corresponding_count: vec![5, 5],
             candidate_ids: vec![0, 0],
             prediction_readings: Default::default(),
+            top_token_margins: Default::default(),
         },
         selection_index: 1,
         ..Composition::default()
@@ -4645,4 +4647,52 @@ fn passthrough_packet_commits_active_composition_in_latin_mode() {
             ],
         ))
     );
+}
+
+#[test]
+fn plain_reading_with_cursor_formats_and_clamps_scalar_positions() {
+    assert_eq!(
+        TextServiceFactory::format_plain_reading_with_cursor("", Some(0)),
+        ""
+    );
+
+    let cases = [
+        ("あいう", None, 3),
+        ("あいう", Some(0), 0),
+        ("あいう", Some(2), 2),
+        ("あいう", Some(99), 3),
+        ("あ😀う", Some(2), 2),
+    ];
+    for (reading, cursor, expected_cursor) in cases {
+        let json = TextServiceFactory::format_plain_reading_with_cursor(reading, cursor);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["reading"], reading);
+        assert_eq!(parsed["cursor"], expected_cursor);
+    }
+}
+
+#[test]
+fn assist_reading_json_preserves_full_reading_and_cursor() {
+    let candidates = Candidates {
+        prediction_readings: Default::default(),
+        texts: vec!["今日は良い天気".into(), "きょうはいいてんき！".into()],
+        sub_texts: vec![String::new(); 2],
+        hiragana: "きょうはいいてんき".into(),
+        corresponding_count: vec![9; 2],
+        candidate_ids: vec![1, shared::ai_candidate::TYPO_CORRECTION],
+        top_token_margins: Default::default(),
+    };
+    let json = TextServiceFactory::build_assist_reading_json(
+        &candidates,
+        Some("きょうはいいてんき"),
+        None,
+        Some(shared::ai_candidate::TYPO_CORRECTION),
+        "",
+        Some(3),
+    )
+    .expect("proposal json");
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["reading"], "きょうはいいてんき");
+    assert_eq!(parsed["cursor"], 3);
+    assert_eq!(parsed["assist"]["status"], "proposal");
 }

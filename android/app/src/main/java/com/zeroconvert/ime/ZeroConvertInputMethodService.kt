@@ -737,7 +737,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         englishCursorPosition = 0
         japaneseTouchBiases.clear()
         englishTouchBiases.clear()
-        currentComposingSurface.value = ""
+        syncComposingDisplayState()
         candidatesList.clear()
         predictedCandidate.value = ""
         lastInferredSurface = ""
@@ -776,11 +776,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
             )
             englishComposing = englishComposing.substring(0, insertAt) + text + englishComposing.substring(insertAt)
             englishCursorPosition = ComposingEditorState.snapBoundary(englishComposing, insertAt + text.length)
-            currentComposingSurface.value = englishComposing
+            syncComposingDisplayState()
             setEnglishComposingText(connection)
         } else {
             composingText.insertAtCursorPosition(text, InputStyle.DIRECT)
-            currentComposingSurface.value = composingText.convertTargetBeforeCursor
+            syncComposingDisplayState()
             setManagedComposingText(connection, composingText.convertTarget, 1)
         }
         scheduleTranslation()
@@ -860,7 +860,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         japaneseTouchBiases.addAll(neutral)
                     }
                 }
-                currentComposingSurface.value = composingText.convertTargetBeforeCursor
+                syncComposingDisplayState()
                 val readingOnly = CorrectionSession.isReadingOnlyCorrection(assist.text)
                 if (readingOnly) {
                     predictedCandidate.value = ""
@@ -1047,7 +1047,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             syncCorrectionRevertState()
             return false
         }
-        currentComposingSurface.value = composingText.convertTargetBeforeCursor
+        syncComposingDisplayState()
         if (immediate) {
             predictedCandidate.value = savedOriginalCandidates.firstOrNull()?.text.orEmpty()
             lastInferredSurface = savedOriginalInferredReading
@@ -1089,7 +1089,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             syncCorrectionRevertState()
             return false
         }
-        currentComposingSurface.value = revertedReading
+        syncComposingDisplayState()
         japaneseTouchBiases.clear()
         val charCount = composingText.input.count { it.piece is InputPiece.CharPiece }
         if (revertedBiases.size == charCount) {
@@ -1550,11 +1550,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         return when (mode) {
             KeyboardMode.JAPANESE -> {
-                val pending = NextKeyPredictor.trailingPendingRomaji(currentComposingSurface.value)
+                val pending = NextKeyPredictor.trailingPendingRomaji(composingText.convertTargetBeforeCursor)
                 NextKeyPredictor.japaneseRomajiWeights(pending)
             }
             KeyboardMode.ENGLISH -> {
-                val prefix = if (englishComposing.isNotEmpty()) englishComposing else currentComposingSurface.value
+                val prefix = if (englishComposing.isNotEmpty()) englishComposing else composingText.convertTargetBeforeCursor
                 if (prefix.isEmpty()) emptyMap() else EnglishWordDictionary.nextCharWeights(prefix)
             }
             KeyboardMode.NUMERIC -> emptyMap()
@@ -1775,6 +1775,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     // azooKey IME State Machine
     val composingText = ComposingText()
     val currentComposingSurface = mutableStateOf("")
+    val currentComposingCursor = mutableStateOf(0)
     val predictedCandidate = mutableStateOf("")
     val candidatesList = mutableStateListOf<Candidate>()
     val selectionAvailableState = mutableStateOf(false)
@@ -1830,6 +1831,30 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private var postCompositionExpectedSurface: String = ""
     private var postCompositionInputConnection: android.view.inputmethod.InputConnection? = null
 
+    private fun syncComposingDisplayState() {
+        when {
+            !composingText.isEmpty -> {
+                val target = composingText.convertTarget
+                currentComposingSurface.value = target
+                currentComposingCursor.value = ComposingEditorState.snapBoundary(
+                    target,
+                    composingText.convertTargetCursorPosition.coerceIn(0, target.length)
+                )
+            }
+            englishComposing.isNotEmpty() -> {
+                currentComposingSurface.value = englishComposing
+                currentComposingCursor.value = ComposingEditorState.snapBoundary(
+                    englishComposing,
+                    englishCursorPosition.coerceIn(0, englishComposing.length)
+                )
+            }
+            else -> {
+                currentComposingSurface.value = ""
+                currentComposingCursor.value = 0
+            }
+        }
+    }
+
     private fun setManagedComposingText(connection: android.view.inputmethod.InputConnection?, text: CharSequence, cursor: Int): Boolean {
         if (connection == null || !connection.setComposingText(text, cursor)) return false
         composingEditor.recordPreview(text.toString(), expectTailCursor = true)
@@ -1861,6 +1886,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             // text) and snap the internal caret to the same place.
             englishCursorPosition = text.length
             composingEditor.adoptCursor(text.length)
+            syncComposingDisplayState()
             return false
         }
         return true
@@ -2149,6 +2175,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             composingText.moveCursorFromCursorPosition(safeCurrentCursor - composingText.convertTargetCursorPosition)
         }
         composingEditor.adoptCursor(snappedPreviewOffset)
+        syncComposingDisplayState()
         return true
     }
 
@@ -2197,6 +2224,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         englishCursorPosition = ComposingEditorState.snapBoundary(preview, previewOffset)
         composingEditor.adoptCursor(englishCursorPosition)
+        syncComposingDisplayState()
         return true
     }
 
@@ -2620,7 +2648,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
         }
         val surface = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = surface
+        syncComposingDisplayState()
 
         // Handle inline display:
         // If realtime inline is ON: keep the converted prefix matching the current reading
@@ -2693,7 +2721,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             japaneseTouchBiases.clear()
         }
         val surface = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = surface
+        syncComposingDisplayState()
 
         val isRealtime = isRealtimeInlineEnabled()
         val tentativeDisplay = tentativeInlineDisplay(surface, isRealtime)
@@ -2755,7 +2783,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
 
         val newSurface = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = newSurface
+        syncComposingDisplayState()
 
         val isRealtime = isRealtimeInlineEnabled()
         val tentativeDisplay = tentativeInlineDisplay(newSurface, isRealtime)
@@ -2795,7 +2823,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
 
         val newSurface = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = newSurface
+        syncComposingDisplayState()
 
         val isRealtime = isRealtimeInlineEnabled()
         val tentativeDisplay = tentativeInlineDisplay(newSurface, isRealtime)
@@ -2841,7 +2869,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             }
             val flipped = if (ch.isUpperCase()) ch.lowercaseChar() else ch.uppercaseChar()
             englishComposing = englishComposing.substring(0, index) + flipped + englishComposing.substring(cursor)
-            currentComposingSurface.value = englishComposing
+            syncComposingDisplayState()
             setEnglishComposingText(currentInputConnection)
             triggerEnglishSuggestions(englishComposing)
             return
@@ -2873,7 +2901,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val remaining = englishComposing.dropLast(oldLength)
             englishComposing = remaining
             englishCursorPosition = remaining.length
-            currentComposingSurface.value = remaining
+            syncComposingDisplayState()
             if (remaining.isEmpty()) {
                 setManagedComposingText(ic, "", 1)
                 clearEnglishInput()
@@ -3152,7 +3180,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val remainingReading = composingText.convertTargetBeforeCursor
             pendingConversionContinuation = if (remainingReading.isNotEmpty())
                 ConversionContinuation.derive(fullReadingBeforeAutoCommit, remainingReading, prefixSurface) else null
-            currentComposingSurface.value = remainingReading
+            syncComposingDisplayState()
 
             // 4. Retain bounded confirmed left context for the remaining input.
             cachedLeftContext = EditorContext.bounded(cachedLeftContext + prefixSurface)
@@ -3244,7 +3272,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 japaneseTouchBiases.addAll(entry.touchBiases)
                 cachedLeftContext = entry.previousLeftContext
                 val surface = composingText.convertTargetBeforeCursor
-                currentComposingSurface.value = surface
+                syncComposingDisplayState()
                 if (composingText.isEmpty) {
                     inferenceHistory.clear()
                     setManagedComposingText(currentInputConnection, "", 0)
@@ -3269,7 +3297,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 englishCursorPosition = englishComposing.length
                 englishTouchBiases.clear()
                 englishTouchBiases.addAll(entry.touchBiases)
-                currentComposingSurface.value = englishComposing
+                syncComposingDisplayState()
                 if (englishComposing.isNotEmpty()) {
                     setManagedComposingText(currentInputConnection, englishComposing, 1)
                     triggerEnglishSuggestions(englishComposing)
@@ -3301,7 +3329,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                             japaneseTouchBiases.clear()
                             japaneseTouchBiases.addAll(entry.japaneseTouchBiases)
                             val surface = composingText.convertTargetBeforeCursor
-                            currentComposingSurface.value = surface
+                            syncComposingDisplayState()
                             setManagedComposingText(ic, composingText.convertTarget, 1)
                             if (surface.isNotEmpty()) {
                                 triggerDebouncedConversion(surface)
@@ -3313,7 +3341,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                             leftContextConnection = ic
                             englishTouchBiases.clear()
                             englishTouchBiases.addAll(entry.englishTouchBiases)
-                            currentComposingSurface.value = englishComposing
+                            syncComposingDisplayState()
                             setManagedComposingText(ic, englishComposing, 1)
                             triggerEnglishSuggestions(englishComposing)
                         }
@@ -3339,7 +3367,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         japaneseTouchBiases.clear()
                         japaneseTouchBiases.addAll(entry.japaneseTouchBiases)
                         val surface = composingText.convertTargetBeforeCursor
-                        currentComposingSurface.value = surface
+                        syncComposingDisplayState()
                         setManagedComposingText(ic, composingText.convertTarget, 1)
                         if (surface.isNotEmpty()) {
                             triggerDebouncedConversion(surface)
@@ -3399,7 +3427,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         pendingConversionContinuation = null
 
         val restoredSurface = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = restoredSurface
+        syncComposingDisplayState()
         lastInferredSurface = ""
         lastInferredResult = ""
         inferenceHistory.clear()
@@ -3471,7 +3499,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 japaneseTouchBiases.clear()
             }
             val surface = composingText.convertTargetBeforeCursor
-            currentComposingSurface.value = surface
+            syncComposingDisplayState()
             if (composingText.isEmpty) {
                 inferenceHistory.clear()
                 setManagedComposingText(currentInputConnection, "", 0)
@@ -3532,7 +3560,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         conversionRange.cancel(composingText)
         conversionRangeState.value = ""
         clearCandidateList()
-        currentComposingSurface.value = composingText.convertTargetBeforeCursor
+        syncComposingDisplayState()
         triggerDebouncedConversion(composingText.convertTargetBeforeCursor)
     }
 
@@ -3543,7 +3571,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         canRewindOnNextBackspace = false
         val reading = composingText.convertTargetBeforeCursor
         conversionRangeState.value = reading + "｜" + composingText.convertTarget.drop(composingText.convertTargetCursorPosition)
-        currentComposingSurface.value = reading
+        syncComposingDisplayState()
         triggerDebouncedConversion(reading)
     }
 
@@ -3567,6 +3595,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             )
             if (target == englishCursorPosition) return false
             englishCursorPosition = target
+            syncComposingDisplayState()
             selfIssuedCursorMoveAt = System.currentTimeMillis()
             setEnglishComposingText(currentInputConnection)
             return true
@@ -3626,7 +3655,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         clearCandidateList()
         pendingConversionContinuation = null
         val surfaceBefore = composingText.convertTargetBeforeCursor
-        currentComposingSurface.value = surfaceBefore
+        syncComposingDisplayState()
         // Reuse the converted preview while its tail still matches the remaining
         // reading. When the caret has moved into a region the engine already
         // converted to kanji there is no such tail, and rewriting the editor with
@@ -3686,7 +3715,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     hasSelectionInEditor = false
                     selectionAvailableState.value = false
                     clearSelectionCharacterCount()
-                    currentComposingSurface.value = plan.reading
+                    syncComposingDisplayState()
                     candidatesList.clear()
                     candidatesList.addAll(plan.candidates)
                     predictedCandidate.value = plan.original
@@ -3878,7 +3907,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         englishComposing = englishComposing.substring(0, insertAt) + ch + englishComposing.substring(insertAt)
         englishCursorPosition = ComposingEditorState.snapBoundary(englishComposing, insertAt + 1)
-        currentComposingSurface.value = englishComposing
+        syncComposingDisplayState()
         setEnglishComposingText(currentInputConnection)
         triggerEnglishSuggestions(englishComposing)
     }
@@ -3905,7 +3934,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val previous = ComposingEditorState.moveByCodePoint(englishComposing, cursor, -1)
                 englishComposing = englishComposing.substring(0, previous) + englishComposing.substring(cursor)
                 englishCursorPosition = previous
-                currentComposingSurface.value = englishComposing
+                syncComposingDisplayState()
                 if (englishComposing.isNotEmpty()) {
                     setEnglishComposingText(currentInputConnection)
                 } else {
@@ -3920,7 +3949,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 if (deleteCount <= 0) return false
                 composingText.deleteBackwardFromCursorPosition(deleteCount)
                 syncCorrectionRevertState()
-                currentComposingSurface.value = composingText.convertTargetBeforeCursor
+                syncComposingDisplayState()
                 if (composingText.isEmpty) {
                     setManagedComposingText(currentInputConnection, "", 0)
                 } else {
@@ -3952,7 +3981,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             if (englishTouchBiases.isNotEmpty()) {
                 englishTouchBiases.removeAt(previous.coerceIn(0, englishTouchBiases.lastIndex))
             }
-            currentComposingSurface.value = englishComposing
+            syncComposingDisplayState()
             if (englishComposing.isNotEmpty()) {
                 setEnglishComposingText(currentInputConnection)
                 triggerEnglishSuggestions(englishComposing)
@@ -4015,7 +4044,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         englishCursorPosition = 0
         japaneseTouchBiases.clear()
         englishTouchBiases.clear()
-        currentComposingSurface.value = ""
+        syncComposingDisplayState()
         candidatesList.clear()
         predictedCandidate.value = ""
     }
@@ -4190,7 +4219,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 syncCorrectionRevertState()
                 val remainingSurface = composingText.convertTarget
                 val remainingReading = composingText.convertTargetBeforeCursor
-                currentComposingSurface.value = remainingReading
+                syncComposingDisplayState()
                 lastInferredSurface = ""
                 lastInferredResult = ""
                 inferenceHistory.clear()
@@ -4243,7 +4272,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         englishCursorPosition = 0
         japaneseTouchBiases.clear()
         englishTouchBiases.clear()
-        currentComposingSurface.value = ""
+        syncComposingDisplayState()
         predictedCandidate.value = ""
         lastInferredSurface = ""
         lastInferredResult = ""

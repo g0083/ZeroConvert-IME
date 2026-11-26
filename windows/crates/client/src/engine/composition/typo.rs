@@ -521,7 +521,11 @@ impl TextServiceFactory {
         self.borrow_mut()?.translation_session =
             Some(shared::translation_session::TranslationSessionGuard::start()?);
         let mut ipc = IMEState::ipc_service()?.context("No IPC service")?;
-        let candidates = self.borrow()?.borrow_composition()?.candidates.clone();
+        let (candidates, cursor_position) = {
+            let service = self.borrow()?;
+            let comp = service.borrow_composition()?;
+            (comp.candidates.clone(), comp.cursor_position)
+        };
         self.sync_candidate_window_update(
             &mut ipc,
             &candidates,
@@ -531,6 +535,7 @@ impl TextServiceFactory {
             Some(""),
             Some(false),
             None,
+            cursor_position,
         )?;
         self.begin_typo_assist()
     }
@@ -778,12 +783,14 @@ impl TextServiceFactory {
                 state.suffix.clear();
             }
         }
+        let cursor_position = self.borrow()?.borrow_composition()?.cursor_position;
         self.sync_candidate_window_after_text_update(
             &mut ipc,
             &candidates,
             0,
             config,
             &CompositionState::Composing,
+            cursor_position,
         )
     }
 
@@ -943,6 +950,7 @@ impl TextServiceFactory {
             applied_hiragana,
             edited_after_apply: false,
         });
+        let cursor_position = ipc.latest_composition_sync().cursor;
         {
             let service = self.borrow()?;
             let mut state = service.borrow_mut_composition()?;
@@ -952,6 +960,7 @@ impl TextServiceFactory {
             state.raw_input = converter_input;
             state.raw_hiragana = candidates.hiragana.clone();
             state.corresponding_count = selected_count;
+            state.cursor_position = cursor_position;
             state.selection_index = 0;
             state.candidates = candidates.clone();
             state.live_conversion_history.clear();
@@ -976,6 +985,7 @@ impl TextServiceFactory {
             0,
             config.app_config(),
             &CompositionState::Composing,
+            cursor_position,
         )
     }
 
@@ -1005,17 +1015,13 @@ impl TextServiceFactory {
                     selected.index,
                 )
             } else {
-                (
-                    format!("{}{trailing}", applied.source),
-                    String::new(),
-                    0,
-                    0,
-                )
+                (format!("{}{trailing}", applied.source), String::new(), 0, 0)
             };
-        let next_raw_input = ipc
-            .latest_composition_sync()
+        let sync = ipc.latest_composition_sync();
+        let next_raw_input = sync
             .raw_input
             .unwrap_or_else(|| format!("{}{trailing}", applied.source));
+        let cursor_position = sync.cursor;
         {
             let service = self.borrow()?;
             let mut state = service.borrow_mut_composition()?;
@@ -1025,6 +1031,7 @@ impl TextServiceFactory {
             state.raw_input = next_raw_input;
             state.raw_hiragana = candidates.hiragana.clone();
             state.corresponding_count = selected_count;
+            state.cursor_position = cursor_position;
             state.selection_index = selected_index;
             state.candidates = candidates.clone();
             state.live_conversion_snapshots.clear();
@@ -1044,6 +1051,7 @@ impl TextServiceFactory {
             selected_index,
             config.app_config(),
             &CompositionState::Composing,
+            cursor_position,
         )
     }
 
@@ -1134,6 +1142,10 @@ impl TextServiceFactory {
         };
         let baseline = format!("{}{}", applied.original.preview, applied.original.suffix);
         select_surface(&mut candidates, &baseline);
+        let cursor_position = ipc
+            .latest_composition_sync()
+            .cursor
+            .or(applied.original.cursor_position);
         let mut restored = applied.original.clone();
         restored.typo.correction = correction;
         restored.state = CompositionState::Composing;
@@ -1142,6 +1154,7 @@ impl TextServiceFactory {
         restored.candidates = candidates.clone();
         restored.selection_index = 0;
         restored.corresponding_count = candidates.corresponding_count[0];
+        restored.cursor_position = cursor_position;
         *self.borrow()?.borrow_mut_composition()? = restored;
         IMEState::set_ipc_service(ipc.clone())?;
         self.set_text(&baseline, "")?;
@@ -1152,6 +1165,7 @@ impl TextServiceFactory {
             0,
             config.app_config(),
             &CompositionState::Composing,
+            cursor_position,
         )
     }
 
@@ -1855,6 +1869,7 @@ mod tests {
             None,
             Some(shared::ai_candidate::TYPO_CORRECTION),
             "",
+            None,
         )
         .expect("proposal assist json");
         let proposal: serde_json::Value = serde_json::from_str(&proposal_json).unwrap();
@@ -1891,6 +1906,7 @@ mod tests {
             Some(&applied),
             None,
             "",
+            None,
         )
         .expect("applied assist json");
         let parsed: serde_json::Value = serde_json::from_str(&applied_json).unwrap();
@@ -1954,14 +1970,12 @@ mod tests {
             None,
             Some(shared::ai_candidate::TYPO_CORRECTION),
             "",
+            None,
         )
         .expect("reading-only proposal json");
         let proposal: serde_json::Value = serde_json::from_str(&proposal_json).unwrap();
         assert_eq!(proposal["assist"]["source"], "おせわになております");
-        assert_eq!(
-            proposal["assist"]["replacement"],
-            "おせわになっております"
-        );
+        assert_eq!(proposal["assist"]["replacement"], "おせわになっております");
 
         let state = Composition {
             raw_input: "osewaninateorimasu".into(),
@@ -2070,6 +2084,7 @@ mod tests {
             Some(&applied),
             Some(shared::ai_candidate::TYPO_CORRECTION),
             "",
+            None,
         )
         .expect("post-edit proposal json");
         let parsed: serde_json::Value = serde_json::from_str(&post_edit_json).unwrap();
@@ -2091,6 +2106,7 @@ mod tests {
             Some(&applied),
             None,
             "",
+            None,
         )
         .expect("post-edit applied json");
         let parsed_live: serde_json::Value = serde_json::from_str(&applied_live_json).unwrap();

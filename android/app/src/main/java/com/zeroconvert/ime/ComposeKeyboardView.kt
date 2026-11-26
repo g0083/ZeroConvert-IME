@@ -619,6 +619,7 @@ fun KeyboardRootView(
 private fun KeyboardTopBars(
     imeService: ZeroConvertInputMethodService,
     currentSurfaceOverride: String?,
+    currentCursorOverride: Int? = null,
     candidatesOverride: List<Candidate>?,
     clipboardHistoryOverride: List<ClipboardEntry>?,
     aiAssistResultOverride: com.zeroconvert.ime.assist.AiAssistResult?,
@@ -639,6 +640,11 @@ private fun KeyboardTopBars(
     onClipboardPaste: (ClipboardEntry, Boolean) -> Unit
 ) {
     val currentSurface = currentSurfaceOverride ?: imeService.currentComposingSurface.value
+    val currentCursor = when {
+        currentCursorOverride != null -> currentCursorOverride
+        currentSurfaceOverride != null -> currentSurfaceOverride.length
+        else -> imeService.currentComposingCursor.value
+    }
     val privateMode = imeService.isPrivateMode
     val candidates = candidatesOverride ?: imeService.candidatesList
     val clipboardHistory = clipboardHistoryOverride ?: imeService.clipboardHistory
@@ -657,7 +663,8 @@ private fun KeyboardTopBars(
         correctionApplied = imeService.aiAssistAdoptedState.value,
         palette = palette,
         onAdopt = onAdoptAiAssist,
-        onUndo = { imeService.revertAiAssist() }
+        onUndo = { imeService.revertAiAssist() },
+        cursor = currentCursor
     )
 
     // --- 1. Candidate Bar & Toolbar (with Clipboard Toggle & Expand/Collapse) ---

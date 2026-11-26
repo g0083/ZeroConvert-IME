@@ -83,7 +83,25 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                         pointer-events: none;
                     }
                     #reading { display: block; max-width: 100%; }
-                    .reading-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                    .reading-text { display: block; overflow: hidden; white-space: nowrap; padding: 0 2px; }
+                    .reading-caret {
+                        display: inline-block;
+                        width: 0;
+                        height: 1.1em;
+                        vertical-align: -0.15em;
+                        position: relative;
+                        pointer-events: none;
+                    }
+                    .reading-caret::after {
+                        content: "";
+                        position: absolute;
+                        left: -1px;
+                        top: 0;
+                        bottom: 0;
+                        width: 2px;
+                        border-radius: 1px;
+                        background-color: var(--ime-accent, #2563EB);
+                    }
                     .ai-assist-pill {
                         display: flex;
                         align-items: center;
@@ -311,6 +329,9 @@ pub fn create_ruby_webview<'a>(web_context: &'a mut WebContext) -> Result<WebVie
                             color: #E0E7FF;
                             border-color: #6366F1;
                         }
+                        .reading-caret::after {
+                            background-color: var(--ime-accent, #60A5FA);
+                        }
                         main.translation-mode {
                             background-color: #1e1e24;
                             border-color: #3f3f4e;
@@ -427,6 +448,28 @@ __CORRECTION_DIFF_SCRIPT__
                             width,
                             height
                         }));
+                        ensureReadingCaretVisible();
+                    }
+
+                    function ensureReadingCaretVisible() {
+                        const container = document.querySelector('#reading .reading-text');
+                        const caret = container ? container.querySelector('.reading-caret') : null;
+                        if (!container) {
+                            return;
+                        }
+                        if (!caret || container.scrollWidth <= container.clientWidth) {
+                            container.scrollLeft = 0;
+                            return;
+                        }
+                        const containerRect = container.getBoundingClientRect();
+                        const caretRect = caret.getBoundingClientRect();
+                        const caretOffset = (caretRect.left - containerRect.left) + container.scrollLeft;
+                        const margin = 16;
+                        if (caretOffset < container.scrollLeft + margin) {
+                            container.scrollLeft = Math.max(0, caretOffset - margin);
+                        } else if (caretOffset > container.scrollLeft + container.clientWidth - margin) {
+                            container.scrollLeft = caretOffset - container.clientWidth + margin;
+                        }
                     }
 
                     function escapeHtml(str) {
@@ -440,6 +483,19 @@ __CORRECTION_DIFF_SCRIPT__
                                 default: return m;
                             }
                         });
+                    }
+
+                    function renderReadingWithCursor(text, cursor) {
+                        if (!text || cursor === null || cursor === undefined) {
+                            return escapeHtml(text);
+                        }
+                        const chars = Array.from(String(text));
+                        const clamped = Math.max(0, Math.min(chars.length, cursor));
+                        const before = chars.slice(0, clamped).join('');
+                        const after = chars.slice(clamped).join('');
+                        return escapeHtml(before)
+                            + '<span class="reading-caret" aria-hidden="true"></span>'
+                            + escapeHtml(after);
                     }
 
                     function correctionDiff(source, replacement) {
@@ -462,7 +518,7 @@ __CORRECTION_DIFF_SCRIPT__
                             : currentRequestId + 1;
                         const text = typeof reading === 'string' ? reading : '';
                         
-                        let readingText = text, assist = null;
+                        let readingText = text, assist = null, cursorPos = null;
                         let translationData = null;
                         // Structured presentation travels in the existing reading envelope.
                         // Legacy tab hints remain readable during a rolling binary update.
@@ -470,9 +526,12 @@ __CORRECTION_DIFF_SCRIPT__
                             const value = JSON.parse(text);
                             if (value && value.translationMode) {
                                 translationData = value;
-                            } else if (value && typeof value.reading === 'string' && value.assist) {
+                            } else if (value && typeof value === 'object' && typeof value.reading === 'string' && (value.assist || typeof value.cursor === 'number')) {
                                 readingText = value.reading;
-                                assist = value.assist;
+                                assist = value.assist || null;
+                                if (typeof value.cursor === 'number' && Number.isFinite(value.cursor)) {
+                                    cursorPos = Math.trunc(value.cursor);
+                                }
                             }
                         } catch (_) {}
 
@@ -557,7 +616,7 @@ __CORRECTION_DIFF_SCRIPT__
                                 }
                                 readingElement.innerHTML += assistHtml;
                             }
-                            readingElement.innerHTML += '<span class="reading-text">' + escapeHtml(readingText) + '</span>';
+                            readingElement.innerHTML += '<span class="reading-text">' + renderReadingWithCursor(readingText, cursorPos) + '</span>';
                         }
 
                         // Measure the actual styled badges, including their margins,

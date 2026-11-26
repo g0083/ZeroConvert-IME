@@ -365,6 +365,18 @@ fn should_render_reading(cached: &mut Option<String>, next: &str) -> bool {
     true
 }
 
+fn ruby_display_char_count(reading: &str) -> usize {
+    serde_json::from_str::<serde_json::Value>(reading)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("reading")
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().count())
+        })
+        .unwrap_or_else(|| reading.chars().count())
+}
+
 fn candidate_list_update_diff(
     cached: &mut Option<(Vec<String>, Option<i32>)>,
     candidates: &[String],
@@ -1329,7 +1341,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                                 if !current_reading.is_empty() {
                                     let measured_size = current_ruby_measured_size.unwrap_or_else(|| {
-                                        let char_count = current_reading.chars().count();
+                                        let char_count = ruby_display_char_count(&current_reading);
                                         RubyMeasuredSize::new((char_count as f64 * 16.0 + 80.0).max(140.0), 34.0)
                                     });
                                     set_and_place_ruby_window(
@@ -1447,7 +1459,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
 
-                            if !candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
+                            if candidate_list_should_show(current_window_visible, current_candidate_list_visible, candidate_ready, &latest_candidates) {
+                                set_window_shown_no_activate(&candidate_window, &mut candidate_window_shown);
+                            } else {
                                 set_window_hidden(&candidate_window, &mut candidate_window_shown);
                             }
 
@@ -1565,5 +1579,27 @@ mod tests {
             super::candidate_list_update_diff(&mut candidates, &first, Some(1)),
             (false, true)
         );
+    }
+
+    #[test]
+    fn ruby_display_char_count_extracts_reading_from_json_envelope() {
+        assert_eq!(super::ruby_display_char_count(""), 0);
+        assert_eq!(super::ruby_display_char_count("きょう"), 3);
+        let payload = serde_json::json!({
+            "reading": "きょうは",
+            "cursor": 2,
+        })
+        .to_string();
+        assert_eq!(super::ruby_display_char_count(&payload), 4);
+    }
+
+    #[test]
+    fn should_render_reading_detects_cursor_only_changes() {
+        let mut cached = None;
+        let at_end = serde_json::json!({ "reading": "あいう", "cursor": 3 }).to_string();
+        let at_mid = serde_json::json!({ "reading": "あいう", "cursor": 1 }).to_string();
+        assert!(super::should_render_reading(&mut cached, &at_end));
+        assert!(!super::should_render_reading(&mut cached, &at_end));
+        assert!(super::should_render_reading(&mut cached, &at_mid));
     }
 }

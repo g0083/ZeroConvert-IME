@@ -29,12 +29,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -198,7 +202,8 @@ fun KeyboardAssistBar(
     correctionApplied: Boolean,
     palette: ZeroConPalette,
     onAdopt: () -> Unit,
-    onUndo: () -> Unit
+    onUndo: () -> Unit,
+    cursor: Int = reading.length
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(KeyboardBarHeight).background(palette.surface),
@@ -217,26 +222,69 @@ fun KeyboardAssistBar(
             modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight().padding(horizontal = 8.dp),
             contentAlignment = Alignment.CenterStart
         ) {
-            // The reading grows to the right, so overflow drops the oldest characters instead of the newest.
             val availableWidth = if (constraints.hasBoundedWidth) with(density) { maxWidth.roundToPx() } else -1
+            val caretReservePx = with(density) { 2.dp.roundToPx() }
+            val textAvailableWidth = if (availableWidth >= 0) (availableWidth - caretReservePx).coerceAtLeast(0) else -1
             val textStyle = LocalTextStyle.current.copy(fontSize = fontSize)
-            val text = remember(reading, label, availableWidth, textStyle, density.density, density.fontScale) {
-                if (reading.isEmpty() || availableWidth < 0) {
-                    label + reading
+            val clampedCursor = cursor.coerceIn(0, reading.length)
+            val fitted = remember(
+                reading,
+                clampedCursor,
+                label,
+                textAvailableWidth,
+                textStyle,
+                density.density,
+                density.fontScale
+            ) {
+                if (reading.isEmpty() || textAvailableWidth < 0) {
+                    TrailingTextFit.FittedReading(reading, clampedCursor)
                 } else {
-                    label + TrailingTextFit.fit(reading) { candidate ->
+                    TrailingTextFit.fitWithCursor(reading, clampedCursor) { candidate ->
                         measurer.measure(label + candidate, textStyle, softWrap = false, maxLines = 1)
-                            .size.width <= availableWidth
+                            .size.width <= textAvailableWidth
                     }
                 }
             }
+            val fullText = label + fitted.text
+            val caretIndex = (label.length + fitted.cursor).coerceIn(0, fullText.length)
+            val caretColor = if (correctionApplied) palette.warningAmber else palette.primaryAccentSoft
+            var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
             Text(
-                text = text,
+                text = fullText,
                 color = if (correctionApplied) palette.warningAmber else palette.textSecondary,
                 fontSize = fontSize,
                 maxLines = 1,
                 softWrap = false,
-                overflow = TextOverflow.Clip
+                overflow = TextOverflow.Clip,
+                onTextLayout = { textLayout = it },
+                modifier = Modifier
+                    .drawWithContent {
+                        drawContent()
+                        if (reading.isNotEmpty()) {
+                            val layout = textLayout
+                            if (layout != null &&
+                                layout.layoutInput.text.text == fullText &&
+                                caretIndex in 0..fullText.length
+                            ) {
+                                val caretRect = layout.getCursorRect(caretIndex)
+                                val strokeWidth = 1.75.dp.toPx()
+                                val halfStroke = strokeWidth / 2f
+                                val maxX = (size.width - halfStroke).coerceAtLeast(halfStroke)
+                                val x = caretRect.left.coerceIn(halfStroke, maxX)
+                                val verticalInset = 1.dp.toPx()
+                                val top = (caretRect.top + verticalInset).coerceAtMost(caretRect.bottom)
+                                val bottom = (caretRect.bottom - verticalInset).coerceAtLeast(top)
+                                drawLine(
+                                    color = caretColor,
+                                    start = Offset(x, top),
+                                    end = Offset(x, bottom),
+                                    strokeWidth = strokeWidth,
+                                    cap = StrokeCap.Round
+                                )
+                            }
+                        }
+                    }
+                    .padding(end = 2.dp)
             )
         }
         // The assist slot keeps its width while idle so results never reflow the reading.
