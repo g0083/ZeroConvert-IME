@@ -63,7 +63,7 @@ def stage_dependencies(output, cache):
         content = manifest.read_text(encoding="utf-8")
         # This dependency is used only by upstream command-line targets.
         content = re.sub(r'^\s*\.package\(url: .*swift-argument-parser.*\n', '\n', content, flags=re.MULTILINE)
-        content = re.sub(r'\.package\(url: "https://github.com/[^/]+/([^".]+)(?:\.git)?", .+\)(,?)$',
+        content = re.sub(r'\.package\(url: "https://github\.com/[^/]+/([^".]+)(?:\.git)?", .+\)(,?)$',
                          r'.package(path: "../\1")\2', content, flags=re.MULTILINE)
         if re.search(r'\.package\(url:', content):
             raise ValueError(f"Unpinned remote dependency in {name}/Package.swift")
@@ -117,10 +117,12 @@ def stage_app(app, source, llama):
     if llama:
         windows = ROOT / "windows/server-swift/Sources"
         for path in (windows / "azookey-server").glob("*.swift"):
-            if path.name == "JevCandidateSelector.swift":
-                continue  # Remote-only reranking isn't part of the CPU model route.
+            if path.name in ("JevCandidateSelector.swift", "ConversionBenchmark.swift"):
+                continue  # Remote-only reranking and native benchmark harness aren't part of the WASI route.
             text = path.read_text(encoding="utf-8").replace(", options: .atomic)", ")")
+            text = re.sub(r"(?m)^import Dispatch\r?\n", "", text)
             (source / path.name).write_text(text, encoding="utf-8")
+        shutil.copyfile(WEB / "WasiDispatchShim.swift", source / "WasiDispatchShim.swift")
         ffi = app / "Sources/ffi"
         headers = ffi / "include"
         headers.mkdir(parents=True, exist_ok=True)
