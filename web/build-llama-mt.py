@@ -79,6 +79,7 @@ def main():
         "-DLLAMA_BUILD_SERVER=OFF",
         "-DLLAMA_BUILD_APP=OFF",
         "-DLLAMA_BUILD_IS_DEV=OFF",
+        "-DLLAMA_WASM_MEM64=OFF",
     ], check=True)
 
     subprocess.run([
