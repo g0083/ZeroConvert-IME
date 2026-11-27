@@ -108,6 +108,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_KEYBOARD_THEME_ID = "keyboard_theme_id"
         const val KEY_CUSTOM_THEME_REVISION = "custom_theme_revision"
         const val KEY_JAPANESE_LAYOUT = "japanese_keyboard_layout" // "FLICK_12KEY", "QWERTY"
+        const val KEY_LAYOUT_PROFILE_FLICK = com.zeroconvert.ime.layout.LayoutProfilePreferences.KEY_LAYOUT_PROFILE_FLICK
+        const val KEY_LAYOUT_PROFILE_QWERTY = com.zeroconvert.ime.layout.LayoutProfilePreferences.KEY_LAYOUT_PROFILE_QWERTY
         const val KEY_KEY_HEIGHT_DP = "keyboard_key_height_dp" // int dp (40..64), default 46
         const val KEY_FLICK_ONLY = "flick_only" // boolean, default true
         const val KEY_QWERTY_NUMBER_ROW = "qwerty_number_row" // boolean, default false
@@ -199,6 +201,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val keyboardThemeIdState = mutableStateOf("system")
     val customThemeRevisionState = androidx.compose.runtime.mutableLongStateOf(0L)
     val japaneseLayoutState = mutableStateOf(JapaneseInputLayout.FLICK_12KEY)
+    val flickLayoutProfileState = mutableStateOf(com.zeroconvert.ime.layout.KeyboardLayoutProfile.ZEROCON)
+    val qwertyLayoutProfileState = mutableStateOf(com.zeroconvert.ime.layout.KeyboardLayoutProfile.ZEROCON)
     val keyboardKeyHeightState = mutableStateOf(46)
     val isFlickOnlyState = mutableStateOf(true)
     val isQwertyNumberRowState = mutableStateOf(true)
@@ -1667,6 +1671,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 KEY_SPLIT_GAP_PERCENT, KEY_SPLIT_DUPLICATE_KEYS ->
                     loadKeyboardPlacementPreferences(prefs)
                 KEY_KEYBOARD_THEME_ID, KEY_THEME_MODE, KEY_CUSTOM_THEME_REVISION,
+                KEY_LAYOUT_PROFILE_FLICK, KEY_LAYOUT_PROFILE_QWERTY,
                 KEY_KEY_HEIGHT_DP, KEY_KEY_PREVIEW_ENABLED, KEY_KEY_BORDERS_ENABLED,
                 KEY_KEYBOARD_BOTTOM_PADDING_DP ->
                     loadAppearancePreferences(prefs)
@@ -1691,6 +1696,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isKeyPreviewEnabledState.value = prefs.getBoolean(KEY_KEY_PREVIEW_ENABLED, true)
         isKeyBordersEnabledState.value = prefs.getBoolean(KEY_KEY_BORDERS_ENABLED, true)
         keyboardBottomPaddingDpState.value = prefs.getInt(KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32)
+        flickLayoutProfileState.value = com.zeroconvert.ime.layout.LayoutProfilePreferences.readFlickProfile(prefs)
+        qwertyLayoutProfileState.value = com.zeroconvert.ime.layout.LayoutProfilePreferences.readQwertyProfile(prefs)
     }
 
     private fun loadKeyboardPlacementPreferences(prefs: android.content.SharedPreferences) {

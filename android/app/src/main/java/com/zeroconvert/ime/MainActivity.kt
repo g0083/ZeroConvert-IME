@@ -99,6 +99,8 @@ import com.zeroconvert.ime.model.ModelManager
 import com.zeroconvert.ime.theme.CustomThemeRepository
 import com.zeroconvert.ime.theme.KeyboardThemeCatalog
 import com.zeroconvert.ime.theme.KeyboardThemeSpec
+import com.zeroconvert.ime.layout.KeyboardLayoutProfile
+import com.zeroconvert.ime.layout.LayoutProfilePreferences
 import com.zeroconvert.ime.theme.ThemeBackgroundCache
 import com.zeroconvert.ime.theme.ThemePreferences
 import com.zeroconvert.ime.theme.keyboardThemeBackground
@@ -171,8 +173,8 @@ fun MainScreen(
     }
     var customThemes by remember { mutableStateOf<List<KeyboardThemeSpec>>(emptyList()) }
     var editorTarget by remember { mutableStateOf<Pair<KeyboardThemeSpec, Boolean>?>(null) }
-    // 開いている区分。初期値は空で、全部閉じた状態から始める。
-    var expandedCategoryIds by rememberSaveable { mutableStateOf(listOf<String>()) }
+    // 現在表示しているタブ。選択中のカテゴリだけを表示して画面をすっきり保つ。
+    var selectedTabIndex by rememberSaveable { mutableStateOf(0) }
     val palette = rememberZeroConPalette(appThemeMode)
     val mainScope = rememberCoroutineScope()
 
@@ -184,8 +186,10 @@ fun MainScreen(
 
     var testText by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
-    // 設定本文のスクロール。見える先頭の区分を上部タブに反映する。
-    val settingsListState = rememberLazyListState()
+    val tabScrollState = rememberScrollState()
+    LaunchedEffect(selectedTabIndex) {
+        tabScrollState.scrollTo(0)
+    }
 
     fun isKeyboardEnabled(): Boolean =
         (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
@@ -228,6 +232,12 @@ fun MainScreen(
                 JapaneseInputLayout.FLICK_12KEY.name
             ) ?: JapaneseInputLayout.FLICK_12KEY.name
         )
+    }
+    var flickLayoutProfile by remember {
+        mutableStateOf(LayoutProfilePreferences.readFlickProfile(imePrefs))
+    }
+    var qwertyLayoutProfile by remember {
+        mutableStateOf(LayoutProfilePreferences.readQwertyProfile(imePrefs))
     }
     var isFlickOnly by remember {
         mutableStateOf(
@@ -2160,6 +2170,20 @@ fun MainScreen(
                     .putString(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, layout)
                     .apply()
             },
+            flickLayoutProfile = flickLayoutProfile,
+            onFlickLayoutProfileChange = { profile ->
+                flickLayoutProfile = profile
+                imePrefs.edit()
+                    .putString(ZeroConvertInputMethodService.KEY_LAYOUT_PROFILE_FLICK, profile.id)
+                    .apply()
+            },
+            qwertyLayoutProfile = qwertyLayoutProfile,
+            onQwertyLayoutProfileChange = { profile ->
+                qwertyLayoutProfile = profile
+                imePrefs.edit()
+                    .putString(ZeroConvertInputMethodService.KEY_LAYOUT_PROFILE_QWERTY, profile.id)
+                    .apply()
+            },
             isFlickOnly = isFlickOnly,
             isQwertyNumberRow = isQwertyNumberRow,
             onQwertyNumberRowChange = { checked ->
@@ -2440,60 +2464,34 @@ fun MainScreen(
             )
 
             if (keyboardSelected) {
-                // 上部の横スライドタブで区分へ移動し、縦スクロールに連動させる。
-                val currentTabIndex = settingsListState.firstVisibleItemIndex.coerceIn(SettingsTabs.indices)
+                val safeTabIndex = selectedTabIndex.coerceIn(SettingsTabs.indices)
+                val currentTab = SettingsTabs[safeTabIndex]
                 SettingsTabBar(
                     tabs = SettingsTabs,
-                    currentIndex = currentTabIndex,
+                    currentIndex = safeTabIndex,
                     palette = palette,
                     onSelected = { index ->
-                        val id = SettingsTabs[index].id
-                        if (id !in expandedCategoryIds) {
-                            expandedCategoryIds = expandedCategoryIds + id
-                        }
-                        coroutineScope.launch {
-                            settingsListState.animateScrollToItem(index)
-                        }
+                        selectedTabIndex = index.coerceIn(SettingsTabs.indices)
                     }
                 )
-                LazyColumn(
-                    state = settingsListState,
+                Column(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .fillMaxWidth()
+                        .verticalScroll(tabScrollState)
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(SettingsTabs, key = { it.id }) { tab ->
-                        val expanded = tab.id in expandedCategoryIds
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            SettingsCategoryHeader(
-                                tab = tab,
-                                expanded = expanded,
-                                onToggle = {
-                                    expandedCategoryIds = if (expanded) {
-                                        expandedCategoryIds - tab.id
-                                    } else {
-                                        expandedCategoryIds + tab.id
-                                    }
-                                },
-                                palette = palette
-                            )
-                            if (expanded) {
-                                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                    when (tab.id) {
-                                        "input" -> InputTabContent()
-                                        "conversion" -> ConversionTabContent()
-                                        "data" -> DataTabContent()
-                                        "translation" -> TranslationTabContent()
-                                        "benchmark" -> BenchmarkTabContent()
-                                        "appearance" -> AppearanceTabContent()
-                                        "about" -> AboutTabContent()
-                                    }
-                                }
-                            }
-                        }
+                    when (currentTab.id) {
+                        "input" -> InputTabContent()
+                        "appearance" -> AppearanceTabContent()
+                        "conversion" -> ConversionTabContent()
+                        "data" -> DataTabContent()
+                        "translation" -> TranslationTabContent()
+                        "benchmark" -> BenchmarkTabContent()
+                        "about" -> AboutTabContent()
                     }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             } else {
                 Column(
