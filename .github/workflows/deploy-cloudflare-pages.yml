@@ -1,18 +1,6 @@
-name: Verify ZeroConvert IME site build (deploy is done by Cloudflare Pages from the pinned release)
+name: Verify ZeroConvert IME site build (manual only; deploy with wrangler from a local build)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'engine/**'
-      - 'windows/server-swift/**'
-      - 'windows/deployment/**'
-      - 'windows/crates/ui/**'
-      - 'windows/native/keyboard-prior/**'
-      - 'windows/scripts/**'
-      - 'android/**'
-      - 'web/**'
-      - '.github/workflows/deploy-cloudflare-pages.yml'
   workflow_dispatch:
 
 permissions:

@@ -31,6 +31,12 @@
 | [android-conversion-logic.md](android-conversion-logic.md) | Android 版の入力 → 変換 → 表示 → 確定の層別解説 |
 | [android-performance-size.md](android-performance-size.md) | 共通エンジン版の APK 容量・推論性能改善の記録（2.0.5-dev） |
 
+## ブラウザ版
+
+| ファイル | 内容 |
+| --- | --- |
+| [web-deploy.md](web-deploy.md) | Cloudflare Pages への手元からの公開手順（自動デプロイ無効、Wrangler 直接デプロイ） |
+
 ## 上流モデル
 
 | ファイル | 内容 |
