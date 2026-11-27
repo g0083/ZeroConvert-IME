@@ -45,6 +45,13 @@ function versionedUrl(name, base, sha256) {
     return url;
 }
 
+function decompressResponse(response, logicalName) {
+    if (!response.ok || !response.body) return response;
+    const stream = response.body.pipeThrough(new DecompressionStream('gzip'));
+    const contentType = logicalName.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
+    return new Response(stream, { status: 200, headers: { 'Content-Type': contentType } });
+}
+
 async function fetchChunkedAsset(assetKey, fileName, entry, base, request, report) {
     const chunks = entry.chunks;
     const totalBytes = entry.bytes || chunks.reduce((sum, part) => sum + (part.bytes || 0), 0);
@@ -92,14 +99,17 @@ async function fetchChunkedAsset(assetKey, fileName, entry, base, request, repor
         offset += part.byteLength;
     }
     report?.({ asset: assetKey, phase: 'downloaded', received: fullLength });
-    const contentType = fileName.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
+    const contentType = (!entry.gzip && fileName.endsWith('.wasm')) ? 'application/wasm' : 'application/octet-stream';
     return new Response(combined, { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': String(fullLength) } });
 }
 
 async function fetchManifestAsset(assetKey, fileName, manifest, base, request, cache, activeUrls, report) {
     const entry = manifest?.assets?.[fileName];
-    const url = versionedUrl(`./${fileName}`, base, entry?.sha256);
+    const remoteName = entry?.file || fileName;
+    const url = versionedUrl(`./${remoteName}`, base, entry?.sha256);
     if (entry?.sha256) activeUrls.add(url.href);
+
+    const finalize = response => (entry?.gzip ? decompressResponse(response, fileName) : response);
 
     if (cache && entry?.sha256) {
         try {
@@ -107,7 +117,7 @@ async function fetchManifestAsset(assetKey, fileName, manifest, base, request, c
             if (cached && cached.ok) {
                 const size = entry.bytes || Number(cached.headers.get('Content-Length')) || 0;
                 report?.({ asset: assetKey, phase: 'downloaded', received: size, cached: true });
-                return cached;
+                return finalize(cached);
             }
         } catch {
             // Fall through to network fetch.
@@ -122,17 +132,17 @@ async function fetchManifestAsset(assetKey, fileName, manifest, base, request, c
         try {
             const bytes = new Uint8Array(await response.arrayBuffer());
             const headers = new Headers(response.headers);
-            if (fileName.endsWith('.wasm')) headers.set('Content-Type', 'application/wasm');
+            if (!entry.gzip && fileName.endsWith('.wasm')) headers.set('Content-Type', 'application/wasm');
             headers.delete('Content-Encoding');
             headers.set('Content-Length', String(bytes.byteLength));
             const storable = new Response(bytes, { status: 200, headers });
             void cache.put(url.href, storable.clone()).catch(() => {});
-            return storable;
+            return finalize(storable);
         } catch {
-            return response;
+            return finalize(response);
         }
     }
-    return response;
+    return finalize(response);
 }
 
 async function compileWasmResponse(response) {
@@ -252,7 +262,7 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
 
     if (cache && manifest?.assets) {
         for (const [name, entry] of Object.entries(manifest.assets)) {
-            if (entry?.sha256) activeUrls.add(versionedUrl(`./${name}`, base, entry.sha256).href);
+            if (entry?.sha256) activeUrls.add(versionedUrl(`./${entry.file || name}`, base, entry.sha256).href);
         }
         void pruneAssetCache(cache, activeUrls);
     }

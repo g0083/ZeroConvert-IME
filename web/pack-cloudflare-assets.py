@@ -1,6 +1,7 @@
-"""Prepare built web assets for Cloudflare Pages (25 MiB limit chunking, SHA-256 manifest, and _headers)."""
+"""Prepare built web assets for Cloudflare Pages (gzip for large Wasm, 25 MiB chunking, SHA-256 manifest, and _headers)."""
 
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -8,10 +9,9 @@ from pathlib import Path
 CLOUDFLARE_LIMIT_BYTES = 24 * 1024 * 1024  # Safe margin below Cloudflare Pages 25 MiB per-file limit
 DEFAULT_CHUNK_BYTES = 16 * 1024 * 1024
 
+# Note: COOP/COEP headers are intentionally omitted while running single-threaded WASI
+# so browser extensions (e.g. Vivaldi content scripts) do not hit cross-origin isolation conflicts.
 HEADERS_CONTENT = """/*
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
-  Cross-Origin-Resource-Policy: same-origin
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
@@ -66,31 +66,52 @@ def main():
     for path in sorted(site_dir.iterdir()):
         if not path.is_file() or path.suffix not in TRACKED_EXTENSIONS:
             continue
-        size = path.stat().st_size
-        digest = sha256_file(path)
+        logical_name = path.name
+        raw_size = path.stat().st_size
+        delivery_path = path
+        use_gzip = False
+
+        # Pre-compress large Wasm binaries (e.g. 52 MiB Swift Wasm -> ~16 MiB .wasm.gz)
+        # so downloads are ~3x faster and fit under Cloudflare Pages' 25 MiB per-file limit.
+        if path.suffix == ".wasm" and raw_size > args.max_file_bytes:
+            gz_path = site_dir / f"{path.name}.gz"
+            with path.open("rb") as src, gz_path.open("wb") as raw_out:
+                with gzip.GzipFile(fileobj=raw_out, mode="wb", compresslevel=9, mtime=0) as gz:
+                    for block in iter(lambda: src.read(1024 * 1024), b""):
+                        gz.write(block)
+            path.unlink()
+            delivery_path = gz_path
+            use_gzip = True
+
+        size = delivery_path.stat().st_size
+        digest = sha256_file(delivery_path)
         entry = {"bytes": size, "sha256": digest}
+        if use_gzip:
+            entry["file"] = delivery_path.name
+            entry["gzip"] = True
+            entry["rawBytes"] = raw_size
 
         if size > args.max_file_bytes:
             parts = []
-            with path.open("rb") as src:
+            with delivery_path.open("rb") as src:
                 index = 0
                 while True:
                     chunk = src.read(args.chunk_bytes)
                     if not chunk:
                         break
-                    part_name = f"{path.name}.part{index:02d}"
+                    part_name = f"{delivery_path.name}.part{index:02d}"
                     (site_dir / part_name).write_bytes(chunk)
                     parts.append({"name": part_name, "bytes": len(chunk)})
                     index += 1
-            path.unlink()
+            delivery_path.unlink()
             entry["chunks"] = parts
 
-        assets[path.name] = entry
+        assets[logical_name] = entry
 
     manifest["assets"] = assets
     manifest["hosting"] = {
         "platform": "cloudflare-pages",
-        "coopCoep": True,
+        "coopCoep": False,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (site_dir / "_headers").write_text(HEADERS_CONTENT, encoding="utf-8")
