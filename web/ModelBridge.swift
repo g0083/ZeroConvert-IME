@@ -12,6 +12,7 @@ private struct Command: Decodable {
     let offset: Int32?
     let candidateId: String?
     let inputCount: Int32?
+    let skipCandidates: Bool?
 }
 
 private struct Row: Encodable {
@@ -111,18 +112,23 @@ public func modelRequest(_ address: UnsafePointer<CChar>?) -> UnsafeMutablePoint
     let rawAddress = get_raw_input()
     let raw = field(rawAddress)
     if let rawAddress { free_c_string(rawAddress) }
-    var count: CInt = 0
     let caret = get_cursor_position()
     let reading = composingText.convertTarget
-    let candidates = caret == reading.count ? get_composed_text(lengthPtr: &count)
-        : get_composed_text_for_cursor_range(lengthPtr: &count)
-    defer { free_candidate_list(candidates, count) }
-    let rows = (0..<Int(count)).compactMap { index -> Row? in
-        guard let row = candidates[index]?.pointee else { return nil }
-        return Row(text: field(row.text), suffix: field(row.subtext), reading: field(row.hiragana),
-                   inputCount: row.correspondingCount, id: String(row.candidateId),
-                   predictionReading: field(row.predictionReading),
-                   learningAllowed: learningCandidateCache.isLearningTarget(row.candidateId))
+    let rows: [Row]
+    if command.skipCandidates == true || reading.isEmpty || ["clear", "recordLearning"].contains(command.key) {
+        rows = []
+    } else {
+        var count: CInt = 0
+        let candidates = caret == reading.count ? get_composed_text(lengthPtr: &count)
+            : get_composed_text_for_cursor_range(lengthPtr: &count)
+        defer { free_candidate_list(candidates, count) }
+        rows = (0..<Int(count)).compactMap { index -> Row? in
+            guard let row = candidates[index]?.pointee else { return nil }
+            return Row(text: field(row.text), suffix: field(row.subtext), reading: field(row.hiragana),
+                       inputCount: row.correspondingCount, id: String(row.candidateId),
+                       predictionReading: field(row.predictionReading),
+                       learningAllowed: learningCandidateCache.isLearningTarget(row.candidateId))
+        }
     }
     let state = State(reading: reading, raw: raw, cursor: caret,
                       inputCount: composingText.input.count, readingCount: reading.count,
