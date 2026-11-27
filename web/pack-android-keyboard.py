@@ -53,19 +53,17 @@ def palettes(theme):
     return result
 
 
-def qwerty_layout(compose):
-    layout = section(compose, "private fun SharedQwertyLayout(", "\n@Composable")
+def qwerty_layout():
+    presets = (SOURCE / "layout/QwertyLayoutPresets.kt").read_text(encoding="utf-8")
     numbers = (SOURCE / "QwertyNumberRow.kt").read_text(encoding="utf-8")
-    first = re.search(r"val row1 = listOf\(([^\n]+)\)", layout)[1]
-    middle = re.search(r"val row2 = if \(isJapanese\) \{\s*listOf\(([^\n]+)\)\s*\} else \{\s*listOf\(([^\n]+)\)", layout)
-    third = re.search(r"val row3 = listOf\(([^\n]+)\)", layout)[1]
+    first, japanese_middle, english_middle, third = (re.search(rf"private val {name} = listOf\(([^\n]+)\)", presets)[1] for name in ("ROW1", "ROW2_JP_10", "ROW2_EN", "ROW3"))
 
     def rows(center):
         return [re.findall(r"'(.)'", row) for row in (first, center, third)]
 
     return {
-        "japanese": rows(middle[1]),
-        "english": rows(middle[2]),
+        "japanese": rows(japanese_middle),
+        "english": rows(english_middle),
         "digits": re.search(r'val DIGITS = "([0-9]+)"', numbers)[1],
         "shiftedSymbols": re.search(r'val SHIFTED_SYMBOLS = "([^\"]+)"', numbers)[1],
     }
@@ -103,7 +101,7 @@ def main():
             "shifted": flick_layout(flick, "English12KeyFlickLayout", english, shifted=True),
             "numeric": flick_layout(flick, "FlickNumericPadLayout", numeric),
         },
-        "qwerty": qwerty_layout(compose),
+        "qwerty": qwerty_layout(),
         "vibration": {
             "enabled": re.search(r"prefs.getBoolean\(KEY_VIBRATION_ENABLED, (true|false)\)", service)[1] == "true",
             "duration": int(re.search(r"prefs.getInt\(KEY_VIBRATION_DURATION, (\d+)\)", service)[1]),
