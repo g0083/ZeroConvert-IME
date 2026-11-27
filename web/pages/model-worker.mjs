@@ -297,7 +297,15 @@ function scheduleAssist(request, live, revision) {
             return;
         }
         started = performance.now();
-        assistTimer = setTimeout(show, waitMs);
+        const scheduleWait = () => {
+            const remaining = waitMs - Math.floor(performance.now() - started);
+            if (remaining > 0) {
+                assistTimer = setTimeout(scheduleWait, remaining);
+                return;
+            }
+            show();
+        };
+        assistTimer = setTimeout(scheduleWait, waitMs);
         if (plan.correction) void run(complete, 'correction', assist.typoCorrection);
         if (plan.prediction) void run(complete, 'prediction', assist.predictive);
     }, ASSIST_IDLE_MS);
