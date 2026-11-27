@@ -249,8 +249,24 @@ pub fn raw_input_split_breaks_romaji(raw_input: &str, split_char_index: usize) -
 fn is_auto_commit_single_hiragana_boundary(ch: char) -> bool {
     matches!(
         ch,
-        'は' | 'が' | 'を' | 'に' | 'で' | 'と' | 'の' | 'へ' | 'も' | 'や'
-            | 'か' | 'て' | 'た' | 'だ' | 'ば' | 'し' | 'な' | 'ね' | 'よ'
+        'は' | 'が'
+            | 'を'
+            | 'に'
+            | 'で'
+            | 'と'
+            | 'の'
+            | 'へ'
+            | 'も'
+            | 'や'
+            | 'か'
+            | 'て'
+            | 'た'
+            | 'だ'
+            | 'ば'
+            | 'し'
+            | 'な'
+            | 'ね'
+            | 'よ'
     )
 }
 
