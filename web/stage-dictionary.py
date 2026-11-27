@@ -99,7 +99,7 @@ def stage_converter(converter, output, llama, llama_bridge=False):
         if llama_bridge:
             # All llama/ggml symbols are supplied by wasi-llama-bridge.c; strip all auto-link directives (quoted or unquoted).
             for modulemap in headers.rglob("module.modulemap"):
-                mm = re.sub(r'(?m)^\s*link\s+(?:framework\s+)?(?:"[^"]+"|\S+)\s*\n?', '', modulemap.read_text(encoding="utf-8"))
+                mm = "\n".join(line for line in modulemap.read_text(encoding="utf-8").splitlines() if not re.match(r"^[ \t]*link[ \t]+", line)) + "\n"
                 modulemap.write_text(mm, encoding="utf-8")
         manifest = manifest.replace('    targets: [\n', '    targets: [\n        .systemLibrary(name: "llama.cpp"),\n')
         manifest = manifest.replace('"SwiftUtils", "EfficientNGram",', '"SwiftUtils", "EfficientNGram", "llama.cpp",')
