@@ -23,7 +23,13 @@ def main():
     suffix = ".exe" if os.name == "nt" else ""
     compiler = args.clang_bin / ("clang" + suffix)
     linker = args.clang_bin / ("clang++" + suffix)
-    target = ["--target=wasm32-wasip1", f"--sysroot={sysroot.resolve()}", "-O2"]
+    target = [
+        "--target=wasm32-wasip1",
+        f"--sysroot={sysroot.resolve()}",
+        "-O3",
+        "-mbulk-memory",
+        "-mnontrapping-fptoint",
+    ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="completion-", dir=args.output.parent) as temp:
         stubs = Path(temp) / "wasi-stubs.o"

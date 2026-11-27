@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="ZeroConvert IME は、独自のオンデバイス AI でライブ変換、タイポ補正、先読みを行うオープンソースの日本語 IME です。">
+  <meta name="description" content="ZeroConvert IME は、独自のオンデバイス AI（ZeroCon Model）でライブ変換、タイポ補正、先読みを行うオープンソースの日本語 IME です。ブラウザから最新エンジンをそのまま試せます。">
   <meta property="og:type" content="website">
   <meta property="og:title" content="ZeroConvert IME | オンデバイス AI で日本語入力を軽く">
-  <meta property="og:description" content="かな漢字変換、打ち間違いの補正、文の先読みを端末内で。ブラウザから試せます。">
+  <meta property="og:description" content="かな漢字変換、打ち間違いの補正、文の先読みを端末内で。最新エンジンをブラウザからそのまま試せます。">
   <meta name="theme-color" content="#101722">
   <title>ZeroConvert IME | オンデバイス AI で日本語入力を軽く</title>
   <link rel="icon" type="image/png" href="./favicon.png">
@@ -21,20 +21,27 @@
   <header class="site-header page-width">
     <a class="wordmark" href="./" aria-label="ZeroConvert IME ホーム"><img class="logo" src="./favicon.png" alt="" width="34" height="34"> ZeroConvert <span class="wordmark-ime">IME</span></a>
     <nav class="site-nav" aria-label="サイト内メニュー">
+      <a href="#demo">試す</a>
       <a href="#features">特徴</a>
-      <a class="nav-download" href="#download">ダウンロード <span aria-hidden="true">↓</span></a>
+      <a href="#benchmarks">実測</a>
+      <a class="nav-download" href="#download">ダウンロード <span class="nav-version" data-latest-release-tag hidden></span><span aria-hidden="true">↓</span></a>
     </nav>
   </header>
 
   <main>
     <section class="hero page-width" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <p class="eyebrow"><span class="brand-dot"></span> ZeroCon Model を搭載した日本語 IME</p>
+        <p class="eyebrow"><span class="brand-dot"></span> <span id="hero-model-badge">ZeroCon Model 搭載 · オープンソース日本語 IME</span></p>
         <h1 id="hero-title">オンデバイス AI で、<br>日本語入力を軽く。</h1>
-        <p class="hero-intro">入力しているそばからかな漢字変換が進みます。打ち間違いの補正も、文の続きの提案も、独自の ZeroCon Model が端末内で処理します。</p>
+        <p class="hero-intro">打っているそばからライブ変換。ローマ字の打ち間違い補正も、文の続きの先読みも、端末内で動く独自の ZeroCon Model が外部サーバーへ送信せずに処理します。</p>
+        <ul class="hero-pills" aria-label="主な特長">
+          <li>完全オフライン推論</li>
+          <li>Windows / Android 共通エンジン</li>
+          <li>軽量 18.7 MiB モデル</li>
+        </ul>
         <div class="actions">
-          <a class="button primary" href="#demo">ブラウザで試す <span aria-hidden="true">↓</span></a>
-          <a class="button secondary" href="#download">Windows・Android 版</a>
+          <a class="button primary" href="#demo">ブラウザで今すぐ試す <span aria-hidden="true">↓</span></a>
+          <a class="button secondary" href="#download">Windows・Android 版を入手</a>
         </div>
       </div>
       <figure class="hero-visual">
@@ -44,28 +51,40 @@
             <span class="visual-input">ashitanokaigi</span>
             <div class="visual-phrase"><ruby>明日の会議<rt>あしたのかいぎ</rt></ruby><span class="visual-caret" aria-hidden="true"></span></div>
           </div>
-          <div class="visual-candidate"><kbd>1</kbd> 明日の会議 <span>変換候補</span></div>
+          <div class="visual-candidate"><kbd>1</kbd> 明日の会議 <span>ライブ変換</span></div>
+          <div class="visual-stats" aria-label="実機ベンチマーク概要">
+            <div><strong>8.9 ms</strong><span>実機変換 (中央値)</span></div>
+            <div><strong>86.7%</strong><span>タイポ実質正解率</span></div>
+            <div><strong>0 B</strong><span>外部への入力送信</span></div>
+          </div>
         </div>
-        <figcaption>ZeroCon Model によるライブ変換の例</figcaption>
+        <figcaption>ZeroCon Model によるライブ変換・タイポ補正のイメージ</figcaption>
       </figure>
     </section>
 
     <section id="demo" class="section-block" aria-labelledby="input-heading" tabindex="-1">
       <div class="section-heading page-width">
-        <p class="eyebrow">インストール不要</p>
+        <p class="eyebrow">インストール不要 · 最新エンジン自動同期</p>
         <h2 id="input-heading">ブラウザで試す</h2>
-        <p>初回にモデルと辞書を取得すると、変換・補正・先読みの処理はブラウザ内で完結します。ローマ字入力、12キーフリック、QWERTY で試せます。</p>
+        <p>Windows・Android 版と同じ変換エンジンと最新 ZeroCon Model をブラウザ内で動かします。2回目以降はブラウザキャッシュから高速起動します。</p>
       </div>
       <div class="demo-shell page-width">
         <div class="demo-editor">
-          <div class="demo-input">
+          <div class="demo-toolbar">
             <label class="demo-presentation">表示方法
               <select id="demo-presentation">
                 <option value="windows">Windows</option>
                 <option value="android">Android</option>
               </select>
             </label>
-            <p id="demo-performance-note" class="hint demo-performance-note">ブラウザ上で変換するため、特に長文ではインストール版の IME より候補の表示に時間がかかることがあります。</p>
+            <div class="demo-telemetry" aria-live="polite">
+              <span id="telemetry-model" class="telemetry-chip">モデル準備中</span>
+              <span id="telemetry-latency" class="telemetry-chip" hidden></span>
+              <span id="telemetry-cache" class="telemetry-chip" hidden></span>
+            </div>
+          </div>
+          <div class="demo-input">
+            <p id="demo-performance-note" class="hint demo-performance-note">ブラウザの Wasm 上で推論するため、実機（Windows CPU 中央値 8.9 ms）より応答に時間がかかることがあります。</p>
             <label for="romaji">ローマ字入力</label>
             <div class="composition-field">
               <div id="composition-display" class="composition-display" data-empty="true" aria-hidden="true"><span id="confirmed"></span><span id="composition"><span id="composition-before"></span><span id="composition-caret"></span><span id="composition-after"></span></span></div>
@@ -90,10 +109,11 @@
             </div>
           </fieldset>
           <div class="demo-actions">
-            <div class="example-buttons">
-              <button id="sample" type="button" data-sample="ashitanokaigi" disabled>入力例「明日の会議」</button>
-              <button type="button" data-sample="okseri" disabled>補正の例「okseri」</button>
-              <button type="button" data-sample="yorosikuonegaisi" disabled>先読みの例「よろしくお願いし」</button>
+            <div class="example-buttons" aria-label="ワンクリック入力例">
+              <button id="sample" type="button" data-sample="ashitanokaigi" disabled>ライブ変換「明日の会議」</button>
+              <button type="button" data-sample="okseri" disabled>タイポ補正「okseri」</button>
+              <button type="button" data-sample="yorosikuonegaisi" disabled>先読み「よろしくお願いし」</button>
+              <button type="button" data-sample="kyouhatenkigaiinodesanponiikimasu" disabled>長文変換「今日は天気がいいので…」</button>
             </div>
             <div class="touch-controls" aria-label="入力操作">
               <button type="button" data-command="space" disabled>候補切替</button>
@@ -136,11 +156,11 @@
               <progress id="progress-dictionary" max="1" value="0"></progress>
             </li>
             <li data-load-item="model" data-state="waiting">
-              <div class="progress-text"><label for="progress-model">ZeroCon Model Nano v4.2</label><span data-detail>待機中</span></div>
+              <div class="progress-text"><label id="progress-model-label" for="progress-model">ZeroCon Model</label><span data-detail>待機中</span></div>
               <progress id="progress-model" max="1" value="0"></progress>
             </li>
           </ol>
-          <p class="hint loader-note">初回はエンジンと辞書も取得するため、通信や端末の速度によって時間がかかります。</p>
+          <p class="hint loader-note">初回のみエンジン・辞書・モデルを取得します。2回目以降はブラウザキャッシュを利用するため高速に起動します。</p>
           <button id="retry-model" type="button" hidden>再読み込み</button>
           <noscript><p class="hint">ブラウザで試すには JavaScript を有効にしてください。</p></noscript>
         </aside>
@@ -156,31 +176,61 @@
         <article class="feature">
           <div class="feature-example"><span class="example-muted">あしたのかいぎ</span><span aria-hidden="true">↓</span><strong>明日の会議</strong></div>
           <h3>入力中にライブ変換</h3>
-          <p>入力中に候補が更新されます。安定した先頭部分を自動で確定しながら、そのまま打ち続けられます。</p>
+          <p>入力中に候補がリアルタイムで更新されます。安定した先頭部分を自動で確定しながら、そのまま打ち続けられます。</p>
         </article>
         <article class="feature">
           <div class="feature-example"><code class="example-muted">okseri</code><span aria-hidden="true">↓</span><strong>おか<span class="accent-text">え</span>り</strong></div>
           <h3>打ち間違いを補正</h3>
-          <p>ローマ字の打ち間違いから、入力したかった表記を提案します。補正が合わなければ取り消せます。</p>
+          <p>隣接キーの誤打や母音抜け・転置をメインモデル1本で判定して提案します。正常入力への誤補正を抑え、不要ならすぐ取り消せます。</p>
         </article>
         <article class="feature">
           <div class="feature-example"><span class="example-muted">よろしくお願いし</span><span aria-hidden="true">↓</span><strong>よろしくお願いし<span class="accent-text">ます。</span></strong></div>
           <h3>文の続きを提案</h3>
-          <p>文脈に応じた続きを先読みします。使いたい提案が出たときは Tab で採用できます。先読みは改善中の試験機能です。</p>
+          <p>文脈に応じた続きを先読みします。使いたい提案が出たときは Tab で採用できます。確定学習とも分離して管理されます。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="benchmarks" class="section-block page-width" aria-labelledby="benchmarks-heading">
+      <div class="section-heading">
+        <p class="eyebrow">設計と実測</p>
+        <h2 id="benchmarks-heading">軽さと精度を、端末の中だけで。</h2>
+        <p>azooKey を基盤に、独自の ZeroCon Model（約 26.7M パラメータ）と共有エンジンを組み合わせています。</p>
+      </div>
+      <div class="metrics-grid">
+        <article class="metric-card">
+          <p class="metric-label">タイポ補正（300件評価）</p>
+          <p class="metric-value">78.0% <small>実質 86.7%</small></p>
+          <p class="metric-desc">メインモデル統合により常駐プロセスを半減しつつ、正常入力の誤補正率 0.0% を維持。</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-label">実機 CPU 変換速度</p>
+          <p class="metric-value">8.9 ms <small>中央値</small></p>
+          <p class="metric-desc">Windows ネイティブ環境では 1 打鍵あたり数ミリ秒で応答。GPU オフロード（Vulkan）にも対応。</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-label">モデルサイズ（既定）</p>
+          <p class="metric-value">18.7 MiB <small>IQ4_emb8</small></p>
+          <p class="metric-desc">内部を IQ4_NL、入出力埋め込みを Q8_0 に保つ独自量子化で、スマホでも軽快に動作。</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-label">プライバシー設計</p>
+          <p class="metric-value">100% <small>ローカル処理</small></p>
+          <p class="metric-desc">変換・補正・先読み・翻訳入力（PLaMo 3 Translate 0.8B）のすべてが端末内で完結します。</p>
         </article>
       </div>
     </section>
 
     <section id="download" class="section-block download page-width" aria-labelledby="download-heading">
       <div>
-        <p class="eyebrow">デスクトップ・スマートフォン</p>
-        <h2 id="download-heading">普段のアプリで使う。</h2>
-        <p>Windows・Android 版を入れると、メールやメモなどの入力欄でもオンデバイス AI を使えます。</p>
-        <a class="text-link" href="https://github.com/g0083/ZeroConvert-IME/releases/latest">リリース情報と配布ファイル <span aria-hidden="true">↗</span></a>
+        <p class="eyebrow">デスクトップ・スマートフォン <span class="release-pill" data-latest-release-tag hidden></span></p>
+        <h2 id="download-heading">普段のアプリで、実機の速さを。</h2>
+        <p>Windows・Android 版をインストールすると、ブラウザ版よりさらに高速なネイティブ推論で、メールやメモ、チャットなどあらゆる入力欄で使えます。</p>
+        <a class="text-link" href="https://github.com/g0083/ZeroConvert-IME/releases/latest">リリースノートと全配布ファイル <span aria-hidden="true">↗</span></a>
       </div>
       <div class="platforms">
-        <a class="platform" data-platform-download="windows" href="https://github.com/g0083/ZeroConvert-IME/releases/latest"><span><strong>Windows</strong><small>Windows 10 / 11 · インストーラー</small></span><span data-download-icon aria-hidden="true">↗</span></a>
-        <a class="platform" data-platform-download="android" href="https://github.com/g0083/ZeroConvert-IME/releases/latest"><span><strong>Android</strong><small>ARM64 / x86_64 · 試用版 APK</small></span><span data-download-icon aria-hidden="true">↗</span></a>
+        <a class="platform" data-platform-download="windows" href="https://github.com/g0083/ZeroConvert-IME/releases/latest"><span><strong>Windows</strong><small>Windows 10 / 11 · インストーラー（CPU / Vulkan 対応）</small></span><span data-download-icon aria-hidden="true">↗</span></a>
+        <a class="platform" data-platform-download="android" href="https://github.com/g0083/ZeroConvert-IME/releases/latest"><span><strong>Android</strong><small>ARM64 / x86_64 · 共通エンジン APK</small></span><span data-download-icon aria-hidden="true">↗</span></a>
       </div>
     </section>
   </main>

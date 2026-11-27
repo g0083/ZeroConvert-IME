@@ -4,8 +4,149 @@ import { trackAsset } from './load-progress.mjs';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const modelName = 'zerocon-nano-v4.2-iq4nl-emb8.gguf';
+const defaultModelName = 'zerocon-nano-v4.2-iq4nl-emb8.gguf';
 const reverseName = 'reverse-v2.bin';
+const ASSET_CACHE_NAME = 'zerocon-ime-assets-v1';
+
+async function loadAssetManifest(base, request) {
+    try {
+        const response = await request(new URL('./asset-manifest.json', base), { cache: 'no-cache' });
+        if (!response.ok) return null;
+        return await response.json();
+    } catch {
+        return null;
+    }
+}
+
+async function openAssetCache() {
+    if (typeof caches === 'undefined') return null;
+    try {
+        return await caches.open(ASSET_CACHE_NAME);
+    } catch {
+        return null;
+    }
+}
+
+async function pruneAssetCache(cache, activeUrls) {
+    if (!cache || !activeUrls.size) return;
+    try {
+        const keys = await cache.keys();
+        await Promise.all(keys
+            .filter(req => !activeUrls.has(req.url))
+            .map(req => cache.delete(req)));
+    } catch {
+        // Ignore cache eviction errors.
+    }
+}
+
+function versionedUrl(name, base, sha256) {
+    const url = new URL(name, base);
+    if (sha256) url.searchParams.set('v', sha256.slice(0, 12));
+    return url;
+}
+
+async function fetchChunkedAsset(assetKey, fileName, entry, base, request, report) {
+    const chunks = entry.chunks;
+    const totalBytes = entry.bytes || chunks.reduce((sum, part) => sum + (part.bytes || 0), 0);
+    report?.({ asset: assetKey, phase: 'downloading', received: 0, total: totalBytes || null });
+    const receivedByChunk = new Array(chunks.length).fill(0);
+    let lastReport = -Infinity;
+    const notify = () => {
+        const now = performance.now();
+        if (now - lastReport < 100) return;
+        lastReport = now;
+        const received = receivedByChunk.reduce((sum, value) => sum + value, 0);
+        report?.({ asset: assetKey, phase: 'downloading', received, total: totalBytes || null });
+    };
+
+    const buffers = await Promise.all(chunks.map(async (part, index) => {
+        const response = await request(versionedUrl(`./${part.name}`, base, entry.sha256));
+        if (!response.ok || !response.body) {
+            throw new Error(`アセット分割ファイルを取得できませんでした（HTTP ${response.status}）。`);
+        }
+        const reader = response.body.getReader();
+        const pieces = [];
+        let length = 0;
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            pieces.push(value);
+            length += value.byteLength;
+            receivedByChunk[index] = length;
+            notify();
+        }
+        const merged = new Uint8Array(length);
+        let offset = 0;
+        for (const piece of pieces) {
+            merged.set(piece, offset);
+            offset += piece.byteLength;
+        }
+        return merged;
+    }));
+
+    const fullLength = buffers.reduce((sum, part) => sum + part.byteLength, 0);
+    const combined = new Uint8Array(fullLength);
+    let offset = 0;
+    for (const part of buffers) {
+        combined.set(part, offset);
+        offset += part.byteLength;
+    }
+    report?.({ asset: assetKey, phase: 'downloaded', received: fullLength });
+    const contentType = fileName.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream';
+    return new Response(combined, { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': String(fullLength) } });
+}
+
+async function fetchManifestAsset(assetKey, fileName, manifest, base, request, cache, activeUrls, report) {
+    const entry = manifest?.assets?.[fileName];
+    const url = versionedUrl(`./${fileName}`, base, entry?.sha256);
+    if (entry?.sha256) activeUrls.add(url.href);
+
+    if (cache && entry?.sha256) {
+        try {
+            const cached = await cache.match(url.href);
+            if (cached && cached.ok) {
+                const size = entry.bytes || Number(cached.headers.get('Content-Length')) || 0;
+                report?.({ asset: assetKey, phase: 'downloaded', received: size, cached: true });
+                return cached;
+            }
+        } catch {
+            // Fall through to network fetch.
+        }
+    }
+
+    const response = entry?.chunks?.length
+        ? await fetchChunkedAsset(assetKey, fileName, entry, base, request, report)
+        : await trackAsset(assetKey, () => request(url), report);
+
+    if (cache && entry?.sha256 && response.ok) {
+        try {
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            const headers = new Headers(response.headers);
+            if (fileName.endsWith('.wasm')) headers.set('Content-Type', 'application/wasm');
+            headers.delete('Content-Encoding');
+            headers.set('Content-Length', String(bytes.byteLength));
+            const storable = new Response(bytes, { status: 200, headers });
+            void cache.put(url.href, storable.clone()).catch(() => {});
+            return storable;
+        } catch {
+            return response;
+        }
+    }
+    return response;
+}
+
+async function compileWasmResponse(response) {
+    if (!response.ok) throw new Error(`変換エンジンを取得できませんでした（HTTP ${response.status}）。`);
+    const type = response.headers.get('Content-Type') || '';
+    if (typeof WebAssembly.compileStreaming === 'function' && type.includes('application/wasm')) {
+        try {
+            return await WebAssembly.compileStreaming(Promise.resolve(response.clone()));
+        } catch {
+            // Fall back to arrayBuffer compilation for synthetic or cached responses.
+        }
+    }
+    return WebAssembly.compile(await response.arrayBuffer());
+}
 
 async function dictionaryFiles(response) {
     if (!response.ok || !response.body) throw new Error(`辞書を取得できませんでした（HTTP ${response.status}）。`);
@@ -86,17 +227,37 @@ async function readAsset(response) {
 }
 
 export async function loadModelEngine(base = import.meta.url, request = fetch, learningFiles = [], report) {
+    const manifest = await loadAssetManifest(base, request);
+    const modelName = manifest?.model?.filename || defaultModelName;
+    const cache = request === fetch ? await openAssetCache() : null;
+    const activeUrls = new Set();
     const asset = name => request(new URL(name, base));
-    const tracked = (name, file) => trackAsset(name, () => asset(file), report);
+    let usedCache = false;
+    const wrappedReport = event => {
+        if (event?.cached) usedCache = true;
+        report?.(event);
+    };
+
     const [module, dictionary, model, settings] = await Promise.all([
-        WebAssembly.compileStreaming(tracked('engine', './zerocon_model.wasm'))
-            .then(module => { report?.({ asset: 'engine', phase: 'done' }); return module; }),
-        tracked('dictionary', './dictionary.gz').then(dictionaryFiles)
-            .then(dictionary => { report?.({ asset: 'dictionary', phase: 'done' }); return dictionary; }),
-        tracked('model', `./${modelName}`).then(readAsset),
+        fetchManifestAsset('engine', 'zerocon_model.wasm', manifest, base, request, cache, activeUrls, wrappedReport)
+            .then(compileWasmResponse)
+            .then(compiled => { wrappedReport({ asset: 'engine', phase: 'done' }); return compiled; }),
+        fetchManifestAsset('dictionary', 'dictionary.gz', manifest, base, request, cache, activeUrls, wrappedReport)
+            .then(dictionaryFiles)
+            .then(loaded => { wrappedReport({ asset: 'dictionary', phase: 'done' }); return loaded; }),
+        fetchManifestAsset('model', modelName, manifest, base, request, cache, activeUrls, wrappedReport)
+            .then(readAsset),
         asset('./ime-settings.json').then(readAsset),
     ]);
-    report?.({ asset: 'model', phase: 'initializing' });
+
+    if (cache && manifest?.assets) {
+        for (const [name, entry] of Object.entries(manifest.assets)) {
+            if (entry?.sha256) activeUrls.add(versionedUrl(`./${name}`, base, entry.sha256).href);
+        }
+        void pruneAssetCache(cache, activeUrls);
+    }
+
+    wrappedReport({ asset: 'model', phase: 'initializing' });
     const staged = JSON.parse(decoder.decode(settings));
     const { autoCommit, ...defaults } = stagedSettings(staged);
     // Early previews used "none"; the shared Swift settings use "disabled".
@@ -137,6 +298,16 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
     send.autoCommit = autoCommit;
     send.stagedSettings = staged;
     send.settings = defaults;
+    send.modelMeta = {
+        id: manifest?.model?.id || staged?.zenzai?.model || '',
+        name: manifest?.model?.name || 'ZeroCon Model Nano v4.2',
+        filename: modelName,
+        releaseTag: manifest?.model?.releaseTag || '',
+        commit: manifest?.build?.commit || '',
+        builtAt: manifest?.build?.builtAt || '',
+        cached: usedCache,
+        crossOriginIsolated: typeof globalThis.crossOriginIsolated === 'boolean' ? globalThis.crossOriginIsolated : false,
+    };
     // Preserve the conversion instance's backing file and transfer just one copy to the assist Worker.
     send.copyModel = () => modelFile.data.slice().buffer;
     let mode = send.settings.learning;
@@ -153,18 +324,23 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         .filter(([, file]) => file instanceof File)
         .map(([name, file]) => [name, file.data.slice()]);
     send('initialize');
-    report?.({ asset: 'model', phase: 'warmup' });
+    wrappedReport({ asset: 'model', phase: 'warmup' });
     const warmup = send('append', { value: 'nihongo' });
     if (warmup.modelStatus !== `load file:///runtime/models/${modelName}`) {
         throw new Error(`ZeroCon Model を読み込めませんでした。${warmup.modelStatus}`);
     }
     send('clear');
-    report?.({ asset: 'model', phase: 'done' });
+    wrappedReport({ asset: 'model', phase: 'done' });
     return send;
 }
 
 export async function loadLivePolicy(base = import.meta.url, request = fetch) {
-    const module = await WebAssembly.compileStreaming(request(new URL('./zerocon_web_live_policy.wasm', base)));
+    const manifest = await loadAssetManifest(base, request);
+    const cache = request === fetch ? await openAssetCache() : null;
+    const response = await fetchManifestAsset(
+        'policy', 'zerocon_web_live_policy.wasm', manifest, base, request, cache, new Set(), null,
+    );
+    const module = await compileWasmResponse(response);
     const wasi = new WASI([], [], [], { debug: false });
     const instance = await WebAssembly.instantiate(module, {
         wasi_snapshot_preview1: wasi.wasiImport,
@@ -204,12 +380,20 @@ function get(api, address) {
 // Construct this only inside the assistant worker. The key-handling worker
 // can continue processing edits while this instance runs synchronous Wasm.
 export async function loadAssistEngine(base = import.meta.url, request = fetch, predictionBudgetScale = 1, modelBuffer) {
-    const asset = name => request(new URL(name, base));
+    const manifest = await loadAssetManifest(base, request);
+    const modelName = manifest?.model?.filename || defaultModelName;
+    const cache = request === fetch ? await openAssetCache() : null;
+    const activeUrls = new Set();
+
     const [policy, completion, model, reverse] = await Promise.all([
-        WebAssembly.compileStreaming(asset('./zerocon_web_live_policy.wasm')),
-        WebAssembly.compileStreaming(asset('./zerocon_completion.wasm')),
-        modelBuffer ?? asset(`./${modelName}`).then(readAsset).then(bytes => bytes.buffer),
-        asset(`./${reverseName}.gz`).then(async response => {
+        fetchManifestAsset('policy', 'zerocon_web_live_policy.wasm', manifest, base, request, cache, activeUrls, null)
+            .then(compileWasmResponse),
+        fetchManifestAsset('completion', 'zerocon_completion.wasm', manifest, base, request, cache, activeUrls, null)
+            .then(compileWasmResponse),
+        modelBuffer ?? fetchManifestAsset('model', modelName, manifest, base, request, cache, activeUrls, null)
+            .then(readAsset)
+            .then(bytes => bytes.buffer),
+        fetchManifestAsset('reverse', `${reverseName}.gz`, manifest, base, request, cache, activeUrls, null).then(async response => {
             if (!response.ok || !response.body) throw new Error('キーボード補正用の辞書を読み込めませんでした。');
             const bytes = new Uint8Array(await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
             if (bytes.length < 16 || bytes.length > 64 * 1024 * 1024 || decoder.decode(bytes.subarray(0, 4)) !== 'AZR2') {

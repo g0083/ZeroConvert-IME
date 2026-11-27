@@ -18,6 +18,9 @@ export async function loadLatestDownloads(request = fetch) {
                 links[platform] = `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(filename)}`;
             }
         }
+        if (Object.keys(links).length) {
+            Object.defineProperty(links, 'tag', { value: versionedTag, enumerable: false });
+        }
         return links;
     } catch {
         // Keep the server-rendered links to the latest release if the API is unavailable.
@@ -27,6 +30,12 @@ export async function loadLatestDownloads(request = fetch) {
 
 if (typeof document !== 'undefined') {
     void loadLatestDownloads().then(downloads => {
+        if (downloads.tag) {
+            for (const badge of document.querySelectorAll('[data-latest-release-tag]')) {
+                badge.textContent = downloads.tag;
+                badge.hidden = false;
+            }
+        }
         for (const link of document.querySelectorAll('[data-platform-download]')) {
             const url = downloads[link.dataset.platformDownload];
             if (!url) continue;
