@@ -119,10 +119,31 @@ object ModelManager {
         return BUILT_IN_MODELS.find { it.fileName == replacement }
     }
 
+    internal fun resolveEffectiveSelectedPath(
+        selectedSpec: BuiltInModelSpec?,
+        selectedCached: Boolean,
+        defaultCached: Boolean,
+        modelsDir: File,
+        savedPath: String?
+    ): String? {
+        if (selectedSpec == null) return savedPath
+        val effectiveSpec = if (!selectedCached && defaultCached) DEFAULT_MODEL_SPEC else selectedSpec
+        return File(modelsDir, effectiveSpec.fileName).absolutePath
+    }
+
+    internal fun resolveCachedBuiltInSpec(context: Context, savedPath: String?): Pair<BuiltInModelSpec, File>? {
+        val selected = selectedBuiltInSpec(context, savedPath) ?: return null
+        cachedFile(context, selected)?.let { return selected to it }
+        if (selected.fileName != DEFAULT_MODEL_SPEC.fileName) {
+            cachedFile(context, DEFAULT_MODEL_SPEC)?.let { return DEFAULT_MODEL_SPEC to it }
+        }
+        return null
+    }
+
     internal fun selectedModelFile(context: Context): File? {
         val path = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_PATH, null)
         val managed = selectedBuiltInSpec(context, path)
-        return if (managed != null) cachedFile(context, managed)
+        return if (managed != null) resolveCachedBuiltInSpec(context, path)?.second
         else path?.let(::File)?.takeIf { it.isFile } ?: cachedFile(context, DEFAULT_MODEL_SPEC)
     }
 
@@ -131,7 +152,13 @@ object ModelManager {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val savedPath = prefs.getString(KEY_PATH, null)
         val selectedSpec = selectedBuiltInSpec(context, savedPath)
-        val selectedPath = selectedSpec?.let { File(getModelsDir(context), it.fileName).absolutePath } ?: savedPath
+        val selectedPath = resolveEffectiveSelectedPath(
+            selectedSpec = selectedSpec,
+            selectedCached = selectedSpec?.let { cachedFile(context, it) != null } == true,
+            defaultCached = cachedFile(context, DEFAULT_MODEL_SPEC) != null,
+            modelsDir = getModelsDir(context),
+            savedPath = savedPath
+        )
 
         val builtInFiles = mutableSetOf<String>()
 
@@ -229,7 +256,7 @@ object ModelManager {
         if (modelInfo.isDefault && !modelInfo.downloaded) return@withContext false
         val fileToLoad = modelInfo.file
 
-        val ok = ZenzNative.loadModel(fileToLoad, modelInfo.name)
+        val ok = ZenzNative.loadModel(fileToLoad, modelInfo.name, context)
         if (ok) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs.edit()
@@ -255,7 +282,7 @@ object ModelManager {
     }
 
     private fun selectModelDirect(context: Context, file: File, name: String) {
-        if (file.isFile) ZenzNative.loadModel(file, name)
+        if (file.isFile) ZenzNative.loadModel(file, name, context)
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
             .putString(KEY_PATH, file.absolutePath)

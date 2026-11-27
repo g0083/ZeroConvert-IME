@@ -662,7 +662,7 @@ fun MainScreen(
                 val mandatoryFile = ConversionModelDownloadManager.modelFile(context, ModelManager.DEFAULT_MODEL_SPEC)
                 if (mandatoryFile.isFile) {
                     coroutineScope.launch {
-                        val ready = withContext(Dispatchers.IO) { ZenzNative.loadModel(mandatoryFile, ModelManager.DEFAULT_MODEL_SPEC.displayName) }
+                        val ready = withContext(Dispatchers.IO) { ZenzNative.loadModel(mandatoryFile, ModelManager.DEFAULT_MODEL_SPEC.displayName, context) }
                         if (ready) {
                             context.getSharedPreferences("model_prefs", Context.MODE_PRIVATE).edit()
                                 .putString("selected_model_path", mandatoryFile.absolutePath)
@@ -1764,9 +1764,14 @@ fun MainScreen(
                                         modifier = Modifier.height(32.dp),
                                         onClick = {
                                             coroutineScope.launch {
-                                                ModelManager.selectModel(context, model)
+                                                val switched = ModelManager.selectModel(context, model)
                                                 availableModels = ModelManager.getAvailableModels(context)
-                                                onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                                                if (switched) {
+                                                    onModelStatusChange("${ZenzNative.currentModelName} — 準備完了")
+                                                    Toast.makeText(context, "${model.name} に切り替えました", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "モデルの切り替えに失敗しました", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                     )

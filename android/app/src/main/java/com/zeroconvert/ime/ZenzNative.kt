@@ -233,7 +233,7 @@ object ZenzNative {
         private set
 
     @Synchronized
-    fun loadModel(modelFile: File, displayName: String? = null): Boolean {
+    fun loadModel(modelFile: File, displayName: String? = null, context: Context? = null): Boolean {
         lifecycleRequests.incrementAndGet()
         if (!modelFile.exists()) {
             Log.e(TAG, "loadModel failed: file not found at ${modelFile.absolutePath}")
@@ -242,8 +242,24 @@ object ZenzNative {
         modelEpoch.incrementAndGet()
         abort()
         val ok = try {
-            val loaded = if (BuildConfig.WINDOWS_ENGINE) com.zeroconvert.ime.engine.WindowsEngine.switchModel(modelFile)
-                else nativeLoadModel(modelFile.absolutePath)
+            val loaded = if (BuildConfig.WINDOWS_ENGINE) {
+                if (!com.zeroconvert.ime.engine.WindowsEngine.isReady() && context != null) {
+                    val initialized = com.zeroconvert.ime.engine.WindowsEngine.initialize(context, modelFile)
+                    if (initialized) {
+                        ModelManager.cleanupLegacyCorrector(context)
+                        com.zeroconvert.ime.assist.AssistVocabulary.load(context)
+                        com.zeroconvert.ime.assist.ReadingCheck.load(context)
+                        if (!isDictInitialized) {
+                            initializeNativeDictionary(context)
+                        }
+                    }
+                    initialized
+                } else {
+                    com.zeroconvert.ime.engine.WindowsEngine.switchModel(modelFile)
+                }
+            } else {
+                nativeLoadModel(modelFile.absolutePath)
+            }
             assistReady = if (loaded) nativeInitAssist(modelFile.absolutePath, "") else 0
             loaded
         } finally { modelEpoch.incrementAndGet() }
@@ -273,15 +289,21 @@ object ZenzNative {
             val savedName = prefs.getString("selected_model_name", null)
 
             val builtIn = ModelManager.selectedBuiltInSpec(context, savedPath)
-            val cached = builtIn?.let { ModelManager.cachedFile(context, it) }
             val modelFile = if (builtIn != null) {
-                currentModelName = builtIn.displayName
-                if (cached == null) {
+                val resolved = ModelManager.resolveCachedBuiltInSpec(context, savedPath)
+                if (resolved != null) {
+                    currentModelName = resolved.first.displayName
+                    if (resolved.first.fileName != builtIn.fileName) {
+                        Log.i(TAG, "Migrated model ${builtIn.fileName} not downloaded yet; falling back to ${resolved.first.fileName}")
+                    }
+                    resolved.second
+                } else {
+                    currentModelName = builtIn.displayName
                     // 未取得のまま初期化を通さない。取得UI（設定画面の必須対話）で取得後に再 init する。
                     // 辞書側（isDictInitialized）は別処理で続行するため、モデル無しの IME でも入力状態を保つ。
                     Log.e(TAG, "Conversion model not downloaded yet: ${builtIn.fileName}")
+                    null
                 }
-                cached
             } else if (!savedPath.isNullOrEmpty() && File(savedPath).isFile) {
                 currentModelName = savedName ?: File(savedPath).name
                 File(savedPath)
