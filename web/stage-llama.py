@@ -43,6 +43,13 @@ def main():
         raise ValueError("Unexpected llama.cpp AMX source list")
     cpu.write_text(source, encoding="utf-8")
 
+    if args.for_emscripten:
+        # Build wasm32 (32-bit pointers, universal browser support) rather than wasm64.
+        for cmake_file in args.output.rglob("CMakeLists.txt"):
+            txt = cmake_file.read_text(encoding="utf-8")
+            if "-sMEMORY64=1" in txt:
+                cmake_file.write_text(txt.replace("-sMEMORY64=1", ""), encoding="utf-8")
+
     if not args.for_emscripten:
         # Single-threaded WASI SDK has no C++ thread implementation.
         (args.output / "ggml/src/ggml-threading.cpp").write_text(
