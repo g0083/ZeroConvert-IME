@@ -70,7 +70,7 @@ def stage_dependencies(output, cache):
         manifest.write_text(content, encoding="utf-8")
 
 
-def stage_converter(converter, output, llama):
+def stage_converter(converter, output, llama, llama_bridge=False):
     target = output / "converter"
     shutil.copytree(converter / "Sources", target / "Sources", dirs_exist_ok=True,
                     copy_function=shutil.copyfile,
@@ -96,6 +96,12 @@ def stage_converter(converter, output, llama):
         shutil.copyfile(ROOT / "engine/swift/llama-compat.h", headers / "llama.h")
         for header in (llama / "ggml/include").glob("*.h"):
             shutil.copyfile(header, headers / header.name)
+        if llama_bridge:
+            # All llama/ggml symbols are supplied by wasi-llama-bridge.c; strip auto-link directives.
+            modulemap = headers / "module.modulemap"
+            if modulemap.is_file():
+                mm = re.sub(r'(?m)^\s*link\s+"[^"]+"\s*\n?', '', modulemap.read_text(encoding="utf-8"))
+                modulemap.write_text(mm, encoding="utf-8")
         manifest = manifest.replace('    targets: [\n', '    targets: [\n        .systemLibrary(name: "llama.cpp"),\n')
         manifest = manifest.replace('"SwiftUtils", "EfficientNGram",', '"SwiftUtils", "EfficientNGram", "llama.cpp",')
         manifest = manifest.replace('package: "swift-collections")], swiftSettings: settings)',
@@ -162,7 +168,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     stage_dependencies(args.output, args.dependency_cache)
-    stage_converter(args.converter, args.output, args.llama_source)
+    stage_converter(args.converter, args.output, args.llama_source, llama_bridge=args.llama_bridge)
     app = args.output / "app"
     source = app / "Sources/App"
     source.mkdir(parents=True, exist_ok=True)
