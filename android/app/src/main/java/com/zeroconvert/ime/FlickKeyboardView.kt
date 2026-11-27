@@ -5,9 +5,12 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Mood
+import androidx.compose.material.icons.filled.SpaceBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -28,9 +31,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.zeroconvert.ime.theme.textShadowOrNull
+import com.zeroconvert.ime.theme.toComposeColor
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -67,6 +73,52 @@ data class FlickKeyDef(
     val subText: String = "",
     val isActionKey: Boolean = false
 )
+
+/**
+ * フリックキーの方向ヒント。上下左右に割り当てられた文字をキーの縁へ小さく表示する。
+ */
+data class FlickDirectionHints(
+    val up: String,
+    val down: String,
+    val left: String,
+    val right: String
+) {
+    val isEmpty: Boolean
+        get() = up.isEmpty() && down.isEmpty() && left.isEmpty() && right.isEmpty()
+}
+
+fun flickDirectionHints(keyDef: FlickKeyDef): FlickDirectionHints = FlickDirectionHints(
+    up = keyDef.up.trim(),
+    down = keyDef.down.trim(),
+    left = keyDef.left.trim(),
+    right = keyDef.right.trim()
+)
+
+/** Advance width of [label] in em: ASCII glyphs are narrower than kana and full-width symbols. */
+internal fun flickLabelEmWidth(label: String): Float =
+    label.fold(0.0) { width, ch -> width + if (ch.code < 0x80) 0.6 else 1.0 }.toFloat()
+
+/**
+ * Largest label size that still clears the left/right direction hints. Narrow keys such as
+ * the floating keyboard cannot keep a long label centered between the two hints otherwise.
+ */
+internal fun fittedFlickLabelSizeSp(
+    label: String,
+    keyWidthDp: Float,
+    hintSp: Float,
+    hasLeftHint: Boolean,
+    hasRightHint: Boolean,
+    maxSizeSp: Float,
+    fontScale: Float = 1f,
+    minSizeSp: Float = 9f
+): Float {
+    val sideBandDp =
+        (if (hasLeftHint) hintSp * fontScale + 5f else 0f) +
+            (if (hasRightHint) hintSp * fontScale + 5f else 0f)
+    val availableDp = (keyWidthDp - sideBandDp - 2f).coerceAtLeast(1f)
+    val fitted = availableDp / (flickLabelEmWidth(label).coerceAtLeast(0.6f) * fontScale)
+    return fitted.coerceIn(minOf(minSizeSp, maxSizeSp), maxSizeSp)
+}
 
 object FlickKeyDefinitions {
     val keyA = FlickKeyDef(label = "あ", center = "あ", left = "い", up = "う", right = "え", down = "お", subText = "い・う・え・お")
@@ -518,6 +570,7 @@ private fun ColumnScope.FlickGridRow(
     onFlickUpdateById: (Long, ActiveFlickPopupState?) -> Unit,
     onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
     onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null,
+    onFlickCompleteWithGeometry: ((FlickKeyDef, FlickDirection, FlickTouchGeometry?) -> Unit)? = null,
     firstKeyBg: Color = keyBgColor,
     firstKeyTextColor: Color = textColor,
     firstIsActionKey: Boolean = false,
@@ -546,7 +599,8 @@ private fun ColumnScope.FlickGridRow(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
-            onFlickCompleteWithBias = onFlickCompleteWithBias
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry
         )
         FlickKeyCell(
             keyDef = keys.second,
@@ -559,7 +613,8 @@ private fun ColumnScope.FlickGridRow(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
-            onFlickCompleteWithBias = onFlickCompleteWithBias
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry
         )
         FlickKeyCell(
             keyDef = keys.third,
@@ -572,7 +627,8 @@ private fun ColumnScope.FlickGridRow(
             getRootCoords = getRootCoords,
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
-            onFlickCompleteWithBias = onFlickCompleteWithBias
+            onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry
         )
 
         rightKey(Modifier.weight(1.05f).fillMaxHeight(), rightPadding)
@@ -591,8 +647,8 @@ private fun FlickSideUndoButton(
     KeyboardActionKey(
         modifier = modifier,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        isModifier = true,
         palette = palette,
         contentDescription = "元に戻す",
         onClick = onUndo
@@ -619,8 +675,8 @@ private fun FlickSideSymbolsButton(
     KeyboardActionKey(
         modifier = modifier,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        isModifier = true,
         palette = palette,
         contentDescription = "記号",
         onFlick = { direction ->
@@ -637,47 +693,47 @@ private fun FlickSideSymbolsButton(
 }
 
 @Composable
-private fun FlickSideEmojiSymbolsButton(
+private fun FlickSideJpEnButton(
     modifier: Modifier,
     visualPadding: PaddingValues,
+    mode: KeyboardMode,
     actionKeyBg: Color,
     textColor: Color,
     palette: ZeroConPalette,
-    onOpenEmoji: () -> Unit,
-    onOpenSymbols: () -> Unit
+    onToggleJpEn: () -> Unit
 ) {
+    val activeColor = textColor
+    val dimColor = palette.textMuted.copy(alpha = 0.72f)
     KeyboardActionKey(
         modifier = modifier,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        isModifier = true,
         palette = palette,
-        contentDescription = "絵文字・記号",
-        onFlick = { direction ->
-            when (direction) {
-                FlickDirection.UP, FlickDirection.RIGHT -> onOpenSymbols()
-                FlickDirection.CENTER -> onOpenEmoji()
-                FlickDirection.LEFT, FlickDirection.DOWN -> Unit
-            }
-        },
-        onClick = onOpenEmoji
+        contentDescription = "あ/a",
+        onClick = onToggleJpEn
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.Mood,
-                contentDescription = null,
-                tint = textColor,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(1.dp))
             Text(
-                text = "記",
-                color = textColor,
+                text = "あ",
+                color = if (mode == KeyboardMode.JAPANESE) activeColor else dimColor,
+                fontSize = 15.sp,
+                fontWeight = if (mode == KeyboardMode.JAPANESE) FontWeight.Bold else FontWeight.Normal
+            )
+            Text(
+                text = "/",
+                color = dimColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Text(
+                text = "a",
+                color = if (mode == KeyboardMode.ENGLISH) activeColor else dimColor,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = if (mode == KeyboardMode.ENGLISH) FontWeight.Bold else FontWeight.Normal
             )
         }
     }
@@ -690,19 +746,24 @@ private fun FlickSideEnterButton(
     palette: ZeroConPalette,
     onEnter: () -> Unit
 ) {
+    // Without a conversion the key stands for the editor's imeOptions action (検索, 次へ, ...).
+    val enterAction = LocalEnterKeyAction.current
+    val enterRadius = resolve12KeyEnterCornerRadiusDp(LocalKeyboardTheme.current.keySurface.enterCornerRadiusDp).dp
     KeyboardActionKey(
         modifier = modifier,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
+        cornerRadius = enterRadius,
         baseColor = palette.primaryAccent,
         isAccent = true,
+        contentDescription = enterAction?.label ?: "確定",
         onClick = onEnter
     ) {
         Text(
-            text = "確定",
+            text = enterAction?.label ?: "確定",
             color = palette.onAccent,
             fontSize = 15.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
         )
     }
 }
@@ -714,18 +775,26 @@ private fun FlickSideSpaceButton(
     actionKeyBg: Color,
     textColor: Color,
     onSpace: () -> Unit,
-    onLongPressSpace: () -> Unit
+    onLongPressSpace: () -> Unit,
+    onCursorLeft: () -> Unit,
+    onCursorRight: () -> Unit
 ) {
     KeyboardActionKey(
         modifier = modifier,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        isModifier = false,
         contentDescription = "空白",
         onClick = onSpace,
-        onLongClick = onLongPressSpace
+        onLongClick = onLongPressSpace,
+        onHorizontalStep = { step -> if (step < 0) onCursorLeft() else onCursorRight() }
     ) {
-        Text(text = "␣", color = textColor, fontSize = 20.sp)
+        Icon(
+            imageVector = Icons.Default.SpaceBar,
+            contentDescription = null,
+            tint = textColor,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
@@ -742,12 +811,17 @@ private fun FlickSideBackspaceButton(
         onClick = onDelete,
         modifier = modifier,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        isModifier = true,
         palette = palette,
         hapticOnPress = false
     ) {
-        Icon(imageVector = Icons.Default.Backspace, contentDescription = "Backspace", tint = textColor, modifier = Modifier.size(22.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.Backspace,
+            contentDescription = "Backspace",
+            tint = textColor,
+            modifier = Modifier.size(21.dp)
+        )
     }
 }
 
@@ -761,25 +835,36 @@ private fun FlickSideCursorButton(
     palette: ZeroConPalette,
     onClick: () -> Unit
 ) {
+    val icon = if (text == "◀") {
+        Icons.AutoMirrored.Filled.KeyboardArrowLeft
+    } else {
+        Icons.AutoMirrored.Filled.KeyboardArrowRight
+    }
     RepeatingIconButton(
         onClick = onClick,
         modifier = modifier,
         initialDelayMs = 300L,
         repeatIntervalMs = 50L,
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = actionKeyBg,
+        isModifier = true,
         palette = palette,
-        hapticOnPress = false
+        hapticOnPress = false,
+        contentDescription = text
     ) {
-        Text(text = text, color = textColor, fontSize = 14.sp)
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = textColor,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
 /**
  * Shared 5x4 12-key grid keeping common utility keys in identical positions across
  * Japanese, English, and Numeric modes (following Gboard's 12-key layout):
- * Left column:  [Undo (↶)] [◀] [☺記 / !?#] [あa1]
+ * Left column:  [Undo (↶)] [◀] [あ/a / !?#] [あa1]
  * Right column: [Backspace] [▶] [␣] [確定]
  */
 @Composable
@@ -795,12 +880,14 @@ private fun Flick12KeyGrid(
     row3FirstIsActionKey: Boolean = false,
     onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
     onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null,
+    onFlickCompleteWithGeometry: ((FlickKeyDef, FlickDirection, FlickTouchGeometry?) -> Unit)? = null,
     onUndo: () -> Unit,
     onDelete: () -> Unit,
     onCursorLeft: () -> Unit,
     onCursorRight: () -> Unit,
     onOpenEmoji: () -> Unit,
     onOpenSymbols: () -> Unit,
+    onToggleJpEn: () -> Unit = {},
     onSpace: () -> Unit,
     onLongPressSpace: () -> Unit,
     onSwitchMode: (FlickDirection) -> Unit,
@@ -818,6 +905,7 @@ private fun Flick12KeyGrid(
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
             onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry,
             leftKey = { mod, pad -> FlickSideUndoButton(mod, pad, actionKeyBg, textColor, palette, onUndo) },
             rightKey = { mod, pad -> FlickSideBackspaceButton(mod, pad, actionKeyBg, textColor, palette, onDelete) }
         )
@@ -833,6 +921,7 @@ private fun Flick12KeyGrid(
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
             onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry,
             leftKey = { mod, pad -> FlickSideCursorButton("◀", mod, pad, actionKeyBg, textColor, palette, onCursorLeft) },
             rightKey = { mod, pad -> FlickSideCursorButton("▶", mod, pad, actionKeyBg, textColor, palette, onCursorRight) }
         )
@@ -848,14 +937,15 @@ private fun Flick12KeyGrid(
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
             onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry,
             leftKey = { mod, pad ->
                 if (mode == KeyboardMode.NUMERIC) {
                     FlickSideSymbolsButton(mod, pad, actionKeyBg, textColor, palette, onOpenSymbols, onOpenEmoji)
                 } else {
-                    FlickSideEmojiSymbolsButton(mod, pad, actionKeyBg, textColor, palette, onOpenEmoji, onOpenSymbols)
+                    FlickSideJpEnButton(mod, pad, mode, actionKeyBg, textColor, palette, onToggleJpEn)
                 }
             },
-            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace) }
+            rightKey = { mod, pad -> FlickSideSpaceButton(mod, pad, actionKeyBg, textColor, onSpace, onLongPressSpace, onCursorLeft, onCursorRight) }
         )
 
         FlickGridRow(
@@ -869,6 +959,7 @@ private fun Flick12KeyGrid(
             onFlickUpdateById = onFlickUpdateById,
             onFlickComplete = onFlickComplete,
             onFlickCompleteWithBias = onFlickCompleteWithBias,
+            onFlickCompleteWithGeometry = onFlickCompleteWithGeometry,
             firstKeyBg = row3FirstKeyBg,
             firstKeyTextColor = row3FirstKeyTextColor,
             firstIsActionKey = row3FirstIsActionKey,
@@ -900,6 +991,7 @@ fun Japanese12KeyFlickLayout(
     onKanaInput: (String) -> Unit,
     onKanaInputWithBias: ((String, TouchKeyBias?) -> Unit)? = null,
     onReplaceLastKana: (String) -> Unit,
+    onReplaceLastKanaWithBias: ((String, TouchKeyBias?) -> Unit)? = null,
     onToggleDakuten: () -> Unit,
     onKanaModifier: (KanaModifierKind) -> Unit = {},
     onDelete: () -> Unit,
@@ -908,17 +1000,18 @@ fun Japanese12KeyFlickLayout(
     onLongPressSpace: () -> Unit = {},
     onEnter: () -> Unit,
     onSwitchMode: (FlickDirection) -> Unit,
-    onOpenSymbols: () -> Unit,
-    onOpenEmoji: () -> Unit,
+    onOpenSymbols: () -> Unit = {},
+    onOpenEmoji: () -> Unit = {},
     onCursorLeft: () -> Unit,
-    onCursorRight: () -> Unit
+    onCursorRight: () -> Unit,
+    onToggleJpEn: () -> Unit = {}
 ) {
     // State for toggle input (when isFlickOnly is false)
     var lastTappedKey by remember { mutableStateOf<String?>(null) }
     var currentCycleIndex by remember { mutableStateOf(0) }
     var lastTapTimestamp by remember { mutableStateOf(0L) }
 
-    val handleFlickResultWithBias = { def: FlickKeyDef, dir: FlickDirection, bias: TouchKeyBias? ->
+    val handleFlickResultWithGeometry = { def: FlickKeyDef, dir: FlickDirection, geometry: FlickTouchGeometry? ->
         if (def == FlickKeyDefinitions.keyMod) {
             lastTappedKey = null
             when (dir) {
@@ -939,7 +1032,18 @@ fun Japanese12KeyFlickLayout(
                         if (cycle != null && lastTappedKey == def.center && (now - lastTapTimestamp) < 850L) {
                             currentCycleIndex = (currentCycleIndex + 1) % cycle.size
                             lastTapTimestamp = now
-                            onReplaceLastKana(cycle[currentCycleIndex])
+                            val nextChar = cycle[currentCycleIndex]
+                            val cycleBias = nextChar.singleOrNull()?.let { ch ->
+                                geometry?.let { g ->
+                                    computeFlickToggleTouchBias(def, ch, g.startX, g.startY, g.widthPx, g.heightPx)
+                                }
+                            }
+                            val replaceWithBias = onReplaceLastKanaWithBias
+                            if (replaceWithBias != null) {
+                                replaceWithBias(nextChar, cycleBias)
+                            } else {
+                                onReplaceLastKana(nextChar)
+                            }
                             null
                         } else {
                             lastTappedKey = def.center
@@ -955,9 +1059,14 @@ fun Japanese12KeyFlickLayout(
                 FlickDirection.DOWN -> { lastTappedKey = null; def.down }
             }
             if (output != null && output.isNotEmpty()) {
-                val scopedBias = if (isFlickOnly) bias else null
+                val bias = geometry?.let { g ->
+                    computeFlickTouchBias(
+                        def, dir, g.dx, g.dy, g.thresholdPx, g.startX, g.startY, g.widthPx, g.heightPx,
+                        isToggleMode = !isFlickOnly
+                    )
+                }
                 if (onKanaInputWithBias != null) {
-                    onKanaInputWithBias(output, scopedBias)
+                    onKanaInputWithBias(output, bias)
                 } else {
                     onKanaInput(output)
                 }
@@ -965,7 +1074,7 @@ fun Japanese12KeyFlickLayout(
         }
     }
     val handleFlickResult: (FlickKeyDef, FlickDirection) -> Unit = { def, dir ->
-        handleFlickResultWithBias(def, dir, null)
+        handleFlickResultWithGeometry(def, dir, null)
     }
 
     val handleUndo = {
@@ -998,7 +1107,7 @@ fun Japanese12KeyFlickLayout(
         row3FirstKeyBg = actionKeyBg,
         row3FirstIsActionKey = true,
         onFlickComplete = handleFlickResult,
-        onFlickCompleteWithBias = handleFlickResultWithBias,
+        onFlickCompleteWithGeometry = handleFlickResultWithGeometry,
         onUndo = handleUndo,
         onDelete = {
             lastTappedKey = null
@@ -1019,6 +1128,10 @@ fun Japanese12KeyFlickLayout(
         onOpenSymbols = {
             lastTappedKey = null
             onOpenSymbols()
+        },
+        onToggleJpEn = {
+            lastTappedKey = null
+            onToggleJpEn()
         },
         onSpace = {
             lastTappedKey = null
@@ -1046,7 +1159,9 @@ fun English12KeyFlickLayout(
     rowHeight: Dp,
     isFlickOnly: Boolean = true,
     onCommitText: (String) -> Unit,
+    onCommitTextWithBias: ((String, TouchKeyBias?) -> Unit)? = null,
     onReplaceLastCommittedText: (String, Int) -> Unit = { _, _ -> },
+    onReplaceLastCommittedTextWithBias: ((String, Int, TouchKeyBias?) -> Unit)? = null,
     onToggleLastCharCase: () -> Unit,
     isLastCharLetter: () -> Boolean,
     onDelete: () -> Unit,
@@ -1055,10 +1170,11 @@ fun English12KeyFlickLayout(
     onLongPressSpace: () -> Unit = {},
     onEnter: () -> Unit,
     onSwitchMode: (FlickDirection) -> Unit,
-    onOpenSymbols: () -> Unit,
-    onOpenEmoji: () -> Unit,
+    onOpenSymbols: () -> Unit = {},
+    onOpenEmoji: () -> Unit = {},
     onCursorLeft: () -> Unit,
-    onCursorRight: () -> Unit
+    onCursorRight: () -> Unit,
+    onToggleJpEn: () -> Unit = {}
 ) {
     var isShifted by remember { mutableStateOf(false) }
 
@@ -1066,7 +1182,7 @@ fun English12KeyFlickLayout(
     var currentCycleIndex by remember { mutableStateOf(0) }
     var lastTapTimestamp by remember { mutableStateOf(0L) }
 
-    val handleFlickResult = { def: FlickKeyDef, dir: FlickDirection ->
+    val handleFlickResultWithGeometry = { def: FlickKeyDef, dir: FlickDirection, geometry: FlickTouchGeometry? ->
         if (def == FlickEnglishKeyDefinitions.keyCase) {
             lastTappedKey = null
             when (dir) {
@@ -1094,7 +1210,18 @@ fun English12KeyFlickLayout(
                         if (cycle != null && lastTappedKey == def.center && (now - lastTapTimestamp) < 850L) {
                             currentCycleIndex = (currentCycleIndex + 1) % cycle.size
                             lastTapTimestamp = now
-                            onReplaceLastCommittedText(cycle[currentCycleIndex], 1)
+                            val nextText = cycle[currentCycleIndex]
+                            val cycleBias = nextText.singleOrNull()?.let { ch ->
+                                geometry?.let { g ->
+                                    computeEnglishFlickToggleTouchBias(def, ch, g.startX, g.startY, g.widthPx, g.heightPx)
+                                }
+                            }
+                            val replaceWithBias = onReplaceLastCommittedTextWithBias
+                            if (replaceWithBias != null) {
+                                replaceWithBias(nextText, 1, cycleBias)
+                            } else {
+                                onReplaceLastCommittedText(nextText, 1)
+                            }
                             null
                         } else {
                             lastTappedKey = def.center
@@ -1110,12 +1237,23 @@ fun English12KeyFlickLayout(
                 FlickDirection.DOWN -> { lastTappedKey = null; def.down }
             }
             if (output != null && output.isNotEmpty()) {
-                onCommitText(output)
+                val bias = geometry?.let { g ->
+                    computeEnglishFlickTouchBias(def, dir, g.dx, g.dy, g.thresholdPx, g.startX, g.startY, g.widthPx, g.heightPx)
+                }
+                val commitWithBias = onCommitTextWithBias
+                if (commitWithBias != null) {
+                    commitWithBias(output, bias)
+                } else {
+                    onCommitText(output)
+                }
                 if (isShifted) {
                     isShifted = false
                 }
             }
         }
+    }
+    val handleFlickResult: (FlickKeyDef, FlickDirection) -> Unit = { def, dir ->
+        handleFlickResultWithGeometry(def, dir, null)
     }
 
     val handleUndo = {
@@ -1174,6 +1312,7 @@ fun English12KeyFlickLayout(
         },
         row3FirstIsActionKey = true,
         onFlickComplete = handleFlickResult,
+        onFlickCompleteWithGeometry = handleFlickResultWithGeometry,
         onUndo = handleUndo,
         onDelete = {
             lastTappedKey = null
@@ -1194,6 +1333,10 @@ fun English12KeyFlickLayout(
         onOpenSymbols = {
             lastTappedKey = null
             onOpenSymbols()
+        },
+        onToggleJpEn = {
+            lastTappedKey = null
+            onToggleJpEn()
         },
         onSpace = {
             lastTappedKey = null
@@ -1347,7 +1490,8 @@ fun FlickKeyCell(
     onFlickUpdate: (ActiveFlickPopupState?) -> Unit = {},
     onFlickUpdateById: ((Long, ActiveFlickPopupState?) -> Unit)? = null,
     onFlickComplete: (FlickKeyDef, FlickDirection) -> Unit,
-    onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null
+    onFlickCompleteWithBias: ((FlickKeyDef, FlickDirection, TouchKeyBias?) -> Unit)? = null,
+    onFlickCompleteWithGeometry: ((FlickKeyDef, FlickDirection, FlickTouchGeometry?) -> Unit)? = null
 ) {
     val currentKeyDef by rememberUpdatedState(keyDef)
     val currentGetRootCoords by rememberUpdatedState(getRootCoords)
@@ -1355,6 +1499,7 @@ fun FlickKeyCell(
     val currentOnFlickUpdateById by rememberUpdatedState(onFlickUpdateById)
     val currentOnFlickComplete by rememberUpdatedState(onFlickComplete)
     val currentOnFlickCompleteWithBias by rememberUpdatedState(onFlickCompleteWithBias)
+    val currentOnFlickCompleteWithGeometry by rememberUpdatedState(onFlickCompleteWithGeometry)
     val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
     val thresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
 
@@ -1370,11 +1515,12 @@ fun FlickKeyCell(
                 contentDescription = "${keyDef.label}を入力"
                 role = Role.Button
                 onClick {
+                    val withGeometryHandler = currentOnFlickCompleteWithGeometry
                     val withBiasHandler = currentOnFlickCompleteWithBias
-                    if (withBiasHandler != null) {
-                        withBiasHandler(currentKeyDef, FlickDirection.CENTER, null)
-                    } else {
-                        currentOnFlickComplete(currentKeyDef, FlickDirection.CENTER)
+                    when {
+                        withGeometryHandler != null -> withGeometryHandler(currentKeyDef, FlickDirection.CENTER, null)
+                        withBiasHandler != null -> withBiasHandler(currentKeyDef, FlickDirection.CENTER, null)
+                        else -> currentOnFlickComplete(currentKeyDef, FlickDirection.CENTER)
                     }
                     true
                 }
@@ -1420,10 +1566,8 @@ fun FlickKeyCell(
                                 change.consume()
                                 lastDx = change.position.x - startOffset.x
                                 lastDy = change.position.y - startOffset.y
-                                val bias = cellCoordinates?.size?.let { sz ->
-                                    computeFlickTouchBias(
-                                        keyDef = gestureKeyDef,
-                                        committedDir = currentDir,
+                                val geometry = cellCoordinates?.size?.let { sz ->
+                                    FlickTouchGeometry(
                                         dx = lastDx,
                                         dy = lastDy,
                                         thresholdPx = thresholdPx,
@@ -1433,11 +1577,27 @@ fun FlickKeyCell(
                                         heightPx = sz.height.toFloat()
                                     )
                                 }
+                                val withGeometryHandler = currentOnFlickCompleteWithGeometry
                                 val withBiasHandler = currentOnFlickCompleteWithBias
-                                if (withBiasHandler != null) {
-                                    withBiasHandler(gestureKeyDef, currentDir, bias)
-                                } else {
-                                    currentOnFlickComplete(gestureKeyDef, currentDir)
+                                when {
+                                    withGeometryHandler != null -> withGeometryHandler(gestureKeyDef, currentDir, geometry)
+                                    withBiasHandler != null -> {
+                                        val bias = geometry?.let { g ->
+                                            computeFlickTouchBias(
+                                                keyDef = gestureKeyDef,
+                                                committedDir = currentDir,
+                                                dx = g.dx,
+                                                dy = g.dy,
+                                                thresholdPx = g.thresholdPx,
+                                                startX = g.startX,
+                                                startY = g.startY,
+                                                widthPx = g.widthPx,
+                                                heightPx = g.heightPx
+                                            )
+                                        }
+                                        withBiasHandler(gestureKeyDef, currentDir, bias)
+                                    }
+                                    else -> currentOnFlickComplete(gestureKeyDef, currentDir)
                                 }
                                 break
                             }
@@ -1461,50 +1621,146 @@ fun FlickKeyCell(
                 }
             },
         visualPadding = visualPadding,
-        cornerRadius = 8.dp,
         baseColor = bgColor,
         isPressed = isPressed,
+        isModifier = isActionKey,
         palette = palette
     ) {
+        val typography = LocalKeyboardTheme.current.typography
+        val textShadow = typography.textShadowOrNull()
+        val hintColor = typography.hintTextColor.toComposeColor()
+        val showHints = typography.showFlickDirectionHints
         BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            // At the minimum user-selected height the original fixed text metrics no
-            // longer leave enough room for both lines.  Keep this decision inside the
-            // shared key component so the IME and the settings preview stay identical.
+            // Keep the compact-size decision inside the shared key component so the
+            // IME and the settings preview stay identical.
             val isCompactKey = maxHeight < 44.dp
-            val mainTextSize = when {
+            val hintTextSize = if (isCompactKey) 7.sp else 8.5.sp
+            val directionHints = remember(keyDef) { flickDirectionHints(keyDef) }
+            val baseTextSize = when {
                 keyDef.label.length > 2 && isCompactKey -> 12.sp
                 keyDef.label.length > 2 -> 14.sp
                 isCompactKey -> 17.sp
                 else -> 19.sp
             }
-            val subTextSize = if (isCompactKey) 7.sp else 8.5.sp
+            // Side hints take half of the free side margin; keep a long label from
+            // squeezing them out on narrow keys (floating keyboard, large font).
+            val mainTextSize = (fittedFlickLabelSizeSp(
+                label = keyDef.label,
+                keyWidthDp = maxWidth.value,
+                hintSp = hintTextSize.value,
+                hasLeftHint = showHints && directionHints.left.isNotEmpty(),
+                hasRightHint = showHints && directionHints.right.isNotEmpty(),
+                maxSizeSp = baseTextSize.value,
+                fontScale = density.fontScale
+            ) * typography.labelScale).sp
 
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = keyDef.label,
-                    color = textColor,
-                    fontSize = mainTextSize,
-                    fontWeight = FontWeight.Bold
-                )
-                if (keyDef.subText.isNotEmpty()) {
+            if (!showHints || directionHints.isEmpty) {
+                // Definitions without directional output keep the legacy centered stack.
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Text(
-                        text = keyDef.subText,
-                        color = textColor.copy(alpha = 0.5f),
-                        fontSize = subTextSize,
-                        fontWeight = FontWeight.Normal,
-                        maxLines = 1
+                        text = keyDef.label,
+                        color = textColor,
+                        fontSize = mainTextSize,
+                        fontWeight = FontWeight.Bold,
+                        style = androidx.compose.ui.text.TextStyle(shadow = textShadow)
                     )
+                    if (showHints && keyDef.subText.isNotEmpty()) {
+                        Text(
+                            text = keyDef.subText,
+                            color = hintColor.copy(alpha = 0.72f),
+                            fontSize = hintTextSize,
+                            fontWeight = FontWeight.Normal,
+                            maxLines = 1
+                        )
+                    }
+                }
+            } else {
+                // Each hint is centered inside the free margin next to the label instead
+                // of sitting on the key edge.
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    if (directionHints.up.isNotEmpty() || directionHints.down.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (directionHints.up.isNotEmpty()) {
+                                FlickDirectionHint(directionHints.up, hintColor, hintTextSize)
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (directionHints.left.isNotEmpty() || directionHints.right.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (directionHints.left.isNotEmpty()) {
+                                    FlickDirectionHint(directionHints.left, hintColor, hintTextSize)
+                                }
+                            }
+                        }
+                        Text(
+                            text = keyDef.label,
+                            color = textColor,
+                            fontSize = mainTextSize,
+                            fontWeight = FontWeight.Bold,
+                            style = androidx.compose.ui.text.TextStyle(shadow = textShadow)
+                        )
+                        if (directionHints.left.isNotEmpty() || directionHints.right.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (directionHints.right.isNotEmpty()) {
+                                    FlickDirectionHint(directionHints.right, hintColor, hintTextSize)
+                                }
+                            }
+                        }
+                    }
+                    if (directionHints.up.isNotEmpty() || directionHints.down.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (directionHints.down.isNotEmpty()) {
+                                FlickDirectionHint(directionHints.down, hintColor, hintTextSize)
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun FlickDirectionHint(
+    text: String,
+    color: Color,
+    fontSize: TextUnit
+) {
+    Text(
+        text = text,
+        color = color.copy(alpha = 0.44f),
+        fontSize = fontSize,
+        fontWeight = FontWeight.Normal,
+        maxLines = 1
+    )
 }
 
 @Composable
@@ -1641,13 +1897,29 @@ private fun PopupCell(
     cellSize: androidx.compose.ui.unit.Dp = 42.dp,
     modifier: Modifier = Modifier
 ) {
+    val popupStyle = LocalKeyboardTheme.current.popup
+    val bgColor = if (isSelected) {
+        popupStyle.accentColor.toComposeColor()
+    } else {
+        popupStyle.backgroundColor.toComposeColor().copy(alpha = 0.95f)
+    }
+    val borderColor = if (isSelected) {
+        palette.primaryAccentSoft
+    } else {
+        popupStyle.borderColor.toComposeColor()
+    }
+    val cellTextColor = if (isSelected) {
+        popupStyle.onAccentColor.toComposeColor()
+    } else {
+        popupStyle.textColor.toComposeColor()
+    }
     Surface(
         modifier = modifier.size(cellSize),
-        shape = RoundedCornerShape(10.dp),
-        color = if (isSelected) palette.primaryAccent else palette.surfaceElevated.copy(alpha = 0.95f),
+        shape = RoundedCornerShape(popupStyle.cornerRadiusDp.dp),
+        color = bgColor,
         border = androidx.compose.foundation.BorderStroke(
             width = if (isSelected) 1.5.dp else 1.dp,
-            color = if (isSelected) palette.primaryAccentSoft else palette.borderSubtle
+            color = borderColor
         ),
         shadowElevation = if (isSelected) 8.dp else 3.dp
     ) {
@@ -1657,7 +1929,7 @@ private fun PopupCell(
         ) {
             Text(
                 text = text,
-                color = if (isSelected) palette.onAccent else palette.textPrimary,
+                color = cellTextColor,
                 fontSize = if (isSelected) 20.sp else 16.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
             )

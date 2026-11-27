@@ -29,8 +29,13 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
+import com.zeroconvert.ime.theme.KeyStylePreset
+import com.zeroconvert.ime.theme.KeyboardThemeCatalog
+import com.zeroconvert.ime.theme.KeyboardThemeSpec
+import com.zeroconvert.ime.theme.toComposeColor
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
@@ -53,6 +58,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -83,58 +89,118 @@ val LocalDynamicTouchAssistEnabled = staticCompositionLocalOf { true }
 /** Current theme palette exposed to shared keyboard controls without forcing parameter churn. */
 val LocalZeroConPalette = staticCompositionLocalOf { ZeroConGraphitePalette }
 
+/** Full keyboard skin specification exposed to keycaps, bars, and popups. */
+val LocalKeyboardTheme = staticCompositionLocalOf { KeyboardThemeCatalog.defaultDark }
+
 data class KeyCapColors(
     val fill: Color,
     val border: Color,
     val topHighlight: Color,
-    val bottomRim: Color
+    val bottomRim: Color,
+    val dropShadow: Color = Color.Transparent
 )
 
 /**
- * Resolves coherent unpressed/pressed fill, subtle border, top highlight, and bottom rim colors
- * for both dark and light [ZeroConPalette] variants.
+ * Resolves coherent unpressed/pressed fill, subtle border, top highlight, bottom rim, and
+ * drop shadow colors for all [KeyStylePreset] and [ZeroConPalette] variants.
  */
 fun resolveKeyCapColors(
     baseColor: Color,
     palette: ZeroConPalette,
     isPressed: Boolean,
-    isAccent: Boolean = false
+    isAccent: Boolean = false,
+    isModifier: Boolean = false,
+    theme: KeyboardThemeSpec = KeyboardThemeCatalog.defaultDark
 ): KeyCapColors {
+    val surface = theme.keySurface
+    val fillAlpha = when {
+        isAccent -> if (surface.preset == KeyStylePreset.BORDERLESS) maxOf(surface.keyFillAlpha, 0.90f) else 1.0f
+        isModifier -> surface.modifierKeyAlpha
+        else -> surface.keyFillAlpha
+    }
+    val effectiveBase = baseColor.copy(alpha = (baseColor.alpha * fillAlpha).coerceIn(0f, 1f))
     val isDarkSurface = palette.isDark && baseColor.luminance() < 0.45f
+    val accentColor = palette.primaryAccent
+    val customPressed = surface.pressedKeyFill?.toComposeColor()
+
     val fill = when {
+        isPressed && customPressed != null && !isAccent -> customPressed
         isPressed && isAccent -> {
             if (isDarkSurface) lerp(baseColor, Color.White, 0.22f)
             else lerp(baseColor, Color.Black, 0.14f)
         }
         isPressed -> {
-            val accented = lerp(baseColor, palette.primaryAccent, if (isDarkSurface) 0.30f else 0.20f)
-            if (isDarkSurface) lerp(accented, Color.White, 0.08f) else lerp(accented, Color.Black, 0.05f)
+            when (surface.preset) {
+                KeyStylePreset.OUTLINED_GLASS, KeyStylePreset.BORDERLESS -> {
+                    val blended = lerp(baseColor, accentColor, if (isDarkSurface) 0.42f else 0.30f)
+                    blended.copy(alpha = maxOf(fillAlpha + 0.25f, 0.52f).coerceAtMost(0.92f))
+                }
+                else -> {
+                    val accented = lerp(baseColor, accentColor, if (isDarkSurface) 0.30f else 0.20f)
+                    val adjusted = if (isDarkSurface) lerp(accented, Color.White, 0.08f) else lerp(accented, Color.Black, 0.05f)
+                    adjusted.copy(alpha = maxOf(fillAlpha, 0.72f).coerceAtMost(1f))
+                }
+            }
         }
-        else -> baseColor
+        else -> effectiveBase
     }
-    val border = when {
-        isPressed -> palette.primaryAccent.copy(alpha = 0.72f)
-        isAccent -> lerp(baseColor, if (isDarkSurface) Color.White else Color.Black, 0.16f).copy(alpha = 0.55f)
-        isDarkSurface -> lerp(palette.borderSubtle, Color.White, 0.10f).copy(alpha = 0.68f)
-        else -> palette.borderSubtle.copy(alpha = 0.90f)
+
+    val themeBorderColor = surface.borderColor.toComposeColor()
+    val border = when (surface.preset) {
+        KeyStylePreset.BEVEL_3D -> when {
+            isPressed -> accentColor.copy(alpha = 0.72f)
+            isAccent -> lerp(baseColor, if (isDarkSurface) Color.White else Color.Black, 0.16f).copy(alpha = 0.45f)
+            isDarkSurface -> lerp(palette.borderSubtle, Color.White, 0.08f).copy(alpha = 0.55f)
+            else -> palette.borderSubtle.copy(alpha = 0.78f)
+        }
+        KeyStylePreset.IOS_SHADOW, KeyStylePreset.MATERIAL_FLAT -> when {
+            isPressed -> accentColor.copy(alpha = 0.65f)
+            surface.borderWidthDp > 0f && surface.borderAlpha > 0f ->
+                themeBorderColor.copy(alpha = surface.borderAlpha)
+            else -> Color.Transparent
+        }
+        KeyStylePreset.OUTLINED_GLASS -> when {
+            isPressed -> accentColor.copy(alpha = 0.90f)
+            isAccent -> lerp(baseColor, Color.White, 0.2f).copy(alpha = 0.45f)
+            else -> themeBorderColor.copy(alpha = surface.borderAlpha)
+        }
+        KeyStylePreset.BORDERLESS -> Color.Transparent
     }
-    val topHighlight = when {
-        isPressed -> Color.Transparent
-        isAccent -> Color.White.copy(alpha = 0.18f)
-        isDarkSurface -> Color.White.copy(alpha = 0.07f)
-        else -> Color.White.copy(alpha = 0.55f)
+
+    val bevelScale = surface.bevelIntensity.coerceIn(0f, 1.5f)
+    val topHighlight = if (surface.preset == KeyStylePreset.BEVEL_3D && !isPressed && bevelScale > 0f) {
+        val baseAlpha = when {
+            isAccent -> 0.14f
+            isDarkSurface -> 0.055f
+            else -> 0.45f
+        }
+        Color.White.copy(alpha = (baseAlpha * bevelScale).coerceIn(0f, 1f))
+    } else {
+        Color.Transparent
     }
-    val bottomRim = when {
-        isPressed -> Color.Transparent
-        isAccent -> lerp(baseColor, Color.Black, 0.30f).copy(alpha = 0.55f)
-        isDarkSurface -> Color.Black.copy(alpha = 0.36f)
-        else -> lerp(baseColor, Color.Black, 0.28f).copy(alpha = 0.22f)
+
+    val bottomRim = if (surface.preset == KeyStylePreset.BEVEL_3D && !isPressed && bevelScale > 0f) {
+        when {
+            isAccent -> lerp(baseColor, Color.Black, 0.30f).copy(alpha = (0.45f * bevelScale).coerceIn(0f, 1f))
+            isDarkSurface -> Color.Black.copy(alpha = (0.30f * bevelScale).coerceIn(0f, 1f))
+            else -> lerp(baseColor, Color.Black, 0.28f).copy(alpha = (0.18f * bevelScale).coerceIn(0f, 1f))
+        }
+    } else {
+        Color.Transparent
     }
+
+    val dropShadow = if (surface.preset == KeyStylePreset.IOS_SHADOW && !isPressed && surface.shadowElevationDp > 0f) {
+        surface.shadowColor.toComposeColor().copy(alpha = if (palette.isDark) 0.45f else 0.28f)
+    } else {
+        Color.Transparent
+    }
+
     return KeyCapColors(
         fill = fill,
         border = border,
         topHighlight = topHighlight,
-        bottomRim = bottomRim
+        bottomRim = bottomRim,
+        dropShadow = dropShadow
     )
 }
 
@@ -148,33 +214,62 @@ internal fun effectiveKeyCapCornerRadiusPx(
     requestedRadiusPx: Float
 ): Float = min(requestedRadiusPx.coerceAtLeast(0f), min(widthPx, heightPx).coerceAtLeast(0f) / 2f)
 
+internal fun resolve12KeyEnterCornerRadiusDp(enterCornerRadiusDp: Float): Float =
+    enterCornerRadiusDp.coerceAtMost(12f)
+
 /**
  * Separates a key's outer zero-deadzone touch hitbox ([modifier]) from its visual keycap margins
- * ([visualPadding]), drawing the background, pressed highlight, subtle border, and 3D bottom rim.
+ * ([visualPadding]), drawing the background, pressed highlight, subtle border, drop shadow, and 3D bottom rim.
  */
 @Composable
 fun KeyCapFrame(
     modifier: Modifier = Modifier,
     visualPadding: PaddingValues = PaddingValues(horizontal = 2.5.dp, vertical = 2.dp),
-    cornerRadius: Dp = 7.dp,
+    cornerRadius: Dp? = null,
     baseColor: Color,
     isPressed: Boolean,
     isAccent: Boolean = false,
+    isModifier: Boolean = false,
     bordersEnabled: Boolean = LocalKeyBordersEnabled.current,
     palette: ZeroConPalette = LocalZeroConPalette.current,
+    theme: KeyboardThemeSpec = LocalKeyboardTheme.current,
     contentAlignment: Alignment = Alignment.Center,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val resolvedCornerRadius = cornerRadius ?: if (isAccent) {
+        theme.keySurface.enterCornerRadiusDp.dp
+    } else {
+        theme.keySurface.cornerRadiusDp.dp
+    }
     val colors = resolveKeyCapColors(
         baseColor = baseColor,
         palette = palette,
         isPressed = isPressed,
-        isAccent = isAccent
+        isAccent = isAccent,
+        isModifier = isModifier,
+        theme = theme
     )
     val currentIsPressed by rememberUpdatedState(isPressed)
     val currentColors by rememberUpdatedState(colors)
-    val currentCornerRadius by rememberUpdatedState(cornerRadius)
-    val shape = RoundedCornerShape(cornerRadius)
+    val currentCornerRadius by rememberUpdatedState(resolvedCornerRadius)
+    val currentPreset by rememberUpdatedState(theme.keySurface.preset)
+    val currentShadowDp by rememberUpdatedState(theme.keySurface.shadowElevationDp.dp)
+    val shape = RoundedCornerShape(resolvedCornerRadius)
+    val borderWidth = if (theme.keySurface.preset == KeyStylePreset.BEVEL_3D) {
+        0.65.dp
+    } else {
+        theme.keySurface.borderWidthDp.dp
+    }
+    val showBorder = when (theme.keySurface.preset) {
+        KeyStylePreset.OUTLINED_GLASS -> colors.border.alpha > 0f && borderWidth > 0.dp
+        KeyStylePreset.BORDERLESS -> false
+        else -> bordersEnabled && colors.border.alpha > 0f && borderWidth > 0.dp
+    }
+    val showBevel = bordersEnabled && theme.keySurface.preset == KeyStylePreset.BEVEL_3D
+    val showShadow = bordersEnabled &&
+        theme.keySurface.preset == KeyStylePreset.IOS_SHADOW &&
+        theme.keySurface.shadowElevationDp > 0f
+
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
@@ -183,66 +278,92 @@ fun KeyCapFrame(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(visualPadding)
+                .then(
+                    if (showShadow) {
+                        Modifier.drawBehind {
+                            val latestColors = currentColors
+                            if (!currentIsPressed && latestColors.dropShadow.alpha > 0f &&
+                                currentPreset == KeyStylePreset.IOS_SHADOW
+                            ) {
+                                val effectiveRadius = effectiveKeyCapCornerRadiusPx(
+                                    widthPx = size.width,
+                                    heightPx = size.height,
+                                    requestedRadiusPx = currentCornerRadius.toPx()
+                                )
+                                drawRoundRect(
+                                    color = latestColors.dropShadow,
+                                    topLeft = Offset(0f, currentShadowDp.toPx()),
+                                    size = size,
+                                    cornerRadius = CornerRadius(effectiveRadius, effectiveRadius)
+                                )
+                            }
+                        }
+                    } else {
+                        Modifier
+                    }
+                )
                 .clip(shape)
                 .background(colors.fill)
                 .then(
-                    if (bordersEnabled) {
-                        Modifier
-                            .drawWithCache {
-                                if (size.width <= 0f || size.height <= 0f) {
-                                    onDrawWithContent { drawContent() }
-                                } else {
-                                    val effectiveRadius = effectiveKeyCapCornerRadiusPx(
-                                        widthPx = size.width,
-                                        heightPx = size.height,
-                                        requestedRadiusPx = currentCornerRadius.toPx()
+                    if (showBevel) {
+                        Modifier.drawWithCache {
+                            if (size.width <= 0f || size.height <= 0f) {
+                                onDrawWithContent { drawContent() }
+                            } else {
+                                val effectiveRadius = effectiveKeyCapCornerRadiusPx(
+                                    widthPx = size.width,
+                                    heightPx = size.height,
+                                    requestedRadiusPx = currentCornerRadius.toPx()
+                                )
+                                val corner = CornerRadius(effectiveRadius, effectiveRadius)
+                                val outerPath = Path().apply {
+                                    addRoundRect(RoundRect(0f, 0f, size.width, size.height, corner))
+                                }
+                                val highlightH = 1.2.dp.toPx()
+                                val shiftedDown = Path().apply {
+                                    addRoundRect(
+                                        RoundRect(
+                                            left = 0f,
+                                            top = highlightH,
+                                            right = size.width,
+                                            bottom = size.height + highlightH,
+                                            cornerRadius = corner
+                                        )
                                     )
-                                    val corner = CornerRadius(effectiveRadius, effectiveRadius)
-                                    val outerPath = Path().apply {
-                                        addRoundRect(RoundRect(0f, 0f, size.width, size.height, corner))
-                                    }
-                                    // Subtract a shifted identical shape so top highlight and bottom rim
-                                    // follow the exact keycap contour (including 22dp pill buttons) instead
-                                    // of forming flat horizontal bands across curved top/bottom edges.
-                                    val highlightH = 1.65.dp.toPx()
-                                    val shiftedDown = Path().apply {
-                                        addRoundRect(
-                                            RoundRect(
-                                                left = 0f,
-                                                top = highlightH,
-                                                right = size.width,
-                                                bottom = size.height + highlightH,
-                                                cornerRadius = corner
-                                            )
+                                }
+                                val topBevelPath = Path.combine(PathOperation.Difference, outerPath, shiftedDown)
+                                val rimH = 1.4.dp.toPx()
+                                val shiftedUp = Path().apply {
+                                    addRoundRect(
+                                        RoundRect(
+                                            left = 0f,
+                                            top = -rimH,
+                                            right = size.width,
+                                            bottom = size.height - rimH,
+                                            cornerRadius = corner
                                         )
+                                    )
+                                }
+                                val bottomBevelPath = Path.combine(PathOperation.Difference, outerPath, shiftedUp)
+                                onDrawWithContent {
+                                    drawContent()
+                                    val latestColors = currentColors
+                                    if (!currentIsPressed && latestColors.topHighlight.alpha > 0f) {
+                                        drawPath(path = topBevelPath, color = latestColors.topHighlight)
                                     }
-                                    val topBevelPath = Path.combine(PathOperation.Difference, outerPath, shiftedDown)
-                                    val rimH = 1.8.dp.toPx()
-                                    val shiftedUp = Path().apply {
-                                        addRoundRect(
-                                            RoundRect(
-                                                left = 0f,
-                                                top = -rimH,
-                                                right = size.width,
-                                                bottom = size.height - rimH,
-                                                cornerRadius = corner
-                                            )
-                                        )
-                                    }
-                                    val bottomBevelPath = Path.combine(PathOperation.Difference, outerPath, shiftedUp)
-                                    onDrawWithContent {
-                                        drawContent()
-                                        val latestColors = currentColors
-                                        if (!currentIsPressed && latestColors.topHighlight.alpha > 0f) {
-                                            drawPath(path = topBevelPath, color = latestColors.topHighlight)
-                                        }
-                                        if (!currentIsPressed && latestColors.bottomRim.alpha > 0f) {
-                                            drawPath(path = bottomBevelPath, color = latestColors.bottomRim)
-                                        }
+                                    if (!currentIsPressed && latestColors.bottomRim.alpha > 0f) {
+                                        drawPath(path = bottomBevelPath, color = latestColors.bottomRim)
                                     }
                                 }
                             }
-                            .border(width = 0.8.dp, color = colors.border, shape = shape)
+                        }
+                    } else {
+                        Modifier
+                    }
+                )
+                .then(
+                    if (showBorder) {
+                        Modifier.border(width = borderWidth, color = colors.border, shape = shape)
                     } else {
                         Modifier
                     }
@@ -261,8 +382,30 @@ suspend fun AwaitPointerEventScope.awaitPointerReleaseInBounds(
     pointerId: PointerId,
     widthPx: Float,
     heightPx: Float,
-    slopForgivenessPx: Float
-): Boolean = awaitKeyRelease(pointerId, widthPx, heightPx, slopForgivenessPx) == FlickDirection.CENTER
+    slopForgivenessPx: Float,
+    horizontalDrag: HorizontalCursorDragTracker? = null
+): Boolean = awaitKeyRelease(
+    pointerId,
+    widthPx,
+    heightPx,
+    slopForgivenessPx,
+    horizontalDrag = horizontalDrag
+) == FlickDirection.CENTER
+
+/**
+ * Builds the drag tracker for one space-key press. Every space key shares this so that its
+ * cursor steps match the arrow keys.
+ */
+internal fun Density.spaceCursorDragTracker(
+    originX: Float,
+    onStep: (Int) -> Unit,
+    onDragStart: () -> Unit
+): HorizontalCursorDragTracker = HorizontalCursorDragTracker(
+    stepPx = 12.dp.toPx(),
+    startSlopPx = 8.dp.toPx(),
+    onStep = onStep,
+    onDragStart = onDragStart
+).also { it.begin(originX) }
 
 private suspend fun AwaitPointerEventScope.awaitKeyRelease(
     pointerId: PointerId,
@@ -271,7 +414,8 @@ private suspend fun AwaitPointerEventScope.awaitKeyRelease(
     slopForgivenessPx: Float,
     flickStart: Offset? = null,
     flickThresholdPx: Float = 0f,
-    onFlickPreview: ((FlickDirection?) -> Unit)? = null
+    onFlickPreview: ((FlickDirection?) -> Unit)? = null,
+    horizontalDrag: HorizontalCursorDragTracker? = null
 ): FlickDirection? {
     var direction = FlickDirection.CENTER
     while (true) {
@@ -279,6 +423,10 @@ private suspend fun AwaitPointerEventScope.awaitKeyRelease(
         val change = event.changes.firstOrNull { it.id == pointerId } ?: return null
         if (change.isConsumed && (!change.pressed || flickStart != null)) return null
         val pos = change.position
+        if (horizontalDrag != null && change.pressed) {
+            horizontalDrag.move(pos.x)
+            if (horizontalDrag.isDragging) change.consume()
+        }
         if (flickStart != null) {
             val nextDirection = calculateFlickDirectionWithHysteresis(
                 pos.x - flickStart.x,
@@ -292,6 +440,11 @@ private suspend fun AwaitPointerEventScope.awaitKeyRelease(
             }
         }
         if (!change.pressed) {
+            // A horizontal drag already moved the cursor; releasing it must not also act as a tap.
+            if (horizontalDrag?.isDragging == true) {
+                change.consume()
+                return null
+            }
             when (direction) {
                 FlickDirection.RIGHT, FlickDirection.UP -> Unit
                 FlickDirection.LEFT, FlickDirection.DOWN -> return null
@@ -319,20 +472,24 @@ private suspend fun AwaitPointerEventScope.awaitKeyRelease(
 fun KeyboardActionKey(
     modifier: Modifier = Modifier,
     visualPadding: PaddingValues = PaddingValues(horizontal = 2.5.dp, vertical = 2.dp),
-    cornerRadius: Dp = 7.dp,
+    cornerRadius: Dp? = null,
     baseColor: Color,
     isAccent: Boolean = false,
+    isModifier: Boolean = !isAccent,
     palette: ZeroConPalette = LocalZeroConPalette.current,
+    theme: KeyboardThemeSpec = LocalKeyboardTheme.current,
     contentDescription: String? = null,
     onBeforePress: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
     onFlick: ((FlickDirection) -> Unit)? = null,
     onFlickPreview: ((FlickDirection?) -> Unit)? = null,
+    onHorizontalStep: ((Int) -> Unit)? = null,
     onClick: () -> Unit,
     content: @Composable BoxScope.(isPressed: Boolean) -> Unit
 ) {
     val currentOnClick by rememberUpdatedState(onClick)
     val currentOnLongClick by rememberUpdatedState(onLongClick)
+    val currentOnHorizontalStep by rememberUpdatedState(onHorizontalStep)
     val currentOnFlick by rememberUpdatedState(onFlick)
     val currentOnFlickPreview by rememberUpdatedState(onFlickPreview)
     val currentOnBeforePress by rememberUpdatedState(onBeforePress)
@@ -385,6 +542,17 @@ fun KeyboardActionKey(
                         }
                     }
 
+                    // Horizontal drag steps cursor one character per step; a long press cancels the drag start.
+                    val dragTracker = if (currentOnHorizontalStep != null) {
+                        spaceCursorDragTracker(
+                            originX = down.position.x,
+                            onStep = { step -> if (!longPressTriggered) currentOnHorizontalStep?.invoke(step) },
+                            onDragStart = { longPressJob?.cancel() }
+                        )
+                    } else {
+                        null
+                    }
+
                     val flickPreview = currentOnFlickPreview
                     val direction = try {
                         flickPreview?.invoke(FlickDirection.CENTER)
@@ -395,7 +563,8 @@ fun KeyboardActionKey(
                             slopForgivenessPx = forgivenessPx,
                             flickStart = down.position.takeIf { currentOnFlick != null },
                             flickThresholdPx = flickThresholdDp.toPx(),
-                            onFlickPreview = flickPreview
+                            onFlickPreview = flickPreview,
+                            horizontalDrag = dragTracker
                         )
                     } finally {
                         longPressJob?.cancel()
@@ -417,8 +586,10 @@ fun KeyboardActionKey(
         baseColor = baseColor,
         isPressed = isPressed,
         isAccent = isAccent,
+        isModifier = isModifier,
         bordersEnabled = bordersEnabled,
-        palette = palette
+        palette = palette,
+        theme = theme
     ) {
         content(isPressed)
     }
@@ -460,7 +631,13 @@ fun QwertyKeyPreviewBubble(
         rootHeightPx = rootHeightPx
     )
 
-    val shape = RoundedCornerShape(10.dp)
+    val popupStyle = LocalKeyboardTheme.current.popup
+    val popupBg = popupStyle.backgroundColor.toComposeColor()
+    val popupAccent = popupStyle.accentColor.toComposeColor()
+    val popupText = popupStyle.textColor.toComposeColor()
+    val popupOnAccent = popupStyle.onAccentColor.toComposeColor()
+    val popupBorder = popupStyle.borderColor.toComposeColor()
+    val shape = RoundedCornerShape(popupStyle.cornerRadiusDp.dp)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -472,10 +649,10 @@ fun QwertyKeyPreviewBubble(
                 .size(width = bubbleWidthDp, height = bubbleHeightDp)
                 .shadow(elevation = 6.dp, shape = shape, clip = false)
                 .clip(shape)
-                .background(palette.surfaceElevated)
+                .background(popupBg)
                 .border(
                     width = if (isUpSelected) 1.5.dp else 1.dp,
-                    color = palette.primaryAccent.copy(alpha = if (isUpSelected) 0.9f else 0.55f),
+                    color = (if (isUpSelected) popupAccent else popupBorder).copy(alpha = if (isUpSelected) 0.9f else 0.75f),
                     shape = shape
                 ),
             contentAlignment = Alignment.Center
@@ -493,14 +670,14 @@ fun QwertyKeyPreviewBubble(
                             .height(25.dp)
                             .clip(RoundedCornerShape(7.dp))
                             .background(
-                                if (isUpSelected) palette.primaryAccent
+                                if (isUpSelected) popupAccent
                                 else palette.keyModifier.copy(alpha = 0.55f)
                             ),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = resolvedUpLabel,
-                            color = if (isUpSelected) palette.onAccent else palette.textSecondary,
+                            color = if (isUpSelected) popupOnAccent else palette.textSecondary,
                             fontSize = if (isUpSelected) 15.sp else 13.sp,
                             fontWeight = if (isUpSelected) FontWeight.Bold else FontWeight.SemiBold,
                             textAlign = TextAlign.Center,
@@ -516,7 +693,7 @@ fun QwertyKeyPreviewBubble(
                     ) {
                         Text(
                             text = label,
-                            color = if (isUpSelected) palette.textMuted else palette.textPrimary,
+                            color = if (isUpSelected) palette.textMuted else popupText,
                             fontSize = if (isUpSelected) 18.sp else 21.sp,
                             fontWeight = if (isUpSelected) FontWeight.Medium else FontWeight.SemiBold,
                             textAlign = TextAlign.Center,
@@ -527,7 +704,7 @@ fun QwertyKeyPreviewBubble(
             } else {
                 Text(
                     text = label,
-                    color = palette.textPrimary,
+                    color = popupText,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center,
@@ -565,10 +742,12 @@ fun ProvideKeyboardErgonomicsLocals(
     flickThresholdDp: Dp,
     keyBordersEnabled: Boolean,
     dynamicTouchAssistEnabled: Boolean = true,
+    keyboardTheme: KeyboardThemeSpec = KeyboardThemeCatalog.defaultDark,
     content: @Composable () -> Unit
 ) {
     CompositionLocalProvider(
         LocalZeroConPalette provides palette,
+        LocalKeyboardTheme provides keyboardTheme,
         LocalOnKeyPressHaptic provides onKeyPressHaptic,
         LocalKeyPreviewEnabled provides keyPreviewEnabled,
         LocalFlickThresholdDp provides flickThresholdDp,

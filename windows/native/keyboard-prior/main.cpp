@@ -570,9 +570,10 @@ int main(int argc, char **argv) {
             }
           }
         }
-        const auto input_mode = (mode_str == "flick")
-                                    ? InputKeyboardMode::Flick
-                                    : InputKeyboardMode::Qwerty;
+        const auto input_mode = parse_input_keyboard_mode(mode_str);
+        const bool is_flick_mode = is_flick_keyboard_mode(input_mode);
+        const double rank_pen_weight = is_flick_mode ? 5.5 : 4.0;
+        const double stage1_pen_weight = is_flick_mode ? 5.0 : 3.0;
         const auto input_hira = !input_utf8.empty()
                                     ? hiragana(decode_utf8(input_utf8))
                                     : roman_decode(raw_keys);
@@ -597,8 +598,8 @@ int main(int argc, char **argv) {
             ctx_u32 = ctx_u32.substr(ctx_u32.size() - 64);
         }
         const auto &orig = candidates[0];
-        const auto windows =
-            build_scoring_windows(orig.reading, ctx_u32, candidates, dictionary);
+        const auto windows = build_scoring_windows(
+            orig.reading, ctx_u32, candidates, dictionary, input_mode);
         if (windows.empty()) {
           reply << "{\"observed\":" << json_string(encode_utf8(orig.reading))
                 << "}";
@@ -631,8 +632,10 @@ int main(int argc, char **argv) {
                           candidates[win.members[a].candidate_index];
                       const auto &cb =
                           candidates[win.members[b].candidate_index];
-                      const double ra = ca.local_delta - ca.penalty * 4.0;
-                      const double rb = cb.local_delta - cb.penalty * 4.0;
+                      const double ra =
+                          ca.local_delta - ca.penalty * rank_pen_weight;
+                      const double rb =
+                          cb.local_delta - cb.penalty * rank_pen_weight;
                       return ra != rb ? ra > rb : a < b;
                     });
           const auto masked_ctx = mask_digits_nam_u32(win.left_context);
@@ -686,8 +689,8 @@ int main(int argc, char **argv) {
               const double short_unit = orig_has_ascii ? 5.0 : 10.0;
               len_comp = -short_unit * std::min(-token_diff, 2);
             }
-            const double total =
-                m.cand_path.score + 8.0 * lm_score + len_comp - cand.penalty * 3.0;
+            const double total = m.cand_path.score + 8.0 * lm_score + len_comp -
+                                 cand.penalty * stage1_pen_weight;
             const double delta = total - baseline;
             if (delta >= 28.0) {
               ranked.push_back({delta, delta, 0.0, false, false,

@@ -12,6 +12,7 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -25,6 +26,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.zeroconvert.ime.theme.keyboardThemeBackground
+import com.zeroconvert.ime.theme.rememberResolvedKeyboardSkin
+import com.zeroconvert.ime.theme.toZeroConPalette
 import kotlinx.coroutines.delay
 
 internal const val FloatingKeyboardHandleHeightDp = 20
@@ -43,13 +47,22 @@ internal fun FloatingKeyboardPanel(
     floating: Boolean,
     inputViewEpoch: Int,
     themeMode: String,
+    customThemeRevision: Long = 0L,
     keyHeightDp: Int,
     maxKeyRows: Int,
     clipboardEditing: Boolean,
     onDock: () -> Unit,
     keyboard: @Composable () -> Unit
 ) {
-    val palette = rememberZeroConPalette(themeMode)
+    val resolvedSkin = rememberResolvedKeyboardSkin(themeMode, customThemeRevision)
+    val keyboardTheme = resolvedSkin.spec
+    val backgroundImage = resolvedSkin.backgroundImage
+    val palette = remember(keyboardTheme) { keyboardTheme.toZeroConPalette() }
+    val barColor = if (keyboardTheme.background.kind == com.zeroconvert.ime.theme.BackgroundKind.IMAGE && keyboardTheme.background.applyToBars) {
+        palette.surface.copy(alpha = keyboardTheme.bars.backgroundAlpha)
+    } else {
+        palette.surface.copy(alpha = if (keyboardTheme.background.applyToBars) keyboardTheme.bars.backgroundAlpha else 1f)
+    }
     val shape = RoundedCornerShape(14.dp)
     var showCorners by remember(inputViewEpoch, floating) { mutableStateOf(false) }
     val activeCorner = host.activeResizeCorner
@@ -70,14 +83,14 @@ internal fun FloatingKeyboardPanel(
         else lerp(palette.borderSubtle, palette.primaryAccent.copy(alpha = 0.58f), cornerEmphasis)
     Box(
         modifier = if (floating) {
-            Modifier.fillMaxSize().clip(shape).background(palette.canvas).border(1.dp, borderColor, shape)
+            Modifier.fillMaxSize().clip(shape).keyboardThemeBackground(keyboardTheme.background, backgroundImage).border(1.dp, borderColor, shape)
         } else {
             Modifier
         }
     ) {
         Column {
             if (floating) {
-                Spacer(Modifier.fillMaxWidth().height(FloatingKeyboardTopRailDp.dp).background(palette.surface))
+                Spacer(Modifier.fillMaxWidth().height(FloatingKeyboardTopRailDp.dp).background(barColor))
             }
             BoxWithConstraints(Modifier.then(if (floating) Modifier.weight(1f).fillMaxWidth() else Modifier)) {
                 val density = LocalDensity.current
@@ -94,7 +107,7 @@ internal fun FloatingKeyboardPanel(
                 }
             }
             if (floating) {
-                FloatingKeyboardMoveHandle(host, palette, onDock)
+                FloatingKeyboardMoveHandle(host, palette, barColor, onDock)
             }
         }
         if (floating && cornerEmphasis > 0f) {
@@ -142,10 +155,11 @@ private fun FloatingKeyboardCornerMark(
 private fun FloatingKeyboardMoveHandle(
     host: FloatingKeyboardHost,
     palette: ZeroConPalette,
+    barColor: Color,
     onDock: () -> Unit
 ) {
     Box(
-        Modifier.fillMaxWidth().height(FloatingKeyboardHandleHeightDp.dp).background(palette.surface)
+        Modifier.fillMaxWidth().height(FloatingKeyboardHandleHeightDp.dp).background(barColor)
     ) {
         Box(
             modifier = Modifier.align(Alignment.Center).fillMaxHeight().width(128.dp)

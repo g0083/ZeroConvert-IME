@@ -6,6 +6,9 @@ import com.zeroconvert.ime.azookey.input.InputPiece
 import com.zeroconvert.ime.azookey.input.InputStyle
 import org.json.JSONObject
 
+/** Whether the composition still carries an adopted correction, and who chose it. */
+enum class AiAssistAdoption { None, Explicit, Automatic }
+
 /** Editor snapshots stay on the host. Adoption, undo and learning state live in Rust. */
 class CorrectionSession(private val policy: AssistPolicyTransport = SharedAssistPolicy.native) {
     data class Acceptance(val reading: String, val surface: String)
@@ -38,6 +41,13 @@ class CorrectionSession(private val policy: AssistPolicyTransport = SharedAssist
         get() = isApplied && undo?.refined == false
     val canRevert: Boolean
         get() = undo != null && state?.let { !it.isNull("undo") } == true
+    /** An automatic correction must not be confirmed by an incidental reading tap. */
+    val adoption: AiAssistAdoption
+        get() = when {
+            !canRevert -> AiAssistAdoption.None
+            undo?.explicit == true -> AiAssistAdoption.Explicit
+            else -> AiAssistAdoption.Automatic
+        }
     val holdsAutoCommit: Boolean get() = state?.optBoolean("holdAutoCommit") ?: false
 
     private fun request(op: String, reading: String = "", surface: String = ""): JSONObject =

@@ -48,6 +48,48 @@ class TouchBiasTypoResolverTest {
         assertTrue(recovered.containsAll(listOf("the", "they", "there")))
     }
 
+    @Test
+    fun rankEnglishCorrections_recoversWordFrom12KeyTapAndFlickBiases() {
+        val words = listOf("the", "they", "there", "tie", "age")
+        // Tapping the bottom edge of jkl (1,1) yields 'j' with edge proximity to tuv (2,1) 't'.
+        val bottomEdgeOnJkl = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey5(false),
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 95f,
+            widthPx = 100f,
+            heightPx = 100f
+        )!!
+        val recoveredFromEdge = TouchBiasTypoResolver.rankEnglishCorrections(
+            prefix = "jhe",
+            touchBiases = listOf(bottomEdgeOnJkl, TouchKeyBias('h'), TouchKeyBias('e')),
+            words = words,
+            limit = 4
+        )
+        assertEquals("the", recoveredFromEdge.firstOrNull())
 
+        // Short leftward flick on ghi (1,0) that stayed in CENTER ('g') hints LEFT ('h').
+        val shortFlickOnGhi = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey4(false),
+            committedDir = FlickDirection.CENTER,
+            dx = -16f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )!!
+        val recoveredFromShortFlick = TouchBiasTypoResolver.rankEnglishCorrections(
+            prefix = "tge",
+            touchBiases = listOf(TouchKeyBias('t'), shortFlickOnGhi, TouchKeyBias('e')),
+            words = words,
+            limit = 4
+        )
+        assertEquals("the", recoveredFromShortFlick.firstOrNull())
+    }
 }
 

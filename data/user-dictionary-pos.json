@@ -1,0 +1,12 @@
+{
+  "common_noun": { "label": "一般名詞", "mozc": "名詞", "msime": "名詞", "aliases": ["品詞なし"] },
+  "proper_noun": { "label": "固有名詞", "mozc": "固有名詞", "msime": "固有名詞", "aliases": ["固有一般"] },
+  "personal_name": { "label": "人名", "mozc": "人名", "msime": "人名", "aliases": ["固有人他"] },
+  "family_name": { "label": "姓", "mozc": "姓", "msime": "姓", "aliases": ["固有人姓"] },
+  "given_name": { "label": "名", "mozc": "名", "msime": "名", "aliases": ["固有人名"] },
+  "organization": { "label": "組織", "mozc": "組織", "msime": "固有名詞", "aliases": ["固有組織"] },
+  "place_name": { "label": "地名", "mozc": "地名", "msime": "地名その他", "aliases": ["固有地名"] },
+  "sahen_noun": { "label": "サ変名詞", "mozc": "名詞サ変", "msime": "さ変名詞", "aliases": [] },
+  "symbol": { "label": "記号・顔文字", "mozc": "記号", "msime": "顔文字", "aliases": ["絵文字"] },
+  "shortcut": { "label": "定型文・ショートカット", "mozc": "短縮よみ", "msime": "短縮よみ", "aliases": ["短縮読み", "単語短縮"] }
+}

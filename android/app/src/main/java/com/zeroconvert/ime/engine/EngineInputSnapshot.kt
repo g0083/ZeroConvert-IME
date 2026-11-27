@@ -8,22 +8,30 @@ import com.zeroconvert.ime.TouchKeyBias
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+import kotlin.math.roundToInt
 
 internal data class EngineInputElement(val text: String, val style: String, val separator: Boolean)
 
 /**
- * Determine `"flick"` vs `"qwerty"` from the active Japanese layout and snapshot styles.
+ * Determine `"flick"`, `"flick_toggle"`, or `"qwerty"` from the active Japanese layout and snapshot styles.
  * Mixed/romaji buffers fall back safely to `"qwerty"` mode.
  */
-internal fun engineInputMode(input: ComposingText, layout: JapaneseInputLayout): String {
+internal fun engineInputMode(
+    input: ComposingText,
+    layout: JapaneseInputLayout,
+    isFlickOnly: Boolean = true
+): String {
     if (layout == JapaneseInputLayout.FLICK_12KEY &&
         input.input.isNotEmpty() &&
         input.input.all { it.inputStyle == InputStyle.DIRECT }
     ) {
-        return "flick"
+        return if (isFlickOnly) "flick" else "flick_toggle"
     }
     return "qwerty"
 }
+
+internal fun isFlickEngineMode(mode: String): Boolean =
+    mode == "flick" || mode == "flick_toggle"
 
 private fun normalizeQwertyHintChar(c: Char): Char? {
     val lowered = c.lowercaseChar()
@@ -78,7 +86,9 @@ private fun isFlickHintAltChar(ch: Char): Boolean =
     (ch in 'ぁ'..'ゖ') || ch == 'ー' || ch == '（' || ch == '）' || ch == '〜'
 
 /**
- * Format measured 12-key flick gesture hints aligned to direct kana elements as `"idx:ch=w,...;..."`.
+ * Format measured 12-key flick gesture hints aligned to direct kana elements.
+ * Emits continuous `v2;<idx>:<kind>,<nx>,<ny>,<dx>,<dy>;...` when gesture observations are present,
+ * or legacy `"idx:ch=w,...;..."` otherwise.
  * Returns empty when the composing buffer is not pure continuous `DIRECT` kana input at end index.
  */
 internal fun engineFlickTouchHints(input: ComposingText, biases: List<TouchKeyBias>): String {
@@ -92,10 +102,30 @@ internal fun engineFlickTouchHints(input: ComposingText, biases: List<TouchKeyBi
     if (directChars.size !in 2..128) return ""
     val offset = directChars.size - biases.size
     if (offset < 0) return ""
+    for ((index, bias) in biases.withIndex()) {
+        if (directChars[offset + index] != bias.typedChar) return ""
+    }
+    if (biases.any { it.flickObservation != null }) {
+        val v2Parts = ArrayList<String>(biases.size)
+        for ((index, bias) in biases.withIndex()) {
+            val obs = bias.flickObservation ?: continue
+            if (!obs.nx.isFinite() || !obs.ny.isFinite() ||
+                !obs.dxNorm.isFinite() || !obs.dyNorm.isFinite()
+            ) {
+                continue
+            }
+            val rawIndex = offset + index
+            val nxInt = (obs.nx.coerceIn(0f, 1f) * 100f).roundToInt()
+            val nyInt = (obs.ny.coerceIn(0f, 1f) * 100f).roundToInt()
+            val dxInt = (obs.dxNorm.coerceIn(-3f, 3f) * 10f).roundToInt()
+            val dyInt = (obs.dyNorm.coerceIn(-3f, 3f) * 10f).roundToInt()
+            v2Parts.add("$rawIndex:${obs.kind.wireCode},$nxInt,$nyInt,$dxInt,$dyInt")
+        }
+        return if (v2Parts.isEmpty()) "" else "v2;" + v2Parts.joinToString(";")
+    }
     val parts = ArrayList<String>(biases.size)
     for ((index, bias) in biases.withIndex()) {
         val rawIndex = offset + index
-        if (directChars[rawIndex] != bias.typedChar) return ""
         val alts = bias.nearbyChars.mapNotNull { (alt, weight) ->
             if (isFlickHintAltChar(alt) && weight.isFinite() && weight in 0.2f..1.0f) {
                 "$alt=${String.format(Locale.ROOT, "%.2f", weight)}"

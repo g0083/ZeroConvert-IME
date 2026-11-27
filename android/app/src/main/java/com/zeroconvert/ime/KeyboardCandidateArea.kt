@@ -12,7 +12,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Surface
@@ -31,10 +32,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -50,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import com.zeroconvert.ime.assist.AiAssistResult
 import com.zeroconvert.ime.assist.AiAssistType
 import com.zeroconvert.ime.assist.CorrectionSession
+import com.zeroconvert.ime.theme.toComposeColor
 
 /**
  * Height of the reading and candidate bars: 80% of the key height setting, so the bars stay
@@ -203,14 +209,71 @@ fun KeyboardAssistBar(
     palette: ZeroConPalette,
     onAdopt: () -> Unit,
     onUndo: () -> Unit,
-    cursor: Int = reading.length
+    cursor: Int = reading.length,
+    // Tapping the reading accepts it as typed (hiragana for Japanese). Null hides the affordance:
+    // translation mode owns the editor, so the bar must not commit behind it.
+    onCommitReading: (() -> Unit)? = null,
+    onOpenEmoji: (() -> Unit)? = null,
+    onSelectAll: (() -> Unit)? = null,
+    onOpenClipboard: (() -> Unit)? = null,
+    isClipboardActive: Boolean = false
 ) {
+    val hasQuickActions = AssistBarActionPolicy.shouldShowQuickActions(
+        reading = reading,
+        hasAssist = assist != null,
+        correctionApplied = correctionApplied,
+        hasAnyAction = onOpenEmoji != null || onSelectAll != null || onOpenClipboard != null
+    )
+    val keyboardTheme = LocalKeyboardTheme.current
+    val barBg = keyboardTheme.bars.backgroundColor.toComposeColor().copy(
+        alpha = if (keyboardTheme.background.applyToBars) keyboardTheme.bars.backgroundAlpha else 1f
+    )
+    val dividerColor = keyboardTheme.bars.dividerColor.toComposeColor().copy(alpha = 0.35f)
+    val topCornerShape = RoundedCornerShape(
+        topStart = keyboardTheme.keySurface.cornerRadiusDp.dp,
+        topEnd = keyboardTheme.keySurface.cornerRadiusDp.dp
+    )
+    if (reading.isEmpty() && hasQuickActions) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(KeyboardBarHeight)
+                .clip(topCornerShape)
+                .background(barBg)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(modifier = Modifier.weight(1f))
+                AssistBarQuickActions(
+                    palette = palette,
+                    onSelectAll = onSelectAll,
+                    onOpenClipboard = onOpenClipboard,
+                    isClipboardActive = isClipboardActive,
+                    onOpenEmoji = onOpenEmoji
+                )
+            }
+            Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(dividerColor))
+        }
+        return
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(KeyboardBarHeight)
+            .clip(topCornerShape)
+            .background(barBg)
+    ) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(KeyboardBarHeight).background(palette.surface),
+        modifier = Modifier.fillMaxWidth().weight(1f),
         verticalAlignment = Alignment.CenterVertically
     ) {
         val label = when {
-            reading.isEmpty() -> "入力待ち"
+            reading.isEmpty() -> ""
             correctionApplied -> "補正済み: "
             else -> "原文: "
         }
@@ -218,6 +281,7 @@ fun KeyboardAssistBar(
         val measurer = rememberTextMeasurer()
         val density = LocalDensity.current
         // Fixed left half: an assist result appearing or disappearing must not resize the reading.
+        val commitReading = onCommitReading.takeIf { reading.isNotEmpty() }
         BoxWithConstraints(
             modifier = Modifier.fillMaxWidth(0.5f).fillMaxHeight().padding(horizontal = 8.dp),
             contentAlignment = Alignment.CenterStart
@@ -258,6 +322,15 @@ fun KeyboardAssistBar(
                 overflow = TextOverflow.Clip,
                 onTextLayout = { textLayout = it },
                 modifier = Modifier
+                    // The reading is shown as typed, so tapping it accepts it without converting.
+                    .then(
+                        if (commitReading == null) {
+                            Modifier
+                        } else {
+                            Modifier.pointerDownHaptic().clickable(onClickLabel = "そのまま確定") { commitReading() }
+                        }
+                    )
+                    .padding(vertical = 4.dp)
                     .drawWithContent {
                         drawContent()
                         if (reading.isNotEmpty()) {
@@ -288,7 +361,10 @@ fun KeyboardAssistBar(
             )
         }
         // The assist slot keeps its width while idle so results never reflow the reading.
-        Box(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 2.dp)) {
+        Box(
+            modifier = Modifier.weight(1f).fillMaxHeight().padding(horizontal = 2.dp),
+            contentAlignment = Alignment.CenterEnd
+        ) {
             if (reading.isNotEmpty() && assist != null) {
                 val isTypo = assist.type == AiAssistType.TYPO_CORRECTION
                 val title = if (isTypo) "補正" else "先読み"
@@ -384,6 +460,15 @@ fun KeyboardAssistBar(
                         }
                     }
                 }
+            } else if (hasQuickActions) {
+                AssistBarQuickActions(
+                    palette = palette,
+                    onSelectAll = onSelectAll,
+                    onOpenClipboard = onOpenClipboard,
+                    isClipboardActive = isClipboardActive,
+                    onOpenEmoji = onOpenEmoji,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
             }
         }
         if (reading.isNotEmpty() && correctionApplied) {
@@ -397,10 +482,94 @@ fun KeyboardAssistBar(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Undo, contentDescription = null, tint = palette.warningAmber,
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, tint = palette.warningAmber,
                     modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("戻す", color = palette.warningAmber, fontSize = 13.sp, maxLines = 1, softWrap = false)
+            }
+        }
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(dividerColor))
+    }
+}
+
+@Composable
+private fun AssistBarQuickActions(
+    palette: ZeroConPalette,
+    onSelectAll: (() -> Unit)?,
+    onOpenClipboard: (() -> Unit)?,
+    isClipboardActive: Boolean,
+    onOpenEmoji: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val actionShape = RoundedCornerShape(8.dp)
+    Row(
+        modifier = modifier.fillMaxHeight(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)
+    ) {
+        if (onSelectAll != null) {
+            Box(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .height(28.dp)
+                    .clip(actionShape)
+                    .background(palette.keyModifier.copy(alpha = 0.50f))
+                    .semantics(mergeDescendants = true) { role = Role.Button }
+                    .pointerDownHaptic()
+                    .clickable(onClick = onSelectAll)
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "全選択",
+                    color = palette.textPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (onOpenClipboard != null) {
+            Box(
+                modifier = Modifier
+                    .width(44.dp)
+                    .height(28.dp)
+                    .clip(actionShape)
+                    .background(
+                        if (isClipboardActive) palette.primaryAccent.copy(alpha = 0.18f)
+                        else Color.Transparent
+                    )
+                    .pointerDownHaptic()
+                    .clickable(role = Role.Button, onClick = onOpenClipboard),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_clipboard),
+                    contentDescription = "Clipboard",
+                    tint = if (isClipboardActive) palette.primaryAccent else palette.textSecondary,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+        }
+        if (onOpenEmoji != null) {
+            Box(
+                modifier = Modifier
+                    .width(36.dp)
+                    .height(28.dp)
+                    .clip(actionShape)
+                    .pointerDownHaptic()
+                    .clickable(role = Role.Button, onClick = onOpenEmoji),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mood,
+                    contentDescription = "絵文字",
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(19.dp)
+                )
             }
         }
     }
@@ -496,7 +665,9 @@ internal data class CandidateBarDisplayPolicy(
     val showClipboardSuggestion: Boolean,
     val showKeyboardPlacementMenu: Boolean,
     val showCandidateToggle: Boolean,
-    val isCandidateToggleExpanded: Boolean
+    val isCandidateToggleExpanded: Boolean,
+    val showSelectionCopy: Boolean = false,
+    val showSelectionSelectAll: Boolean = false
 ) {
     companion object {
         fun resolve(
@@ -518,14 +689,38 @@ internal data class CandidateBarDisplayPolicy(
                 !clipboardSuggestionDismissed
             val showCandidateToggle = hasCandidates &&
                 (mode == CandidateBarContentMode.CANDIDATE_STRIP || mode == CandidateBarContentMode.IDLE_TOOLBAR)
+            val showSelectionActions = mode == CandidateBarContentMode.SELECTION_ACTIONS
             return CandidateBarDisplayPolicy(
                 mode = mode,
                 showClipboardSuggestion = showClipboardSuggestion,
                 showKeyboardPlacementMenu = mode == CandidateBarContentMode.IDLE_TOOLBAR,
                 showCandidateToggle = showCandidateToggle,
-                isCandidateToggleExpanded = showCandidateToggle && isCandidatesExpanded
+                isCandidateToggleExpanded = showCandidateToggle && isCandidatesExpanded,
+                showSelectionCopy = showSelectionActions,
+                showSelectionSelectAll = showSelectionActions
             )
         }
+    }
+}
+
+internal object SymbolsPanelPolicy {
+    const val FULLWIDTH_CATEGORY_TITLE = "[全]"
+    const val FULLWIDTH_SPACE = "\u3000"
+
+    fun spaceCommitText(categoryTitle: String): String? =
+        if (categoryTitle == FULLWIDTH_CATEGORY_TITLE) FULLWIDTH_SPACE else null
+}
+
+internal object AssistBarActionPolicy {
+    fun shouldShowQuickActions(
+        reading: String,
+        hasAssist: Boolean,
+        correctionApplied: Boolean,
+        hasAnyAction: Boolean
+    ): Boolean {
+        if (!hasAnyAction) return false
+        if (reading.isEmpty()) return true
+        return !hasAssist && !correctionApplied
     }
 }
 

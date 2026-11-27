@@ -93,5 +93,94 @@ class ExpandedCandidateLayoutTest {
         assertFalse(translating.showClipboardSuggestion)
         assertFalse(translating.showKeyboardPlacementMenu)
         assertFalse(translating.showCandidateToggle)
+        assertFalse(translating.showSelectionCopy)
+        assertFalse(translating.showSelectionSelectAll)
+    }
+
+    @Test fun barPolicyShowsCopyAndSelectAllOnlyWhenSelecting() {
+        val selecting = CandidateBarDisplayPolicy.resolve(
+            hasCandidates = false,
+            isCandidatesExpanded = false,
+            hasSelectionCount = true,
+            translationActive = false,
+            selectionTranslationActive = false
+        )
+        assertEquals(CandidateBarContentMode.SELECTION_ACTIONS, selecting.mode)
+        assertTrue(selecting.showSelectionCopy)
+        assertTrue(selecting.showSelectionSelectAll)
+        assertFalse(selecting.showClipboardSuggestion)
+        assertFalse(selecting.showKeyboardPlacementMenu)
+
+        val idle = CandidateBarDisplayPolicy.resolve(
+            hasCandidates = false,
+            isCandidatesExpanded = false,
+            hasSelectionCount = false,
+            translationActive = false,
+            selectionTranslationActive = false
+        )
+        assertEquals(CandidateBarContentMode.IDLE_TOOLBAR, idle.mode)
+        assertFalse(idle.showSelectionCopy)
+        assertFalse(idle.showSelectionSelectAll)
+
+        val postComposition = CandidateBarDisplayPolicy.resolve(
+            hasCandidates = true,
+            isCandidatesExpanded = false,
+            hasSelectionCount = false,
+            translationActive = false,
+            selectionTranslationActive = false
+        )
+        assertEquals(CandidateBarContentMode.CANDIDATE_STRIP, postComposition.mode)
+        assertFalse(postComposition.showSelectionCopy)
+        assertFalse(postComposition.showSelectionSelectAll)
+    }
+
+    @Test fun symbolsPanelPolicyReturnsFullwidthSpaceOnlyForFullwidthCategory() {
+        assertEquals("\u3000", SymbolsPanelPolicy.spaceCommitText("[全]"))
+        assertNull(SymbolsPanelPolicy.spaceCommitText("1?#"))
+        assertNull(SymbolsPanelPolicy.spaceCommitText("( )"))
+        assertNull(SymbolsPanelPolicy.spaceCommitText("￥"))
+    }
+
+    @Test fun assistBarActionPolicyKeepsActionsWhileComposingWithoutAssist() {
+        assertTrue(
+            AssistBarActionPolicy.shouldShowQuickActions(
+                reading = "",
+                hasAssist = false,
+                correctionApplied = false,
+                hasAnyAction = true
+            )
+        )
+        assertTrue(
+            AssistBarActionPolicy.shouldShowQuickActions(
+                reading = "きょう",
+                hasAssist = false,
+                correctionApplied = false,
+                hasAnyAction = true
+            )
+        )
+        assertFalse(
+            AssistBarActionPolicy.shouldShowQuickActions(
+                reading = "きょう",
+                hasAssist = true,
+                correctionApplied = false,
+                hasAnyAction = true
+            )
+        )
+        assertFalse(
+            AssistBarActionPolicy.shouldShowQuickActions(
+                reading = "きょう",
+                hasAssist = false,
+                correctionApplied = true,
+                hasAnyAction = true
+            )
+        )
+        assertFalse(
+            AssistBarActionPolicy.shouldShowQuickActions(
+                reading = "",
+                hasAssist = false,
+                correctionApplied = false,
+                hasAnyAction = false
+            )
+        )
     }
 }

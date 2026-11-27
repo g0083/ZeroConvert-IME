@@ -73,7 +73,7 @@ Androidの「補正候補を自動で反映」は `auto_typo_correction` に対�
 - **Native打鍵補正ワーカー（`keyboard-prior.exe`）**: `ai_assist/keyboard_hybrid.rs` が `{app}\keyboard-prior.exe`（旧配置 `llama_cpu\keyboard-prior.exe` はインストーラーで削除）を起動・管理し、`Dictionary/Reverse/reverse-v2.bin`（AZR2）と現在選択中の変換モデルで補正読み候補を探索・採点する。Vulkanの初回推論はバックグラウンド起動時に済ませ、入力中の採点は350msまで待ち（超過応答は破棄）、通信切断や30秒応答なし時はワーカーを再起動する。
 - **実設定・学習データの保存先**:
   - 実設定: `%APPDATA%\Azookey\settings.json`。`windows/deployment/settings.json` は配布時の初期コピー元であり、既存設定があれば上書きしない。
-  - ユーザー辞書は `%APPDATA%\Azookey\user-dictionary.json` に最大10,000件を保存する。旧 `settings.json` の登録語は初回読込時に移行する。設定画面で固有名詞、一般名詞、サ変名詞、定型文、記号を選べる。
+  - Windows のユーザー辞書は `%APPDATA%\Azookey\user-dictionary.json` に保存する。旧 `settings.json` の登録語は初回読み込み時に移行する。辞書画面での編集・読み込みは「保存」で反映する。
   - 変換用の日本語辞書は設定画面が `%LOCALAPPDATA%\ZeroConIME\dictionary\Dictionary` へ取得する。変換サーバーは `ZEROCON_DICTIONARY_DIR` → 実行ファイル横の `Dictionary\` → 取得済みキャッシュの順に解決する。
   - 補正学習: `%APPDATA%\Azookey\ai-assist-learning.json`（最大500件）、追加補正語彙は `ai-assist-vocabulary.json`。
   - 英字学習: `%APPDATA%\Azookey\english-learning.json`（Androidはアプリデータ配下 `Azookey/english-learning.json`）。
@@ -81,13 +81,28 @@ Androidの「補正候補を自動で反映」は `auto_typo_correction` に対�
   - 先読みの確定履歴キャッシュ: Rustプロセス内に最大300件保持する。
 - **学習の削除**: 共有エンジンに集約されている。`ForgetLearningCandidate` は候補IDだけで1件を消し、`GetLearningStats` はスコープ別件数を返し、`ResetLearningMemory` は `scopes`（`conversion` / `typo` / `english`）で選択削除する。
 - **Named Pipe**: `shared/src/lib.rs` のPipe名は `\\.\pipe\LOCAL\azookey_{server,ui,launcher}_s<sessionId>`。古い固定名やセッション番号をハードコードしない。
-- **配布初期設定** (`windows/deployment/settings.json`): Zenzai有効、Vulkan、`gpu_layers: 99`、モデル `nano_v4_2_iq4_emb8`、タイポ補正・AIアシスト・自動確定有効、翻訳機能無効、engine `embedded`。これは実行中のAppData設定の値を保証しない。
+- **配布初期設定** (`windows/deployment/settings.json`): Zenzai有効、Vulkan、`gpu_layers: 99`、モデル `standard_v4_2_iq4_emb8`、タイポ補正・AIアシスト・自動確定有効、翻訳機能無効、engine `embedded`。これは実行中のAppData設定の値を保証しない。
 
 ### Windowsのプライベートモード
 
 TSFの入力欄が `IS_PRIVATE`、パスワード、PINの入力スコープを通知すると、自動でプライベートモードになる。状態はタスクバーのIMEアイコンのツールチップに表示する。プライベート入力では、周辺テキストの取得、学習の参照と保存、タイポ補正、先読み、翻訳、英字学習を停止し、基本のかな漢字変換を使う。
 
 クライアントは入力スコープを周辺テキストの取得前に確認し、`SetContext` で空の文脈とプライベート指定を送る。変換サーバーが指定を返してから打鍵を送信する。再接続時も変換状態を復元する前に指定を送り直す。TSFの通知に対応するアプリで自動切り替えが働く。
+
+## ユーザー辞書
+
+Windows の「辞書」と Android の「学習とデータ › ユーザー辞書」から最大10,000件を登録できる。Android はアプリ内の `zerocon_user_data` に保存し、編集・読み込みの確定時に反映する。両 OS の登録項目は読み、単語、品詞。品詞と外部形式での名前は [共通カタログ](../data/user-dictionary-pos.json) を参照する。新規登録は一般名詞が既定で、旧データの品詞省略は固有名詞として引き継ぐ。共通 Swift エンジンは品詞ごとに接続 ID と意味 ID を設定し、定型文・ショートカットは読み全体に一致したときに候補に出す。
+
+辞書ファイルでは読み・単語・品詞を移せる。他の IME のテキスト辞書を読み込むときは品詞名を ZeroConvert の品詞に変換する。例えば Google 日本語入力 / Mozc の「名詞サ変」と Microsoft IME の「さ変名詞」は、どちらも「サ変名詞」として取り込む。
+
+| 形式 | 読み込み | 書き出し |
+| --- | --- | --- |
+| ZeroConvert JSON | 読み・単語・品詞をそのまま復元 | Windows と Android 間での移行、バックアップ用 |
+| Google 日本語入力 / Mozc | 対応する品詞に変換 | Mozc の品詞名で書き出す UTF-8 のタブ区切りテキスト |
+| Microsoft IME | 対応する品詞に変換 | Microsoft IME の品詞名で書き出す BOM 付き UTF-16LE のタブ区切りテキスト。組織は固有名詞、記号・顔文字は顔文字に変換 |
+| ATOK | タブ区切りテキストから対応する品詞に変換 | — |
+
+読み込み時は UTF-8、BOM 付き UTF-16、Shift_JIS（Windows-31J）を判別する。追加では同じ読み・単語の登録を残し、置き換えでは確認後に辞書全体を入れ替える。品詞を対応付けられない行は一般名詞に割り当て、抑制・制御・サジェスト専用の行は除外する。外部辞書のコメントは読み飛ばす。
 
 ## モデル作成とAndroid
 

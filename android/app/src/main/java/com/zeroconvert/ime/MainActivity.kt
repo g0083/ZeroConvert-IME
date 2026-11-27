@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -36,6 +37,8 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import android.widget.Toast
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -77,6 +80,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -92,6 +96,13 @@ import com.zeroconvert.ime.model.ConversionModelDownloadManager
 import com.zeroconvert.ime.model.DictionaryDownloadManager
 import com.zeroconvert.ime.model.ModelInfo
 import com.zeroconvert.ime.model.ModelManager
+import com.zeroconvert.ime.theme.CustomThemeRepository
+import com.zeroconvert.ime.theme.KeyboardThemeCatalog
+import com.zeroconvert.ime.theme.KeyboardThemeSpec
+import com.zeroconvert.ime.theme.ThemeBackgroundCache
+import com.zeroconvert.ime.theme.ThemePreferences
+import com.zeroconvert.ime.theme.keyboardThemeBackground
+import com.zeroconvert.ime.theme.toZeroConPalette
 import com.zeroconvert.ime.translation.TranslationEngine
 import com.zeroconvert.ime.translation.TranslationModelManager
 import com.zeroconvert.ime.translation.TranslationText
@@ -149,14 +160,32 @@ fun MainScreen(
         context.getSharedPreferences(ZeroConvertInputMethodService.PREFS_SETTINGS, Context.MODE_PRIVATE)
     }
 
-    var themeMode by remember {
-        mutableStateOf(imePrefs.getString(ZeroConvertInputMethodService.KEY_THEME_MODE, "system") ?: "system")
+    var appThemeMode by remember {
+        mutableStateOf(ThemePreferences.readAppThemeMode(imePrefs))
     }
-    val palette = rememberZeroConPalette(themeMode)
+    var keyboardThemeId by remember {
+        mutableStateOf(ThemePreferences.readKeyboardThemeId(imePrefs))
+    }
+    var customThemeRevision by remember {
+        mutableStateOf(imePrefs.getLong(ZeroConvertInputMethodService.KEY_CUSTOM_THEME_REVISION, 0L))
+    }
+    var customThemes by remember { mutableStateOf<List<KeyboardThemeSpec>>(emptyList()) }
+    var editorTarget by remember { mutableStateOf<Pair<KeyboardThemeSpec, Boolean>?>(null) }
+    // 開いている区分。初期値は空で、全部閉じた状態から始める。
+    var expandedCategoryIds by rememberSaveable { mutableStateOf(listOf<String>()) }
+    val palette = rememberZeroConPalette(appThemeMode)
+    val mainScope = rememberCoroutineScope()
+
+    LaunchedEffect(customThemeRevision) {
+        customThemes = withContext(Dispatchers.IO) {
+            CustomThemeRepository.forContext(context).listThemes()
+        }
+    }
 
     var testText by remember { mutableStateOf("") }
-    var selectedTab by rememberSaveable { mutableStateOf("input") }
     val scrollState = rememberScrollState()
+    // 設定本文のスクロール。見える先頭の区分を上部タブに反映する。
+    val settingsListState = rememberLazyListState()
 
     fun isKeyboardEnabled(): Boolean =
         (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
@@ -186,9 +215,6 @@ fun MainScreen(
             keyboardEnabled = isKeyboardEnabled()
             keyboardSelected = isKeyboardSelected()
         }
-    }
-    LaunchedEffect(selectedTab) {
-        scrollState.scrollTo(0)
     }
     val coroutineScope = rememberCoroutineScope()
 
@@ -248,6 +274,22 @@ fun MainScreen(
         val editor = imePrefs.edit().putString(ZeroConvertInputMethodService.KEY_ONE_HANDED_MODE, mode.name)
         if (mode != OneHandedMode.OFF) editor.putBoolean(ZeroConvertInputMethodService.KEY_SPLIT_KEYBOARD, false)
         editor.apply()
+    }
+    var oneHandedWidthPercent by rememberSaveable {
+        mutableStateOf(
+            OneHandedLayout.clampWidthPercent(
+                imePrefs.getInt(
+                    ZeroConvertInputMethodService.KEY_ONE_HANDED_WIDTH_PERCENT,
+                    OneHandedLayout.DEFAULT_WIDTH_PERCENT
+                )
+            )
+        )
+    }
+    fun saveOneHandedWidthPercent(percent: Int) {
+        oneHandedWidthPercent = OneHandedLayout.clampWidthPercent(percent)
+        imePrefs.edit()
+            .putInt(ZeroConvertInputMethodService.KEY_ONE_HANDED_WIDTH_PERCENT, oneHandedWidthPercent)
+            .apply()
     }
     var keyboardBottomPaddingDp by remember {
         mutableStateOf(imePrefs.getInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32))
@@ -421,9 +463,6 @@ fun MainScreen(
         }
     }
 
-    var userDictList by remember { mutableStateOf<List<UserDictEntry>>(emptyList()) }
-    var newDictReading by remember { mutableStateOf("") }
-    var newDictWord by remember { mutableStateOf("") }
     var learningCount by remember { mutableStateOf(0) }
     var typoLearningCount by remember { mutableStateOf(0) }
     var englishLearningCount by remember { mutableStateOf(0) }
@@ -434,17 +473,14 @@ fun MainScreen(
             // the same initialization the IME performs instead of showing a stale zero.
             ZenzNative.init(context)
             listOf(
-                KanaKanjiConverter.getUserDictionary(context),
                 KanaKanjiConverter.getLearningCount(context),
                 KanaKanjiConverter.getTypoLearningCount(context),
                 KanaKanjiConverter.getEnglishLearningCount(context)
             )
         }
-        @Suppress("UNCHECKED_CAST")
-        userDictList = loaded[0] as List<UserDictEntry>
-        learningCount = loaded[1] as Int
-        typoLearningCount = loaded[2] as Int
-        englishLearningCount = loaded[3] as Int
+        learningCount = loaded[0]
+        typoLearningCount = loaded[1]
+        englishLearningCount = loaded[2]
     }
 
     var benchmarkProgress by remember {
@@ -758,359 +794,7 @@ fun MainScreen(
             }
         }
 
-        SettingsSection("キーボード", palette) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = "日本語入力キーボード配列",
-                    color = palette.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                SettingsSegmented(
-                    options = listOf(
-                        JapaneseInputLayout.FLICK_12KEY.name to "12キー（フリック）",
-                        JapaneseInputLayout.QWERTY.name to "QWERTY（ローマ字）"
-                    ),
-                    selected = japaneseLayout,
-                    palette = palette,
-                    onSelected = { layout ->
-                        japaneseLayout = layout
-                        imePrefs.edit()
-                            .putString(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, layout)
-                            .apply()
-                    }
-                )
-            }
-
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
-                val previewScale = (maxWidth / realKeyboardWidth).coerceAtMost(1f)
-                // Mirror the IME: the two bars above the keys plus the key area, which grows to
-                // five rows only for the QWERTY layout with the number row shown. Reserving the
-                // bars keeps the bottom row inside the frame instead of clipping it.
-                val previewRowCount = if (
-                    japaneseLayout == JapaneseInputLayout.QWERTY.name && isQwertyNumberRow
-                ) 5 else 4
-                val previewBarHeight = (keyboardKeyHeight * 0.8f).dp
-                val realKeyboardHeight = previewBarHeight * 2 +
-                    keyboardContentHeight(keyboardKeyHeight.dp, previewRowCount) +
-                    keyboardBottomPaddingDp.dp
-                val density = LocalDensity.current
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(realKeyboardHeight * previewScale)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(palette.canvas)
-                ) {
-                    Layout(
-                        content = {
-                            ProvideKeyboardErgonomicsLocals(
-                                palette = palette,
-                                onKeyPressHaptic = {},
-                                keyPreviewEnabled = isKeyPreviewEnabled,
-                                flickThresholdDp = flickSensitivityDp.dp,
-                                keyBordersEnabled = isKeyBordersEnabled,
-                                dynamicTouchAssistEnabled = isDynamicTouchAssistEnabled
-                            ) {
-                            CompositionLocalProvider(LocalKeyboardKeyHeight provides keyboardKeyHeight.dp) {
-                                Column(Modifier.requiredWidth(realKeyboardWidth).height(realKeyboardHeight)) {
-                                    KeyboardAssistBar(
-                                        reading = "",
-                                        assist = null,
-                                        correctionApplied = false,
-                                        palette = palette,
-                                        onAdopt = {},
-                                        onUndo = {}
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(KeyboardBarHeight)
-                                            .background(palette.surface)
-                                    ) {
-                                        HorizontalCandidateStrip(
-                                            reading = "",
-                                            candidates = listOf(Candidate("候補", "")),
-                                            palette = palette,
-                                            onSelect = {},
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    }
-                                    val previewKeyboardBody: @Composable () -> Unit = {
-                                        if (japaneseLayout == JapaneseInputLayout.FLICK_12KEY.name) {
-                                            Japanese12KeyFlickLayout(
-                                                keyBgColor = palette.keyNormal,
-                                                actionKeyBg = palette.keyModifier,
-                                                textColor = palette.textPrimary,
-                                                palette = palette,
-                                                rowHeight = keyboardRowHeight(
-                                                    keyboardKeyHeight.dp,
-                                                    rowCount = 5,
-                                                    targetRowCount = 4
-                                                ),
-                                                isFlickOnly = isFlickOnly,
-                                                onKanaInput = {},
-                                                onReplaceLastKana = {},
-                                                onToggleDakuten = {},
-                                                onDelete = {},
-                                                onSpace = {},
-                                                onEnter = {},
-                                                onSwitchMode = {},
-                                                onOpenSymbols = {},
-                                                onOpenEmoji = {},
-                                                onCursorLeft = {},
-                                                onCursorRight = {}
-                                            )
-                                        } else {
-                                            JapaneseQwertyLayout(
-                                                isShifted = false,
-                                                keyBgColor = palette.keyNormal,
-                                                actionKeyBg = palette.keyModifier,
-                                                textColor = palette.textPrimary,
-                                                palette = palette,
-                                                onKeyPress = {},
-                                                onShiftToggle = {},
-                                                onDelete = {},
-                                                onSpace = {},
-                                                onEnter = {},
-                                                onSwitchMode = {},
-                                                onOpenEmoji = {},
-                                                isComposing = false,
-                                                onCursorLeft = {},
-                                                onCursorRight = {},
-                                                showNumberRow = isQwertyNumberRow
-                                            )
-                                        }
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .weight(1f)
-                                    ) {
-                                        if (oneHandedMode == OneHandedMode.OFF) {
-                                            previewKeyboardBody()
-                                        } else {
-                                            Row(modifier = Modifier.fillMaxSize()) {
-                                                if (oneHandedMode == OneHandedMode.RIGHT) {
-                                                    OneHandedSideRail(
-                                                        modifier = Modifier.weight(0.18f).fillMaxHeight(),
-                                                        actionKeyBg = palette.keyModifier,
-                                                        textColor = palette.textPrimary,
-                                                        palette = palette,
-                                                        isLeftAligned = false,
-                                                        onFlipSide = { saveOneHandedMode(OneHandedMode.LEFT) },
-                                                        onExitOneHanded = { saveOneHandedMode(OneHandedMode.OFF) }
-                                                    )
-                                                    Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
-                                                        previewKeyboardBody()
-                                                    }
-                                                } else {
-                                                    Box(modifier = Modifier.weight(0.82f).fillMaxHeight()) {
-                                                        previewKeyboardBody()
-                                                    }
-                                                    OneHandedSideRail(
-                                                        modifier = Modifier.weight(0.18f).fillMaxHeight(),
-                                                        actionKeyBg = palette.keyModifier,
-                                                        textColor = palette.textPrimary,
-                                                        palette = palette,
-                                                        isLeftAligned = true,
-                                                        onFlipSide = { saveOneHandedMode(OneHandedMode.RIGHT) },
-                                                        onExitOneHanded = { saveOneHandedMode(OneHandedMode.OFF) }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (keyboardBottomPaddingDp > 0) {
-                                        Spacer(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(keyboardBottomPaddingDp.dp)
-                                                .background(palette.canvas)
-                                        )
-                                    }
-                                }
-                            }
-                            }
-                        }
-                    ) { measurables, constraints ->
-                        val realWidthPx = with(density) { realKeyboardWidth.roundToPx() }
-                        val realHeightPx = with(density) { realKeyboardHeight.roundToPx() }
-                        val keyboard = measurables.single().measure(Constraints.fixed(realWidthPx, realHeightPx))
-                        val previewHeightPx = (realHeightPx * previewScale).roundToInt()
-                            .coerceIn(constraints.minHeight, constraints.maxHeight)
-                        layout(constraints.maxWidth, previewHeightPx) {
-                            keyboard.placeWithLayer(0, 0) {
-                                scaleX = previewScale
-                                scaleY = previewScale
-                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
-                            }
-                        }
-                    }
-                }
-            }
-
-            SettingsDivider(palette)
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "キーの高さ",
-                        color = palette.textPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "${keyboardKeyHeight} dp",
-                        color = palette.primaryAccentSoft,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Slider(
-                    value = keyboardKeyHeight.toFloat(),
-                    onValueChange = { value ->
-                        keyboardKeyHeight = value.toInt().coerceIn(40, 64)
-                        imePrefs.edit()
-                            .putInt(ZeroConvertInputMethodService.KEY_KEY_HEIGHT_DP, keyboardKeyHeight)
-                            .apply()
-                    },
-                    valueRange = 40f..64f,
-                    steps = 23,
-                    colors = SliderDefaults.colors(
-                        thumbColor = palette.primaryAccent,
-                        activeTrackColor = palette.primaryAccent,
-                        inactiveTrackColor = palette.surfaceElevated
-                    )
-                )
-                Text(
-                    text = "QWERTYと12キーのキーボード全体の高さに反映されます。",
-                    color = palette.textMuted,
-                    fontSize = 12.sp
-                )
-            }
-            SettingsDivider(palette)
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "片手モード",
-                    color = palette.textPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                SettingsSegmented(
-                    options = listOf(
-                        OneHandedMode.OFF.name to "オフ",
-                        OneHandedMode.LEFT.name to "左寄せ",
-                        OneHandedMode.RIGHT.name to "右寄せ"
-                    ),
-                    selected = oneHandedMode.name,
-                    palette = palette,
-                    onSelected = { modeName -> saveOneHandedMode(OneHandedMode.fromName(modeName)) }
-                )
-                Text(
-                    text = "キーボードの幅を約82%にして左右どちらかに寄せます。ツールバーや側面ボタンからいつでも解除できます。",
-                    color = palette.textMuted,
-                    fontSize = 12.sp
-                )
-            }
-            SettingsDivider(palette)
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "下部余白（底上げ）",
-                        color = palette.textPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "${keyboardBottomPaddingDp} dp",
-                        color = palette.primaryAccentSoft,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Slider(
-                    value = keyboardBottomPaddingDp.toFloat(),
-                    onValueChange = { value ->
-                        keyboardBottomPaddingDp = value.toInt().coerceIn(0, 32)
-                        imePrefs.edit()
-                            .putInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, keyboardBottomPaddingDp)
-                            .apply()
-                    },
-                    valueRange = 0f..32f,
-                    steps = 31,
-                    colors = SliderDefaults.colors(
-                        thumbColor = palette.primaryAccent,
-                        activeTrackColor = palette.primaryAccent,
-                        inactiveTrackColor = palette.surfaceElevated
-                    )
-                )
-                Text(
-                    text = "画面下端のベゼルやジェスチャーバーと最下段キーの間に余白を設け、指を届きやすくします（標準: 0 dp）。",
-                    color = palette.textMuted,
-                    fontSize = 12.sp
-                )
-            }
-            SettingsDivider(palette)
-            SettingsSwitchRow(
-                title = "上部の数字キー",
-                description = if (isQwertyNumberRow) {
-                    "QWERTY配列の最上段に 1〜0 の数字キーを表示します。"
-                } else {
-                    "数字キーを隠し、最上段の q〜p を上フリックすると 1〜0 を入力します。"
-                },
-                checked = isQwertyNumberRow,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    isQwertyNumberRow = checked
-                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, checked).apply()
-                }
-            )
-            SettingsDivider(palette)
-            SettingsSwitchRow(
-                title = stringResource(R.string.split_keyboard_duplicate_keys),
-                description = stringResource(R.string.split_keyboard_duplicate_keys_description),
-                checked = splitDuplicateKeys,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    splitDuplicateKeys = checked
-                    imePrefs.edit().putBoolean(ZeroConvertInputMethodService.KEY_SPLIT_DUPLICATE_KEYS, checked).apply()
-                }
-            )
-            SettingsDivider(palette)
-            SplitKeyboardGapSetting(
-                gapPercent = splitGapPercent,
-                duplicateMiddleKeys = splitDuplicateKeys,
-                keyHeight = keyboardKeyHeight.dp,
-                showNumberRow = isQwertyNumberRow,
-                keyBordersEnabled = isKeyBordersEnabled,
-                palette = palette,
-                onValueChange = { splitGapPercent = it },
-                onValueChangeFinished = {
-                    imePrefs.edit().putInt(ZeroConvertInputMethodService.KEY_SPLIT_GAP_PERCENT, splitGapPercent).apply()
-                }
-            )
-            SettingsDivider(palette)
+        SettingsSection("キーボードの操作", palette) {
             SettingsSwitchRow(
                 title = "フリックのみ",
                 description = if (isFlickOnly) {
@@ -1186,32 +870,6 @@ fun MainScreen(
             }
             SettingsDivider(palette)
             SettingsSwitchRow(
-                title = "キー拡大プレビュー",
-                description = "QWERTYでキーに触れた瞬間に、押している文字をキー上に拡大表示します。",
-                checked = isKeyPreviewEnabled,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    isKeyPreviewEnabled = checked
-                    imePrefs.edit()
-                        .putBoolean(ZeroConvertInputMethodService.KEY_KEY_PREVIEW_ENABLED, checked)
-                        .apply()
-                }
-            )
-            SettingsDivider(palette)
-            SettingsSwitchRow(
-                title = "キー枠線と立体表示",
-                description = "キーの境界線と立体的な縁取りを表示し、明暗テーマでキー位置を見分けやすくします。",
-                checked = isKeyBordersEnabled,
-                palette = palette,
-                onCheckedChange = { checked ->
-                    isKeyBordersEnabled = checked
-                    imePrefs.edit()
-                        .putBoolean(ZeroConvertInputMethodService.KEY_KEY_BORDERS_ENABLED, checked)
-                        .apply()
-                }
-            )
-            SettingsDivider(palette)
-            SettingsSwitchRow(
                 title = "キーの当たり判定を調整",
                 description = "QWERTYで次に押しそうなキーの判定範囲を広げ、押しやすくします。",
                 checked = isDynamicTouchAssistEnabled,
@@ -1226,7 +884,7 @@ fun MainScreen(
             SettingsDivider(palette)
             SettingsSwitchRow(
                 title = "タッチ位置による候補の重み付け",
-                description = "「タイポ補正」がONのとき、日本語QWERTYの押下位置を使って近接キーの補正候補を重み付けします。英語では押下位置を使って補正候補を並べます。",
+                description = "「タイポ補正」がONのとき、日本語（QWERTY・12キー）の押下位置やフリック境界を使って近接キーの補正候補を重み付けします。英語でも押下位置を使って補正候補を並べます。",
                 checked = isTouchTypoCorrectionEnabled,
                 palette = palette,
                 onCheckedChange = { checked ->
@@ -1738,125 +1396,7 @@ fun MainScreen(
             }
         }
 
-        SettingsSection("ユーザー辞書", palette) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "登録数: ${userDictList.size}件",
-                        color = palette.primaryAccentSoft,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Text(
-                    text = "よく使う固有名詞や専門用語を登録すると、候補バーの上位に表示されます。",
-                    color = palette.textMuted,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = newDictReading,
-                        onValueChange = { newDictReading = it },
-                        placeholder = { Text("よみ（ひらがな）", color = palette.textMuted, fontSize = 12.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        colors = settingsTextFieldColors(palette)
-                    )
-                    OutlinedTextField(
-                        value = newDictWord,
-                        onValueChange = { newDictWord = it },
-                        placeholder = { Text("単語（表記）", color = palette.textMuted, fontSize = 12.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        colors = settingsTextFieldColors(palette)
-                    )
-                }
-                SettingsPrimaryButton(
-                    text = "辞書に追加",
-                    palette = palette,
-                    modifier = Modifier.fillMaxWidth().height(42.dp),
-                    onClick = {
-                        val reading = newDictReading
-                        val word = newDictWord
-                        coroutineScope.launch {
-                            val updated = withContext(Dispatchers.IO) {
-                                if (KanaKanjiConverter.addUserDictEntry(context, reading, word))
-                                    KanaKanjiConverter.getUserDictionary(context) else null
-                            }
-                            if (updated != null) {
-                                userDictList = updated
-                                if (newDictReading == reading && newDictWord == word) {
-                                    newDictReading = ""
-                                    newDictWord = ""
-                                }
-                            }
-                        }
-                    }
-                )
-                if (userDictList.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        userDictList.forEach { entry ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(palette.surfaceElevated)
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        text = entry.reading,
-                                        color = palette.primaryAccentSoft,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Text(
-                                        text = "→",
-                                        color = palette.textMuted,
-                                        fontSize = 12.sp
-                                    )
-                                    Text(
-                                        text = entry.word,
-                                        color = palette.textPrimary,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                TextButton(
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            userDictList = withContext(Dispatchers.IO) {
-                                                KanaKanjiConverter.removeUserDictEntry(context, entry)
-                                                KanaKanjiConverter.getUserDictionary(context)
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Text("削除", color = palette.danger, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        UserDictionarySettings(palette)
 
         SettingsSection("クリップボード", palette) {
             ClipboardSuggestionDurationSetting(clipboardSuggestionMinutes, palette) { minutes ->
@@ -2540,63 +2080,143 @@ fun MainScreen(
 
     @Composable
     fun AppearanceTabContent() {
-        SettingsSection("カラーテーマ", palette) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = "Windows版設定画面と同じ6種類の配色を、設定画面とIMEキーボードに適用します。",
-                    color = palette.textMuted,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp
-                )
-                SettingsThemePicker(
-                    selected = themeMode,
-                    palette = palette,
-                    onSelected = { mode ->
-                        themeMode = mode
+        AppearanceSettingsTab(
+            appThemeMode = appThemeMode,
+            onAppThemeModeChange = { mode ->
+                appThemeMode = mode
+                imePrefs.edit()
+                    .putString(ZeroConvertInputMethodService.KEY_APP_THEME_MODE, mode)
+                    .apply()
+            },
+            keyboardThemeId = keyboardThemeId,
+            onKeyboardThemeIdChange = { id ->
+                keyboardThemeId = id
+                imePrefs.edit()
+                    .putString(ZeroConvertInputMethodService.KEY_KEYBOARD_THEME_ID, id)
+                    .apply()
+            },
+            appPalette = palette,
+            customThemes = customThemes,
+            customThemeRevision = customThemeRevision,
+            onCreateNewTheme = { baseSpec ->
+                val repo = CustomThemeRepository.forContext(context)
+                val sanitizedBase = if (
+                    baseSpec.background.kind == com.zeroconvert.ime.theme.BackgroundKind.IMAGE &&
+                    !baseSpec.isBuiltIn
+                ) {
+                    baseSpec.copy(
+                        background = baseSpec.background.copy(
+                            kind = com.zeroconvert.ime.theme.BackgroundKind.SOLID,
+                            imageFileName = null
+                        )
+                    )
+                } else {
+                    baseSpec
+                }
+                editorTarget = sanitizedBase.copy(
+                    id = repo.generateCustomThemeId(),
+                    name = "${sanitizedBase.name} カスタム",
+                    category = com.zeroconvert.ime.theme.ThemeCategory.CUSTOM,
+                    isBuiltIn = false
+                ) to true
+            },
+            onEditCustomTheme = { spec ->
+                editorTarget = spec to false
+            },
+            onDuplicateTheme = { spec ->
+                mainScope.launch {
+                    val repo = CustomThemeRepository.forContext(context)
+                    val copied = withContext(Dispatchers.IO) {
+                        repo.duplicateTheme(spec, "${spec.name} コピー")
+                    }
+                    ThemeBackgroundCache.clear()
+                    customThemeRevision = repo.bumpRevision(imePrefs)
+                    keyboardThemeId = copied.id
+                    imePrefs.edit()
+                        .putString(ZeroConvertInputMethodService.KEY_KEYBOARD_THEME_ID, copied.id)
+                        .apply()
+                }
+            },
+            onDeleteCustomTheme = { themeId ->
+                mainScope.launch {
+                    val repo = CustomThemeRepository.forContext(context)
+                    withContext(Dispatchers.IO) {
+                        repo.deleteTheme(themeId)
+                    }
+                    ThemeBackgroundCache.clear()
+                    customThemeRevision = repo.bumpRevision(imePrefs)
+                    if (keyboardThemeId == themeId) {
+                        keyboardThemeId = ZERO_CON_THEME_SYSTEM
                         imePrefs.edit()
-                            .putString(ZeroConvertInputMethodService.KEY_THEME_MODE, mode)
+                            .putString(ZeroConvertInputMethodService.KEY_KEYBOARD_THEME_ID, ZERO_CON_THEME_SYSTEM)
                             .apply()
                     }
-                )
-                SettingsInnerCard(palette) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .background(palette.primaryAccent, RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "あ",
-                                color = palette.onAccent,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        Column {
-                            Text(
-                                text = "プレビュー — ${resolveZeroConTheme(themeMode, isSystemInDarkTheme()).label}",
-                                color = palette.textPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "候補: 日本語 / にほんご",
-                                color = palette.textSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
                 }
-            }
-        }
+            },
+            japaneseLayout = japaneseLayout,
+            onJapaneseLayoutChange = { layout ->
+                japaneseLayout = layout
+                imePrefs.edit()
+                    .putString(ZeroConvertInputMethodService.KEY_JAPANESE_LAYOUT, layout)
+                    .apply()
+            },
+            isFlickOnly = isFlickOnly,
+            isQwertyNumberRow = isQwertyNumberRow,
+            onQwertyNumberRowChange = { checked ->
+                isQwertyNumberRow = checked
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_QWERTY_NUMBER_ROW, checked)
+                    .apply()
+            },
+            keyboardKeyHeight = keyboardKeyHeight,
+            onKeyboardKeyHeightChange = { height ->
+                keyboardKeyHeight = height
+                imePrefs.edit()
+                    .putInt(ZeroConvertInputMethodService.KEY_KEY_HEIGHT_DP, height)
+                    .apply()
+            },
+            keyboardBottomPaddingDp = keyboardBottomPaddingDp,
+            onKeyboardBottomPaddingChange = { padding ->
+                keyboardBottomPaddingDp = padding
+                imePrefs.edit()
+                    .putInt(ZeroConvertInputMethodService.KEY_KEYBOARD_BOTTOM_PADDING_DP, padding)
+                    .apply()
+            },
+            oneHandedMode = oneHandedMode,
+            onOneHandedModeChange = { mode -> saveOneHandedMode(mode) },
+            oneHandedWidthPercent = oneHandedWidthPercent,
+            onOneHandedWidthPercentChange = { percent -> saveOneHandedWidthPercent(percent) },
+            splitDuplicateKeys = splitDuplicateKeys,
+            onSplitDuplicateKeysChange = { checked ->
+                splitDuplicateKeys = checked
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_SPLIT_DUPLICATE_KEYS, checked)
+                    .apply()
+            },
+            splitGapPercent = splitGapPercent,
+            onSplitGapPercentChange = { splitGapPercent = it },
+            onSplitGapPercentCommit = {
+                imePrefs.edit()
+                    .putInt(ZeroConvertInputMethodService.KEY_SPLIT_GAP_PERCENT, splitGapPercent)
+                    .apply()
+            },
+            isKeyPreviewEnabled = isKeyPreviewEnabled,
+            onKeyPreviewEnabledChange = { checked ->
+                isKeyPreviewEnabled = checked
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_KEY_PREVIEW_ENABLED, checked)
+                    .apply()
+            },
+            isKeyBordersEnabled = isKeyBordersEnabled,
+            onKeyBordersEnabledChange = { checked ->
+                isKeyBordersEnabled = checked
+                imePrefs.edit()
+                    .putBoolean(ZeroConvertInputMethodService.KEY_KEY_BORDERS_ENABLED, checked)
+                    .apply()
+            },
+            isDynamicTouchAssistEnabled = isDynamicTouchAssistEnabled,
+            flickSensitivityDp = flickSensitivityDp
+        )
     }
 
     @Composable
@@ -2705,7 +2325,65 @@ fun MainScreen(
         colorScheme = colorScheme,
         typography = typography
     ) {
-        if (!setupReady) {
+        val activeEditor = editorTarget
+        if (activeEditor != null) {
+            val (initialSpec, isNewTheme) = activeEditor
+            ThemeEditorScreen(
+                initialSpec = initialSpec,
+                isNewTheme = isNewTheme,
+                appPalette = palette,
+                initialLayoutName = japaneseLayout,
+                keyboardKeyHeight = keyboardKeyHeight,
+                isQwertyNumberRow = isQwertyNumberRow,
+                isFlickOnly = isFlickOnly,
+                isKeyBordersEnabled = isKeyBordersEnabled,
+                onCancel = { editorTarget = null },
+                onSave = { savedSpec, sourceBytes, renderedBytes, clearImages ->
+                    mainScope.launch {
+                        val repo = CustomThemeRepository.forContext(context)
+                        val persisted = withContext(Dispatchers.IO) {
+                            repo.saveTheme(
+                                spec = savedSpec,
+                                sourceImageBytes = sourceBytes,
+                                renderedImageBytes = renderedBytes,
+                                clearImages = clearImages
+                            )
+                        }
+                        ThemeBackgroundCache.clear()
+                        customThemeRevision = repo.bumpRevision(imePrefs)
+                        keyboardThemeId = persisted.id
+                        imePrefs.edit()
+                            .putString(ZeroConvertInputMethodService.KEY_KEYBOARD_THEME_ID, persisted.id)
+                            .apply()
+                        editorTarget = null
+                    }
+                },
+                onDelete = if (!isNewTheme) {
+                    { deleteId ->
+                        mainScope.launch {
+                            val repo = CustomThemeRepository.forContext(context)
+                            withContext(Dispatchers.IO) {
+                                repo.deleteTheme(deleteId)
+                            }
+                            ThemeBackgroundCache.clear()
+                            customThemeRevision = repo.bumpRevision(imePrefs)
+                            if (keyboardThemeId == deleteId) {
+                                keyboardThemeId = ZERO_CON_THEME_SYSTEM
+                                imePrefs.edit()
+                                    .putString(
+                                        ZeroConvertInputMethodService.KEY_KEYBOARD_THEME_ID,
+                                        ZERO_CON_THEME_SYSTEM
+                                    )
+                                    .apply()
+                            }
+                            editorTarget = null
+                        }
+                    }
+                } else {
+                    null
+                }
+            )
+        } else if (!setupReady) {
             // 「後で」を選んだ場合もここに留まる。使えるのはダウンロードボタンだけ。
             SetupRequiredContent(
                 palette = palette,
@@ -2730,63 +2408,92 @@ fun MainScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 6.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    ZeroConLogo(size = 48.dp)
+                    ZeroConLogo(size = 36.dp)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "ZeroCon Keyboard",
                             color = palette.textPrimary,
-                            fontSize = 20.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = (-0.3).sp
                         )
                         Text(
                             text = "ZeroCon AI 搭載 — オンデバイス日本語入力",
                             color = palette.textSecondary,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp
                         )
                     }
                 }
-                val statusText = modelStatus.removePrefix("● ").trim()
-                SettingsStatusPill(
-                    text = statusText,
-                    ready = statusText.contains("準備完了"),
-                    palette = palette
-                )
             }
+            SettingsLoadingBar(
+                loading = modelStatus.contains("ロード中"),
+                status = modelStatus,
+                palette = palette
+            )
 
             if (keyboardSelected) {
+                // 上部の横スライドタブで区分へ移動し、縦スクロールに連動させる。
+                val currentTabIndex = settingsListState.firstVisibleItemIndex.coerceIn(SettingsTabs.indices)
                 SettingsTabBar(
                     tabs = SettingsTabs,
-                    selectedId = selectedTab,
+                    currentIndex = currentTabIndex,
                     palette = palette,
-                    onSelected = { selectedTab = it }
+                    onSelected = { index ->
+                        val id = SettingsTabs[index].id
+                        if (id !in expandedCategoryIds) {
+                            expandedCategoryIds = expandedCategoryIds + id
+                        }
+                        coroutineScope.launch {
+                            settingsListState.animateScrollToItem(index)
+                        }
+                    }
                 )
-                Column(
+                LazyColumn(
+                    state = settingsListState,
                     modifier = Modifier
                         .weight(1f)
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    when (selectedTab) {
-                        "input" -> InputTabContent()
-                        "conversion" -> ConversionTabContent()
-                        "data" -> DataTabContent()
-                        "translation" -> TranslationTabContent()
-                        "benchmark" -> BenchmarkTabContent()
-                        "appearance" -> AppearanceTabContent()
-                        "about" -> AboutTabContent()
+                    items(SettingsTabs, key = { it.id }) { tab ->
+                        val expanded = tab.id in expandedCategoryIds
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SettingsCategoryHeader(
+                                tab = tab,
+                                expanded = expanded,
+                                onToggle = {
+                                    expandedCategoryIds = if (expanded) {
+                                        expandedCategoryIds - tab.id
+                                    } else {
+                                        expandedCategoryIds + tab.id
+                                    }
+                                },
+                                palette = palette
+                            )
+                            if (expanded) {
+                                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    when (tab.id) {
+                                        "input" -> InputTabContent()
+                                        "conversion" -> ConversionTabContent()
+                                        "data" -> DataTabContent()
+                                        "translation" -> TranslationTabContent()
+                                        "benchmark" -> BenchmarkTabContent()
+                                        "appearance" -> AppearanceTabContent()
+                                        "about" -> AboutTabContent()
+                                    }
+                                }
+                            }
+                        }
                     }
-                    Spacer(modifier = Modifier.height(20.dp))
                 }
             } else {
                 Column(
@@ -2910,16 +2617,19 @@ fun MainScreen(
 }
 
 @Composable
-private fun SplitKeyboardGapSetting(
+internal fun SplitKeyboardGapSetting(
     gapPercent: Int,
     duplicateMiddleKeys: Boolean,
     keyHeight: Dp,
     showNumberRow: Boolean,
     keyBordersEnabled: Boolean,
     palette: ZeroConPalette,
+    keyboardTheme: KeyboardThemeSpec = KeyboardThemeCatalog.defaultDark,
+    backgroundImage: ImageBitmap? = null,
     onValueChange: (Int) -> Unit,
     onValueChangeFinished: () -> Unit
 ) {
+    val kbPalette = remember(keyboardTheme) { keyboardTheme.toZeroConPalette() }
     val title = stringResource(R.string.split_keyboard_gap)
     val previewLabel = stringResource(R.string.split_keyboard_preview)
     Column(Modifier.padding(16.dp)) {
@@ -2948,21 +2658,23 @@ private fun SplitKeyboardGapSetting(
         val keyboardWidth = maxOf(LocalConfiguration.current.screenWidthDp.toFloat(), QwertySplitLayout.MIN_WIDTH_DP).dp
         val keyboardHeight = keyboardContentHeight(keyHeight, if (showNumberRow) 5 else 4)
         Layout(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(palette.canvas)
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                .keyboardThemeBackground(keyboardTheme.background, backgroundImage)
                 .clearAndSetSemantics { contentDescription = previewLabel },
             content = {
                 CompositionLocalProvider(
-                    LocalZeroConPalette provides palette,
+                    LocalZeroConPalette provides kbPalette,
+                    LocalKeyboardTheme provides keyboardTheme,
                     LocalKeyboardKeyHeight provides keyHeight,
                     LocalKeyBordersEnabled provides keyBordersEnabled,
                     LocalKeyPreviewEnabled provides false
                 ) {
                     JapaneseQwertyLayout(
                         isShifted = false,
-                        keyBgColor = palette.keyNormal,
-                        actionKeyBg = palette.keyModifier,
-                        textColor = palette.textPrimary,
-                        palette = palette,
+                        keyBgColor = kbPalette.keyNormal,
+                        actionKeyBg = kbPalette.keyModifier,
+                        textColor = kbPalette.textPrimary,
+                        palette = kbPalette,
                         onKeyPress = {},
                         onShiftToggle = {},
                         onDelete = {},

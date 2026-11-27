@@ -31,6 +31,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.zeroconvert.ime.azookey.input.ComposingText
 import com.zeroconvert.ime.azookey.input.InputPiece
 import com.zeroconvert.ime.azookey.input.InputStyle
+import com.zeroconvert.ime.assist.AiAssistAdoption
 import com.zeroconvert.ime.assist.AssistRequestGate
 import com.zeroconvert.ime.assist.AutoTypoCorrectionStrength
 import com.zeroconvert.ime.assist.CorrectionSession
@@ -100,9 +101,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_AUTO_COMMIT_MODE = "auto_commit_mode" // off|standard|fast
         const val KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE = "auto_commit_rewind_on_backspace"
         const val KEY_AI_PROFILE = "ai_profile"
-        // "system" or a ZeroConThemes id ("dark_blue", "graphite", "forest", "plum", "sakura", "paper").
-        // Legacy "dark"/"light" values are still resolved by resolveZeroConThemeId.
+        // "system" or a built-in/custom KeyboardThemeCatalog id.
+        // Legacy KEY_THEME_MODE ("dark"/"light"/theme id) is migrated via ThemePreferences.
         const val KEY_THEME_MODE = "theme_mode"
+        const val KEY_APP_THEME_MODE = "app_theme_mode"
+        const val KEY_KEYBOARD_THEME_ID = "keyboard_theme_id"
+        const val KEY_CUSTOM_THEME_REVISION = "custom_theme_revision"
         const val KEY_JAPANESE_LAYOUT = "japanese_keyboard_layout" // "FLICK_12KEY", "QWERTY"
         const val KEY_KEY_HEIGHT_DP = "keyboard_key_height_dp" // int dp (40..64), default 46
         const val KEY_FLICK_ONLY = "flick_only" // boolean, default true
@@ -114,6 +118,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_FLICK_SENSITIVITY_DP = "flick_sensitivity_dp" // int dp (12..28), default 18
         const val KEY_KEY_BORDERS_ENABLED = "key_borders_enabled" // boolean, default true
         const val KEY_ONE_HANDED_MODE = "one_handed_mode" // String: OFF, LEFT, RIGHT
+        const val KEY_ONE_HANDED_WIDTH_PERCENT = "one_handed_width_percent" // int % (60..95), default 82
         const val KEY_SPLIT_KEYBOARD = "split_keyboard"
         const val KEY_SPLIT_GAP_PERCENT = "split_keyboard_gap_percent"
         const val KEY_SPLIT_DUPLICATE_KEYS = "split_keyboard_duplicate_keys"
@@ -191,6 +196,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isAutoCommitRewindState = mutableStateOf(false)
     val aiProfileState = mutableStateOf("")
     val themeModeState = mutableStateOf("system")
+    val keyboardThemeIdState = mutableStateOf("system")
+    val customThemeRevisionState = androidx.compose.runtime.mutableLongStateOf(0L)
     val japaneseLayoutState = mutableStateOf(JapaneseInputLayout.FLICK_12KEY)
     val keyboardKeyHeightState = mutableStateOf(46)
     val isFlickOnlyState = mutableStateOf(true)
@@ -200,12 +207,16 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val keyboardModeState = mutableStateOf(KeyboardMode.JAPANESE)
     // Bumped for every input view session so open panels do not hide the keys in a new one.
     val inputViewEpochState = mutableIntStateOf(0)
+    // imeOptions of the focused editor, mirrored into state so the Enter key label follows
+    // field changes inside one input view (onStartInput does not bump the epoch).
+    val enterKeyImeOptionsState = mutableIntStateOf(0)
     val isVibrationEnabledState = mutableStateOf(true)
     val vibrationDurationState = mutableStateOf(15)
     val isKeyPreviewEnabledState = mutableStateOf(true)
     val flickSensitivityDpState = mutableStateOf(18)
     val isKeyBordersEnabledState = mutableStateOf(true)
     val oneHandedModeState = mutableStateOf(OneHandedMode.OFF)
+    val oneHandedWidthPercentState = mutableIntStateOf(OneHandedLayout.DEFAULT_WIDTH_PERCENT)
     val isSplitKeyboardEnabledState = mutableStateOf(false)
     val splitGapPercentState = mutableIntStateOf(QwertySplitLayout.DEFAULT_GAP_PERCENT)
     val splitDuplicateKeysState = mutableStateOf(QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS)
@@ -227,7 +238,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isEnglishSpaceAdoptsCandidateState = mutableStateOf(false)
     val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
-    val aiAssistAdoptedState = mutableStateOf(false)
+    val aiAssistAdoptionState = mutableStateOf(AiAssistAdoption.None)
     var savedOriginalSurface: String = ""
     var savedOriginalReading: String = ""
     private val corrections = CorrectionSession()
@@ -317,7 +328,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         cancelPendingInference(edited = false)
         clearCandidateList()
         pendingConversionContinuation = null
-        aiAssistAdoptedState.value = false
+        aiAssistAdoptionState.value = AiAssistAdoption.None
         lastAutoCommitRewind = null
         canRewindOnNextBackspace = false
         undoHistory.clear()
@@ -495,6 +506,47 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val manager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
         manager.setPrimaryClip(android.content.ClipData.newPlainText("translation", output))
         translationToast("訳文をコピーしました")
+    }
+
+    fun copySelectedText() {
+        val connection = currentInputConnection ?: return
+        val isPassword = currentInputEditorInfo?.let {
+            InputPrivacy.isPasswordInput(it.inputType)
+        } ?: false
+        if (!isPassword) {
+            val selected = connection.getSelectedText(0)?.toString()
+            if (!selected.isNullOrEmpty()) {
+                val manager = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                if (manager != null) {
+                    manager.setPrimaryClip(android.content.ClipData.newPlainText("selection", selected))
+                    Toast.makeText(applicationContext, "コピーしました", Toast.LENGTH_SHORT).show()
+                    return
+                }
+            }
+        }
+        if (connection.performContextMenuAction(android.R.id.copy)) {
+            Toast.makeText(applicationContext, "コピーしました", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun selectAllText() {
+        val connection = currentInputConnection ?: return
+        if (isTranslationMode()) {
+            exitTranslationMode(revert = false)
+        }
+        if (!composingText.isEmpty || englishComposing.isNotEmpty()) {
+            connection.finishComposingText()
+            clearInput()
+        }
+        if (!connection.performContextMenuAction(android.R.id.selectAll)) {
+            val meta = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+            connection.sendKeyEvent(
+                android.view.KeyEvent(0L, 0L, android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_A, 0, meta)
+            )
+            connection.sendKeyEvent(
+                android.view.KeyEvent(0L, 0L, android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_A, 0, meta)
+            )
+        }
     }
 
     fun dismissSelectionTranslation() {
@@ -752,7 +804,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         savedOriginalReading = ""
         savedOriginalResult = ""
         savedOriginalInferredReading = ""
-        aiAssistAdoptedState.value = false
+        aiAssistAdoptionState.value = AiAssistAdoption.None
         aiAssistResultState.value = null
         conversionRange.clear()
         conversionRangeState.value = ""
@@ -874,7 +926,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 candidatesList.clear()
                 candidatesList.add(Candidate(assist.text, savedOriginalReading))
                 inferenceHistory.clear()
-                aiAssistAdoptedState.value = true
+                aiAssistAdoptionState.value = if (explicit) AiAssistAdoption.Explicit else AiAssistAdoption.Automatic
                 pendingConversionContinuation = null
                 triggerDebouncedConversion(
                     composingText.convertTargetBeforeCursor,
@@ -1024,7 +1076,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun syncCorrectionRevertState() {
         corrections.reconcileWithInput(composingText)
-        aiAssistAdoptedState.value = corrections.canRevert
+        aiAssistAdoptionState.value = corrections.adoption
     }
 
     fun revertAiAssist() {
@@ -1064,7 +1116,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             displayedConversionTicket = null
         }
         inferenceHistory.clear()
-        aiAssistAdoptedState.value = false
+        aiAssistAdoptionState.value = AiAssistAdoption.None
         aiAssistResultState.value = null
         pendingConversionContinuation = null
         if (!immediate && composingText.convertTargetBeforeCursor.isNotEmpty()) {
@@ -1101,7 +1153,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         candidatesList.clear()
         displayedConversionTicket = null
         inferenceHistory.clear()
-        aiAssistAdoptedState.value = false
+        aiAssistAdoptionState.value = AiAssistAdoption.None
         aiAssistResultState.value = null
         pendingConversionContinuation = null
         if (revertedReading.isNotEmpty()) {
@@ -1431,9 +1483,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     fun pasteClipboard(entry: ClipboardEntry, fromSuggestion: Boolean = false) {
         if (isPrivateMode) return
-        if (!composingText.isEmpty) {
+        if (!composingText.isEmpty || englishComposing.isNotEmpty()) {
             confirmCurrent()
         }
+        clearPostCompositionDisplay()
         val ic = currentInputConnection ?: return
         if (entry.text != null) {
             ic.commitText(entry.text, 1)
@@ -1610,8 +1663,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
     private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
         val reload = {
             when (key) {
-                KEY_ONE_HANDED_MODE, KEY_SPLIT_KEYBOARD, KEY_SPLIT_GAP_PERCENT, KEY_SPLIT_DUPLICATE_KEYS ->
+                KEY_ONE_HANDED_MODE, KEY_ONE_HANDED_WIDTH_PERCENT, KEY_SPLIT_KEYBOARD,
+                KEY_SPLIT_GAP_PERCENT, KEY_SPLIT_DUPLICATE_KEYS ->
                     loadKeyboardPlacementPreferences(prefs)
+                KEY_KEYBOARD_THEME_ID, KEY_THEME_MODE, KEY_CUSTOM_THEME_REVISION,
+                KEY_KEY_HEIGHT_DP, KEY_KEY_PREVIEW_ENABLED, KEY_KEY_BORDERS_ENABLED,
+                KEY_KEYBOARD_BOTTOM_PADDING_DP ->
+                    loadAppearancePreferences(prefs)
                 else -> reloadPreferences()
             }
         }
@@ -1624,8 +1682,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
+    private fun loadAppearancePreferences(prefs: android.content.SharedPreferences) {
+        val resolvedKeyboardTheme = com.zeroconvert.ime.theme.ThemePreferences.readKeyboardThemeId(prefs)
+        keyboardThemeIdState.value = resolvedKeyboardTheme
+        themeModeState.value = resolvedKeyboardTheme
+        customThemeRevisionState.longValue = prefs.getLong(KEY_CUSTOM_THEME_REVISION, 0L)
+        keyboardKeyHeightState.value = prefs.getInt(KEY_KEY_HEIGHT_DP, 46).coerceIn(40, 64)
+        isKeyPreviewEnabledState.value = prefs.getBoolean(KEY_KEY_PREVIEW_ENABLED, true)
+        isKeyBordersEnabledState.value = prefs.getBoolean(KEY_KEY_BORDERS_ENABLED, true)
+        keyboardBottomPaddingDpState.value = prefs.getInt(KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32)
+    }
+
     private fun loadKeyboardPlacementPreferences(prefs: android.content.SharedPreferences) {
         oneHandedModeState.value = OneHandedMode.fromName(prefs.getString(KEY_ONE_HANDED_MODE, OneHandedMode.OFF.name))
+        oneHandedWidthPercentState.intValue = OneHandedLayout.clampWidthPercent(
+            prefs.getInt(KEY_ONE_HANDED_WIDTH_PERCENT, OneHandedLayout.DEFAULT_WIDTH_PERCENT)
+        )
         isSplitKeyboardEnabledState.value = prefs.getBoolean(KEY_SPLIT_KEYBOARD, false)
         splitGapPercentState.intValue = QwertySplitLayout.clampGapPercent(
             prefs.getInt(KEY_SPLIT_GAP_PERCENT, QwertySplitLayout.DEFAULT_GAP_PERCENT)
@@ -1644,7 +1716,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isAutoCommitEnabledState.value = autoCommitMode.isEnabled
         isAutoCommitRewindState.value = prefs.getBoolean(KEY_AUTO_COMMIT_REWIND_ON_BACKSPACE, false)
         aiProfileState.value = prefs.getString(KEY_AI_PROFILE, "") ?: ""
-        themeModeState.value = prefs.getString(KEY_THEME_MODE, "system") ?: "system"
+        loadAppearancePreferences(prefs)
         val layoutName = prefs.getString(KEY_JAPANESE_LAYOUT, JapaneseInputLayout.FLICK_12KEY.name)
         japaneseLayoutState.value = try {
             JapaneseInputLayout.valueOf(layoutName ?: JapaneseInputLayout.FLICK_12KEY.name)
@@ -1654,14 +1726,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         isFlickOnlyState.value = prefs.getBoolean(KEY_FLICK_ONLY, true)
         isQwertyNumberRowState.value = prefs.getBoolean(KEY_QWERTY_NUMBER_ROW, false)
         isFollowInputTypeModeState.value = prefs.getBoolean(KEY_FOLLOW_INPUT_TYPE_MODE, false)
-        keyboardKeyHeightState.value = prefs.getInt(KEY_KEY_HEIGHT_DP, 46).coerceIn(40, 64)
         isVibrationEnabledState.value = prefs.getBoolean(KEY_VIBRATION_ENABLED, true)
         vibrationDurationState.value = prefs.getInt(KEY_VIBRATION_DURATION, 15)
-        isKeyPreviewEnabledState.value = prefs.getBoolean(KEY_KEY_PREVIEW_ENABLED, true)
         flickSensitivityDpState.value = prefs.getInt(KEY_FLICK_SENSITIVITY_DP, 18).coerceIn(12, 28)
-        isKeyBordersEnabledState.value = prefs.getBoolean(KEY_KEY_BORDERS_ENABLED, true)
         loadKeyboardPlacementPreferences(prefs)
-        keyboardBottomPaddingDpState.value = prefs.getInt(KEY_KEYBOARD_BOTTOM_PADDING_DP, 0).coerceIn(0, 32)
         val touchAssist = TouchAssistSettings.load(prefs)
         val touchCorrectionChanged = isTouchTypoCorrectionEnabledState.value != touchAssist.correctionEnabled
         isDynamicTouchAssistEnabledState.value = touchAssist.hitAreaEnabled
@@ -2051,7 +2119,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             conversionRange.clear()
             conversionRangeState.value = ""
             corrections.edited()
-            aiAssistAdoptedState.value = corrections.canRevert
+            aiAssistAdoptionState.value = corrections.adoption
         }
     }
 
@@ -2517,12 +2585,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
         composeView.setContent {
             val floating = floatingKeyboard.isFloating
-            val themeMode = themeModeState.value
+            val themeMode = keyboardThemeIdState.value
+            val customThemeRevision = customThemeRevisionState.longValue
             FloatingKeyboardPanel(
                 host = host,
                 floating = floating,
                 inputViewEpoch = inputViewEpochState.value,
                 themeMode = themeMode,
+                customThemeRevision = customThemeRevision,
                 keyHeightDp = keyboardKeyHeightState.value,
                 maxKeyRows = maxFloatingRows(),
                 clipboardEditing = clipboardEditSessionState.value != null,
@@ -2532,6 +2602,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                     imeService = this@ZeroConvertInputMethodService,
                     onAdoptAiAssist = { adoptAiAssist() },
                     themeMode = themeMode,
+                    customThemeRevision = customThemeRevision,
                     onToggleRealtimeInline = {
                         setRealtimeInlineEnabled(!isRealtimeInlineState.value)
                     },
@@ -2697,6 +2768,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             leftContextConnection = ic
             inferenceHistory.clear()
             lastAutoCommitRewind = null
+            japaneseTouchBiases.clear()
         }
 
         // Abort ongoing inference
@@ -2761,22 +2833,13 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(modified.toString(), InputStyle.DIRECT)
-        if (!isSensitiveInput() && composingText.isAtEndIndex &&
-            japaneseTouchBiases.isNotEmpty() &&
-            japaneseTouchBiases.size == composingText.input.count { it.piece is InputPiece.CharPiece }
-        ) {
-            val prevBias = japaneseTouchBiases[japaneseTouchBiases.lastIndex]
-            val mappedNearby = LinkedHashMap<Char, Float>()
-            for ((alt, weight) in prevBias.nearbyChars) {
-                val modAlt = KanaModifier.modify(alt, kind)
-                if (modAlt != modified) {
-                    val prevW = mappedNearby[modAlt]
-                    if (prevW == null || weight > prevW) mappedNearby[modAlt] = weight
-                }
-            }
-            japaneseTouchBiases[japaneseTouchBiases.lastIndex] = TouchKeyBias(
-                typedChar = modified,
-                nearbyChars = mappedNearby.entries.sortedByDescending { it.value }.map { it.key to it.value }
+        if (!isSensitiveInput() && composingText.isAtEndIndex) {
+            TouchBiasBuffer.updateLastForModifier(
+                biases = japaneseTouchBiases,
+                charCount = composingText.input.count { it.piece is InputPiece.CharPiece },
+                previousChar = lastChar,
+                modifiedChar = modified,
+                kind = kind
             )
         } else if (!composingText.isAtEndIndex) {
             japaneseTouchBiases.clear()
@@ -2801,7 +2864,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun replaceLastKana(nextKana: String) {
+    fun replaceLastKana(nextKana: String, touchBias: TouchKeyBias? = null) {
         if (isConfirming) return
         if (composingText.isEmpty) return
 
@@ -2811,13 +2874,17 @@ class ZeroConvertInputMethodService : InputMethodService(),
         canRewindOnNextBackspace = false
         cancelPendingInference()
 
+        val prevLastChar = composingText.convertTargetBeforeCursor.lastOrNull()
         composingText.deleteBackwardFromCursorPosition(1)
         composingText.insertAtCursorPosition(nextKana, InputStyle.DIRECT)
-        if (!isSensitiveInput() && composingText.isAtEndIndex && nextKana.length == 1 &&
-            japaneseTouchBiases.isNotEmpty() &&
-            japaneseTouchBiases.size == composingText.input.count { it.piece is InputPiece.CharPiece }
-        ) {
-            japaneseTouchBiases[japaneseTouchBiases.lastIndex] = TouchKeyBias(nextKana[0])
+        if (!isSensitiveInput() && composingText.isAtEndIndex && nextKana.length == 1) {
+            TouchBiasBuffer.updateLastForReplacement(
+                biases = japaneseTouchBiases,
+                charCount = composingText.input.count { it.piece is InputPiece.CharPiece },
+                previousChar = prevLastChar,
+                replacementChar = nextKana[0],
+                replacementBias = touchBias
+            )
         } else if (!composingText.isAtEndIndex) {
             japaneseTouchBiases.clear()
         }
@@ -2893,14 +2960,16 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
     }
 
-    fun replaceLastCommittedText(newText: String, oldLength: Int = 1) {
+    fun replaceLastCommittedText(newText: String, oldLength: Int = 1, touchBias: TouchKeyBias? = null) {
         if (isConfirming) return
         val ic = currentInputConnection ?: return
         if (englishComposing.isNotEmpty() && oldLength > 0 && englishComposing.length >= oldLength) {
             englishCursorPosition = englishComposing.length
+            val prevLen = englishComposing.length
             val remaining = englishComposing.dropLast(oldLength)
             englishComposing = remaining
             englishCursorPosition = remaining.length
+            TouchBiasBuffer.trimForBackwardDelete(englishTouchBiases, prevLen, remaining.length)
             syncComposingDisplayState()
             if (remaining.isEmpty()) {
                 setManagedComposingText(ic, "", 1)
@@ -2909,7 +2978,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 setManagedComposingText(ic, remaining, 1)
                 triggerEnglishSuggestions(remaining)
             }
-            handleEnglishText(newText)
+            handleEnglishText(newText, touchBias)
             return
         }
         ic.deleteSurroundingText(oldLength, 0)
@@ -3044,7 +3113,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         }
                         val inputMode = com.zeroconvert.ime.engine.engineInputMode(
                             refinement?.originInput ?: snapshot,
-                            japaneseLayoutState.value
+                            japaneseLayoutState.value,
+                            isFlickOnlyState.value
                         )
                         val rawInput = if (allowCorrection && inputMode == "qwerty") {
                             com.zeroconvert.ime.engine.engineRawRomaji(snapshot)
@@ -3053,7 +3123,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         }
                         val touchHints = if (!allowCorrection) {
                             ""
-                        } else if (inputMode == "flick") {
+                        } else if (com.zeroconvert.ime.engine.isFlickEngineMode(inputMode)) {
                             com.zeroconvert.ime.engine.engineFlickTouchHints(snapshot, touchBiasesSnapshot)
                         } else {
                             com.zeroconvert.ime.engine.engineTouchHints(snapshot, touchBiasesSnapshot)
@@ -3067,7 +3137,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         }
                         val originTouchHints = if (refinement == null) {
                             ""
-                        } else if (inputMode == "flick") {
+                        } else if (com.zeroconvert.ime.engine.isFlickEngineMode(inputMode)) {
                             com.zeroconvert.ime.engine.engineFlickTouchHints(refinement.originInput, refinement.originBiases)
                         } else {
                             com.zeroconvert.ime.engine.engineTouchHints(refinement.originInput, refinement.originBiases)
@@ -3174,9 +3244,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
             // 3. Remove the first L hiragana characters from composingText
             composingText.prefixComplete(readingLen)
             syncCorrectionRevertState()
-            while (japaneseTouchBiases.size > composingText.input.size) {
-                japaneseTouchBiases.removeAt(0)
-            }
+            TouchBiasBuffer.trimToMaxCharCountFromStart(
+                japaneseTouchBiases,
+                composingText.input.count { it.piece is InputPiece.CharPiece }
+            )
             val remainingReading = composingText.convertTargetBeforeCursor
             pendingConversionContinuation = if (remainingReading.isNotEmpty())
                 ConversionContinuation.derive(fullReadingBeforeAutoCommit, remainingReading, prefixSurface) else null
@@ -3240,7 +3311,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
 
     private fun performUndo(): Boolean {
         if (isConfirming || isTranslationMode()) return false
-        if (aiAssistAdoptedState.value && !hasSelectionInEditor) {
+        if (aiAssistAdoptionState.value != AiAssistAdoption.None && !hasSelectionInEditor) {
             return performRevertAiAssist()
         }
         if (isAutoCommitRewindEnabled() && canRewindOnNextBackspace && lastAutoCommitRewind != null) {
@@ -3266,7 +3337,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 canRewindOnNextBackspace = false
                 lastAutoCommitRewind = null
                 corrections.clear()
-                aiAssistAdoptedState.value = false
+                aiAssistAdoptionState.value = AiAssistAdoption.None
                 composingText.restoreFrom(entry.previousComposing)
                 japaneseTouchBiases.clear()
                 japaneseTouchBiases.addAll(entry.touchBiases)
@@ -3488,13 +3559,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
             val deleteCount = composingText.convertTargetCursorPosition - previous
             if (deleteCount <= 0) { clearCandidateList(); return false }
             recordJapaneseComposingUndo()
+            val prevCharCount = composingText.input.count { it.piece is InputPiece.CharPiece }
             composingText.deleteBackwardFromCursorPosition(deleteCount)
             syncCorrectionRevertState()
             if (composingText.isAtEndIndex) {
                 val charCount = composingText.input.count { it.piece is InputPiece.CharPiece }
-                while (japaneseTouchBiases.size > charCount) {
-                    japaneseTouchBiases.removeAt(japaneseTouchBiases.lastIndex)
-                }
+                TouchBiasBuffer.trimForBackwardDelete(japaneseTouchBiases, prevCharCount, charCount)
             } else {
                 japaneseTouchBiases.clear()
             }
@@ -3681,8 +3751,23 @@ class ZeroConvertInputMethodService : InputMethodService(),
         } else if (!composingText.isEmpty) {
             confirmAsync()
         } else {
-            sendKeyChar('\n')
+            sendEnterOrEditorAction()
         }
+    }
+
+    /**
+     * Sends the editor action the Enter key is labelled with, falling back to a newline.
+     * A multiline field (IME_FLAG_NO_ENTER_ACTION) or an editor that declares no action
+     * keeps the newline it always got.
+     */
+    private fun sendEnterOrEditorAction() {
+        val action = EnterKeyAction.forEditor(currentInputEditorInfo?.imeOptions ?: 0, isComposing = false)
+        val handled = action != null && try {
+            currentInputConnection?.performEditorAction(action.editorAction) == true
+        } catch (_: RuntimeException) {
+            false
+        }
+        if (!handled) sendKeyChar('\n')
     }
 
     fun canReconvertSelection(): Boolean = selectionAvailableState.value && composingText.isEmpty &&
@@ -3819,6 +3904,41 @@ class ZeroConvertInputMethodService : InputMethodService(),
         confirmAsync(trailingText)
     }
 
+    /**
+     * Commits the reading bar text as typed: a Japanese reading stays hiragana instead of
+     * waiting for a conversion, and an English buffer is committed as spelled. The tap is
+     * an explicit choice of that text, so it records no conversion learning. A correction
+     * applied automatically stays unconfirmed composition input; only the user's own
+     * choice (typing on, Enter, or the bar's adopt button) may settle it.
+     */
+    fun commitReadingAsIs() {
+        when (ReadingTap.decide(
+            confirming = isConfirming,
+            translationMode = isTranslationMode(),
+            automaticCorrection = corrections.adoption == AiAssistAdoption.Automatic,
+            japaneseReading = composingText.convertTarget,
+            englishBuffer = englishComposing
+        )) {
+            ReadingTapCommit.Hiragana -> commitComposingReadingAsIs()
+            ReadingTapCommit.English -> commitEnglishBuffer(useTopCandidate = false)
+            ReadingTapCommit.Ignored -> Unit
+        }
+    }
+
+    /**
+     * The editor replaces the whole composition when text is committed, so the internal
+     * caret moves to its end first; otherwise the uncommitted tail would remain as a
+     * second composition behind the committed reading.
+     */
+    private fun commitComposingReadingAsIs() {
+        if (currentInputConnection == null) return
+        if (!composingText.isAtEndIndex) {
+            composingText.moveCursorFromCursorPosition(composingText.convertTarget.length)
+            syncComposingDisplayState()
+        }
+        commitText(composingText.convertTarget, committedCandidate = null)
+    }
+
     fun commitDirect(text: String) {
         if (isTranslationMode() && !committingTranslation) {
             appendTranslationLiteral(text)
@@ -3912,8 +4032,12 @@ class ZeroConvertInputMethodService : InputMethodService(),
         triggerEnglishSuggestions(englishComposing)
     }
 
-    fun handleEnglishText(text: String) {
-        for (ch in text) handleEnglishChar(ch)
+    fun handleEnglishText(text: String, touchBias: TouchKeyBias? = null) {
+        if (text.length == 1) {
+            handleEnglishChar(text[0], touchBias)
+        } else {
+            for (ch in text) handleEnglishChar(ch)
+        }
     }
 
     fun handleEnglishDelete() {
@@ -4212,9 +4336,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 val fullReadingBeforeCommit = composingText.convertTarget
                 cachedLeftContext = EditorContext.bounded(cachedLeftContext + text)
                 composingText.prefixComplete(readingBefore.length)
-                while (japaneseTouchBiases.size > composingText.input.size) {
-                    japaneseTouchBiases.removeAt(0)
-                }
+                TouchBiasBuffer.trimToMaxCharCountFromStart(
+                    japaneseTouchBiases,
+                    composingText.input.count { it.piece is InputPiece.CharPiece }
+                )
                 corrections.edited()
                 syncCorrectionRevertState()
                 val remainingSurface = composingText.convertTarget
@@ -4263,7 +4388,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         hasSelectionInEditor = false
         selectionAvailableState.value = false
         clearSelectionCharacterCount()
-        aiAssistAdoptedState.value = false
+        aiAssistAdoptionState.value = AiAssistAdoption.None
         savedOriginalCandidates = emptyList()
         savedOriginalSurface = ""
         savedOriginalReading = ""
@@ -4327,6 +4452,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         clearInput()
         undoHistory.clear()
         applyInputTypeMode(info)
+        enterKeyImeOptionsState.intValue = info?.imeOptions ?: 0
         inputViewEpochState.value++
         hasSelectionInEditor = info != null && info.initialSelStart >= 0 && info.initialSelStart != info.initialSelEnd
         selectionAvailableState.value = hasSelectionInEditor
@@ -4341,6 +4467,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         super.onStartInput(info, restarting)
         cancelClipboardEdit()
         updateInputPrivacy(info)
+        enterKeyImeOptionsState.intValue = info?.imeOptions ?: 0
         exitTranslationMode(revert = false)
         clearInput()
         undoHistory.clear()
@@ -4356,6 +4483,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     override fun onFinishInput() {
         cancelClipboardEdit()
         updateInputPrivacy(null)
+        enterKeyImeOptionsState.intValue = 0
         exitTranslationMode(revert = false)
         clearInput()
         undoHistory.clear()

@@ -154,7 +154,7 @@ pub fn model_download_root() -> PathBuf {
 }
 
 pub fn conversion_model_path(install: &Path, id: &str) -> PathBuf {
-    let filename = model_filename(id).unwrap_or(NANO_IQ4);
+    let filename = model_filename(id).unwrap_or(STANDARD_IQ4);
     let cached = model_download_root().join(filename);
     if cached.is_file() {
         return cached;
@@ -219,7 +219,7 @@ pub fn default_translation_model() -> &'static str {
 }
 
 pub fn default_model() -> String {
-    "nano_v4_2_iq4_emb8".into()
+    "standard_v4_2_iq4_emb8".into()
 }
 
 pub fn canonical_model_id(id: &str) -> Option<&'static str> {
@@ -362,12 +362,17 @@ mod tests {
     }
 
     #[test]
-    fn settings_without_model_load_with_nano_v4_2_default() {
+    fn settings_without_model_load_with_standard_v4_2_iq4_default() {
         // 共有エンジンの最小クレートでも ZenzaiConfig を前提にしない。
-        assert_eq!(default_model(), "nano_v4_2_iq4_emb8");
+        assert_eq!(default_model(), "standard_v4_2_iq4_emb8");
         assert_eq!(
             canonical_model_id(&default_model()),
-            Some("nano_v4_2_iq4_emb8")
+            Some("standard_v4_2_iq4_emb8")
+        );
+        assert_eq!(
+            model_filename(&default_model()),
+            Some(STANDARD_IQ4),
+            "settings without a model must resolve to the downloaded default weights"
         );
     }
 

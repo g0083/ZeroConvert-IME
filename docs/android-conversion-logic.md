@@ -60,6 +60,8 @@ QWERTY のシフト記号 (`isImmediateCommitChar`) は composition を即時確
 
 また `follow_input_type_mode`（`InputTypeMode.kt`、既定 false）を有効にすると、`onStartInputView` 時に `EditorInfo.inputType` / `imeOptions` に応じて `NUMERIC`（数値・電話・日時）または `ENGLISH`（URI・メール等）へ自動で切り替える（機密入力欄では維持）。英字モードの単語補完と共有学習（`english-learning.json`）については [english-completion.md](english-completion.md) を参照。
 
+Enter キーは、入力欄の `imeOptions` が編集アクション（次へ・検索・送信・完了など）を宣言していればそのラベルを表示し、未確定の読み・英字が無いときはそのアクションを送る。複数行入力欄（`IME_FLAG_NO_ENTER_ACTION`）と変換中は従来のリターン矢印・「確定」のまま。判定は `EnterKeyAction.kt`、詳細は [android-enter-key-label.md](investigations/android-enter-key-label.md) を参照。
+
 ### 2.2 ローマ字→かな
 
 `ComposingText` が `input: MutableList<InputElement>`（原打鍵列）と `convertTarget`（読み/かな列）を管理する。`DefaultRomanToKana.table` でローマ字→かな変換を行う。入力スタイル `ROMAN2KANA` / `DIRECT` / `FROZEN` を区別する。
@@ -137,7 +139,7 @@ Windows と同等の UX:
 - Tab で補正しても確定せず、続けて入力できる。先読みの Tab は採用・確定。
 - 補正適用直後の Esc で原文の打鍵履歴と表示を復元。同じ入力状態では取り消した候補を再表示しない。
 - `adoptAiAssist(explicit)` で適用。`corrections.apply(composingText, assist.text, preview, explicit)` で内部状態を更新し、`setComposingText` で composition を更新。
-- `aiAssistAdoptedState` で採用済みフラグ管理。`inferenceHistory.clear()` で履歴をクリア。
+- `aiAssistAdoptionState` で採用状態（`AiAssistAdoption`: 未採用 / 明示採用 / 自動適用）を管理。`inferenceHistory.clear()` で履歴をクリア。
 
 ### 6.2 補正の内部パイプライン (`ModelCorrector`)
 
@@ -315,7 +317,8 @@ Windows と同様:
 
 - `ComposeKeyboardView` / `FlickKeyboardView` / `KeyboardCandidateArea`: キーボード + 候補表示 (Compose)。分割キーボード（`QwertySplitLayout.kt`）、フローティング・片手モード（`FloatingKeyboardHost.kt` / `FloatingKeyboardControls.kt`）、Undo 履歴（`ImeUndoHistory.kt`）に対応
 - `aiAssistResultState` で補正/先読みの結果を UI に反映（`SharedAssistPolicy.kt` 経由で共有 Rust ポリシーと連携）
-- `aiAssistAdoptedState` で採用済み状態を表示 (Esc / 戻すボタンで復元)
+- `aiAssistAdoptionState` で採用状態（未採用 / 明示採用 / 自動適用）を表示 (Esc / 戻すボタンで復元)
+- 読みバー (`KeyboardAssistBar`) の読みをタップすると、変換を待たずに表示中の読みのまま確定する。日本語はひらがな、英字バッファは綴りのまま確定し、変換学習は記録しない。判定は `ReadingTap`。確定処理中と翻訳モード中はタップを受け付けず、読みが空のときは押せる領域を作らない。タイポ補正が自動適用されている間（`CorrectionSession.adoption` が `Automatic`）もタップ確定の対象にせず、補正後の読みを未変換の入力のまま残す（明示的に採用した `Explicit` は従来どおり確定できる）。
 - 候補一覧は `candidatesList` (mutableStateListOf)
 
 ---

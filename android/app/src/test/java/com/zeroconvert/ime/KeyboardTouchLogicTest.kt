@@ -3,6 +3,7 @@ package com.zeroconvert.ime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -377,6 +378,17 @@ class KeyboardTouchLogicTest {
     }
 
     @Test
+    fun oneHandedLayout_clampsWidthPercentAndSplitsRemainingSpace() {
+        assertEquals(OneHandedLayout.MIN_WIDTH_PERCENT, OneHandedLayout.clampWidthPercent(40))
+        assertEquals(OneHandedLayout.MAX_WIDTH_PERCENT, OneHandedLayout.clampWidthPercent(120))
+        assertEquals(OneHandedLayout.DEFAULT_WIDTH_PERCENT, OneHandedLayout.clampWidthPercent(82))
+        assertEquals(0.82f, OneHandedLayout.keyboardWeight(82), 0.0001f)
+        assertEquals(0.18f, OneHandedLayout.railWeight(82), 0.0001f)
+        assertEquals(1f, OneHandedLayout.keyboardWeight(60) + OneHandedLayout.railWeight(60), 0.0001f)
+        assertEquals(1f, OneHandedLayout.keyboardWeight(95) + OneHandedLayout.railWeight(95), 0.0001f)
+    }
+
+    @Test
     fun nextKeyPredictor_japaneseRomajiWeights_predictsVowelsAndDigraphsAndReturnsEmptyOnBoundary() {
         assertTrue(NextKeyPredictor.japaneseRomajiWeights("").isEmpty())
         assertEquals("", NextKeyPredictor.trailingPendingRomaji("わたし"))
@@ -676,5 +688,361 @@ class KeyboardTouchLogicTest {
         )
         assertEquals('く', edge?.typedChar)
         assertTrue(edge?.nearbyChars?.any { it.first == 'す' && it.second in 0.25f..0.85f } == true)
+    }
+
+    @Test
+    fun computeFlickTouchBias_cornerTapHintsOrthogonalAndDiagonalNeighbors() {
+        val cornerTap = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyA,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 92f,
+            startY = 92f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('あ', cornerTap?.typedChar)
+        assertTrue(cornerTap?.nearbyChars?.any { it.first == 'か' && it.second in 0.50f..0.85f } == true)
+        assertTrue(cornerTap?.nearbyChars?.any { it.first == 'た' && it.second in 0.50f..0.85f } == true)
+        assertTrue(cornerTap?.nearbyChars?.any { it.first == 'な' && it.second in 0.45f..0.85f } == true)
+
+        val cornerFlick = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.LEFT,
+            dx = -50f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 92f,
+            startY = 92f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('き', cornerFlick?.typedChar)
+        assertTrue(cornerFlick?.nearbyChars?.any { it.first == 'し' } == true)
+        assertTrue(cornerFlick?.nearbyChars?.any { it.first == 'に' } == true)
+        assertTrue(cornerFlick?.nearbyChars?.any { it.first == 'ひ' } == true)
+    }
+
+    @Test
+    fun computeFlickTouchBias_keyPuncEdgeHintsAdjacentKanaOneWay() {
+        val leftEdge = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyPunc,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 5f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('、', leftEdge?.typedChar)
+        assertTrue(leftEdge?.nearbyChars?.any { it.first == 'わ' && it.second in 0.50f..0.85f } == true)
+
+        val topLeftCorner = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyPunc,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 8f,
+            startY = 8f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertTrue(topLeftCorner?.nearbyChars?.any { it.first == 'わ' } == true)
+        assertTrue(topLeftCorner?.nearbyChars?.any { it.first == 'ら' } == true)
+        assertTrue(topLeftCorner?.nearbyChars?.any { it.first == 'や' } == true)
+
+        val waRightEdge = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyWa,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 95f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertTrue(waRightEdge?.nearbyChars?.none { it.first == '、' } == true)
+    }
+
+    @Test
+    fun computeFlickToggleTouchBias_emitsCellEdgeHintsForCycledKanaWithoutDirectionNoise() {
+        val cycledKu = computeFlickToggleTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedChar = 'く',
+            startX = 95f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('く', cycledKu?.typedChar)
+        assertTrue(cycledKu?.nearbyChars?.any { it.first == 'す' && it.second in 0.50f..0.85f } == true)
+        assertTrue(cycledKu?.nearbyChars?.none { it.first == 'か' } == true)
+
+        val cycledYo = computeFlickToggleTouchBias(
+            keyDef = FlickKeyDefinitions.keyYa,
+            committedChar = 'よ',
+            startX = 95f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('よ', cycledYo?.typedChar)
+        assertTrue(cycledYo?.nearbyChars?.any { it.first == 'ろ' } == true)
+
+        val centerTap = computeFlickToggleTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedChar = 'き',
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertTrue(centerTap?.nearbyChars?.isEmpty() == true)
+    }
+
+    @Test
+    fun computeEnglishFlickTouchBias_andToggleBias_coverBoundaryEdgeCornerAndActionKeys() {
+        val cleanCenter = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey2(false),
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('a', cleanCenter?.typedChar)
+        assertTrue(cleanCenter?.nearbyChars?.isEmpty() == true)
+
+        val shortTap = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey2(false),
+            committedDir = FlickDirection.CENTER,
+            dx = -16f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertTrue(shortTap?.nearbyChars?.any { it.first == 'b' } == true)
+
+        val microFlick = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey2(false),
+            committedDir = FlickDirection.LEFT,
+            dx = -21f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('b', microFlick?.typedChar)
+        assertTrue(microFlick?.nearbyChars?.any { it.first == 'a' } == true)
+
+        val diagonal = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey5(false),
+            committedDir = FlickDirection.LEFT,
+            dx = -40f,
+            dy = -34f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('k', diagonal?.typedChar)
+        assertTrue(diagonal?.nearbyChars?.any { it.first == 'l' } == true)
+
+        val shiftedCorner = computeEnglishFlickTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey5(true),
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 92f,
+            startY = 92f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('j', shiftedCorner?.typedChar)
+        assertTrue(shiftedCorner?.nearbyChars?.any { it.first == 'm' } == true)
+        assertTrue(shiftedCorner?.nearbyChars?.any { it.first == 't' } == true)
+        assertTrue(shiftedCorner?.nearbyChars?.any { it.first == 'w' } == true)
+
+        val cycledUpper = computeEnglishFlickToggleTouchBias(
+            keyDef = FlickEnglishKeyDefinitions.getKey5(true),
+            committedChar = 'L',
+            startX = 95f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )
+        assertEquals('l', cycledUpper?.typedChar)
+        assertTrue(cycledUpper?.nearbyChars?.any { it.first == 'o' } == true)
+
+        assertNull(
+            computeEnglishFlickTouchBias(
+                keyDef = FlickEnglishKeyDefinitions.getKey1(),
+                committedDir = FlickDirection.CENTER,
+                dx = 0f,
+                dy = 0f,
+                thresholdPx = 20f,
+                startX = 95f,
+                startY = 50f,
+                widthPx = 100f,
+                heightPx = 100f
+            )
+        )
+        assertNull(
+            computeEnglishFlickTouchBias(
+                keyDef = FlickEnglishKeyDefinitions.keyCase,
+                committedDir = FlickDirection.CENTER,
+                dx = 0f,
+                dy = 0f,
+                thresholdPx = 20f,
+                startX = 50f,
+                startY = 50f,
+                widthPx = 100f,
+                heightPx = 100f
+            )
+        )
+        assertNull(
+            computeEnglishFlickTouchBias(
+                keyDef = FlickEnglishKeyDefinitions.keyPunc,
+                committedDir = FlickDirection.CENTER,
+                dx = 0f,
+                dy = 0f,
+                thresholdPx = 20f,
+                startX = 50f,
+                startY = 50f,
+                widthPx = 100f,
+                heightPx = 100f
+            )
+        )
+    }
+
+    @Test
+    fun touchBiasBuffer_preservesSuffixAlignmentAcrossEdits() {
+        val biases = mutableListOf(
+            TouchKeyBias('か', listOf('さ' to 0.7f)),
+            TouchKeyBias('つ', listOf('す' to 0.6f))
+        )
+        TouchBiasBuffer.updateLastForModifier(
+            biases = biases,
+            charCount = 4, // suffix-aligned (2 untracked prefix chars + 2 tracked suffix chars)
+            previousChar = 'つ',
+            modifiedChar = 'っ',
+            kind = KanaModifierKind.SMALL
+        )
+        assertEquals('っ', biases.last().typedChar)
+        assertTrue(biases.last().nearbyChars.any { it.first == 'す' })
+
+        val replacement = TouchKeyBias('く', listOf('す' to 0.75f))
+        TouchBiasBuffer.updateLastForReplacement(
+            biases = biases,
+            charCount = 4,
+            previousChar = 'っ',
+            replacementChar = 'く',
+            replacementBias = replacement
+        )
+        assertEquals(2, biases.size)
+        assertEquals('く', biases.last().typedChar)
+        assertTrue(biases.last().nearbyChars.any { it.first == 'す' })
+
+        TouchBiasBuffer.trimForBackwardDelete(biases, prevCharCount = 4, nextCharCount = 3)
+        assertEquals(1, biases.size)
+        assertEquals('か', biases.single().typedChar)
+
+        TouchBiasBuffer.trimToMaxCharCountFromStart(biases, remainingCharCount = 0)
+        assertTrue(biases.isEmpty())
+    }
+
+    @Test
+    fun flickTouchObservation_capturesNormalizedCoordsAndModifierUpgrade() {
+        val flickObs = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.LEFT,
+            dx = -16f,
+            dy = 5f,
+            thresholdPx = 20f,
+            startX = 95f,
+            startY = 10f,
+            widthPx = 100f,
+            heightPx = 100f
+        )?.flickObservation
+        assertNotNull(flickObs)
+        assertEquals(FlickObservationKind.FLICK, flickObs?.kind)
+        assertEquals(0.95f, flickObs!!.nx, 1e-4f)
+        assertEquals(0.10f, flickObs.ny, 1e-4f)
+        assertEquals(-0.80f, flickObs.dxNorm, 1e-4f)
+        assertEquals(0.25f, flickObs.dyNorm, 1e-4f)
+
+        val toggleFirstObs = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f,
+            isToggleMode = true
+        )?.flickObservation
+        assertEquals(FlickObservationKind.TOGGLE_FIRST, toggleFirstObs?.kind)
+
+        val toggleCycleBias = computeFlickToggleTouchBias(
+            keyDef = FlickKeyDefinitions.keyKa,
+            committedChar = 'き',
+            startX = 92f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )!!
+        assertEquals(FlickObservationKind.TOGGLE_CYCLE, toggleCycleBias.flickObservation?.kind)
+
+        val clampedObs = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyA,
+            committedDir = FlickDirection.RIGHT,
+            dx = 200f,
+            dy = -200f,
+            thresholdPx = 20f,
+            startX = 50f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )?.flickObservation
+        assertEquals(3.0f, clampedObs!!.dxNorm, 1e-4f)
+        assertEquals(-3.0f, clampedObs.dyNorm, 1e-4f)
+
+        val biases = mutableListOf(
+            computeFlickTouchBias(
+                keyDef = FlickKeyDefinitions.keyKa,
+                committedDir = FlickDirection.CENTER,
+                dx = 0f,
+                dy = 0f,
+                thresholdPx = 20f,
+                startX = 50f,
+                startY = 50f,
+                widthPx = 100f,
+                heightPx = 100f
+            )!!
+        )
+        TouchBiasBuffer.updateLastForModifier(biases, 1, 'か', 'が', KanaModifierKind.DAKUTEN)
+        assertEquals(FlickObservationKind.FLICK_MOD, biases.single().flickObservation?.kind)
+
+        val toggleBiases = mutableListOf(toggleCycleBias)
+        TouchBiasBuffer.updateLastForModifier(toggleBiases, 1, 'き', 'ぎ', KanaModifierKind.DAKUTEN)
+        assertEquals(FlickObservationKind.TOGGLE_MOD, toggleBiases.single().flickObservation?.kind)
     }
 }

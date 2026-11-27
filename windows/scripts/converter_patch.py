@@ -2203,6 +2203,14 @@ REUSABLE_LATTICE_PUBLIC_API = '''    public func exportReusableFullInputLattice(
                 candidate.text == generatedText && candidate.rubyCount == katakanaCount
             }
 
+            let leftSideContext: String
+            switch options.zenzaiMode.versionDependentMode {
+            case .v2(let mode):
+                leftSideContext = mode.leftSideContext ?? ""
+            case .v3(let mode):
+                leftSideContext = mode.leftSideContext ?? ""
+            }
+
             let chosenCandidate: Candidate
             var firstClauseResults: [Candidate] = []
             if let exactCandidate {
@@ -2229,20 +2237,24 @@ REUSABLE_LATTICE_PUBLIC_API = '''    public func exportReusableFullInputLattice(
                     lastMid: MIDData.一般.mid,
                     data: []
                 )
-                let materialized = self.converter.materializeWholeResultCandidate(
+                let materialized = self.converter.materializeWholeResultCandidateWithDiagnostics(
                     wholeText: generatedText,
                     inputData: inputData,
                     baseCandidate: baseCandidate,
                     baseNode: baseNode,
                     lattice: materializedLattice,
-                    additionalNodes: reusableLattice?.unconstrainedResult?.prevs ?? []
+                    additionalNodes: reusableLattice?.unconstrainedResult?.prevs ?? [],
+                    leftSideContext: leftSideContext
                 )
-                var built = materialized.1
+                guard self.converter.isAcceptableWholeResultDiagnostics(materialized.diagnostics) else {
+                    return nil
+                }
+                var built = materialized.candidate
                 built.withActions(self.getAppropriateActions(built))
                 built.parseTemplate()
                 chosenCandidate = built
 
-                let candidateData = materialized.0.getCandidateData()
+                let candidateData = materialized.node.getCandidateData()
                 if let first = candidateData.clauses.first {
                     let count = max(0, first.clause.dataEndIndex)
                     let dataSlice = count < candidateData.data.count
@@ -4149,7 +4161,7 @@ ZENZAI_REPLACEMENTS = (
         if let exactIndex = candidates.firstIndex(where: { $0.text == wholeText && self.heuristicRetryValidation($0.text) }) {
             chosen = (draftPrevs[exactIndex], candidates[exactIndex])
         } else {
-            chosen = self.materializeWholeResultCandidate(
+            let materialized = self.materializeWholeResultCandidateWithDiagnostics(
                 wholeText: wholeText,
                 inputData: inputData,
                 baseCandidate: baseCandidate,
@@ -4157,6 +4169,10 @@ ZENZAI_REPLACEMENTS = (
                 lattice: lattice,
                 additionalNodes: draftPrevs
             )
+            guard self.isAcceptableWholeResultDiagnostics(materialized.diagnostics) else {
+                return nil
+            }
+            chosen = (materialized.node, materialized.candidate)
         }
         let finalConstraint = PrefixConstraint(
             Array(wholeText.utf8),
@@ -4167,6 +4183,39 @@ ZENZAI_REPLACEMENTS = (
         return (chosen, cache)
     }
 
+    struct DirectMaterializationDiagnostics {
+        let readingCount: Int
+        let unmatchedReadingChars: Int
+        let pureDropReadingChars: Int
+        let pureInsertSurfaceChars: Int
+        let maxNonAsciiDropDelta: Int
+        let maxNonAsciiInsertDelta: Int
+        let hasLeftContextCopyHallucination: Bool
+    }
+
+    func isAcceptableWholeResultDiagnostics(_ d: DirectMaterializationDiagnostics) -> Bool {
+        if d.pureDropReadingChars >= 3
+            || d.maxNonAsciiDropDelta >= 4
+            || d.pureInsertSurfaceChars >= 2
+            || d.maxNonAsciiInsertDelta >= 2
+            || d.hasLeftContextCopyHallucination {
+            return false
+        }
+        return true
+    }
+
+    private static func containsKanjiOrKatakana(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            let v = scalar.value
+            return (0x30A1 ... 0x30FA).contains(v)
+                || (0x30FC ... 0x30FF).contains(v)
+                || (0x3400 ... 0x4DBF).contains(v)
+                || (0x4E00 ... 0x9FFF).contains(v)
+                || (0xF900 ... 0xFAFF).contains(v)
+                || (0x20000 ... 0x2FA1F).contains(v)
+        }
+    }
+
     func materializeWholeResultCandidate(
         wholeText: String,
         inputData: ComposingText,
@@ -4175,6 +4224,26 @@ ZENZAI_REPLACEMENTS = (
         lattice: Lattice,
         additionalNodes: [RegisteredNode]
     ) -> (RegisteredNode, Candidate) {
+        let res = self.materializeWholeResultCandidateWithDiagnostics(
+            wholeText: wholeText,
+            inputData: inputData,
+            baseCandidate: baseCandidate,
+            baseNode: baseNode,
+            lattice: lattice,
+            additionalNodes: additionalNodes
+        )
+        return (res.node, res.candidate)
+    }
+
+    func materializeWholeResultCandidateWithDiagnostics(
+        wholeText: String,
+        inputData: ComposingText,
+        baseCandidate: Candidate,
+        baseNode: RegisteredNode,
+        lattice: Lattice,
+        additionalNodes: [RegisteredNode],
+        leftSideContext: String = ""
+    ) -> (node: RegisteredNode, candidate: Candidate, diagnostics: DirectMaterializationDiagnostics) {
         let R = Array(inputData.convertTarget.toKatakana())
         let S = Array(wholeText)
         let surfaceCount = inputData.convertTarget.count
@@ -4198,7 +4267,16 @@ ZENZAI_REPLACEMENTS = (
                 totalValue: baseCandidate.value,
                 range: .surface(from: 0, to: surfaceCount)
             )
-            return (reg, self.processClauseCandidate(reg.getCandidateData()))
+            let fallbackDiag = DirectMaterializationDiagnostics(
+                readingCount: n,
+                unmatchedReadingChars: n,
+                pureDropReadingChars: (n > 0 && m == 0) ? n : 0,
+                pureInsertSurfaceChars: (n == 0 && m > 0) ? m : 0,
+                maxNonAsciiDropDelta: max(0, n - m),
+                maxNonAsciiInsertDelta: max(0, m - n),
+                hasLeftContextCopyHallucination: false
+            )
+            return (reg, self.processClauseCandidate(reg.getCandidateData()), fallbackDiag)
         }
 
         let inputToSurface = inputData.inputIndexToSurfaceIndexMap()
@@ -4466,6 +4544,39 @@ ZENZAI_REPLACEMENTS = (
                 merged.append(piece)
             }
         }
+        var unmatchedReadingChars = 0
+        var pureDropReadingChars = 0
+        var pureInsertSurfaceChars = 0
+        var maxNonAsciiDropDelta = 0
+        var maxNonAsciiInsertDelta = 0
+        var hasLeftContextCopyHallucination = false
+        for piece in merged where piece.elem == nil {
+            let rLen = piece.r2 - piece.r1
+            let sLen = piece.s2 - piece.s1
+            let pieceSurface = String(S[piece.s1 ..< piece.s2])
+            let pieceRuby = String(R[piece.r1 ..< piece.r2])
+            if rLen > 0 && pieceSurface.toKatakana() == pieceRuby {
+                continue
+            }
+            unmatchedReadingChars += rLen
+            if sLen == 0 {
+                pureDropReadingChars += rLen
+            }
+            if rLen == 0 {
+                pureInsertSurfaceChars += sLen
+            }
+            let isAsciiOnlySurface = sLen > 0 && pieceSurface.allSatisfy { $0.isASCII }
+            if !isAsciiOnlySurface {
+                maxNonAsciiDropDelta = max(maxNonAsciiDropDelta, rLen - sLen)
+                maxNonAsciiInsertDelta = max(maxNonAsciiInsertDelta, sLen - rLen)
+            }
+            if !leftSideContext.isEmpty && rLen > 0 && sLen >= 2
+                && Self.containsKanjiOrKatakana(pieceSurface)
+                && pieceSurface.toKatakana() != pieceRuby
+                && leftSideContext.contains(pieceSurface) {
+                hasLeftContextCopyHallucination = true
+            }
+        }
         var reg = rootNode
         for piece in merged {
             let elem: DicdataElement
@@ -4495,7 +4606,16 @@ ZENZAI_REPLACEMENTS = (
                 range: .surface(from: sStart, to: sEnd)
             )
         }
-        return (reg, self.processClauseCandidate(reg.getCandidateData()))
+        let diagnostics = DirectMaterializationDiagnostics(
+            readingCount: n,
+            unmatchedReadingChars: unmatchedReadingChars,
+            pureDropReadingChars: pureDropReadingChars,
+            pureInsertSurfaceChars: pureInsertSurfaceChars,
+            maxNonAsciiDropDelta: maxNonAsciiDropDelta,
+            maxNonAsciiInsertDelta: maxNonAsciiInsertDelta,
+            hasLeftContextCopyHallucination: hasLeftContextCopyHallucination
+        )
+        return (reg, self.processClauseCandidate(reg.getCandidateData()), diagnostics)
     }
 
     /// リトライの候補に対して恣意的なバリデーションを実施する

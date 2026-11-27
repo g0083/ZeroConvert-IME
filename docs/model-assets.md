@@ -4,12 +4,12 @@
 
 | 設定ID | 配布ファイル名 | 容量 | 取得URL（GitHub Release `models-v4.2`） |
 |---|---|---:|---|
-| `nano_v4_2_iq4_emb8`（**強制**・既定） | `zerocon-nano-v4.2-iq4nl-emb8.gguf` | 19,602,048 bytes | `…/download/models-v4.2/zerocon-nano-v4.2-iq4nl-emb8.gguf` |
+| `nano_v4_2_iq4_emb8` | `zerocon-nano-v4.2-iq4nl-emb8.gguf` | 19,602,048 bytes | `…/download/models-v4.2/zerocon-nano-v4.2-iq4nl-emb8.gguf` |
 | `nano_v4_2_q8` | `zerocon-nano-v4.2-q8_0.gguf` | 29,039,232 bytes | `…/download/models-v4.2/zerocon-nano-v4.2-q8_0.gguf` |
-| `standard_v4_2_iq4_emb8` | `zerocon-standard-v4.2-iq4nl-emb8.gguf` | 61,399,072 bytes | `…/download/models-v4.2/zerocon-standard-v4.2-iq4nl-emb8.gguf` |
+| `standard_v4_2_iq4_emb8`（**Windowsの既定・必須**） | `zerocon-standard-v4.2-iq4nl-emb8.gguf` | 61,399,072 bytes | `…/download/models-v4.2/zerocon-standard-v4.2-iq4nl-emb8.gguf` |
 | `standard_v4_2_q8` | `zerocon-standard-v4.2-q8_0.gguf` | 103,866,400 bytes | `…/download/models-v4.2/zerocon-standard-v4.2-q8_0.gguf` |
 
-IQ4_emb8はNano / Standard v4.2の省メモリ版（内部IQ4_NL、入力埋め込み・出力Q8_0）。Q8はQ8_0高精度版。SHA-256・元ファイル名・モデル仕様の正本は `windows/deployment/model-catalog.json` とする（取得URLは `releases/download/models-v4.2/<filename>`）。
+IQ4_emb8はNano / Standard v4.2の省メモリ版（内部IQ4_NL、入力埋め込み・出力Q8_0）。Q8はQ8_0高精度版。SHA-256・元ファイル名・モデル仕様の正本は `windows/deployment/model-catalog.json` とする（取得URLは `releases/download/models-v4.2/<filename>`）。カタログの `mandatory` はWindowsの既定（初回取得・削除不可）モデルを示し、Androidは `ModelManager` の定義に従ってNano v4.2 IQ4_emb8を強制する。
 
 ZeroCon Model v4.2 は Nano / Standard v4.2 の量子化済みファイルで、配布ファイル名は `zerocon-{nano,standard}-v4.2-*.gguf` です。追加辞書の固有名詞や時間・数値表記の変換精度を改善しています。
 

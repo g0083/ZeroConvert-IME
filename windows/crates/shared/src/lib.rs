@@ -1931,6 +1931,11 @@ pub enum UserDictionaryPos {
     #[default]
     ProperNoun,
     CommonNoun,
+    PersonalName,
+    FamilyName,
+    GivenName,
+    Organization,
+    PlaceName,
     SahenNoun,
     Shortcut,
     Symbol,

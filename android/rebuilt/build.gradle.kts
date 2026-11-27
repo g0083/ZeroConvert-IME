@@ -12,6 +12,7 @@ fun requiredProperty(name: String): String =
         ?: error("Missing $name in android/gradle.properties")
 
 val sharedHostAssets by tasks.registering(Sync::class) {
+    from("../../data/user-dictionary-pos.json")
     from("../app/src/main/assets") {
         // 旧 `assets/dictionary` は `engine/build/assets/shared-engine/Dictionary`
         // とほぼ重複する（louds/mm の二重格納）。`WINDOWS_ENGINE=true` では

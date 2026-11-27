@@ -857,15 +857,17 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
 }
 
 func canonicalZenzaiModelId(_ raw: String?) -> String {
-    switch raw ?? "nano_v4_2_iq4_emb8" {
+    switch raw ?? "standard_v4_2_iq4_emb8" {
     case "nano_v4_2_q8", "nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km":
         return "nano_v4_2_q8"
+    case "nano_v4_2_iq4_emb8", "nano_v4_1_iq4_emb8", "nano_v4_iq4_emb8", "nano", "nano_q4km":
+        return "nano_v4_2_iq4_emb8"
     case "standard_v4_2_iq4_emb8", "standard_v4_1_iq4_emb8", "standard_v4_iq4_emb8":
         return "standard_v4_2_iq4_emb8"
     case "standard_v4_2_q8", "standard_v4_1_q8", "standard_v4_q8", "standard_v4_2", "standard_v4_1":
         return "standard_v4_2_q8"
     default:
-        return "nano_v4_2_iq4_emb8"
+        return "standard_v4_2_iq4_emb8"
     }
 }
 
@@ -1928,16 +1930,35 @@ private struct UserDictionarySettings: Decodable, Sendable {
 enum UserDictionaryPos: String, Decodable, Sendable {
     case properNoun = "proper_noun"
     case commonNoun = "common_noun"
+    case personalName = "personal_name"
+    case familyName = "family_name"
+    case givenName = "given_name"
+    case organization
+    case placeName = "place_name"
     case sahenNoun = "sahen_noun"
     case shortcut
     case symbol
 
     var cid: Int {
         switch self {
-        case .properNoun, .shortcut: 1288
-        case .commonNoun: 1285
+        case .properNoun, .shortcut: CIDData.固有名詞.cid
+        case .commonNoun: CIDData.一般名詞.cid
+        case .personalName: CIDData.人名一般.cid
+        case .familyName: CIDData.人名姓.cid
+        case .givenName: CIDData.人名名.cid
+        case .organization: CIDData.固有名詞組織.cid
+        case .placeName: CIDData.地名一般.cid
         case .sahenNoun: 1283
-        case .symbol: 5
+        case .symbol: CIDData.記号.cid
+        }
+    }
+
+    var mid: Int {
+        switch self {
+        case .familyName: MIDData.人名姓.mid
+        case .givenName: MIDData.人名名.mid
+        case .organization: MIDData.組織.mid
+        default: MIDData.一般.mid
         }
     }
 
@@ -2001,7 +2022,7 @@ struct UserDictionarySnapshot: Sendable {
             guard isValidLearningKey(ruby), isValidLearningKey(word),
                   seen[ruby, default: []].insert(word).inserted else { continue }
             let pos = entry.pos ?? .properNoun
-            let data = DicdataElement(word: word, ruby: ruby, cid: pos.cid, mid: pos.cid,
+            let data = DicdataElement(word: word, ruby: ruby, cid: pos.cid, mid: pos.mid,
                                       value: pos.score(rank: registered.count), metadata: .isFromUserDictionary)
             registered.append(data)
             if pos == .shortcut {
@@ -3820,7 +3841,7 @@ public func load_config() {
     config["profile"] = ""
     config["backend"] = "cpu"
     config["gpuLayers"] = 99
-    config["model"] = "standard"
+    config["model"] = "standard_v4_2_iq4_emb8"
     config["cpuRuntimeTuning"] = nil
     config["experimentalTypoCorrection"] = defaultKeyboardTypoCorrection
     config["predictiveConversion"] = defaultPredictiveConversionEnabled
@@ -3835,7 +3856,7 @@ public func load_config() {
 
         if let zenzai = settings.zenzai {
             config["gpuLayers"] = Int(resolvedGpuLayerCount(zenzai.gpu_layers))
-            config["model"] = zenzai.model ?? "nano_v4_2_iq4_emb8"
+            config["model"] = zenzai.model ?? "standard_v4_2_iq4_emb8"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
             }

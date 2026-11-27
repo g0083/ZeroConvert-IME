@@ -455,8 +455,10 @@ std::string KeyboardScorer::run(const ChannelDictionary &dict, const std::string
                 const std::string &touch_hints,
                 const std::string &mode_str) {
   const auto *vocab = llama_model_get_vocab(model);
-  const auto input_mode = (mode_str == "flick") ? InputKeyboardMode::Flick
-                                                : InputKeyboardMode::Qwerty;
+  const auto input_mode = parse_input_keyboard_mode(mode_str);
+  const bool is_flick_mode = is_flick_keyboard_mode(input_mode);
+  const double rank_pen_weight = is_flick_mode ? 5.5 : 4.0;
+  const double stage1_pen_weight = is_flick_mode ? 5.0 : 3.0;
   const auto input_hira = !input_utf8.empty()
                               ? hiragana(decode_utf8(input_utf8))
                               : roman_decode(raw_keys);
@@ -480,8 +482,8 @@ std::string KeyboardScorer::run(const ChannelDictionary &dict, const std::string
       ctx_u32 = ctx_u32.substr(ctx_u32.size() - 64);
   }
   const auto &orig = candidates[0];
-  const auto windows =
-      build_scoring_windows(orig.reading, ctx_u32, candidates, dict);
+  const auto windows = build_scoring_windows(orig.reading, ctx_u32, candidates,
+                                             dict, input_mode);
   if (windows.empty()) {
     out << "{\"observed\":" << json_string(encode_utf8(orig.reading)) << "}";
     return out.str();
@@ -511,8 +513,8 @@ std::string KeyboardScorer::run(const ChannelDictionary &dict, const std::string
               [&](size_t a, size_t b) {
                 const auto &ca = candidates[win.members[a].candidate_index];
                 const auto &cb = candidates[win.members[b].candidate_index];
-                const double ra = ca.local_delta - ca.penalty * 4.0;
-                const double rb = cb.local_delta - cb.penalty * 4.0;
+                const double ra = ca.local_delta - ca.penalty * rank_pen_weight;
+                const double rb = cb.local_delta - cb.penalty * rank_pen_weight;
                 return ra != rb ? ra > rb : a < b;
               });
     const auto masked_ctx = mask_digits_nam_u32(win.left_context);
@@ -578,7 +580,7 @@ std::string KeyboardScorer::run(const ChannelDictionary &dict, const std::string
         len_comp = -short_unit * std::min(-token_diff, 2);
       }
       const double total = m.cand_path.score + 8.0 * lm_score + len_comp -
-                           cand.penalty * 3.0;
+                           cand.penalty * stage1_pen_weight;
       const double delta = total - baseline;
       if (delta >= 28.0)
         ranked.push_back({delta, delta, 0.0, false, false, m.candidate_index,

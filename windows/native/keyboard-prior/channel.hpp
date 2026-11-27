@@ -1,4 +1,5 @@
 #pragma once
+#include "flick_channel.hpp"
 #include "roman_table.hpp"
 #include <algorithm>
 #include <array>
@@ -348,165 +349,6 @@ struct TouchHint {
   char key = 0;
   double weight = 0.0;
 };
-enum class InputKeyboardMode { Qwerty, Flick };
-struct FlickTouchHint {
-  size_t index = 0;
-  char32_t ch = 0;
-  double weight = 0.0;
-};
-inline std::vector<FlickTouchHint>
-parse_flick_touch_hints(const std::string &spec) {
-  std::vector<FlickTouchHint> hints;
-  if (spec.empty())
-    return hints;
-  std::u32string u32;
-  try {
-    u32 = decode_utf8(spec);
-  } catch (...) {
-    return hints;
-  }
-  size_t pos = 0;
-  size_t seen_indices = 0;
-  while (pos < u32.size() && seen_indices < 128 && hints.size() < 512) {
-    size_t semi = u32.find(U';', pos);
-    if (semi == std::u32string::npos)
-      semi = u32.size();
-    const auto entry = u32.substr(pos, semi - pos);
-    pos = semi + 1;
-    const size_t colon = entry.find(U':');
-    if (colon == std::u32string::npos || colon == 0)
-      continue;
-    bool valid_idx = true;
-    size_t idx = 0;
-    for (size_t k = 0; k < colon; ++k) {
-      if (entry[k] < U'0' || entry[k] > U'9') {
-        valid_idx = false;
-        break;
-      }
-      idx = idx * 10 + size_t(entry[k] - U'0');
-      if (idx >= 128) {
-        valid_idx = false;
-        break;
-      }
-    }
-    if (!valid_idx)
-      continue;
-    ++seen_indices;
-    size_t apos = colon + 1;
-    size_t alts_for_idx = 0;
-    while (apos < entry.size() && alts_for_idx < 4 && hints.size() < 512) {
-      size_t comma = entry.find(U',', apos);
-      if (comma == std::u32string::npos)
-        comma = entry.size();
-      const auto item = entry.substr(apos, comma - apos);
-      apos = comma + 1;
-      if (item.size() < 3 || item[1] != U'=')
-        continue;
-      std::string w_ascii;
-      w_ascii.reserve(item.size() - 2);
-      bool ok_w = true;
-      for (size_t k = 2; k < item.size(); ++k) {
-        const char32_t wc = item[k];
-        if ((wc >= U'0' && wc <= U'9') || wc == U'.') {
-          w_ascii += char(wc);
-        } else {
-          ok_w = false;
-          break;
-        }
-      }
-      if (!ok_w || w_ascii.empty())
-        continue;
-      char *endp = nullptr;
-      const double w = std::strtod(w_ascii.c_str(), &endp);
-      if (endp != w_ascii.c_str() + w_ascii.size() || !std::isfinite(w) ||
-          w < 0.2 || w > 1.0)
-        continue;
-      hints.push_back({idx, item[0], w});
-      ++alts_for_idx;
-    }
-  }
-  return hints;
-}
-
-enum class FlickMod { Plain = 0, Dakuten = 1, Handakuten = 2, Small = 3 };
-struct FlickKeySpec {
-  int row;
-  int col;
-  char32_t dirs[5]; // [CENTER, LEFT, UP, RIGHT, DOWN]
-};
-inline const std::array<FlickKeySpec, 10> &flick_kana_keys() {
-  static const std::array<FlickKeySpec, 10> k = {{
-      {0, 0, {U'あ', U'い', U'う', U'え', U'お'}},
-      {0, 1, {U'か', U'き', U'く', U'け', U'こ'}},
-      {0, 2, {U'さ', U'し', U'す', U'せ', U'そ'}},
-      {1, 0, {U'た', U'ち', U'つ', U'て', U'と'}},
-      {1, 1, {U'な', U'に', U'ぬ', U'ね', U'の'}},
-      {1, 2, {U'は', U'ひ', U'ふ', U'へ', U'ほ'}},
-      {2, 0, {U'ま', U'み', U'む', U'め', U'も'}},
-      {2, 1, {U'や', U'（', U'ゆ', U'）', U'よ'}},
-      {2, 2, {U'ら', U'り', U'る', U'れ', U'ろ'}},
-      {3, 1, {U'わ', U'を', U'ん', U'ー', U'〜'}},
-  }};
-  return k;
-}
-inline char32_t flick_compose(int key, int dir, FlickMod mod) {
-  if (key < 0 || key >= 10 || dir < 0 || dir >= 5)
-    return 0;
-  const char32_t base = flick_kana_keys()[size_t(key)].dirs[size_t(dir)];
-  if (mod == FlickMod::Plain)
-    return base;
-  if (mod == FlickMod::Dakuten) {
-    if (base == U'う')
-      return U'ゔ';
-    if (key == 1 || key == 2 || key == 5)
-      return base + 1; // か->が, さ->ざ, は->ば
-    if (key == 3) {
-      if (dir == 0 || dir == 1 || dir == 2)
-        return base + 1; // た->だ, ち->ぢ, つ->づ
-      if (dir == 3 || dir == 4)
-        return base + 1; // て->で, と->ど
-    }
-    return 0;
-  }
-  if (mod == FlickMod::Handakuten) {
-    if (key == 5)
-      return base + 2; // は->ぱ
-    return 0;
-  }
-  if (mod == FlickMod::Small) {
-    switch (base) {
-    case U'あ': return U'ぁ';
-    case U'い': return U'ぃ';
-    case U'う': return U'ぅ';
-    case U'え': return U'ぇ';
-    case U'お': return U'ぉ';
-    case U'つ': return U'っ';
-    case U'や': return U'ゃ';
-    case U'ゆ': return U'ゅ';
-    case U'よ': return U'ょ';
-    case U'わ': return U'ゎ';
-    default: return 0;
-    }
-  }
-  return 0;
-}
-inline bool flick_decompose(char32_t c, int &key, int &dir, FlickMod &mod) {
-  for (int k = 0; k < 10; ++k) {
-    for (int d = 0; d < 5; ++d) {
-      for (FlickMod m :
-           {FlickMod::Plain, FlickMod::Dakuten, FlickMod::Handakuten,
-            FlickMod::Small}) {
-        if (flick_compose(k, d, m) == c) {
-          key = k;
-          dir = d;
-          mod = m;
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
 inline std::vector<TouchHint> parse_touch_hints(const std::string &spec) {
   std::vector<TouchHint> hints;
   if (spec.empty())
@@ -1017,7 +859,7 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   const size_t H = orig.size();
   if (H < 2 || H > 128)
     return {};
-  const bool is_flick_mode = (mode == InputKeyboardMode::Flick);
+  const bool is_flick_mode = is_flick_keyboard_mode(mode);
   if (!std::all_of(orig.begin(), orig.end(), [&](char32_t c) {
         if ((c >= U'ぁ' && c <= U'ゖ') || c == U'ー' || c == U'、' ||
             c == U'。' || c == U'！' || c == U'？' || c == U'!' ||
@@ -1154,211 +996,8 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
   static const std::u32string specials = U"っんー";
 
   if (is_flick_mode) {
-    const auto flick_hints = parse_flick_touch_hints(touch_hints_spec);
-    auto lookup_flick_hint = [&](size_t idx, char32_t ch) -> double {
-      for (const auto &h : flick_hints) {
-        if (h.index == idx && h.ch == ch)
-          return h.weight;
-      }
-      return 0.0;
-    };
-    for (const auto &h : flick_hints) {
-      if (h.weight >= 0.5 && h.index < H)
-        active_kana[h.index] = true;
-    }
-    auto add_flick_sub = [&](size_t pos, char32_t alt, double base_cost) {
-      if (alt == 0 || alt == orig[pos])
-        return;
-      double cost = base_cost;
-      const double hw = lookup_flick_hint(pos, alt);
-      if (hw > 0.0)
-        cost = std::max(0.55, cost - 0.4 * hw);
-      auto v = orig;
-      v[pos] = alt;
-      add(v, cost);
-    };
-    auto flick_mod_cost = [](FlickMod a, FlickMod b) -> double {
-      if (a == b)
-        return 0.0;
-      if ((a == FlickMod::Plain && b == FlickMod::Dakuten) ||
-          (a == FlickMod::Dakuten && b == FlickMod::Plain) ||
-          (a == FlickMod::Dakuten && b == FlickMod::Handakuten) ||
-          (a == FlickMod::Handakuten && b == FlickMod::Dakuten) ||
-          (a == FlickMod::Small && b == FlickMod::Dakuten) ||
-          (a == FlickMod::Dakuten && b == FlickMod::Small))
-        return 1.00;
-      if ((a == FlickMod::Plain && b == FlickMod::Handakuten) ||
-          (a == FlickMod::Handakuten && b == FlickMod::Plain))
-        return 1.10;
-      return 1.00;
-    };
-    const auto &keys = flick_kana_keys();
-    for (size_t k = 0; k < H; ++k) {
-      if (!active_kana[k])
-        continue;
-      int key = -1, dir = -1;
-      FlickMod mod = FlickMod::Plain;
-      if (flick_decompose(orig[k], key, dir, mod)) {
-        // F1: Same-key direction error
-        for (int d2 = 0; d2 < 5; ++d2) {
-          if (d2 == dir)
-            continue;
-          double dir_cost = 1.75;
-          if (dir == 0 || d2 == 0) {
-            dir_cost = 1.10;
-          } else {
-            const bool adjacent_cardinal =
-                (dir == 1 && (d2 == 2 || d2 == 4)) ||
-                (dir == 2 && (d2 == 1 || d2 == 3)) ||
-                (dir == 3 && (d2 == 2 || d2 == 4)) ||
-                (dir == 4 && (d2 == 1 || d2 == 3));
-            if (adjacent_cardinal)
-              dir_cost = 1.20;
-          }
-          const char32_t alt_same_mod = flick_compose(key, d2, mod);
-          if (alt_same_mod != 0)
-            add_flick_sub(k, alt_same_mod, dir_cost);
-          if (mod != FlickMod::Plain) {
-            const char32_t alt_plain = flick_compose(key, d2, FlickMod::Plain);
-            if (alt_plain != 0)
-              add_flick_sub(k, alt_plain, dir_cost + 0.15);
-          }
-        }
-        if (orig[k] == U'（' || orig[k] == U'）') {
-          add_flick_sub(k, U'や', 1.05);
-          add_flick_sub(k, U'ゆ', 1.05);
-          add_flick_sub(k, U'よ', 1.05);
-          add_flick_sub(k, U'ゃ', 1.25);
-          add_flick_sub(k, U'ゅ', 1.25);
-          add_flick_sub(k, U'ょ', 1.25);
-        }
-
-        // F2: 小゛゜ modifier omission/overshoot & misfire onto adjacent ま/わ
-        for (FlickMod m2 :
-             {FlickMod::Plain, FlickMod::Dakuten, FlickMod::Handakuten,
-              FlickMod::Small}) {
-          if (m2 == mod)
-            continue;
-          const char32_t alt_mod = flick_compose(key, dir, m2);
-          if (alt_mod == 0)
-            continue;
-          double mc = flick_mod_cost(mod, m2);
-          if (m2 == FlickMod::Small || mod == FlickMod::Small) {
-            const char32_t plain = flick_compose(key, dir, FlickMod::Plain);
-            if (plain == U'う' &&
-                (m2 == FlickMod::Dakuten || mod == FlickMod::Dakuten)) {
-              mc = 1.35;
-            } else if ((key == 0 || plain == U'わ') &&
-                       m2 != FlickMod::Dakuten && mod != FlickMod::Dakuten) {
-              mc = 1.35;
-            }
-          }
-          add_flick_sub(k, alt_mod, mc);
-        }
-        if (k > 0 && (orig[k] == U'ま' || orig[k] == U'わ')) {
-          int pk = -1, pd = -1;
-          FlickMod pm = FlickMod::Plain;
-          if (flick_decompose(orig[k - 1], pk, pd, pm)) {
-            for (FlickMod pm2 :
-                 {FlickMod::Dakuten, FlickMod::Handakuten, FlickMod::Small}) {
-              const char32_t modded = flick_compose(pk, pd, pm2);
-              if (modded != 0 && modded != orig[k - 1]) {
-                add(orig.substr(0, k - 1) + std::u32string(1, modded) +
-                        orig.substr(k + 1),
-                    1.55, true);
-              }
-            }
-          }
-        }
-
-        // F3: 3x4 adjacent key cell (same direction)
-        const int r1 = keys[size_t(key)].row;
-        const int c1 = keys[size_t(key)].col;
-        for (int nk = 0; nk < 10; ++nk) {
-          if (nk == key)
-            continue;
-          const int dr = std::abs(keys[size_t(nk)].row - r1);
-          const int dc = std::abs(keys[size_t(nk)].col - c1);
-          if (dr == 0 && dc == 0)
-            continue;
-          if (dr + dc == 1) {
-            const char32_t c_mod = flick_compose(nk, dir, mod);
-            if (c_mod != 0)
-              add_flick_sub(k, c_mod, 1.25);
-            if (mod != FlickMod::Plain) {
-              const char32_t c_plain = flick_compose(nk, dir, FlickMod::Plain);
-              if (c_plain != 0)
-                add_flick_sub(k, c_plain, 1.45);
-            }
-          } else if (dr == 1 && dc == 1) {
-            char32_t c_diag = flick_compose(nk, dir, mod);
-            if (c_diag == 0)
-              c_diag = flick_compose(nk, dir, FlickMod::Plain);
-            if (c_diag != 0)
-              add_flick_sub(k, c_diag, 1.75);
-          }
-        }
-      }
-      for (const auto &h : flick_hints) {
-        if (h.index == k && h.ch != orig[k]) {
-          auto v = orig;
-          v[k] = h.ch;
-          add(v, std::max(0.75, 1.8 - 0.4 * h.weight));
-        }
-      }
-
-      // F4: Structured kana omissions (っ / ん / ー / う / い)
-      if (sokuon_next.find(orig[k]) != std::u32string::npos)
-        add(orig.substr(0, k) + U"っ" + orig.substr(k), 1.45);
-      if (k >= 1 && orig[k - 1] != U'？' && orig[k - 1] != U'！' &&
-          orig[k - 1] != U'。' && orig[k - 1] != U'、')
-        add(orig.substr(0, k) + U"ん" + orig.substr(k), 1.65);
-      if (k >= 1 && orig[k - 1] >= U'ぁ' && orig[k - 1] <= U'ゖ') {
-        add(orig.substr(0, k) + U"ー" + orig.substr(k), 1.80);
-        if (ou_row.find(orig[k - 1]) != std::u32string::npos)
-          add(orig.substr(0, k) + U"う" + orig.substr(k), 1.75);
-        if (ae_row.find(orig[k - 1]) != std::u32string::npos)
-          add(orig.substr(0, k) + U"い" + orig.substr(k), 1.85);
-      }
-      if (k == H - 1 && orig[H - 1] >= U'ぁ' && orig[H - 1] <= U'ゖ') {
-        add(orig + U"ー", 2.15);
-        if (ou_row.find(orig[k]) != std::u32string::npos)
-          add(orig + U"う", 2.10);
-        if (ae_row.find(orig[k]) != std::u32string::npos)
-          add(orig + U"い", 2.20);
-        add(orig + U"ん", 2.00);
-      }
-
-      // F5: Extra / duplicate / stray symbol deletions
-      const bool is_dup = (k > 0 && orig[k] == orig[k - 1]) ||
-                          (k + 1 < H && orig[k] == orig[k + 1]);
-      const bool is_vowel_kana =
-          (orig[k] == U'あ' || orig[k] == U'い' || orig[k] == U'う' ||
-           orig[k] == U'え' || orig[k] == U'お');
-      if (is_dup) {
-        const bool trailing_vowel = (k == H - 1 && is_vowel_kana);
-        add(orig.substr(0, k) + orig.substr(k + 1),
-            trailing_vowel ? 1.45 : 1.05, !trailing_vowel);
-      } else if (specials.find(orig[k]) != std::u32string::npos) {
-        add(orig.substr(0, k) + orig.substr(k + 1), 1.20, true);
-      } else if (orig[k] == U'（' || orig[k] == U'）' || orig[k] == U'〜' ||
-                 orig[k] == U'・') {
-        add(orig.substr(0, k) + orig.substr(k + 1), 1.10, true);
-      } else {
-        add(orig.substr(0, k) + orig.substr(k + 1), 2.75);
-      }
-
-      // F6: Adjacent kana swap & particle は↔わ
-      if (k + 1 < H) {
-        auto v = orig;
-        std::swap(v[k], v[k + 1]);
-        add(v, 1.55);
-      }
-      if (orig[k] == U'は')
-        add(orig.substr(0, k) + U"わ" + orig.substr(k + 1), 1.85);
-      else if (orig[k] == U'わ')
-        add(orig.substr(0, k) + U"は" + orig.substr(k + 1), 1.85);
-    }
+    generate_flick_candidates(orig, active_kana, touch_hints_spec,
+                              mode == InputKeyboardMode::FlickToggle, add);
   } else {
 
   std::string rom;
@@ -1774,8 +1413,9 @@ assist_candidates(const std::string &raw_keys, const std::u32string &input_hira,
       continue;
     const double cand_sub_score = dictionary.score_only(
         std::u32string_view(cand).substr(anchor_l, size_t(cand_sub_len)));
+    const double pre_pen_weight = is_flick_mode ? 5.5 : 4.0;
     const double local_delta = cand_sub_score - orig_sub_score;
-    const double rank_score = local_delta - kv.second * 4.0;
+    const double rank_score = local_delta - kv.second * pre_pen_weight;
     items.push_back({rank_score, local_delta, kv.second, l, orig_r, anchor_l,
                      size_t(cand_sub_len), cand});
   }
@@ -1829,7 +1469,8 @@ inline std::vector<ScoringWindow>
 build_scoring_windows(const std::u32string &orig,
                       const std::u32string &ctx_u32,
                       const std::vector<ReadingCandidate> &candidates,
-                      const ChannelDictionary &dictionary) {
+                      const ChannelDictionary &dictionary,
+                      InputKeyboardMode mode = InputKeyboardMode::Qwerty) {
   std::vector<ScoringWindow> windows;
   const size_t H = orig.size();
   if (candidates.size() <= 1 || H == 0)
@@ -1871,10 +1512,11 @@ build_scoring_windows(const std::u32string &orig,
     double best_rank = -std::numeric_limits<double>::infinity();
     std::vector<size_t> indices;
   };
+  const double pre_pen_weight = is_flick_keyboard_mode(mode) ? 5.5 : 4.0;
   std::vector<Cluster> clusters;
   for (size_t idx : order) {
     const auto &c = candidates[idx];
-    const double rank = c.local_delta - c.penalty * 4.0;
+    const double rank = c.local_delta - c.penalty * pre_pen_weight;
     if (!clusters.empty() &&
         std::max(clusters.back().max_r, c.edit_r) - clusters.back().min_l <= 10) {
       clusters.back().max_r = std::max(clusters.back().max_r, c.edit_r);

@@ -245,6 +245,15 @@ pub fn raw_input_split_breaks_romaji(raw_input: &str, split_char_index: usize) -
     last.is_ascii_alphabetic() && !matches!(last.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
 }
 
+#[inline]
+fn is_auto_commit_single_hiragana_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        'は' | 'が' | 'を' | 'に' | 'で' | 'と' | 'の' | 'へ' | 'も' | 'や'
+            | 'か' | 'て' | 'た' | 'だ' | 'ば' | 'し' | 'な' | 'ね' | 'よ'
+    )
+}
+
 pub fn is_natural_auto_commit_prefix(candidate_prefix: &str, full_preview: &str) -> bool {
     let Some(remainder) = full_preview.strip_prefix(candidate_prefix) else {
         return false;
@@ -263,9 +272,17 @@ pub fn is_natural_auto_commit_prefix(candidate_prefix: &str, full_preview: &str)
     if is_japanese_clause_punctuation_char(last_char) {
         return true;
     }
-    candidate_prefix.chars().any(is_kanji_or_katakana_char)
+    if !(candidate_prefix.chars().any(is_kanji_or_katakana_char)
         && is_hiragana_char(last_char)
-        && is_kanji_or_katakana_char(next_char)
+        && is_kanji_or_katakana_char(next_char))
+    {
+        return false;
+    }
+    let prev_char = candidate_prefix.chars().rev().nth(1);
+    if prev_char.is_some_and(is_kanji_or_katakana_char) {
+        return is_auto_commit_single_hiragana_boundary(last_char);
+    }
+    true
 }
 
 /// Pushes one inference surface into the stable-preview window.
@@ -744,8 +761,24 @@ mod tests {
             "私は学校に行",
             "私は学校に行って勉強する"
         ));
+        assert!(!is_natural_auto_commit_prefix(
+            "大気に飛び",
+            "大気に飛び交う可能性"
+        ));
+        assert!(!is_natural_auto_commit_prefix(
+            "今すぐ取り",
+            "今すぐ取り戻す"
+        ));
+        assert!(!is_natural_auto_commit_prefix(
+            "技術を持ち",
+            "技術を持ち合わせる"
+        ));
         assert!(is_natural_auto_commit_prefix(
             "私は学校に",
+            "私は学校に行って勉強する"
+        ));
+        assert!(is_natural_auto_commit_prefix(
+            "私は学校に行って",
             "私は学校に行って勉強する"
         ));
         assert!(is_kanji_or_katakana_char('𠮷'));

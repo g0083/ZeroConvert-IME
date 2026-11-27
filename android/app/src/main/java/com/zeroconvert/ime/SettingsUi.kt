@@ -1,10 +1,16 @@
 package com.zeroconvert.ime
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,14 +18,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Palette
@@ -37,9 +49,17 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -238,32 +258,66 @@ fun SettingsBadge(text: String, palette: ZeroConPalette) {
 }
 
 @Composable
-fun SettingsStatusPill(
-    text: String,
-    ready: Boolean,
-    palette: ZeroConPalette
+fun SettingsLoadingBar(
+    loading: Boolean,
+    status: String,
+    palette: ZeroConPalette,
+    modifier: Modifier = Modifier
 ) {
-    val color = if (ready) palette.readyEmerald else palette.warningAmber
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = color.copy(alpha = 0.12f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.35f))
-    ) {
+    // モデルの状態は、細い進行バーと1行の文字で示す。ロード完了後も文字は残す。
+    val isError = status.startsWith("エラー")
+    val dotColor = when {
+        isError -> palette.danger
+        loading -> palette.warningAmber
+        else -> palette.readyEmerald
+    }
+    Column(modifier = modifier.fillMaxWidth()) {
+        // 高さは固定し、状態が変わっても下の本文が跳ねないようにする。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .clipToBounds()
+        ) {
+            if (loading) {
+                val transition = rememberInfiniteTransition(label = "settingsLoadingBar")
+                val phase by transition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 1200, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "settingsLoadingPhase"
+                )
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawRect(color = palette.surfaceElevated, size = size)
+                    val segmentWidth = size.width * 0.4f
+                    val left = (size.width + segmentWidth) * phase - segmentWidth
+                    drawRect(
+                        color = palette.primaryAccent,
+                        topLeft = Offset(left, 0f),
+                        size = Size(segmentWidth, size.height)
+                    )
+                }
+            }
+        }
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(
                 modifier = Modifier
                     .size(6.dp)
-                    .background(color, CircleShape)
+                    .background(dotColor, CircleShape)
             )
             Text(
-                text = text,
-                color = color,
+                text = status,
+                color = if (isError) palette.danger else palette.textMuted,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -436,30 +490,92 @@ private fun ThemeSwatch(
 }
 
 @Composable
-fun SettingsTabBar(
-    tabs: List<SettingsTab>,
-    selectedId: String,
+fun SettingsCategoryHeader(
+    tab: SettingsTab,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     palette: ZeroConPalette,
-    onSelected: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 各区分は閉じた状態で並べ、タップで開閉する。
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
+            .height(44.dp)
+            .semantics { stateDescription = if (expanded) "開いている" else "閉じている" }
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (expanded) "閉じる" else "開く",
+                onClick = onToggle
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .background(palette.primaryAccent, RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = tab.icon,
+                contentDescription = null,
+                tint = palette.onAccent,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        Text(
+            text = tab.label,
+            color = palette.textPrimary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.2).sp,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = null,
+            tint = if (expanded) palette.primaryAccentSoft else palette.textSecondary,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+@Composable
+fun SettingsTabBar(
+    tabs: List<SettingsTab>,
+    currentIndex: Int,
+    palette: ZeroConPalette,
+    onSelected: (index: Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // 上部の横スライドタブ。縦スクロールに連動し、現在の区分をハイライトして見える位置へ寄せる。
+    val listState = rememberLazyListState()
+    LaunchedEffect(currentIndex) {
+        if (currentIndex in tabs.indices) {
+            listState.animateScrollToItem(currentIndex)
+        }
+    }
+    LazyRow(
+        state = listState,
+        modifier = modifier
+            .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        tabs.forEach { tab ->
-            val selected = tab.id == selectedId
+        items(tabs, key = { it.id }) { tab ->
+            val index = tabs.indexOf(tab)
+            val selected = index == currentIndex
             Surface(
-                modifier = Modifier.clickable { onSelected(tab.id) },
+                modifier = Modifier.selectable(selected = selected, role = Role.Tab) { onSelected(index) },
                 shape = RoundedCornerShape(8.dp),
                 color = if (selected) palette.primaryAccent else palette.surface,
                 border = BorderStroke(1.dp, if (selected) palette.primaryAccent else palette.borderSubtle)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {

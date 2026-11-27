@@ -439,15 +439,18 @@ pub fn dispatch(value: &str) -> Result<Value, String> {
         || request.context.chars().count() > 4096
         || request.baseline_reading.chars().count() > 512
         || request.raw.chars().count() > 256
-        || request.touch_hints.chars().count() > 2048
+        || request.touch_hints.chars().count() > 4096
         || request.origin_reading.chars().count() > 512
         || request.origin_raw.chars().count() > 256
-        || request.origin_touch_hints.chars().count() > 2048
+        || request.origin_touch_hints.chars().count() > 4096
         || request.applied_prefix.chars().count() > 512
     {
         return Err("request exceeds engine limits".into());
     }
-    if !matches!(request.input_mode.as_str(), "" | "qwerty" | "flick") {
+    if !matches!(
+        request.input_mode.as_str(),
+        "" | "qwerty" | "flick" | "flick_toggle"
+    ) {
         return Err("invalid inputMode".into());
     }
     let config = assist_config();
@@ -1268,7 +1271,7 @@ mod tests {
             "op": "correction",
             "input": "おもってる",
             "baseline": "思ってる",
-            "touchHints": "x".repeat(2049),
+            "touchHints": "x".repeat(4097),
         })
         .to_string();
         assert!(dispatch(&too_long_touch).is_err());
@@ -1281,6 +1284,72 @@ mod tests {
         })
         .to_string();
         assert!(dispatch(&bad_mode).is_err());
+    }
+
+    #[test]
+    fn correction_forwards_flick_toggle_mode_and_v2_observations() {
+        #[derive(Default)]
+        struct Capture {
+            seen: Vec<Value>,
+        }
+        unsafe extern "C" fn mock_complete(
+            ctx: *mut c_void,
+            _prediction_port: bool,
+            payload: *const c_char,
+            _timeout_ms: u64,
+        ) -> *mut c_char {
+            let state = &mut *(ctx as *mut Capture);
+            let req = CStr::from_ptr(payload).to_str().unwrap();
+            let parsed: Value = serde_json::from_str(req).unwrap();
+            let is_repair = parsed.get("keyboard_repair").is_some();
+            state.seen.push(parsed);
+            if is_repair {
+                CString::new(r#"{"observed":"おはゆう","reading":"おはよう","gain":72.0}"#)
+                    .unwrap()
+                    .into_raw()
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+        unsafe extern "C" fn mock_release(_ctx: *mut c_void, ptr: *mut c_char) {
+            if !ptr.is_null() {
+                drop(CString::from_raw(ptr));
+            }
+        }
+        let mut capture = Capture::default();
+        let req = CString::new(
+            json!({
+                "op": "correction",
+                "context": "おはようございます",
+                "input": "おはゆう",
+                "baseline": "お早う",
+                "touchHints": "v2;0:t,50,50,0,0;1:c,92,50,0,0",
+                "inputMode": "flick_toggle"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reply_ptr = unsafe {
+            zerocon_assist_request(
+                req.as_ptr(),
+                mock_complete,
+                mock_release,
+                (&mut capture as *mut Capture).cast(),
+            )
+        };
+        let reply: Value = unsafe {
+            let text = CStr::from_ptr(reply_ptr).to_str().unwrap().to_owned();
+            zerocon_engine_free(reply_ptr);
+            serde_json::from_str(&text).unwrap()
+        };
+        let repair_req = capture
+            .seen
+            .iter()
+            .find(|v| v.get("keyboard_repair").is_some())
+            .expect("expected keyboard_repair payload");
+        assert_eq!(repair_req["mode"], "flick_toggle");
+        assert_eq!(repair_req["touch"], "v2;0:t,50,50,0,0;1:c,92,50,0,0");
+        assert_eq!(reply["text"], "おはよう");
     }
 
     #[test]

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="ZeroConvertSettingsTheme" parent="android:style/Theme.DeviceDefault" />
+    <style name="ZeroConvertSettingsTheme" parent="android:style/Theme.DeviceDefault">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 
     <!-- Floating editor over the keyboard: transparent window, the card is drawn in Compose. -->
     <style name="ZeroConvertClipboardEditTheme" parent="android:style/Theme.DeviceDefault.NoActionBar">

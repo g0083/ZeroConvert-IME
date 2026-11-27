@@ -189,4 +189,48 @@ class EngineTouchEvidenceTest {
         )
         assertEquals("4:s=0.75;6:i=0.65", engineTouchHints(composed, biases))
     }
+
+    @Test fun flickTouchHintsFormatV2ObservationsAndLegacyFallback() {
+        val flickComposing = ComposingText().apply {
+            "あわ、".forEach { insertAtCursorPosition(it.toString(), InputStyle.DIRECT) }
+        }
+        assertEquals(
+            "flick_toggle",
+            engineInputMode(flickComposing, JapaneseInputLayout.FLICK_12KEY, isFlickOnly = false)
+        )
+        val cornerBias = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyA,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 92f,
+            startY = 92f,
+            widthPx = 100f,
+            heightPx = 100f
+        )!!
+        val puncEdgeBias = computeFlickTouchBias(
+            keyDef = FlickKeyDefinitions.keyPunc,
+            committedDir = FlickDirection.CENTER,
+            dx = 0f,
+            dy = 0f,
+            thresholdPx = 20f,
+            startX = 5f,
+            startY = 50f,
+            widthPx = 100f,
+            heightPx = 100f
+        )!!
+        val v2Formatted = engineFlickTouchHints(
+            flickComposing,
+            listOf(cornerBias, TouchKeyBias('わ'), puncEdgeBias)
+        )
+        assertEquals("v2;0:f,92,92,0,0;2:f,5,50,0,0", v2Formatted)
+
+        // Legacy TouchKeyBias without flickObservation keeps legacy string format.
+        val legacyFormatted = engineFlickTouchHints(
+            flickComposing,
+            listOf(TouchKeyBias('あ', listOf('か' to 0.65f)), TouchKeyBias('わ'), TouchKeyBias('、', listOf('わ' to 0.72f)))
+        )
+        assertEquals("0:か=0.65;2:わ=0.72", legacyFormatted)
+    }
 }

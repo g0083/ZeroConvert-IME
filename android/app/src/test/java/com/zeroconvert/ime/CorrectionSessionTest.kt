@@ -1,6 +1,7 @@
 package com.zeroconvert.ime
 
 import android.content.SharedPreferences
+import com.zeroconvert.ime.assist.AiAssistAdoption
 import com.zeroconvert.ime.assist.AssistRequestGate
 import com.zeroconvert.ime.assist.AutoTypoCorrectionStrength
 import com.zeroconvert.ime.assist.CorrectionSession
@@ -84,6 +85,25 @@ class CorrectionSessionTest {
         assertTrue(correction.committed("学校").isEmpty())
     }
 
+    @Test fun adoptionKeepsAutomaticAndExplicitCorrectionsApart() {
+        val typed = { ComposingText().apply { insertAtCursorPosition("おつくれさま", InputStyle.DIRECT) } }
+        val automaticInput = typed()
+        val automatic = CorrectionSession(RustAssistPolicy)
+        automatic.apply(automaticInput, "お疲れ様", "おつくれ様", explicit = false)
+        assertEquals(AiAssistAdoption.Automatic, automatic.adoption)
+        automatic.edited()
+        assertEquals(AiAssistAdoption.Automatic, automatic.adoption)
+        automatic.revert(automaticInput)
+        assertEquals(AiAssistAdoption.None, automatic.adoption)
+
+        val explicitInput = typed()
+        val explicit = CorrectionSession(RustAssistPolicy)
+        explicit.apply(explicitInput, "お疲れ様", "おつくれ様")
+        assertEquals(AiAssistAdoption.Explicit, explicit.adoption)
+        explicit.clear()
+        assertEquals(AiAssistAdoption.None, explicit.adoption)
+    }
+
     @Test fun sameReadingAfterDeletionCannotReuseAnOldResult() {
         val gate = AssistRequestGate()
         val key = AssistRequestGate.Key("おつくれさま", 6, "文脈", "", 1, true)
@@ -144,6 +164,13 @@ class CorrectionSessionTest {
         assertTrue(InputPrivacy.isPrivateInput(0xe1, 0))
         assertTrue(InputPrivacy.isPrivateInput(0x12, 0))
         assertFalse(InputPrivacy.isPrivateInput(1, 0))
+
+        assertTrue(InputPrivacy.isPasswordInput(0x81))
+        assertTrue(InputPrivacy.isPasswordInput(0x91))
+        assertTrue(InputPrivacy.isPasswordInput(0xe1))
+        assertTrue(InputPrivacy.isPasswordInput(0x12))
+        assertFalse(InputPrivacy.isPasswordInput(1))
+        assertFalse(InputPrivacy.isPasswordInput(0))
 
         assertTrue(InputPrivacy.shouldAcceptClipboardEvent(privateMode = false, clipTimestamp = 5_000L, lastPrivateInputEndMillis = 0L))
         assertFalse(InputPrivacy.shouldAcceptClipboardEvent(privateMode = true, clipTimestamp = 5_000L, lastPrivateInputEndMillis = 0L))

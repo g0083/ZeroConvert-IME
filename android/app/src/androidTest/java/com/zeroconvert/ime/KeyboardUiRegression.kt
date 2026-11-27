@@ -52,6 +52,11 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
     private var density = 1f
     private var adopted = 0
     private var undone = 0
+    private var jpEnToggles = 0
+    private var emojiOpened = 0
+    private var selectAllPressed = 0
+    private var clipboardOpened = 0
+    private var backToKeyboard = 0
     private var forgotten: String? = null
     private var typed = ""
     private var emojiTyped = ""
@@ -221,7 +226,10 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                 if (!sample.emoji && !sample.symbols) {
                     KeyboardAssistBar(sample.reading, sample.assist, sample.applied, ZeroConDarkPalette,
                         onAdopt = { adopted++ },
-                        onUndo = { undone++; state.value = state.value.copy(applied = false, assist = null) })
+                        onUndo = { undone++; state.value = state.value.copy(applied = false, assist = null) },
+                        onOpenEmoji = { emojiOpened++ },
+                        onSelectAll = { selectAllPressed++ },
+                        onOpenClipboard = { clipboardOpened++ })
                     Row(Modifier.fillMaxWidth().height(KeyboardBarHeight)) {
                         HorizontalCandidateStrip(sample.reading, sample.candidates, ZeroConDarkPalette, {},
                             Modifier.weight(1f).fillMaxHeight(),
@@ -252,7 +260,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                     textColor = ZeroConDarkPalette.textPrimary,
                                     palette = ZeroConDarkPalette,
                                     onSelect = { emojiTyped += it },
-                                    onBackToQwerty = {},
+                                    onBackToQwerty = { backToKeyboard++ },
                                     onDelete = {},
                                     onSpace = {},
                                     onEnter = {},
@@ -265,7 +273,7 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                     textColor = ZeroConDarkPalette.textPrimary,
                                     palette = ZeroConDarkPalette,
                                     onSelect = { symbolTyped += it },
-                                    onBackToQwerty = {},
+                                    onBackToQwerty = { backToKeyboard++ },
                                     onDelete = {},
                                     onSpace = {},
                                     onEnter = {},
@@ -284,7 +292,8 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                         onKanaInput = { typed += it }, onReplaceLastKana = {}, onToggleDakuten = {},
                                         onDelete = {}, onUndo = { undone++ }, onSpace = {}, onEnter = {},
                                         onSwitchMode = { modeSwitches += it },
-                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
+                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {},
+                                        onToggleJpEn = { jpEnToggles++ }
                                     )
                                     KeyboardMode.ENGLISH -> English12KeyFlickLayout(
                                         keyBgColor = ZeroConDarkPalette.keyNormal,
@@ -297,7 +306,8 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                                         isLastCharLetter = { false },
                                         onDelete = {}, onUndo = { undone++ }, onSpace = {}, onEnter = {},
                                         onSwitchMode = { modeSwitches += it },
-                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {}
+                                        onOpenSymbols = {}, onOpenEmoji = {}, onCursorLeft = {}, onCursorRight = {},
+                                        onToggleJpEn = { jpEnToggles++ }
                                     )
                                     KeyboardMode.NUMERIC -> FlickNumericPadLayout(
                                         keyBgColor = ZeroConDarkPalette.keyNormal,
@@ -684,11 +694,11 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
             test("flick_12key_common_keys_keep_same_positions_across_modes") {
                 fun captureSidePositions(mode: KeyboardMode): List<Rect> {
                     update(Case(flick = true, flickMode = mode))
-                    val emojiOrSymbols = if (mode == KeyboardMode.NUMERIC) "記号" else "絵文字・記号"
+                    val row2LeftLabel = if (mode == KeyboardMode.NUMERIC) "記号" else "あ/a"
                     return listOf(
                         bounds("元に戻す"),
                         bounds("◀"),
-                        bounds(emojiOrSymbols),
+                        bounds(row2LeftLabel),
                         bounds("入力モード:${mode.label}"),
                         bounds("Backspace"),
                         bounds("▶"),
@@ -704,11 +714,79 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                 undone = 0
                 tap("元に戻す")
                 check(undone == 1) { "12-key Undo button did not fire onUndo: $undone" }
+                jpEnToggles = 0
+                update(Case(flick = true, flickMode = KeyboardMode.JAPANESE))
+                tap("あ/a")
+                update(Case(flick = true, flickMode = KeyboardMode.ENGLISH))
+                tap("あ/a")
+                check(jpEnToggles == 2) { "12-key あ/a button did not fire onToggleJpEn twice: $jpEnToggles" }
+            }
+            test("qwerty_bottom_row_always_shows_question_mark") {
+                update(Case(flick = false, reading = ""))
+                check(node("？を入力") != null) { "Idle QWERTY missing ？ key: " + texts() }
+                check(node("Emoji") == null) { "Idle QWERTY still shows Emoji key" }
+                update(Case(flick = false, reading = "あ"))
+                check(node("？を入力") != null) { "Composing QWERTY missing ？ key: " + texts() }
+            }
+            test("assist_bar_idle_actions") {
+                emojiOpened = 0
+                selectAllPressed = 0
+                clipboardOpened = 0
+                update(Case(reading = "", candidates = listOf(Candidate("確定後予測", ""))))
+                val selectAllIdle = bounds("全選択")
+                val clipboardIdle = bounds("Clipboard")
+                val emojiIdle = bounds("絵文字")
+                check(selectAllIdle.right <= clipboardIdle.left && clipboardIdle.right <= emojiIdle.left) {
+                    "Idle order must be 全選択 -> Clipboard -> 絵文字: $selectAllIdle, $clipboardIdle, $emojiIdle"
+                }
+                check(clipboardIdle.width() > emojiIdle.width()) {
+                    "Clipboard target should be wider than Emoji: $clipboardIdle vs $emojiIdle"
+                }
+                tap("絵文字")
+                tap("全選択")
+                tap("Clipboard")
+                check(emojiOpened == 1 && selectAllPressed == 1 && clipboardOpened == 1) {
+                    "Idle assist bar actions failed: emoji=$emojiOpened selectAll=$selectAllPressed clipboard=$clipboardOpened"
+                }
+
+                // Still visible while composing with candidates and no typo/prediction assist.
+                update(Case(reading = "きょう", candidates = listOf(Candidate("今日", "きょう"))))
+                val selectAllComposing = bounds("全選択")
+                val clipboardComposing = bounds("Clipboard")
+                val emojiComposing = bounds("絵文字")
+                check(selectAllComposing.right <= clipboardComposing.left && clipboardComposing.right <= emojiComposing.left) {
+                    "Composing order must be 全選択 -> Clipboard -> 絵文字"
+                }
+
+                // Hidden when prediction or typo correction appears.
+                update(Case(reading = "きょう", assist = prediction))
+                check(node("全選択") == null && node("Clipboard") == null && node("絵文字") == null) {
+                    "Quick actions remained visible while prediction assist was shown"
+                }
+                update(Case(reading = "きょう", assist = prediction.copy(type = AiAssistType.TYPO_CORRECTION)))
+                check(node("全選択") == null && node("Clipboard") == null && node("絵文字") == null) {
+                    "Quick actions remained visible while typo correction was shown"
+                }
             }
             test("emoji_and_symbols_panels_switch_between_each_other") {
+                backToKeyboard = 0
                 update(Case(emoji = true))
+                val toSymbols = bounds("記号パネルに切り替え")
+                val backFromEmoji = bounds("キーボードに戻る")
+                check(toSymbols.left > frame.centerX() && toSymbols.right <= backFromEmoji.left) {
+                    "Emoji top-right order must be 記号 -> 戻る: $toSymbols, $backFromEmoji vs $frame"
+                }
+                click("キーボードに戻る")
+                check(backToKeyboard == 1) { "Emoji top-right back button did not fire: $backToKeyboard" }
                 click("記号パネルに切り替え")
                 waitFor("Did not switch from Emoji to Symbols panel") { node("絵文字パネルに切り替え") != null }
+                val toEmoji = bounds("絵文字パネルに切り替え")
+                val backFromSymbols = bounds("キーボードに戻る")
+                check(toEmoji.left > frame.centerX() && toEmoji.right <= backFromSymbols.left) {
+                    "Symbols top-right order must be 絵文字 -> 戻る: $toEmoji, $backFromSymbols vs $frame"
+                }
+                click("キーボードに戻る")
+                check(backToKeyboard == 2) { "Symbols top-right back button did not fire: $backToKeyboard" }
                 click("絵文字パネルに切り替え")
                 waitFor("Did not switch from Symbols to Emoji panel") { node("記号パネルに切り替え") != null }
             }
@@ -724,6 +802,13 @@ class KeyboardUiRegression(private val instrumentation: Instrumentation) {
                 val first = symbolCategories.first().symbols.first()
                 click(first)
                 check(symbolTyped == first) { "Symbol tab committed '$symbolTyped' instead of '$first'" }
+            }
+            test("symbols_panel_fullwidth_category_inserts_fullwidth_space") {
+                symbolTyped = ""
+                update(Case(symbols = true))
+                click("[全]")
+                click("Spaceを入力")
+                check(symbolTyped == "\u3000") { "Fullwidth symbol space committed '$symbolTyped' instead of fullwidth space" }
             }
             test("emoji_panel_categories_and_commit") {
                 emojiTyped = ""

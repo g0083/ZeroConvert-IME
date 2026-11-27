@@ -118,8 +118,8 @@ fn resolve_runtime_preferences_from_str(settings_json: &str) -> (String, String,
     let model = zenzai
         .and_then(|z| z.get("model"))
         .and_then(Value::as_str)
-        .unwrap_or("nano_v4_2_iq4_emb8")
-        .to_owned();
+        .map(str::to_owned)
+        .unwrap_or_else(shared::runtime_assets::default_model);
     let raw_backend = zenzai
         .and_then(|z| z.get("backend"))
         .and_then(Value::as_str)
@@ -281,7 +281,7 @@ fn find_runtime_dir_and_layers(
 
 fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
     let filename = shared::runtime_assets::model_filename(selected_id)
-        .unwrap_or(shared::runtime_assets::NANO_IQ4);
+        .unwrap_or(shared::runtime_assets::STANDARD_IQ4);
     for candidate in [
         root.join("models").join(filename),
         shared::runtime_assets::model_download_root().join(filename),
@@ -1069,6 +1069,10 @@ mod deployment_tests {
             find_runtime_dir_and_layers(&root, &root_executable, "vulkan", 99),
             expected_vulkan
         );
+
+        let (default_model, _, _) = resolve_runtime_preferences_from_str("{}");
+        assert_eq!(default_model, shared::runtime_assets::default_model());
+        assert_eq!(default_model, "standard_v4_2_iq4_emb8");
 
         let (parsed_model, parsed_backend, parsed_layers) = resolve_runtime_preferences_from_str(
             r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_2_q8"}}"#,

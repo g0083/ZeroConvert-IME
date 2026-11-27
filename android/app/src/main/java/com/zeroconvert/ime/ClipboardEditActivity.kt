@@ -753,10 +753,12 @@ private fun ClipboardEditScreen(
     BackHandler(onBack = onCancel)
     val context = LocalContext.current
     val themeMode = remember {
-        context.getSharedPreferences(
-            ZeroConvertInputMethodService.PREFS_SETTINGS,
-            Context.MODE_PRIVATE
-        ).getString(ZeroConvertInputMethodService.KEY_THEME_MODE, "system") ?: "system"
+        com.zeroconvert.ime.theme.ThemePreferences.readAppThemeMode(
+            context.getSharedPreferences(
+                ZeroConvertInputMethodService.PREFS_SETTINGS,
+                Context.MODE_PRIVATE
+            )
+        )
     }
     val palette = rememberZeroConPalette(themeMode)
     var text by rememberSaveable(sessionId, initialText) { mutableStateOf(initialText) }

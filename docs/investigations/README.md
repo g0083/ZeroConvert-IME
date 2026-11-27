@@ -14,6 +14,7 @@
 ## 実装済み・進行中の計画書（設計・検証記録）
 
 - [android-input-type-mode.md](android-input-type-mode.md): **実装済み** — 入力先の `inputType` に合わせたキーボードモード自動切替（現行: [android-conversion-logic.md](../android-conversion-logic.md) / `InputTypeMode.kt`）
+- [android-enter-key-label.md](android-enter-key-label.md): **実装済み** — 入力欄の `imeOptions` に合わせた Enter キーのラベルと編集アクション（現行: [android-conversion-logic.md](../android-conversion-logic.md) / `EnterKeyAction.kt`）
 - [windows-input-scope-mode.md](windows-input-scope-mode.md): **実装済み** — 入力先の `InputScope` に合わせた入力モード自動切替（現行: [windows-conversion-logic.md](../windows-conversion-logic.md) / `input_scope_mode.rs`）
 - [windows-copy-translation-plan.md](windows-copy-translation-plan.md): **実装済み** — 入力欄外コピーからの文字数・翻訳ポップアップ（`selection-ui` / `copy_translation.rs`）
 - [translation-improvements-plan.md](translation-improvements-plan.md): **実装済み** — 翻訳入力のコールドスタート待ち・数字のみ除外・エラー細分化・プロンプト同期
@@ -22,6 +23,7 @@
 - [browser-ime-parity-plan.md](browser-ime-parity-plan.md): **段階実装中** — Web 版での Windows パリティ再現計画（検証記録: [browser-ime-parity-2026-11-17.md](../../reports/web/browser-ime-parity-2026-11-17.md)）
 - [dictionary-learning-architecture-plan.md](dictionary-learning-architecture-plan.md): **実装進行中（Step 1 完了・Step 2〜5 一気通貫実装仕様）** — モデル重視変換（純粋プロンプト＋評価時ユーザー辞書保護）・文節連鎖による文再現・10,000件ユーザー辞書刷新・永続化統合の設計・検証仕様（共有エンジン軸・Windows 優先実装）
 - [additional-dictionary-plan.md](additional-dictionary-plan.md) — SudachiDict FullとWikidataを使うWindows試験辞書の生成・切り替えと採用判定
+- [android-theme-and-layout-redesign-plan.md](android-theme-and-layout-redesign-plan.md): **段階実装中（Phase 1〜2 完了）** — Android版のテーマ・着せ替え（写真背景・透過・キー造形・自由配色）とデータ駆動キーボード配列（iOS風・Gboard風・Simeji風）の再設計計画
 
 ## 過去の調査・バージョン別修正ログ
 

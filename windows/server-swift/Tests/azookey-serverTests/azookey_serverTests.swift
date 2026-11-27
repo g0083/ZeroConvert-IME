@@ -4455,12 +4455,21 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     #expect(snapshot.shortcuts.count == 2000)
     #expect(Array(snapshot.entries.prefix(5)).map(\.lcid) == [1288, 1285, 1283, 5, 1288])
     #expect(snapshot.entries.allSatisfy {
-        $0.lcid == $0.rcid && $0.rcid == $0.mid &&
+        $0.lcid == $0.rcid && $0.mid == MIDData.一般.mid &&
         $0.value() >= -6.5 && $0.metadata.contains(.isFromUserDictionary) &&
         !$0.metadata.contains(.isKeyboardTypoCorrection)
     })
     #expect(abs(snapshot.entries[9998].value() - (-5.9998)) < 0.0001)
     #expect(abs(snapshot.entries[9999].value() - (-1.09999)) < 0.0001)
+}
+
+@Test func userDictionaryNamePresetsUseSeparateConnectionAndMeaningIds() {
+    let positions: [UserDictionaryPos] = [.personalName, .familyName, .givenName, .organization, .placeName]
+    let snapshot = UserDictionarySnapshot(entries: positions.enumerated().map { index, pos in
+        UserDictionaryEntry(reading: "よみ", word: "登録語\(index)", pos: pos)
+    })
+    #expect(snapshot.entries.map(\.lcid) == [1289, 1290, 1291, 1292, 1293])
+    #expect(snapshot.entries.map(\.mid) == [501, 344, 370, 378, 501])
 }
 
 @MainActor @Test func userDictionary10000EntryLoadCompletesWithinBudget() throws {
@@ -4899,7 +4908,8 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     #expect(omittedBatchDecoded.direct_model_first)
     #expect(omittedBatchDecoded.tuning_version == nil)
     #expect(canonicalZenzaiModelId(omittedBatchDecoded.model_id) == "standard_v4_2_q8")
-    #expect(canonicalZenzaiModelId(nil) == "nano_v4_2_iq4_emb8")
+    #expect(canonicalZenzaiModelId(nil) == "standard_v4_2_iq4_emb8")
+    #expect(canonicalZenzaiModelId("nano_v4_2_iq4_emb8") == "nano_v4_2_iq4_emb8")
 
     #if os(Windows)
     let savedConfig = config

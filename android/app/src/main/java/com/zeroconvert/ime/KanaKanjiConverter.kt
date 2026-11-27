@@ -13,6 +13,11 @@ internal const val MAX_USER_DICTIONARY_ENTRIES = 10_000
 enum class UserDictionaryPos(val key: String) {
     PROPER_NOUN("proper_noun"),
     COMMON_NOUN("common_noun"),
+    PERSONAL_NAME("personal_name"),
+    FAMILY_NAME("family_name"),
+    GIVEN_NAME("given_name"),
+    ORGANIZATION("organization"),
+    PLACE_NAME("place_name"),
     SAHEN_NOUN("sahen_noun"),
     SHORTCUT("shortcut"),
     SYMBOL("symbol");
@@ -99,7 +104,7 @@ class KanaKanjiConverter {
                     val arr = JSONArray(dictJson)
                     for (i in 0 until arr.length()) {
                         val obj = arr.getJSONObject(i)
-                        val r = toHiragana(obj.optString("reading", "").trim())
+                        val r = obj.optString("reading", "").trim()
                         val w = obj.optString("word", "").trim()
                         if (r.isNotEmpty() && w.isNotEmpty()) {
                             userDictEntries.add(UserDictEntry(r, w, UserDictionaryPos.fromKey(obj.optString("pos"))))
@@ -137,20 +142,44 @@ class KanaKanjiConverter {
         }
 
         private fun publishAssistVocabulary() {
-            com.zeroconvert.ime.assist.AssistVocabulary.replaceUserEntries(userDictEntries.map { it.reading to it.word })
+            com.zeroconvert.ime.assist.AssistVocabulary.replaceUserEntries(userDictEntries.map { hiraganaReading(it.reading) to it.word })
         }
 
         @Synchronized
-        fun addUserDictEntry(context: Context, reading: String, word: String): Boolean {
+        internal fun saveUserDictEntry(
+            context: Context,
+            draft: UserDictEntry,
+            original: UserDictEntry?
+        ): String? {
             ensureInitialized(context)
-            val normReading = toHiragana(reading.trim())
-            val normWord = word.trim()
-            if (normReading.isEmpty() || normWord.isEmpty() || userDictEntries.size >= MAX_USER_DICTIONARY_ENTRIES) return false
-            if (userDictEntries.any { it.reading == normReading && it.word == normWord }) return false
-            userDictEntries.add(0, UserDictEntry(normReading, normWord))
+            val entry = normalizedDictionaryEntry(draft.reading, draft.word, draft.pos)
+                ?: return "読みと単語を入力してください。"
+            val index = original?.let { userDictEntries.indexOf(it) }
+            if (index == -1) return "編集中の単語が見つかりません。"
+            if (index == null && userDictEntries.size >= MAX_USER_DICTIONARY_ENTRIES) {
+                return "辞書には最大10,000件まで登録できます。"
+            }
+            val key = entry.dictionaryKey()
+            if (userDictEntries.withIndex().any { (i, item) -> i != index && item.dictionaryKey() == key }) {
+                return "同じ読みと単語が登録されています。"
+            }
+            if (index == null) userDictEntries.add(0, entry) else userDictEntries[index] = entry
             userDictRevision++
             saveUserDict(context)
-            return true
+            return null
+        }
+
+        @Synchronized
+        internal fun importUserDictEntries(context: Context, incoming: List<UserDictEntry>, replace: Boolean): DictionaryMerge {
+            ensureInitialized(context)
+            val result = mergeDictionaryEntries(if (replace) emptyList() else userDictEntries, incoming)
+            if (result.added > 0) {
+                userDictEntries.clear()
+                userDictEntries.addAll(result.entries)
+                userDictRevision++
+                saveUserDict(context)
+            }
+            return result
         }
 
         @Synchronized
