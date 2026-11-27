@@ -18,7 +18,8 @@ def main():
         } };
         document.addEventListener('pointerdown', event => event.preventDefault(), { capture: true });
     """
-    html = html.replace("<head>", "<head><meta charset='utf-8'><script>" + host + "</script>", 1)
+    transparent_style = "<link rel='stylesheet' href='./ime-theme.css'><style>html, body { background: transparent !important; }</style>"
+    html = html.replace("<head>", "<head><meta charset='utf-8'>" + transparent_style + "<script>" + host + "</script>", 1)
     html = html.replace("(maxOverlayWidth - horizontalBox", "(Math.min(maxOverlayWidth, parent.innerWidth - 16) - horizontalBox", 1)
     Path(sys.argv[1]).write_text("<!doctype html>\n" + html, encoding="utf-8")
 
