@@ -1,4 +1,4 @@
-"""Prepare built web assets for Cloudflare Pages (gzip for large Wasm, 25 MiB chunking, SHA-256 manifest, and _headers)."""
+"""Prepare built web assets for Cloudflare Pages (gzip for large Wasm, 25 MiB chunking, SHA-256 manifest, and COOP/COEP _headers)."""
 
 import argparse
 import gzip
@@ -9,9 +9,11 @@ from pathlib import Path
 CLOUDFLARE_LIMIT_BYTES = 24 * 1024 * 1024  # Safe margin below Cloudflare Pages 25 MiB per-file limit
 DEFAULT_CHUNK_BYTES = 16 * 1024 * 1024
 
-# Note: COOP/COEP headers are intentionally omitted while running single-threaded WASI
-# so browser extensions (e.g. Vivaldi content scripts) do not hit cross-origin isolation conflicts.
+# Enable COOP/COEP so SharedArrayBuffer and Emscripten pthreads (multi-threaded Wasm) work on Cloudflare Pages.
 HEADERS_CONTENT = """/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
@@ -71,8 +73,7 @@ def main():
         delivery_path = path
         use_gzip = False
 
-        # Pre-compress large Wasm binaries (e.g. 52 MiB Swift Wasm -> ~16 MiB .wasm.gz)
-        # so downloads are ~3x faster and fit under Cloudflare Pages' 25 MiB per-file limit.
+        # Pre-compress large Wasm binaries so downloads are ~3x faster and stay under Cloudflare Pages' 25 MiB limit.
         if path.suffix == ".wasm" and raw_size > args.max_file_bytes:
             gz_path = site_dir / f"{path.name}.gz"
             with path.open("rb") as src, gz_path.open("wb") as raw_out:
@@ -111,7 +112,7 @@ def main():
     manifest["assets"] = assets
     manifest["hosting"] = {
         "platform": "cloudflare-pages",
-        "coopCoep": False,
+        "coopCoep": True,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (site_dir / "_headers").write_text(HEADERS_CONTENT, encoding="utf-8")

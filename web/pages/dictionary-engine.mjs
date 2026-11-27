@@ -158,6 +158,171 @@ async function compileWasmResponse(response) {
     return WebAssembly.compile(await response.arrayBuffer());
 }
 
+function desiredThreadCount() {
+    const isNode = typeof process !== 'undefined' && Boolean(process.versions?.node);
+    const hasSab = typeof SharedArrayBuffer !== 'undefined'
+        && (isNode || globalThis.crossOriginIsolated === true);
+    if (!hasSab) return 1;
+    const hw = typeof navigator !== 'undefined' && Number.isFinite(navigator.hardwareConcurrency)
+        ? navigator.hardwareConcurrency
+        : 4;
+    return Math.max(1, Math.min(4, hw));
+}
+
+async function loadLlamaMt(base, request, manifest, cache, activeUrls) {
+    const { default: createZeroConLlamaMt } = await import(new URL('./zerocon_llama_mt.mjs', base).href);
+    const wasmResponse = await fetchManifestAsset(
+        'llama', 'zerocon_llama_mt.wasm', manifest, base, request, cache, activeUrls, null,
+    );
+    const wasmBinary = new Uint8Array(await wasmResponse.arrayBuffer());
+    const mt = await createZeroConLlamaMt({
+        wasmBinary,
+        locateFile(path) {
+            return new URL(`./${path}`, base).href;
+        },
+    });
+    const threads = desiredThreadCount();
+    mt._mt_set_default_threads(threads);
+    if (typeof process !== 'undefined' && process.versions?.node) {
+        process.once('beforeExit', () => {
+            try { mt.PThread?.terminateAllThreads?.(); } catch {}
+        });
+    }
+    return { mt, threads };
+}
+
+function createLlamaHostImports(mt, getWasiMemory) {
+    const wasiU8 = () => new Uint8Array(getWasiMemory().buffer);
+    const wasiI32 = () => new Int32Array(getWasiMemory().buffer);
+    const wasiF32 = () => new Float32Array(getWasiMemory().buffer);
+
+    function mtAllocCopyU8(bytes) {
+        const ptr = mt._malloc(Math.max(1, bytes.byteLength));
+        if (!ptr) throw new Error('Emscripten メモリを確保できませんでした。');
+        if (bytes.byteLength) mt.HEAPU8.set(bytes, ptr);
+        return ptr;
+    }
+
+    function mtAllocCopyI32(wasiPtr, count) {
+        const byteLen = count * 4;
+        const ptr = mt._malloc(Math.max(4, byteLen));
+        if (!ptr) throw new Error('Emscripten メモリを確保できませんでした。');
+        if (count > 0) {
+            mt.HEAP32.set(wasiI32().subarray(wasiPtr >> 2, (wasiPtr >> 2) + count), ptr >> 2);
+        }
+        return ptr;
+    }
+
+    return {
+        backend_init: () => mt._mt_llama_backend_init(),
+        backend_free: () => mt._mt_llama_backend_free(),
+        model_load(pathPtr, pathLen) {
+            const pathBytes = wasiU8().subarray(pathPtr, pathPtr + pathLen);
+            const cstr = new Uint8Array(pathLen + 1);
+            cstr.set(pathBytes);
+            const mtPath = mtAllocCopyU8(cstr);
+            try {
+                return mt._mt_llama_model_load(mtPath);
+            } finally {
+                mt._free(mtPath);
+            }
+        },
+        model_free: model => mt._mt_llama_model_free(model),
+        model_size: model => BigInt(mt._mt_llama_model_size(model)),
+        model_get_vocab: model => mt._mt_llama_model_get_vocab(model),
+        vocab_n_tokens: vocab => mt._mt_llama_vocab_n_tokens(vocab),
+        vocab_bos: vocab => mt._mt_llama_vocab_bos(vocab),
+        vocab_eos: vocab => mt._mt_llama_vocab_eos(vocab),
+        vocab_is_eog: (vocab, token) => mt._mt_llama_vocab_is_eog(vocab, token),
+        tokenize(vocab, textPtr, textLen, tokensPtr, nTokensMax, addSpecial, parseSpecial) {
+            const textBytes = wasiU8().subarray(textPtr, textPtr + textLen);
+            const mtText = mtAllocCopyU8(textBytes);
+            const mtTokens = mt._malloc(Math.max(4, nTokensMax * 4));
+            try {
+                const count = mt._mt_llama_tokenize(
+                    vocab, mtText, textLen, mtTokens, nTokensMax, addSpecial, parseSpecial,
+                );
+                if (count > 0 && tokensPtr) {
+                    wasiI32().set(mt.HEAP32.subarray(mtTokens >> 2, (mtTokens >> 2) + count), tokensPtr >> 2);
+                }
+                return count;
+            } finally {
+                mt._free(mtTokens);
+                mt._free(mtText);
+            }
+        },
+        token_to_piece(vocab, token, bufPtr, length, lstrip, special) {
+            const mtBuf = mt._malloc(Math.max(1, length));
+            try {
+                const count = mt._mt_llama_token_to_piece(vocab, token, mtBuf, length, lstrip, special);
+                if (count > 0 && bufPtr) {
+                    wasiU8().set(mt.HEAPU8.subarray(mtBuf, mtBuf + count), bufPtr);
+                }
+                return count;
+            } finally {
+                mt._free(mtBuf);
+            }
+        },
+        init_from_model: (model, nCtx, nBatch, nUbatch, nThreads, nThreadsBatch, flashAttn) =>
+            mt._mt_llama_init_from_model(model, nCtx, nBatch, nUbatch, nThreads, nThreadsBatch, flashAttn),
+        free_ctx: ctx => mt._mt_llama_free(ctx),
+        n_ctx: ctx => mt._mt_llama_n_ctx(ctx),
+        n_batch: ctx => mt._mt_llama_n_batch(ctx),
+        set_n_threads: (ctx, nThreads, nThreadsBatch) => mt._mt_llama_set_n_threads(ctx, nThreads, nThreadsBatch),
+        memory_clear: (ctx, data) => mt._mt_llama_memory_clear(ctx, data),
+        memory_seq_rm: (ctx, seqId, p0, p1) => mt._mt_llama_memory_seq_rm(ctx, seqId, p0, p1),
+        memory_seq_cp: (ctx, src, dst, p0, p1) => mt._mt_llama_memory_seq_cp(ctx, src, dst, p0, p1),
+        memory_seq_pos_max: (ctx, seqId) => mt._mt_llama_memory_seq_pos_max(ctx, seqId),
+        decode_one(ctx, tokensPtr, nTokens) {
+            const mtTokens = mtAllocCopyI32(tokensPtr, nTokens);
+            try {
+                return mt._mt_llama_decode_one(ctx, mtTokens, nTokens);
+            } finally {
+                mt._free(mtTokens);
+            }
+        },
+        decode_flat(ctx, nTokens, tokensPtr, posPtr, nSeqPtr, seqIdsPtr, totalSeqIds, logitsPtr) {
+            const mtTokens = mtAllocCopyI32(tokensPtr, nTokens);
+            const mtPos = mtAllocCopyI32(posPtr, nTokens);
+            const mtNSeq = mtAllocCopyI32(nSeqPtr, nTokens);
+            const mtSeqIds = mtAllocCopyI32(seqIdsPtr, Math.max(1, totalSeqIds));
+            const mtLogits = mtAllocCopyU8(wasiU8().subarray(logitsPtr, logitsPtr + nTokens));
+            try {
+                return mt._mt_llama_decode_flat(ctx, nTokens, mtTokens, mtPos, mtNSeq, mtSeqIds, mtLogits);
+            } finally {
+                mt._free(mtLogits);
+                mt._free(mtSeqIds);
+                mt._free(mtNSeq);
+                mt._free(mtPos);
+                mt._free(mtTokens);
+            }
+        },
+        logits_size(ctx) {
+            return mt._mt_llama_get_logits_count(ctx) * mt._mt_llama_get_vocab_size_for_ctx(ctx);
+        },
+        copy_logits(ctx, dstPtr, count) {
+            const srcPtr = mt._mt_llama_get_logits_ptr(ctx);
+            if (!srcPtr || count <= 0) return 0;
+            wasiF32().set(mt.HEAPF32.subarray(srcPtr >> 2, (srcPtr >> 2) + count), dstPtr >> 2);
+            return 1;
+        },
+        logits_ith_size(ctx) {
+            return mt._mt_llama_get_vocab_size_for_ctx(ctx);
+        },
+        copy_logits_ith(ctx, i, dstPtr, count) {
+            const srcPtr = mt._mt_llama_get_logits_ith_ptr(ctx, i);
+            if (!srcPtr || count <= 0) return 0;
+            wasiF32().set(mt.HEAPF32.subarray(srcPtr >> 2, (srcPtr >> 2) + count), dstPtr >> 2);
+            return 1;
+        },
+        sampler_init_greedy: () => mt._mt_llama_sampler_init_greedy(),
+        sampler_sample: (smpl, ctx, idx) => mt._mt_llama_sampler_sample(smpl, ctx, idx),
+        sampler_accept: (smpl, token) => mt._mt_llama_sampler_accept(smpl, token),
+        sampler_reset: smpl => mt._mt_llama_sampler_reset(smpl),
+        sampler_free: smpl => mt._mt_llama_sampler_free(smpl),
+    };
+}
+
 async function dictionaryFiles(response) {
     if (!response.ok || !response.body) throw new Error(`辞書を取得できませんでした（HTTP ${response.status}）。`);
     const stream = response.body.pipeThrough(new DecompressionStream('gzip'));
@@ -248,7 +413,7 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         report?.(event);
     };
 
-    const [module, dictionary, model, settings] = await Promise.all([
+    const [module, dictionary, model, settings, llamaMtResult] = await Promise.all([
         fetchManifestAsset('engine', 'zerocon_model.wasm', manifest, base, request, cache, activeUrls, wrappedReport)
             .then(compileWasmResponse)
             .then(compiled => { wrappedReport({ asset: 'engine', phase: 'done' }); return compiled; }),
@@ -258,7 +423,10 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         fetchManifestAsset('model', modelName, manifest, base, request, cache, activeUrls, wrappedReport)
             .then(readAsset),
         asset('./ime-settings.json').then(readAsset),
+        loadLlamaMt(base, request, manifest, cache, activeUrls),
     ]);
+
+    const { mt, threads } = llamaMtResult;
 
     if (cache && manifest?.assets) {
         for (const [name, entry] of Object.entries(manifest.assets)) {
@@ -268,6 +436,10 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
     }
 
     wrappedReport({ asset: 'model', phase: 'initializing' });
+    // Stage the GGUF into Emscripten's virtual FS so multi-threaded llama.cpp loads it directly.
+    mt.FS.mkdirTree('/runtime/models');
+    mt.FS.writeFile(`/runtime/models/${modelName}`, model);
+
     const staged = JSON.parse(decoder.decode(settings));
     const { autoCommit, ...defaults } = stagedSettings(staged);
     // Early previews used "none"; the shared Swift settings use "disabled".
@@ -278,10 +450,11 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         ['settings.json', settingsFile],
         ['LearningMemory', new Directory(new Map(learningFiles.map(([name, bytes]) => [name, new File(bytes)])))],
     ]));
-    const modelFile = new File(model.buffer, { readonly: true });
+    // Keep a lightweight placeholder entry in WASI FS so Swift's FileManager.fileExists checks succeed.
+    const modelPlaceholder = new File(new Uint8Array(1), { readonly: true });
     const runtime = new Map([
         ['Dictionary', dictionary],
-        ['models', new Directory(new Map([[modelName, modelFile]]))],
+        ['models', new Directory(new Map([[modelName, modelPlaceholder]]))],
         ['Azookey', app],
     ]);
     const wasi = new WASI(['/runtime/zerocon_model.wasm'], ['APPDATA=/runtime'], [
@@ -290,7 +463,13 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         ConsoleStdout.lineBuffered(() => {}),
         new PreopenDirectory('/runtime', runtime),
     ], { debug: false });
-    const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi.wasiImport });
+
+    let instance;
+    const llamaImports = createLlamaHostImports(mt, () => instance.exports.memory);
+    instance = await WebAssembly.instantiate(module, {
+        wasi_snapshot_preview1: wasi.wasiImport,
+        zerocon_llama: llamaImports,
+    });
     wasi.initialize(instance);
     const call = requestJSON(instance.exports, instance.exports.zerocon_model_request);
     const send = (key, fields = {}) => {
@@ -316,10 +495,11 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
         commit: manifest?.build?.commit || '',
         builtAt: manifest?.build?.builtAt || '',
         cached: usedCache,
+        threads,
         crossOriginIsolated: typeof globalThis.crossOriginIsolated === 'boolean' ? globalThis.crossOriginIsolated : false,
     };
-    // Preserve the conversion instance's backing file and transfer just one copy to the assist Worker.
-    send.copyModel = () => modelFile.data.slice().buffer;
+    // Preserve the conversion instance's backing bytes and transfer one copy to the assist Worker.
+    send.copyModel = () => model.slice().buffer;
     let mode = send.settings.learning;
     let general = staged.general;
     send.applySettings = options => {
@@ -387,22 +567,33 @@ function get(api, address) {
     return decoder.decode(bytes.subarray(address, end));
 }
 
+function mtPut(mt, bytes) {
+    const address = mt._malloc(Math.max(1, bytes.length));
+    if (!address) throw new Error('推論用メモリを確保できませんでした。');
+    mt.HEAPU8.set(bytes, address);
+    return address;
+}
+
+function mtGet(mt, address) {
+    if (!address) throw new Error('推論結果を読み取れませんでした。');
+    return mt.UTF8ToString(address);
+}
+
 // Construct this only inside the assistant worker. The key-handling worker
-// can continue processing edits while this instance runs synchronous Wasm.
+// can continue processing edits while this instance runs multi-threaded Emscripten Wasm.
 export async function loadAssistEngine(base = import.meta.url, request = fetch, predictionBudgetScale = 1, modelBuffer) {
     const manifest = await loadAssetManifest(base, request);
     const modelName = manifest?.model?.filename || defaultModelName;
     const cache = request === fetch ? await openAssetCache() : null;
     const activeUrls = new Set();
 
-    const [policy, completion, model, reverse] = await Promise.all([
+    const [policy, { mt }, model, reverse] = await Promise.all([
         fetchManifestAsset('policy', 'zerocon_web_live_policy.wasm', manifest, base, request, cache, activeUrls, null)
             .then(compileWasmResponse),
-        fetchManifestAsset('completion', 'zerocon_completion.wasm', manifest, base, request, cache, activeUrls, null)
-            .then(compileWasmResponse),
-        modelBuffer ?? fetchManifestAsset('model', modelName, manifest, base, request, cache, activeUrls, null)
-            .then(readAsset)
-            .then(bytes => bytes.buffer),
+        loadLlamaMt(base, request, manifest, cache, activeUrls),
+        modelBuffer
+            ? Promise.resolve(new Uint8Array(modelBuffer))
+            : fetchManifestAsset('model', modelName, manifest, base, request, cache, activeUrls, null).then(readAsset),
         fetchManifestAsset('reverse', `${reverseName}.gz`, manifest, base, request, cache, activeUrls, null).then(async response => {
             if (!response.ok || !response.body) throw new Error('キーボード補正用の辞書を読み込めませんでした。');
             const bytes = new Uint8Array(await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
@@ -412,20 +603,16 @@ export async function loadAssistEngine(base = import.meta.url, request = fetch, 
             return bytes;
         }),
     ]);
-    const io = new WASI(['/runtime/zerocon_completion.wasm'], [], [
-        new OpenFile(new File([])), ConsoleStdout.lineBuffered(() => {}), ConsoleStdout.lineBuffered(() => {}),
-        new PreopenDirectory('/runtime', new Map([
-            [modelName, new File(model, { readonly: true })], [reverseName, new File(reverse, { readonly: true })],
-        ])),
-    ], { debug: false });
-    const worker = await WebAssembly.instantiate(completion, { wasi_snapshot_preview1: io.wasiImport });
-    io.initialize(worker);
-    const modelApi = worker.exports;
-    const path = put(modelApi, encoder.encode(`/runtime/${modelName}\0`));
+
+    mt.FS.mkdirTree('/runtime');
+    mt.FS.writeFile(`/runtime/${modelName}`, model);
+    mt.FS.writeFile(`/runtime/${reverseName}`, reverse);
+
+    const path = mtPut(mt, encoder.encode(`/runtime/${modelName}\0`));
     try {
-        if (!modelApi.zerocon_completion_init(path)) throw new Error('補正と先読みのモデルを読み込めませんでした。');
+        if (!mt._zerocon_completion_init(path)) throw new Error('補正と先読みのモデルを読み込めませんでした。');
     } finally {
-        modelApi.free(path);
+        mt._free(path);
     }
 
     const wasi = new WASI([], [], [], { debug: false });
@@ -440,32 +627,32 @@ export async function loadAssistEngine(base = import.meta.url, request = fetch, 
                 // The composing host has the romaji ledger. Use it when the
                 // Windows fallback only supplied the observed kana.
                 const withRaw = serialized.replace('"raw":""', `"raw":"${rawKeys}"`);
-                const input = put(modelApi, encoder.encode(`${withRaw}\0`));
+                const input = mtPut(mt, encoder.encode(`${withRaw}\0`));
                 try {
-                    const result = modelApi.zerocon_keyboard_repair(input, timeout);
-                    return result ? put(api, encoder.encode(`${get(modelApi, result)}\0`)) : 0;
+                    const result = mt._zerocon_keyboard_repair(input, timeout);
+                    return result ? put(api, encoder.encode(`${mtGet(mt, result)}\0`)) : 0;
                 } finally {
-                    modelApi.free(input);
+                    mt._free(input);
                 }
             }
             const { prompt, n_predict: limit, stop } = payload;
             if (typeof prompt !== 'string' || prompt.includes('\0') || !Number.isInteger(limit)
                 || !Array.isArray(stop) || stop.some(s => typeof s !== 'string' || s.includes('\0'))) return 0;
-            const promptAddress = put(modelApi, encoder.encode(`${prompt}\0`));
+            const promptAddress = mtPut(mt, encoder.encode(`${prompt}\0`));
             let stopsAddress = 0;
             try {
                 const markers = encoder.encode(stop.map(s => `${s}\0`).join(''));
-                stopsAddress = put(modelApi, markers.length ? markers : new Uint8Array(1));
+                stopsAddress = mtPut(mt, markers.length ? markers : new Uint8Array(1));
                 const budget = Math.min(5000, Math.round(timeout * budgetScale));
-                const result = modelApi.zerocon_complete(promptAddress, limit, budget, stopsAddress, markers.length);
+                const result = mt._zerocon_complete(promptAddress, limit, budget, stopsAddress, markers.length);
                 if (!result) return 0;
-                const reason = ['error', 'eos', 'stop', 'limit'][modelApi.zerocon_completion_stop()];
-                const response = { content: get(modelApi, result), stop_type: reason,
+                const reason = ['error', 'eos', 'stop', 'limit'][mt._zerocon_completion_stop()];
+                const response = { content: mtGet(mt, result), stop_type: reason,
                     stopped_limit: reason === 'limit', stopped_eos: reason === 'eos' };
                 return put(api, encoder.encode(`${JSON.stringify(response)}\0`));
             } finally {
-                modelApi.free(stopsAddress);
-                modelApi.free(promptAddress);
+                mt._free(stopsAddress);
+                mt._free(promptAddress);
             }
         } catch {
             // Never unwind a Rust completion request through a host exception.

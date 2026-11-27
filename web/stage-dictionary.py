@@ -1,4 +1,4 @@
-"""Stage a dictionary-only Swift package from the pinned shared converter."""
+"""Stage a dictionary-only or multi-threaded-bridge Swift package from the pinned shared converter."""
 
 import argparse
 import json
@@ -112,7 +112,7 @@ def stage_converter(converter, output, llama):
     (target / "Package.swift").write_text(manifest, encoding="utf-8")
 
 
-def stage_app(app, source, llama):
+def stage_app(app, source, llama, llama_bridge=False):
     manifest = APP_MANIFEST
     if llama:
         windows = ROOT / "windows/server-swift/Sources"
@@ -128,10 +128,22 @@ def stage_app(app, source, llama):
         headers.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(windows / "ffi/include/ffi.h", headers / "ffi.h")
         (headers / "module.modulemap").write_text('module ffi { header "ffi.h" export * }\n', encoding="utf-8")
-        shutil.copyfile(WEB / "wasi-exceptions.c", ffi / "wasi-exceptions.c")
+        if llama_bridge:
+            # Copy llama/ggml headers so wasi-llama-bridge.c compiles cleanly against the exact pinned ABI.
+            bridge_inc = ffi / "llama_inc"
+            bridge_inc.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(llama / "include/llama.h", bridge_inc / "llama-current.h")
+            shutil.copyfile(ROOT / "engine/swift/llama-compat.h", bridge_inc / "llama.h")
+            for header in (llama / "ggml/include").glob("*.h"):
+                shutil.copyfile(header, bridge_inc / header.name)
+            shutil.copyfile(WEB / "wasi-llama-bridge.c", ffi / "wasi-llama-bridge.c")
+            ffi_target = '.target(name: "ffi", cSettings: [.headerSearchPath("llama_inc")])'
+        else:
+            shutil.copyfile(WEB / "wasi-exceptions.c", ffi / "wasi-exceptions.c")
+            ffi_target = '.target(name: "ffi")'
         shutil.copyfile(WEB / "ModelBridge.swift", source / "ModelBridge.swift")
         manifest = manifest.replace('zerocon_dictionary', 'zerocon_model')
-        manifest = manifest.replace('targets: [.executableTarget', 'targets: [.target(name: "ffi"), .executableTarget')
+        manifest = manifest.replace('targets: [.executableTarget', f'targets: [{ffi_target}, .executableTarget')
         manifest = manifest.replace('name: "App", dependencies: [', 'name: "App", dependencies: ["ffi", ')
     else:
         shutil.copyfile(WEB / "DictionaryBridge.swift", source / "DictionaryBridge.swift")
@@ -145,6 +157,8 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--dependency-cache", type=Path)
     parser.add_argument("--llama-source", type=Path)
+    parser.add_argument("--llama-bridge", action="store_true",
+                        help="Link wasi-llama-bridge.c instead of static libllama.a (delegates inference to Emscripten pthreads)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     stage_dependencies(args.output, args.dependency_cache)
@@ -152,7 +166,7 @@ def main():
     app = args.output / "app"
     source = app / "Sources/App"
     source.mkdir(parents=True, exist_ok=True)
-    stage_app(app, source, args.llama_source)
+    stage_app(app, source, args.llama_source, llama_bridge=args.llama_bridge)
 
 
 if __name__ == "__main__":
