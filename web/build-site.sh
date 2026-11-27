@@ -113,4 +113,6 @@ node web/check-model-learning.mjs dist/pages
 # Gzip large Wasm, generate SHA-256 asset-manifest, split any >24 MiB files, write COOP/COEP _headers
 python3 web/pack-cloudflare-assets.py dist/pages
 
+# emcc's default output from configure checks lands in the repository root.
+rm -f a.out.js a.out.wasm
 echo "BUILD_SITE_DONE: $(du -sh dist/pages | cut -f1) in dist/pages"

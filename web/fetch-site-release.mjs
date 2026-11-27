@@ -3,8 +3,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 const pin = JSON.parse(readFileSync(new URL('./site-release.json', import.meta.url), 'utf8'));
 if (!pin.tag || !pin.asset || !pin.sha256 || !pin.bytes) {
@@ -25,10 +23,14 @@ if (digest !== pin.sha256) {
     throw new Error(`SHA-256 mismatch for ${pin.asset}: expected ${pin.sha256}, got ${digest}`);
 }
 
-const archivePath = join(tmpdir(), pin.asset);
+// Relative paths only: Windows bsdtar treats "C:\..." as a remote host.
+const archivePath = `.fetch-${pin.asset}`;
 writeFileSync(archivePath, archive);
 rmSync('dist/pages', { recursive: true, force: true });
 mkdirSync('dist/pages', { recursive: true });
-execFileSync('tar', ['-xzf', archivePath, '-C', 'dist/pages'], { stdio: 'inherit' });
-rmSync(archivePath, { force: true });
+try {
+    execFileSync('tar', ['-xzf', archivePath, '-C', 'dist/pages'], { stdio: 'inherit' });
+} finally {
+    rmSync(archivePath, { force: true });
+}
 console.log(`Unpacked ${pin.asset} (${pin.tag}, commit ${pin.commit}) into dist/pages`);

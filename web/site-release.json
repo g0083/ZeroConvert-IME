@@ -1,8 +1,8 @@
 {
   "repository": "g0083/ZeroConvert-IME",
-  "tag": "site-pending",
+  "tag": "site-202611271829-c64c4c2",
   "asset": "zerocon-site.tar.gz",
-  "sha256": "",
-  "bytes": 0,
-  "commit": ""
+  "sha256": "1a0df06db864edbd9c53574f328d8e732d88a30813eb97f1591baf0ac43ff227",
+  "bytes": 51883069,
+  "commit": "c64c4c2aafca056b5fab0f09d218494ef7197267"
 }
