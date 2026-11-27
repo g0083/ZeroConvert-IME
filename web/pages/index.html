@@ -70,20 +70,20 @@
       </div>
       <div class="demo-shell page-width">
         <div class="demo-editor">
-          <div class="demo-toolbar">
-            <label class="demo-presentation">表示方法
-              <select id="demo-presentation">
-                <option value="windows">Windows</option>
-                <option value="android">Android</option>
-              </select>
-            </label>
-            <div class="demo-telemetry" aria-live="polite">
-              <span id="telemetry-model" class="telemetry-chip">モデル準備中</span>
-              <span id="telemetry-latency" class="telemetry-chip" hidden></span>
-              <span id="telemetry-cache" class="telemetry-chip" hidden></span>
-            </div>
-          </div>
           <div class="demo-input">
+            <div class="demo-toolbar">
+              <label class="demo-presentation">表示方法
+                <select id="demo-presentation">
+                  <option value="windows">Windows</option>
+                  <option value="android">Android</option>
+                </select>
+              </label>
+              <div class="demo-telemetry" aria-live="polite">
+                <span id="telemetry-model" class="telemetry-chip">モデル準備中</span>
+                <span id="telemetry-latency" class="telemetry-chip" hidden></span>
+                <span id="telemetry-cache" class="telemetry-chip" hidden></span>
+              </div>
+            </div>
             <p id="demo-performance-note" class="hint demo-performance-note">ブラウザの Wasm 上で推論するため、実機（Windows CPU 中央値 8.9 ms）より応答に時間がかかることがあります。</p>
             <label for="romaji">ローマ字入力</label>
             <div class="composition-field">
