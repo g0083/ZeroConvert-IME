@@ -1,4 +1,4 @@
-name: Build and deploy ZeroConvert IME to Cloudflare Pages
+name: Verify ZeroConvert IME site build (deploy is done by Cloudflare Pages from the pinned release)
 
 on:
   push:
@@ -13,20 +13,17 @@ on:
       - 'android/**'
       - 'web/**'
       - '.github/workflows/deploy-cloudflare-pages.yml'
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
-  deployments: write
 
 concurrency:
   group: cloudflare-pages-production
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build-and-verify:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -226,9 +223,3 @@ jobs:
           # Gzip large Wasm, generate SHA-256 asset-manifest, split any >24 MiB files, and write COOP/COEP _headers
           python3 web/pack-cloudflare-assets.py dist/pages
 
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist/pages --project-name=zeroconvert-ime --branch=main
