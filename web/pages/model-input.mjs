@@ -6,6 +6,7 @@ const editor = document.querySelector('#romaji');
 const editorLabel = document.querySelector('label[for="romaji"]');
 const demo = document.querySelector('#demo');
 const presentationPicker = document.querySelector('#demo-presentation');
+const presentationButtons = document.querySelectorAll('[data-presentation-option]');
 const androidRoot = document.querySelector('#android-keyboard');
 const status = document.querySelector('#conversion-status');
 const loader = document.querySelector('#loader');
@@ -73,6 +74,7 @@ function setPresentation(value) {
     presentation = value;
     demo.dataset.presentation = value;
     presentationPicker.value = value;
+    for (const button of presentationButtons) button.setAttribute('aria-pressed', String(button.dataset.presentationOption === value));
     androidRoot.hidden = value !== 'android';
     vibrationSetting.closest('label').hidden = value !== 'android' || typeof navigator.vibrate !== 'function';
     editor.inputMode = value === 'android' ? 'none' : 'text';
@@ -467,4 +469,10 @@ androidRoot.querySelector('.android-settings').addEventListener('click', () => {
     panel.querySelector('summary').focus();
 });
 presentationPicker.addEventListener('change', () => setPresentation(presentationPicker.value));
+for (const button of presentationButtons) {
+    button.addEventListener('click', () => {
+        presentationPicker.value = button.dataset.presentationOption;
+        presentationPicker.dispatchEvent(new Event('change'));
+    });
+}
 setPresentation(defaultPresentation());

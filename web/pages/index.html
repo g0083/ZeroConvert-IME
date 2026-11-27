@@ -72,12 +72,17 @@
         <div class="demo-editor">
           <div class="demo-input">
             <div class="demo-toolbar">
-              <label class="demo-presentation">表示方法
-                <select id="demo-presentation">
+              <div class="demo-presentation">
+                <span id="presentation-label" class="presentation-label">表示方法</span>
+                <div class="segmented" role="group" aria-labelledby="presentation-label">
+                  <button type="button" class="segment" data-presentation-option="windows" aria-pressed="true">Windows</button>
+                  <button type="button" class="segment" data-presentation-option="android" aria-pressed="false">Android</button>
+                </div>
+                <select id="demo-presentation" class="sr-only" tabindex="-1" aria-hidden="true">
                   <option value="windows">Windows</option>
                   <option value="android">Android</option>
                 </select>
-              </label>
+              </div>
               <div class="demo-telemetry" aria-live="polite">
                 <span id="telemetry-model" class="telemetry-chip">モデル準備中</span>
                 <span id="telemetry-latency" class="telemetry-chip" hidden></span>

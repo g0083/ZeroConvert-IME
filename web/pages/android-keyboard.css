@@ -6,13 +6,6 @@
   margin-bottom: 12px;
   color: var(--muted);
 }
-.demo-presentation select {
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 5px 9px;
-  color: var(--ime-text);
-  background: var(--ime-surface);
-}
 #demo[data-presentation="android"] :is(.touch-controls, .keyboard-help) { display: none; }
 #demo[data-presentation="android"] .demo-shell {
   --demo-width: min(var(--page-max), calc(100% - 2 * var(--page-gutter)));
