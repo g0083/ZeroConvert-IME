@@ -67,6 +67,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import com.zeroconvert.ime.layout.KeyAction
+import com.zeroconvert.ime.layout.KeyboardLayoutProfile
+import com.zeroconvert.ime.layout.LayoutActionCallbacks
+import com.zeroconvert.ime.layout.LayoutGridRenderer
+import com.zeroconvert.ime.layout.QwertyLayoutPresets
 import com.zeroconvert.ime.theme.keyboardThemeBackground
 import com.zeroconvert.ime.theme.rememberResolvedKeyboardSkin
 import com.zeroconvert.ime.theme.textShadowOrNull
@@ -388,7 +393,9 @@ fun KeyboardRootView(
                                         onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
                                         onCursorLeft = { imeService.handleCursorLeft() },
                                         onCursorRight = { imeService.handleCursorRight() },
-                                        onToggleJpEn = onToggleJpEn
+                                        onToggleJpEn = onToggleJpEn,
+                                        onOpenClipboard = { activeTab = KeyboardTab.CLIPBOARD },
+                                        layoutProfile = imeService.flickLayoutProfileState.value
                                     )
                                 } else {
                                     JapaneseQwertyLayout(
@@ -424,7 +431,10 @@ fun KeyboardRootView(
                                         },
                                         nextKeyWeightsProvider = {
                                             imeService.nextKeyWeightsForCurrentInput(KeyboardMode.JAPANESE)
-                                        }
+                                        },
+                                        onToggleJpEn = onToggleJpEn,
+                                        onOpenSymbols = { activeTab = KeyboardTab.SYMBOLS },
+                                        layoutProfile = imeService.qwertyLayoutProfileState.value
                                     )
                                 }
                             }
@@ -466,7 +476,9 @@ fun KeyboardRootView(
                                         onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
                                         onCursorLeft = { imeService.handleCursorLeft() },
                                         onCursorRight = { imeService.handleCursorRight() },
-                                        onToggleJpEn = onToggleJpEn
+                                        onToggleJpEn = onToggleJpEn,
+                                        onOpenClipboard = { activeTab = KeyboardTab.CLIPBOARD },
+                                        layoutProfile = imeService.flickLayoutProfileState.value
                                     )
                                 } else {
                                     EnglishQwertyLayout(
@@ -502,7 +514,10 @@ fun KeyboardRootView(
                                         },
                                         nextKeyWeightsProvider = {
                                             imeService.nextKeyWeightsForCurrentInput(KeyboardMode.ENGLISH)
-                                        }
+                                        },
+                                        onToggleJpEn = onToggleJpEn,
+                                        onOpenSymbols = { activeTab = KeyboardTab.SYMBOLS },
+                                        layoutProfile = imeService.qwertyLayoutProfileState.value
                                     )
                                 }
                             }
@@ -528,7 +543,15 @@ fun KeyboardRootView(
                                     onOpenSymbols = { activeTab = KeyboardTab.SYMBOLS },
                                     onOpenEmoji = { activeTab = KeyboardTab.EMOJI },
                                     onCursorLeft = { imeService.handleCursorLeft() },
-                                    onCursorRight = { imeService.handleCursorRight() }
+                                    onCursorRight = { imeService.handleCursorRight() },
+                                    onToggleJpEn = onToggleJpEn,
+                                    onOpenClipboard = { activeTab = KeyboardTab.CLIPBOARD },
+                                    layoutProfile = if (imeService.japaneseLayoutState.value == JapaneseInputLayout.QWERTY) {
+                                        imeService.qwertyLayoutProfileState.value
+                                    } else {
+                                        imeService.flickLayoutProfileState.value
+                                    },
+                                    keepModeSwitchAtBottomLeft = imeService.japaneseLayoutState.value == JapaneseInputLayout.QWERTY
                                 )
                             }
                         }
@@ -1890,17 +1913,20 @@ private fun SharedQwertyLayout(
     duplicateMiddleKeys: Boolean,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
     onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
-    nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null
+    nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null,
+    onToggleJpEn: () -> Unit = {},
+    onOpenSymbols: () -> Unit = {},
+    layoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON
 ) {
-    val row0Normal = listOf('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
-    val row0Shift = listOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')')
-    val row1 = listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p')
-    val row2 = if (isJapanese) {
-        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'ー')
-    } else {
-        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l')
+    val qwertySpec = remember(layoutProfile, isJapanese) {
+        QwertyLayoutPresets.specFor(layoutProfile, isJapanese)
     }
-    val row3 = listOf('z', 'x', 'c', 'v', 'b', 'n', 'm')
+    val row0Normal = qwertySpec.numberRowNormal
+    val row0Shift = qwertySpec.numberRowShift
+    val row1 = qwertySpec.row1
+    val row2 = qwertySpec.row2
+    val row2Staggered = qwertySpec.row2Staggered
+    val row3 = qwertySpec.row3
 
     val isSplit = splitGap > 0.dp
     val duplicateMiddle = isSplit && duplicateMiddleKeys
@@ -2057,7 +2083,7 @@ private fun SharedQwertyLayout(
         )
         val cutWidth = with(density) { splitSpacing.cutWidthPx.toDp() }
         val homeDuplicateWidth = with(density) {
-            if (duplicateMiddle && !isJapanese) splitSpacing.keyWidthPx(QwertySplitLayout.HOME_ROW_WEIGHT).toDp() else 0.dp
+            if (duplicateMiddle && row2Staggered) splitSpacing.keyWidthPx(QwertySplitLayout.HOME_ROW_WEIGHT).toDp() else 0.dp
         }
         val bottomDuplicateWidth = with(density) {
             if (duplicateMiddle) splitSpacing.keyWidthPx(QwertySplitLayout.BOTTOM_LETTER_ROW_WEIGHT).toDp() else 0.dp
@@ -2112,8 +2138,8 @@ private fun SharedQwertyLayout(
             // Row 2
             QwertyCharacterRow(rowModifier, cutWidth, row2.size, homeDuplicateWidth) { i, rightHalf ->
                 val ch = row2[i]
-                val isStaggerLeft = !isJapanese && i == 0
-                val isStaggerRight = !isJapanese && i == row2.lastIndex
+                val isStaggerLeft = row2Staggered && i == 0
+                val isStaggerRight = row2Staggered && i == row2.lastIndex
                 val spec = QwertyCharKeySpec(
                     id = "r2_${ch}_$rightHalf",
                     normalChar = ch,
@@ -2198,14 +2224,28 @@ private fun SharedQwertyLayout(
                 )
             }
 
-            // Row 4
+            // Row 4 (declarative from QwertyLayoutPresets)
+            val bottomCallbacks = LayoutActionCallbacks(
+                onDelete = onDelete,
+                onCursorLeft = onCursorLeft,
+                onCursorRight = onCursorRight,
+                onOpenEmoji = onOpenEmoji,
+                onOpenSymbols = onOpenSymbols,
+                onToggleJpEn = onToggleJpEn,
+                onSpace = onSpace,
+                onLongPressSpace = onLongPressSpace,
+                onSwitchMode = onSwitchMode,
+                onEnter = onEnter,
+                onShowImePicker = onLongPressSpace,
+                onBeforeAction = flushBeforeAction
+            )
             val spaceKey: @Composable RowScope.() -> Unit = {
                 KeyboardActionKey(
-                    modifier = Modifier.weight(if (isSplit) 1.2f else 2.4f).fillMaxHeight(),
+                    modifier = Modifier.weight(if (isSplit) qwertySpec.splitSpaceWeight else qwertySpec.spaceWeight).fillMaxHeight(),
                     visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
                     baseColor = spaceBaseColor,
                     isModifier = false,
-                    contentDescription = if (isSplit) stringResource(R.string.space_key) else "日本語を入力",
+                    contentDescription = if (isSplit) stringResource(R.string.space_key) else qwertySpec.spaceLabel,
                     onBeforePress = flushBeforeAction,
                     onClick = onSpace,
                     onLongClick = onLongPressSpace,
@@ -2217,7 +2257,7 @@ private fun SharedQwertyLayout(
                         tint = textColor,
                         modifier = Modifier.size(22.dp)
                     ) else Text(
-                        text = "日本語",
+                        text = qwertySpec.spaceLabel,
                         color = textColor,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium,
@@ -2229,139 +2269,78 @@ private fun SharedQwertyLayout(
                 modifier = rowModifier,
                 splitGap = cutWidth,
                 left = {
-                    Aa1Button(
-                        mode = if (isJapanese) KeyboardMode.JAPANESE else KeyboardMode.ENGLISH,
-                        modifier = Modifier.weight(1.35f),
-                        actionKeyBg = actionKeyBg,
-                        fillAvailableHeight = true,
-                        matchEnterStyle = true,
-                        visualPadding = qwertyRowPadding(false, true, isFirst = true, isLast = false),
-                        palette = palette,
-                        onBeforePress = flushBeforeAction,
-                        onSwitchMode = onSwitchMode
-                    )
-
-                    if (isJapanese) {
-                        QwertyCharacterKeySlot(
-                            spec = QwertyCharKeySpec("r4_comma_jp", '、', '、', baseColor = actionKeyBg, keyWeight = 0.85f),
-                            isShifted = isShifted,
-                            supportsUpFlick = false,
-                            visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
-                            textColor = textColor,
-                            palette = palette,
-                            host = host,
-                            onAccessibleCommit = currentOnCommitChar
-                        )
+                    qwertySpec.bottomLeft.forEachIndexed { idx, slot ->
+                        val pad = qwertyRowPadding(false, true, isFirst = idx == 0, isLast = false)
+                        val action = slot.action
+                        if (action is KeyAction.CommitChar) {
+                            QwertyCharacterKeySlot(
+                                spec = QwertyCharKeySpec(
+                                    id = slot.id,
+                                    normalChar = action.normal,
+                                    shiftedChar = action.shifted,
+                                    baseColor = actionKeyBg,
+                                    keyWeight = slot.weight
+                                ),
+                                isShifted = isShifted,
+                                supportsUpFlick = false,
+                                visualPadding = pad,
+                                textColor = textColor,
+                                palette = palette,
+                                host = host,
+                                onAccessibleCommit = currentOnCommitChar
+                            )
+                        } else {
+                            LayoutGridRenderer.QwertyBottomActionKey(
+                                slot = slot,
+                                isJapanese = isJapanese,
+                                modifier = Modifier.weight(slot.weight),
+                                visualPadding = pad,
+                                actionKeyBg = actionKeyBg,
+                                textColor = textColor,
+                                palette = palette,
+                                callbacks = bottomCallbacks
+                            )
+                        }
                     }
-
-                    val qChar = if (isJapanese) '？' else '?'
-                    QwertyCharacterKeySlot(
-                        spec = QwertyCharKeySpec("r4_question", qChar, qChar, baseColor = actionKeyBg, keyWeight = 0.85f),
-                        isShifted = isShifted,
-                        supportsUpFlick = false,
-                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
-                        textColor = textColor,
-                        palette = palette,
-                        host = host,
-                        onAccessibleCommit = currentOnCommitChar
-                    )
-
-                    if (!isJapanese) {
-                        QwertyCharacterKeySlot(
-                            spec = QwertyCharKeySpec("r4_comma_en", ',', ',', baseColor = actionKeyBg, keyWeight = 0.85f),
-                            isShifted = isShifted,
-                            supportsUpFlick = false,
-                            visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
-                            textColor = textColor,
-                            palette = palette,
-                            host = host,
-                            onAccessibleCommit = currentOnCommitChar
-                        )
-                    }
-
                     spaceKey()
                 },
                 right = {
                     if (isSplit) spaceKey()
-
-                    val enterAction = LocalEnterKeyAction.current
-                    val periodChar = if (isJapanese) '。' else '.'
-                    QwertyCharacterKeySlot(
-                        spec = QwertyCharKeySpec("r4_period", periodChar, periodChar, baseColor = actionKeyBg, keyWeight = 0.85f),
-                        isShifted = isShifted,
-                        supportsUpFlick = false,
-                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
-                        textColor = textColor,
-                        palette = palette,
-                        host = host,
-                        onAccessibleCommit = currentOnCommitChar
-                    )
-
-                    RepeatingIconButton(
-                        onClick = onCursorLeft,
-                        modifier = Modifier.weight(0.85f).fillMaxHeight(),
-                        initialDelayMs = 300L,
-                        repeatIntervalMs = 50L,
-                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
-                        baseColor = actionKeyBg,
-                        isModifier = true,
-                        palette = palette,
-                        onBeforePress = flushBeforeAction,
-                        hapticOnPress = false,
-                        contentDescription = "◀"
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                            contentDescription = null,
-                            tint = textColor,
-                            modifier = Modifier.size(20.dp)
+                    qwertySpec.bottomRight.forEachIndexed { idx, slot ->
+                        val pad = qwertyRowPadding(
+                            false,
+                            true,
+                            isFirst = false,
+                            isLast = idx == qwertySpec.bottomRight.lastIndex
                         )
-                    }
-
-                    RepeatingIconButton(
-                        onClick = onCursorRight,
-                        modifier = Modifier.weight(0.85f).fillMaxHeight(),
-                        initialDelayMs = 300L,
-                        repeatIntervalMs = 50L,
-                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = false),
-                        baseColor = actionKeyBg,
-                        isModifier = true,
-                        palette = palette,
-                        onBeforePress = flushBeforeAction,
-                        hapticOnPress = false,
-                        contentDescription = "▶"
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = textColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    KeyboardActionKey(
-                        modifier = Modifier.weight(1.35f).fillMaxHeight(),
-                        visualPadding = qwertyRowPadding(false, true, isFirst = false, isLast = true),
-                        baseColor = palette.primaryAccent,
-                        isAccent = true,
-                        contentDescription = enterAction?.label ?: "Enter",
-                        onBeforePress = flushBeforeAction,
-                        onClick = onEnter
-                    ) {
-                        if (enterAction != null) {
-                            Text(
-                                text = enterAction.label,
-                                color = palette.onAccent,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1
+                        val action = slot.action
+                        if (action is KeyAction.CommitChar) {
+                            QwertyCharacterKeySlot(
+                                spec = QwertyCharKeySpec(
+                                    id = slot.id,
+                                    normalChar = action.normal,
+                                    shiftedChar = action.shifted,
+                                    baseColor = actionKeyBg,
+                                    keyWeight = slot.weight
+                                ),
+                                isShifted = isShifted,
+                                supportsUpFlick = false,
+                                visualPadding = pad,
+                                textColor = textColor,
+                                palette = palette,
+                                host = host,
+                                onAccessibleCommit = currentOnCommitChar
                             )
                         } else {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardReturn,
-                                contentDescription = null,
-                                tint = palette.onAccent,
-                                modifier = Modifier.size(24.dp)
+                            LayoutGridRenderer.QwertyBottomActionKey(
+                                slot = slot,
+                                isJapanese = isJapanese,
+                                modifier = Modifier.weight(slot.weight),
+                                visualPadding = pad,
+                                actionKeyBg = actionKeyBg,
+                                textColor = textColor,
+                                palette = palette,
+                                callbacks = bottomCallbacks
                             )
                         }
                     }
@@ -2417,7 +2396,10 @@ fun JapaneseQwertyLayout(
     onKeyPressWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
     nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null,
     splitGap: Dp = 0.dp,
-    duplicateMiddleKeys: Boolean = QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS
+    duplicateMiddleKeys: Boolean = QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS,
+    onToggleJpEn: () -> Unit = {},
+    onOpenSymbols: () -> Unit = {},
+    layoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON
 ) {
     SharedQwertyLayout(
         isJapanese = true,
@@ -2443,7 +2425,10 @@ fun JapaneseQwertyLayout(
         duplicateMiddleKeys = duplicateMiddleKeys,
         nextKeyWeights = nextKeyWeights,
         onCommitCharWithBias = onKeyPressWithBias,
-        nextKeyWeightsProvider = nextKeyWeightsProvider
+        nextKeyWeightsProvider = nextKeyWeightsProvider,
+        onToggleJpEn = onToggleJpEn,
+        onOpenSymbols = onOpenSymbols,
+        layoutProfile = layoutProfile
     )
 }
 
@@ -2471,7 +2456,10 @@ fun EnglishQwertyLayout(
     onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
     nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null,
     splitGap: Dp = 0.dp,
-    duplicateMiddleKeys: Boolean = QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS
+    duplicateMiddleKeys: Boolean = QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS,
+    onToggleJpEn: () -> Unit = {},
+    onOpenSymbols: () -> Unit = {},
+    layoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON
 ) {
     SharedQwertyLayout(
         isJapanese = false,
@@ -2497,7 +2485,10 @@ fun EnglishQwertyLayout(
         duplicateMiddleKeys = duplicateMiddleKeys,
         nextKeyWeights = nextKeyWeights,
         onCommitCharWithBias = onCommitCharWithBias,
-        nextKeyWeightsProvider = nextKeyWeightsProvider
+        nextKeyWeightsProvider = nextKeyWeightsProvider,
+        onToggleJpEn = onToggleJpEn,
+        onOpenSymbols = onOpenSymbols,
+        layoutProfile = layoutProfile
     )
 }
 

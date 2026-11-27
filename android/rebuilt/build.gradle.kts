@@ -65,7 +65,16 @@ android {
 
     }
 
+    val isPreviewBuild = providers.gradleProperty("previewBuild").orNull == "true"
+
     buildTypes {
+        getByName("debug") {
+            if (isPreviewBuild) {
+                applicationIdSuffix = ".preview"
+                resValue("string", "app_name", "ZeroConvert Preview")
+                resValue("string", "ime_name", "ZeroConvert Preview")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

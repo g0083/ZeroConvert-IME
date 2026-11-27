@@ -76,11 +76,11 @@ data class SettingsTab(
 
 val SettingsTabs = listOf(
     SettingsTab("input", "入力", Icons.Outlined.Keyboard),
-    SettingsTab("conversion", "変換", Icons.Outlined.Tune),
-    SettingsTab("data", "学習とデータ", Icons.Outlined.Storage),
-    SettingsTab("translation", "翻訳", Icons.Outlined.Translate),
-    SettingsTab("benchmark", "モデルと評価", Icons.Outlined.Speed),
     SettingsTab("appearance", "外観", Icons.Outlined.Palette),
+    SettingsTab("conversion", "変換", Icons.Outlined.Tune),
+    SettingsTab("data", "データ", Icons.Outlined.Storage),
+    SettingsTab("translation", "翻訳", Icons.Outlined.Translate),
+    SettingsTab("benchmark", "モデル", Icons.Outlined.Speed),
     SettingsTab("about", "情報", Icons.Outlined.Info)
 )
 
@@ -551,13 +551,8 @@ fun SettingsTabBar(
     onSelected: (index: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 上部の横スライドタブ。縦スクロールに連動し、現在の区分をハイライトして見える位置へ寄せる。
+    // 上部の横スライドタブ。ユーザーが手動でスクロールした位置を維持し、タップ時に勝手に先頭へ移動しない。
     val listState = rememberLazyListState()
-    LaunchedEffect(currentIndex) {
-        if (currentIndex in tabs.indices) {
-            listState.animateScrollToItem(currentIndex)
-        }
-    }
     LazyRow(
         state = listState,
         modifier = modifier

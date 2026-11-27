@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
+import com.zeroconvert.ime.layout.KeyboardLayoutProfile
 import com.zeroconvert.ime.theme.BackgroundKind
 import com.zeroconvert.ime.theme.KeyboardThemeCatalog
 import com.zeroconvert.ime.theme.KeyboardThemeSpec
@@ -80,6 +82,10 @@ fun AppearanceSettingsTab(
     onDeleteCustomTheme: (String) -> Unit = {},
     japaneseLayout: String,
     onJapaneseLayoutChange: (String) -> Unit,
+    flickLayoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON,
+    onFlickLayoutProfileChange: (KeyboardLayoutProfile) -> Unit = {},
+    qwertyLayoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON,
+    onQwertyLayoutProfileChange: (KeyboardLayoutProfile) -> Unit = {},
     isFlickOnly: Boolean,
     isQwertyNumberRow: Boolean,
     onQwertyNumberRowChange: (Boolean) -> Unit,
@@ -115,18 +121,11 @@ fun AppearanceSettingsTab(
     }
     var selectedCategory by remember { mutableStateOf<ThemeCategory?>(null) }
 
-    SettingsSection("キーボードテーマ", appPalette) {
+    SettingsSection("プレビュー", appPalette) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(
-                text = "キーボード専用の見た目を設定画面と独立して選べます。立体・iOS風・フラット・グラデーションなど16種類のプリセットに対応しています。",
-                color = appPalette.textMuted,
-                fontSize = 12.sp,
-                lineHeight = 17.sp
-            )
-
             // Live Keyboard Preview Header + Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -170,6 +169,8 @@ fun AppearanceSettingsTab(
                 kbPalette = kbPalette,
                 backgroundImage = backgroundImage,
                 previewLayoutName = previewLayoutName,
+                flickLayoutProfile = flickLayoutProfile,
+                qwertyLayoutProfile = qwertyLayoutProfile,
                 isFlickOnly = isFlickOnly,
                 isQwertyNumberRow = isQwertyNumberRow,
                 keyboardKeyHeight = keyboardKeyHeight,
@@ -182,6 +183,138 @@ fun AppearanceSettingsTab(
                 flickSensitivityDp = flickSensitivityDp,
                 onOneHandedModeChange = onOneHandedModeChange,
                 borderColor = appPalette.borderSubtle
+            )
+
+        }
+    }
+
+    SettingsSection("キーボード配列", appPalette) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "日本語入力キーボード配列",
+                color = appPalette.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            SettingsSegmented(
+                options = listOf(
+                    JapaneseInputLayout.FLICK_12KEY.name to "12キー（フリック）",
+                    JapaneseInputLayout.QWERTY.name to "QWERTY（ローマ字）"
+                ),
+                selected = japaneseLayout,
+                palette = appPalette,
+                onSelected = onJapaneseLayoutChange
+            )
+
+            SettingsDivider(appPalette)
+
+            var profileTargetIsQwerty by remember(japaneseLayout) {
+                mutableStateOf(japaneseLayout == JapaneseInputLayout.QWERTY.name)
+            }
+            val activeProfile = if (profileTargetIsQwerty) qwertyLayoutProfile else flickLayoutProfile
+
+            Text(
+                text = "キー配置プリセット（配列プロファイル）",
+                color = appPalette.textSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            SettingsSegmented(
+                options = listOf(
+                    "FLICK" to "12キー用",
+                    "QWERTY" to "QWERTY用"
+                ),
+                selected = if (profileTargetIsQwerty) "QWERTY" else "FLICK",
+                palette = appPalette,
+                onSelected = { choice ->
+                    profileTargetIsQwerty = choice == "QWERTY"
+                    previewLayoutName = if (profileTargetIsQwerty) {
+                        JapaneseInputLayout.QWERTY.name
+                    } else {
+                        JapaneseInputLayout.FLICK_12KEY.name
+                    }
+                }
+            )
+
+            KeyboardLayoutProfile.entries.chunked(2).forEach { rowProfiles ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowProfiles.forEach { profile ->
+                        val isSelected = activeProfile == profile
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    if (profileTargetIsQwerty) {
+                                        onQwertyLayoutProfileChange(profile)
+                                        previewLayoutName = JapaneseInputLayout.QWERTY.name
+                                    } else {
+                                        onFlickLayoutProfileChange(profile)
+                                        previewLayoutName = JapaneseInputLayout.FLICK_12KEY.name
+                                    }
+                                },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) appPalette.primaryAccent.copy(alpha = 0.16f) else appPalette.surfaceElevated,
+                            border = BorderStroke(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) appPalette.primaryAccent else appPalette.borderSubtle
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(
+                                    text = profile.label,
+                                    color = if (isSelected) appPalette.primaryAccentSoft else appPalette.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = profile.summary,
+                                    color = appPalette.textMuted,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (flickLayoutProfile != qwertyLayoutProfile) {
+                SettingsSecondaryButton(
+                    text = "12キー・QWERTY 両方に適用",
+                    palette = appPalette,
+                    onClick = {
+                        onFlickLayoutProfileChange(activeProfile)
+                        onQwertyLayoutProfileChange(activeProfile)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+
+    SettingsSection("キーボードテーマ", appPalette) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "キーボード専用の見た目を設定画面と独立して選べます。立体・iOS風・フラット・グラデーションなど16種類のプリセットに対応しています。",
+                color = appPalette.textMuted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp
             )
 
             Row(
@@ -282,34 +415,31 @@ fun AppearanceSettingsTab(
                 }
             }
 
-            // Theme Gallery (2-column visual mini-keyboard cards)
+            // Theme Gallery (horizontal scrollable cards)
             val filteredThemes = remember(selectedCategory, allThemes) {
                 if (selectedCategory == null) allThemes
                 else allThemes.filter { it.category == selectedCategory }
             }
             val resolvedCurrentId = KeyboardThemeCatalog.resolveId(keyboardThemeId, systemDark, customThemes)
-            filteredThemes.chunked(2).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    row.forEach { spec ->
-                        KeyboardThemeCard(
-                            spec = spec,
-                            selected = spec.id == keyboardThemeId,
-                            implied = followsSystem && spec.id == resolvedCurrentId,
-                            appPalette = appPalette,
-                            customThemeRevision = customThemeRevision,
-                            onClick = { onKeyboardThemeIdChange(spec.id) },
-                            onEdit = if (!spec.isBuiltIn) ({ onEditCustomTheme(spec) }) else null,
-                            onDuplicate = if (!spec.isBuiltIn) ({ onDuplicateTheme(spec) }) else null,
-                            onDelete = if (!spec.isBuiltIn) ({ pendingDeleteTheme = spec }) else null,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    if (row.size == 1) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                filteredThemes.forEach { spec ->
+                    KeyboardThemeCard(
+                        spec = spec,
+                        selected = spec.id == keyboardThemeId,
+                        implied = followsSystem && spec.id == resolvedCurrentId,
+                        appPalette = appPalette,
+                        customThemeRevision = customThemeRevision,
+                        onClick = { onKeyboardThemeIdChange(spec.id) },
+                        onEdit = if (!spec.isBuiltIn) ({ onEditCustomTheme(spec) }) else null,
+                        onDuplicate = if (!spec.isBuiltIn) ({ onDuplicateTheme(spec) }) else null,
+                        onDelete = if (!spec.isBuiltIn) ({ pendingDeleteTheme = spec }) else null,
+                        modifier = Modifier.width(156.dp)
+                    )
                 }
             }
 
@@ -335,29 +465,6 @@ fun AppearanceSettingsTab(
                     }
                 )
             }
-        }
-    }
-
-    SettingsSection("キーボード配列", appPalette) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "日本語入力キーボード配列",
-                color = appPalette.textSecondary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-            SettingsSegmented(
-                options = listOf(
-                    JapaneseInputLayout.FLICK_12KEY.name to "12キー（フリック）",
-                    JapaneseInputLayout.QWERTY.name to "QWERTY（ローマ字）"
-                ),
-                selected = japaneseLayout,
-                palette = appPalette,
-                onSelected = onJapaneseLayoutChange
-            )
         }
     }
 
@@ -864,7 +971,9 @@ internal fun KeyboardThemeLivePreview(
     flickSensitivityDp: Int,
     onOneHandedModeChange: (OneHandedMode) -> Unit,
     borderColor: Color,
-    backgroundImage: ImageBitmap? = null
+    backgroundImage: ImageBitmap? = null,
+    flickLayoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON,
+    qwertyLayoutProfile: KeyboardLayoutProfile = KeyboardLayoutProfile.ZEROCON
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val realKeyboardWidth = LocalConfiguration.current.screenWidthDp.dp
@@ -951,7 +1060,8 @@ internal fun KeyboardThemeLivePreview(
                                             onOpenSymbols = {},
                                             onOpenEmoji = {},
                                             onCursorLeft = {},
-                                            onCursorRight = {}
+                                            onCursorRight = {},
+                                            layoutProfile = flickLayoutProfile
                                         )
                                     } else {
                                         JapaneseQwertyLayout(
@@ -970,7 +1080,8 @@ internal fun KeyboardThemeLivePreview(
                                             isComposing = false,
                                             onCursorLeft = {},
                                             onCursorRight = {},
-                                            showNumberRow = isQwertyNumberRow
+                                            showNumberRow = isQwertyNumberRow,
+                                            layoutProfile = qwertyLayoutProfile
                                         )
                                     }
                                 }
