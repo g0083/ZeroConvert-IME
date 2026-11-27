@@ -29,8 +29,13 @@ def flick_layout(flick, function, definitions, shifted=False):
     for name, upper, lower in re.findall(r"fun (getKey\d+)\(isShifted: Boolean\) = if \(isShifted\) \{\s*FlickKeyDef\(([^\n]*)\)\s*\} else \{\s*FlickKeyDef\(([^\n]*)\)", definitions):
         keys[name] = definition(upper if shifted else lower)
     rows = []
-    for group in re.findall(r"keys = Triple\((.*?)\),\s*keyBgColor", layout, re.S):
-        rows.append([keys[key] for key in re.findall(r"\bFlick\w*KeyDefinitions\.(\w+)", group)])
+    if "rows = listOf(" in layout:
+        rows_block = section(layout, "rows = listOf(", "keyBgColor")
+        for group in re.findall(r"Triple\(((?:[^()]+|\([^()]*\))*)\)", rows_block, re.S):
+            rows.append([keys[key] for key in re.findall(r"\bFlick\w*KeyDefinitions\.(\w+)", group)])
+    else:
+        for group in re.findall(r"keys = Triple\((.*?)\),\s*keyBgColor", layout, re.S):
+            rows.append([keys[key] for key in re.findall(r"\bFlick\w*KeyDefinitions\.(\w+)", group)])
     if len(rows) != 4 or any(len(row) != 3 for row in rows):
         raise ValueError(f"Expected four rows of three native keys in {function}")
     return rows
