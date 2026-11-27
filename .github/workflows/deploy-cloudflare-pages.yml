@@ -1,0 +1,181 @@
+name: Build and deploy ZeroConvert IME to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'engine/**'
+      - 'windows/server-swift/**'
+      - 'windows/deployment/**'
+      - 'windows/crates/ui/**'
+      - 'windows/native/keyboard-prior/**'
+      - 'windows/scripts/**'
+      - 'android/**'
+      - 'web/**'
+      - '.github/workflows/deploy-cloudflare-pages.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: cloudflare-pages-production
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            engine/rust -> target
+            web/live-policy -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch the pinned dictionary
+        run: git submodule update --init --depth 1 windows/server-swift/azooKey_dictionary_storage
+
+      - name: Restore or fetch Swift 6.4.2 and WASI SDK
+        id: swift-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/zerocon-swift
+          key: zerocon-swift-6.4.2-ubuntu2204-wasip1
+
+      - name: Install Swift and WASI SDK
+        if: steps.swift-cache.outputs.cache-hit != 'true'
+        run: |
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          mkdir -p "$swift_root"
+          cd "$swift_root"
+          server=https://download.swift.org/swift-6.4.2-release
+          curl --fail --silent --show-error --location --retry 3 "$server/ubuntu2204/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE-ubuntu22.04.tar.gz" -o swift-linux.tar.gz
+          curl --fail --silent --show-error --location --retry 3 "$server/wasm-sdk/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE_wasm.artifactbundle.tar.gz" -o swift-wasm.tar.gz
+          echo 'c3081b1817117c66e4764d2a148357d997200048922c778b0f08c795833ae06d  swift-linux.tar.gz' | sha256sum --check
+          echo '83baca83553f8c443cda7b84800912e6e709c3acd2e7ebf277794ca5836c0da5  swift-wasm.tar.gz' | sha256sum --check
+          tar -xzf swift-linux.tar.gz
+          tar -xzf swift-wasm.tar.gz
+          rm -f swift-linux.tar.gz swift-wasm.tar.gz
+
+      - name: Install wasm-opt (binaryen) if available
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binaryen || true
+
+      - name: Build and check the shared Rust engines
+        run: |
+          cargo rustc --locked --manifest-path engine/rust/Cargo.toml --target wasm32-wasip1 --release --lib --crate-type cdylib -- -C link-arg=--export=malloc -C link-arg=--export=free
+          node web/check-assist-wasm.cjs engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm
+          cargo rustc --locked --manifest-path web/live-policy/Cargo.toml --target wasm32-wasip1 --release -- -C link-arg=--export=malloc -C link-arg=--export=free
+          node web/check-session-wasm.cjs web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm
+          node web/check-worker-session.mjs
+          node web/check-worker-assist.mjs
+          node web/check-assist-session.mjs
+          node web/check-learning-store.mjs
+          node web/check-settings-store.mjs
+          node web/check-load-progress.mjs
+          node web/check-release-downloads.mjs
+          mkdir -p dist/pages
+          cp web/pages/index.html web/pages/style.css web/pages/android-keyboard.css web/pages/android-keyboard.mjs web/pages/dictionary-engine.mjs web/pages/model-*.mjs web/pages/assist-session.mjs web/pages/learning-store.mjs web/pages/load-progress.mjs web/pages/release-downloads.mjs web/pages/settings-store.mjs dist/pages/
+          python3 web/pack-android-keyboard.py dist/pages/android-keyboard-layout.mjs
+          python3 web/pack-site-theme.py dist/pages/ime-theme.css
+          cp web/unicode-emoji-license.txt dist/pages/
+          cp windows/frontend/public/favicon.png dist/pages/
+          cp engine/rust/target/wasm32-wasip1/release/zerocon_engine.wasm dist/pages/
+          cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages/
+          cp windows/LICENSE dist/pages/LICENSE.txt
+
+      - name: Build the pinned llama.cpp for WASI (O3 + SIMD128)
+        run: |
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          bin="$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin"
+          sdk="$swift_root/swift-6.4.2-RELEASE_wasm.artifactbundle/swift-6.4.2-RELEASE_wasm/wasm32-unknown-wasip1/WASI.sdk"
+          python3 web/stage-llama.py "$RUNNER_TEMP/llama-source" --windows-source "$RUNNER_TEMP/llama-windows-source"
+          flags='-O3 -msimd128 -mbulk-memory -mnontrapping-fptoint -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS'
+          cmake -G Ninja -S "$RUNNER_TEMP/llama-source" -B "$RUNNER_TEMP/llama-build" \
+            -DCMAKE_SYSTEM_NAME=WASI -DCMAKE_SYSTEM_PROCESSOR=wasm32 \
+            -DCMAKE_C_COMPILER_TARGET=wasm32-wasip1 -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip1 \
+            -DCMAKE_SYSROOT="$sdk" -DCMAKE_C_COMPILER="$bin/clang" -DCMAKE_CXX_COMPILER="$bin/clang++" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_RPC=OFF \
+            -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_IS_DEV=OFF
+          cmake --build "$RUNNER_TEMP/llama-build" --target llama --parallel 4
+          python3 web/build-completion.py "$bin" "${sdk%/WASI.sdk}" \
+            "$RUNNER_TEMP/llama-source" "$RUNNER_TEMP/llama-build" dist/pages/zerocon_completion.wasm
+
+      - name: Build Swift model engine, fetch latest catalog model, and verify
+        run: |
+          set -o pipefail
+          swift_root="$RUNNER_TEMP/zerocon-swift"
+          converter=$(python3 windows/scripts/prepare-modern-llama.py --converter-only | python3 -c 'import json,sys; print(json.load(sys.stdin)["converter"])')
+          python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/model-source" --llama-source "$RUNNER_TEMP/llama-source"
+          llama_lib="$RUNNER_TEMP/llama-build"
+          "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/swift" build -c release \
+            --swift-sdks-path "$swift_root" --swift-sdk swift-6.4.2-RELEASE_wasm \
+            --package-path "$RUNNER_TEMP/model-source/app" --scratch-path "$RUNNER_TEMP/model-build" \
+            -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor \
+            -Xlinker --export=malloc -Xlinker --export=free -Xlinker --export=zerocon_model_request \
+            -Xlinker "-L$llama_lib/src" -Xlinker "-L$llama_lib/ggml/src" \
+            -Xlinker -lggml-cpu -Xlinker -lc++ -Xlinker -lc++abi \
+            -Xlinker -lwasi-emulated-signal -Xlinker -lwasi-emulated-mman -Xlinker -lwasi-emulated-process-clocks
+          wasm=$(find "$RUNNER_TEMP/model-build" -name zerocon_model.wasm -type f -print -quit)
+          test -n "$wasm"
+          "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/llvm-objcopy" \
+            --strip-debug --remove-section=name "$wasm" dist/pages/zerocon_model.wasm
+
+          if command -v wasm-opt >/dev/null 2>&1; then
+            for target_wasm in dist/pages/zerocon_completion.wasm dist/pages/zerocon_model.wasm; do
+              wasm-opt -O3 --enable-simd --enable-bulk-memory --enable-nontrapping-float-to-int \
+                "$target_wasm" -o "${target_wasm}.opt" && mv "${target_wasm}.opt" "$target_wasm" || true
+            done
+          fi
+
+          dictionary=windows/server-swift/azooKey_dictionary_storage
+          node windows/scripts/generate-reverse-dictionary.mjs --source "$dictionary/Dictionary/louds" \
+            --output "$RUNNER_TEMP/reverse-v2.bin"
+          python3 web/pack-dictionary.py "$dictionary/Dictionary" dist/pages/dictionary.gz \
+            --reverse "$RUNNER_TEMP/reverse-v2.bin"
+          cp "$dictionary/LICENSE" dist/pages/DICTIONARY-LICENSE.txt
+          cp "$converter/LICENSE" dist/pages/CONVERTER-LICENSE.txt
+          cp "$RUNNER_TEMP/llama-source/LICENSE" dist/pages/LLAMA-LICENSE.txt
+
+          # Fetch latest default model directly from windows/deployment/model-catalog.json and write asset-manifest.json
+          python3 web/pack-model.py dist/pages --cache-dir "$RUNNER_TEMP/model-cache"
+          python3 web/pack-candidate-window.py dist/pages/candidate-window.html
+          python3 web/pack-reading-window.py dist/pages/reading-window.html
+
+          node --test --test-name-pattern='^(empty candidates|short candidate lists|long candidate lists|render ranges|render range|selection indices|selection scrolling)' windows/crates/ui/tests/candidate_scroller.test.cjs
+          (cd web && npm ci --ignore-scripts --no-audit)
+          cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages/wasi
+
+          # Verify Wasm engines before Cloudflare chunking
+          node web/check-model-wasm.mjs dist/pages
+          node web/check-model-assist.mjs dist/pages
+          node web/check-model-learning.mjs dist/pages
+
+          # Generate SHA-256 asset-manifest, split any >24 MiB files for Cloudflare Pages 25 MiB limit, and write _headers
+          python3 web/pack-cloudflare-assets.py dist/pages
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist/pages --project-name=zeroconvert-ime --branch=main

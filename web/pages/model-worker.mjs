@@ -111,7 +111,7 @@ loading.then(([request, live]) => {
     assist = assistIds(live);
     if (request.settings) settings = request.settings;
     learning = live.learning({ mode: settings.learning ?? 'enabled', target: false });
-    postMessage({ type: 'ready', state, assist, learning, settings });
+    postMessage({ type: 'ready', state, assist, learning, settings, modelMeta: request.modelMeta ?? null });
 }).catch(error => postMessage({ type: 'failed', message: error.message }));
 
 function autoCommit(request, live) {
@@ -297,7 +297,15 @@ function scheduleAssist(request, live, revision) {
             return;
         }
         started = performance.now();
-        assistTimer = setTimeout(show, waitMs);
+        const scheduleWait = () => {
+            const remaining = waitMs - Math.floor(performance.now() - started);
+            if (remaining > 0) {
+                assistTimer = setTimeout(scheduleWait, remaining);
+                return;
+            }
+            show();
+        };
+        assistTimer = setTimeout(scheduleWait, waitMs);
         if (plan.correction) void run(complete, 'correction', assist.typoCorrection);
         if (plan.prediction) void run(complete, 'prediction', assist.predictive);
     }, ASSIST_IDLE_MS);
@@ -308,6 +316,7 @@ self.addEventListener('message', async ({ data }) => {
     let { value } = data;
     try {
         const [request, live] = await loading;
+        const startedAt = performance.now();
         if (key === 'settings' && value) {
             invalidateAssist();
             const correction = value.correction !== false;
@@ -365,18 +374,26 @@ self.addEventListener('message', async ({ data }) => {
                 state = request('context', { value: '' });
                 committed = '';
                 live.reset();
-                if (typeof value !== 'string' || !/^[a-z]{1,32}$/u.test(value)) value = 'ashitanokaigi';
-            }
-            const op = key === 'appendKana' ? 'appendDirect' : 'append';
-            // Keep individual edits around a cursor split or where auto-commit
-            // can free capacity before the rest of the run is appended.
-            const canBatch = batch && key !== 'sample' && state.cursor === readingLength()
-                && inputLength() + value.length <= 256;
-            const edits = canBatch ? queuedAppends(value, key, request.autoCommit) : value;
-            for (const text of edits) {
-                if (inputLength() >= 256) break;
-                state = request(op, { value: text });
-                if (key !== 'sample') autoCommit(request, live);
+                if (typeof value !== 'string' || !/^[a-z]{1,64}$/u.test(value)) value = 'ashitanokaigi';
+                // Feed the entire sample in a single engine call instead of running
+                // neural conversion once per character.
+                state = request('append', { value });
+            } else {
+                const op = key === 'appendKana' ? 'appendDirect' : 'append';
+                // Keep individual edits around a cursor split or where auto-commit
+                // can free capacity before the rest of the run is appended.
+                const canBatch = batch && state.cursor === readingLength()
+                    && inputLength() + value.length <= 256;
+                const edits = canBatch ? [...queuedAppends(value, key, request.autoCommit)] : [...value];
+                const skipIntermediate = !canBatch && edits.length > 1;
+                for (let index = 0; index < edits.length; index++) {
+                    if (inputLength() >= 256) break;
+                    const text = edits[index];
+                    const isLast = index === edits.length - 1;
+                    const fields = skipIntermediate && !isLast ? { value: text, skipCandidates: true } : { value: text };
+                    state = request(op, fields);
+                    if (!skipIntermediate || isLast) autoCommit(request, live);
+                }
             }
         } else if (key === 'kanaModifier') {
             const previous = [...graphemes.segment(state.reading)][state.cursor - 1]?.segment;
@@ -467,7 +484,9 @@ self.addEventListener('message', async ({ data }) => {
             offered = [];
             primaryAssist = null;
         }
-        publishState('state', revision);
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        const measureLatency = ['append', 'appendKana', 'sample', 'backspace', 'delete', 'adjustClause'].includes(key);
+        publishState('state', revision, measureLatency ? { elapsedMs } : {});
         if (['append', 'appendKana', 'kanaModifier', 'sample', 'backspace', 'delete', 'left', 'right', 'autoApply'].includes(key)
             || (appliedCorrection && ['tab', 'select'].includes(key))) {
             scheduleAssist(request, live, revision);

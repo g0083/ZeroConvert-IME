@@ -12,6 +12,11 @@ const loader = document.querySelector('#loader');
 const retryModel = document.querySelector('#retry-model');
 const progressItems = new Map([...loader.querySelectorAll('[data-load-item]')]
     .map(item => [item.dataset.loadItem, item]));
+const progressModelLabel = document.querySelector('#progress-model-label');
+const heroModelBadge = document.querySelector('#hero-model-badge');
+const telemetryModel = document.querySelector('#telemetry-model');
+const telemetryLatency = document.querySelector('#telemetry-latency');
+const telemetryCache = document.querySelector('#telemetry-cache');
 const display = document.querySelector('#composition-display');
 const assistStatus = document.querySelector('#assist-status');
 const beforeCaret = document.querySelector('#composition-before');
@@ -30,7 +35,7 @@ const clearLearning = document.querySelector('#clear-learning');
 const learningStatus = document.querySelector('#learning-status');
 const worker = new Worker(new URL('./model-worker.mjs', import.meta.url), { type: 'module' });
 // Bound each worker task even if a long burst of typing is queued.
-const MAX_QUEUED_APPEND = 16;
+const MAX_QUEUED_APPEND = 64;
 // The Worker reports assist candidate identities and learning capabilities in
 // its ready message.
 let assistIds = {};
@@ -82,7 +87,7 @@ function formatBytes(bytes) {
     return `${byteFormat.format(bytes / 1024 ** 2)} MiB`;
 }
 
-function renderLoadProgress({ asset, phase, received, total }) {
+function renderLoadProgress({ asset, phase, received, total, cached }) {
     if (loader.dataset.state !== 'loading') return;
     const row = progressItems.get(asset);
     if (!row) return;
@@ -99,13 +104,15 @@ function renderLoadProgress({ asset, phase, received, total }) {
         }
     } else if (phase === 'downloaded') {
         bar.value = 1;
-        row.dataset.size = formatBytes(received);
-        const stage = { engine: '準備中', dictionary: '展開中', model: '取得完了' }[asset];
-        detail.textContent = `${stage} · ${row.dataset.size}`;
+        row.dataset.size = received ? formatBytes(received) : '';
+        const stage = cached
+            ? 'キャッシュから復元'
+            : { engine: '準備中', dictionary: '展開中', model: '取得完了' }[asset];
+        detail.textContent = row.dataset.size ? `${stage} · ${row.dataset.size}` : stage;
     } else if (phase === 'initializing') {
         bar.removeAttribute('value');
         detail.textContent = 'モデルを初期化中';
-        status.textContent = 'ファイルの取得が完了し、モデルを初期化しています。';
+        status.textContent = 'ファイルの準備が完了し、モデルを初期化しています。';
     } else if (phase === 'warmup') {
         detail.textContent = '試し変換中';
         status.textContent = '試し変換を行っています。完了すると入力できます。';
@@ -113,6 +120,33 @@ function renderLoadProgress({ asset, phase, received, total }) {
         bar.value = 1;
         detail.textContent = row.dataset.size ? `完了 · ${row.dataset.size}` : '完了';
     }
+}
+
+function renderModelMeta(meta) {
+    if (!meta) return;
+    if (meta.name) {
+        if (progressModelLabel) progressModelLabel.textContent = meta.name;
+        if (telemetryModel) telemetryModel.textContent = meta.name;
+        if (heroModelBadge) heroModelBadge.textContent = `${meta.name} 搭載 · オープンソース日本語 IME`;
+    }
+    if (telemetryCache) {
+        if (meta.cached) {
+            telemetryCache.textContent = 'キャッシュ起動';
+            telemetryCache.classList.add('is-fast');
+            telemetryCache.hidden = false;
+        } else if (meta.crossOriginIsolated) {
+            telemetryCache.textContent = 'COOP/COEP 有効';
+            telemetryCache.classList.add('is-fast');
+            telemetryCache.hidden = false;
+        }
+    }
+}
+
+function renderLatency(elapsedMs) {
+    if (!telemetryLatency || !Number.isFinite(elapsedMs)) return;
+    telemetryLatency.textContent = `変換 ${elapsedMs} ms`;
+    telemetryLatency.classList.toggle('is-fast', elapsedMs <= 60);
+    telemetryLatency.hidden = false;
 }
 
 function loadFailed(message) {
@@ -307,6 +341,7 @@ worker.addEventListener('message', ({ data }) => {
         for (const button of editorButtons) button.disabled = false;
         assistIds = data.assist ?? {};
         learning = data.learning ?? null;
+        renderModelMeta(data.modelMeta);
         settings = readSettings(localStorage, { ...data.settings, learning: learning?.mode ?? 'disabled', vibration: androidVibrationDefault });
         correctionSetting.checked = settings.correction;
         predictionSetting.checked = settings.prediction;
@@ -326,6 +361,7 @@ worker.addEventListener('message', ({ data }) => {
         // still require the displayed revision to match the latest input.
         ({ state, selection } = data);
         renderedRevision = data.revision;
+        renderLatency(data.elapsedMs);
         applyCommittedUpdate();
         render();
     } else if (data.type === 'settings') {
