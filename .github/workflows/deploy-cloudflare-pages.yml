@@ -52,24 +52,26 @@ jobs:
         run: |
           echo "dict_rev=$(git rev-parse HEAD:windows/server-swift/azooKey_dictionary_storage)" >> "$GITHUB_OUTPUT"
 
-      # --- Artifact-level caches (skip multi-minute C++/Swift/dictionary rebuilds when inputs haven't changed) ---
-      - name: Cache built llama.cpp completion Wasm
-        id: llama-cache
+      # --- Artifact-level caches ---
+      - name: Cache built multi-threaded Emscripten llama.cpp Wasm
+        id: llama-mt-cache
         uses: actions/cache@v4
         with:
           path: |
-            dist/pages-cache/zerocon_completion.wasm
+            dist/pages-cache/zerocon_llama_mt.mjs
+            dist/pages-cache/zerocon_llama_mt.wasm
+            dist/pages-cache/zerocon_llama_mt.worker.*
             dist/pages-cache/LLAMA-LICENSE.txt
-          key: zerocon-llama-wasm-v1-${{ hashFiles('windows/scripts/prepare-modern-llama.py', 'patches/llama.cpp/**', 'web/stage-llama.py', 'web/build-completion.py', 'web/completion.cpp', 'web/wasi-exceptions.c', 'engine/native/keyboard_assist.*', 'windows/native/keyboard-prior/**') }}
+          key: zerocon-llama-mt-v1-${{ hashFiles('windows/scripts/prepare-modern-llama.py', 'patches/llama.cpp/**', 'web/stage-llama.py', 'web/build-llama-mt.py', 'web/llama-mt-bridge.cpp', 'engine/native/keyboard_assist.*', 'windows/native/keyboard-prior/**') }}
 
-      - name: Cache built Swift model Wasm
+      - name: Cache built Swift model Wasm (bridged to MT llama)
         id: swift-model-cache
         uses: actions/cache@v4
         with:
           path: |
             dist/pages-cache/zerocon_model.wasm
             dist/pages-cache/CONVERTER-LICENSE.txt
-          key: zerocon-swift-model-wasm-v1-${{ hashFiles('engine/Package.resolved', 'windows/scripts/prepare-modern-llama.py', 'patches/llama.cpp/**', 'windows/server-swift/Sources/azookey-server/**', 'windows/server-swift/Sources/ffi/**', 'web/stage-dictionary.py', 'web/ModelBridge.swift', 'web/WasiDispatchShim.swift', 'web/wasi-exceptions.c') }}
+          key: zerocon-swift-model-mt-v1-${{ hashFiles('engine/Package.resolved', 'windows/scripts/prepare-modern-llama.py', 'patches/llama.cpp/**', 'windows/server-swift/Sources/azookey-server/**', 'windows/server-swift/Sources/ffi/**', 'web/stage-dictionary.py', 'web/ModelBridge.swift', 'web/WasiDispatchShim.swift', 'web/wasi-llama-bridge.c') }}
 
       - name: Cache packed dictionary
         id: dict-cache
@@ -88,17 +90,25 @@ jobs:
           path: ${{ runner.temp }}/model-cache
           key: zerocon-model-gguf-v1-${{ hashFiles('windows/deployment/model-catalog.json', 'windows/deployment/settings.json') }}
 
-      # --- Only fetch Swift SDK & binaryen when llama or Swift Wasm needs rebuilding ---
+      # --- Setup Emscripten only when MT llama needs rebuilding ---
+      - name: Setup Emscripten SDK
+        if: steps.llama-mt-cache.outputs.cache-hit != 'true'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: '3.1.74'
+          actions-cache-folder: 'emsdk-cache'
+
+      # --- Setup Swift WASI SDK only when Swift model Wasm needs rebuilding ---
       - name: Restore or fetch Swift 6.4.2 and WASI SDK
         id: swift-cache
-        if: steps.llama-cache.outputs.cache-hit != 'true' || steps.swift-model-cache.outputs.cache-hit != 'true'
+        if: steps.swift-model-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/zerocon-swift
           key: zerocon-swift-6.4.2-ubuntu2204-wasip1
 
       - name: Install Swift and WASI SDK
-        if: (steps.llama-cache.outputs.cache-hit != 'true' || steps.swift-model-cache.outputs.cache-hit != 'true') && steps.swift-cache.outputs.cache-hit != 'true'
+        if: steps.swift-model-cache.outputs.cache-hit != 'true' && steps.swift-cache.outputs.cache-hit != 'true'
         run: |
           swift_root="$RUNNER_TEMP/zerocon-swift"
           mkdir -p "$swift_root"
@@ -113,7 +123,7 @@ jobs:
           rm -f swift-linux.tar.gz swift-wasm.tar.gz
 
       - name: Install wasm-opt (binaryen) if available
-        if: steps.llama-cache.outputs.cache-hit != 'true' || steps.swift-model-cache.outputs.cache-hit != 'true'
+        if: steps.swift-model-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends binaryen || true
@@ -141,50 +151,29 @@ jobs:
           cp web/live-policy/target/wasm32-wasip1/release/zerocon_web_live_policy.wasm dist/pages/
           cp windows/LICENSE dist/pages/LICENSE.txt
 
-      - name: Build the pinned llama.cpp for WASI (O3 + SIMD128)
-        if: steps.llama-cache.outputs.cache-hit != 'true' || steps.swift-model-cache.outputs.cache-hit != 'true'
+      - name: Stage llama.cpp sources (when MT llama or Swift model needs rebuilding)
+        if: steps.llama-mt-cache.outputs.cache-hit != 'true' || steps.swift-model-cache.outputs.cache-hit != 'true'
         run: |
-          swift_root="$RUNNER_TEMP/zerocon-swift"
-          bin="$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin"
-          sdk="$swift_root/swift-6.4.2-RELEASE_wasm.artifactbundle/swift-6.4.2-RELEASE_wasm/wasm32-unknown-wasip1/WASI.sdk"
-          python3 web/stage-llama.py "$RUNNER_TEMP/llama-source" --windows-source "$RUNNER_TEMP/llama-windows-source"
-          flags='-O3 -msimd128 -mbulk-memory -mnontrapping-fptoint -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS'
-          cmake -G Ninja -S "$RUNNER_TEMP/llama-source" -B "$RUNNER_TEMP/llama-build" \
-            -DCMAKE_SYSTEM_NAME=WASI -DCMAKE_SYSTEM_PROCESSOR=wasm32 \
-            -DCMAKE_C_COMPILER_TARGET=wasm32-wasip1 -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip1 \
-            -DCMAKE_SYSROOT="$sdk" -DCMAKE_C_COMPILER="$bin/clang" -DCMAKE_CXX_COMPILER="$bin/clang++" \
-            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_RPC=OFF \
-            -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_IS_DEV=OFF
-          cmake --build "$RUNNER_TEMP/llama-build" --target llama --parallel 4
-          if [ "${{ steps.llama-cache.outputs.cache-hit }}" != "true" ]; then
-            python3 web/build-completion.py "$bin" "${sdk%/WASI.sdk}" \
-              "$RUNNER_TEMP/llama-source" "$RUNNER_TEMP/llama-build" dist/pages-cache/zerocon_completion.wasm
-            if command -v wasm-opt >/dev/null 2>&1; then
-              wasm-opt -O3 --enable-simd --enable-bulk-memory --enable-nontrapping-float-to-int \
-                dist/pages-cache/zerocon_completion.wasm -o dist/pages-cache/zerocon_completion.wasm.opt \
-                && mv dist/pages-cache/zerocon_completion.wasm.opt dist/pages-cache/zerocon_completion.wasm || true
-            fi
-            cp "$RUNNER_TEMP/llama-source/LICENSE" dist/pages-cache/LLAMA-LICENSE.txt
-          fi
+          python3 web/stage-llama.py "$RUNNER_TEMP/llama-source" --windows-source "$RUNNER_TEMP/llama-windows-source" --for-emscripten
 
-      - name: Build the Swift model Wasm
+      - name: Build multi-threaded Emscripten llama.cpp (pthreads + SIMD128 + O3)
+        if: steps.llama-mt-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 web/build-llama-mt.py "$RUNNER_TEMP/llama-source" "$RUNNER_TEMP/llama-mt-build" dist/pages-cache/zerocon_llama_mt.mjs --pool-size 4
+          cp "$RUNNER_TEMP/llama-source/LICENSE" dist/pages-cache/LLAMA-LICENSE.txt
+
+      - name: Build Swift model Wasm (bridged to MT llama)
         if: steps.swift-model-cache.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
           swift_root="$RUNNER_TEMP/zerocon-swift"
           converter=$(python3 windows/scripts/prepare-modern-llama.py --converter-only | python3 -c 'import json,sys; print(json.load(sys.stdin)["converter"])')
-          python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/model-source" --llama-source "$RUNNER_TEMP/llama-source"
-          llama_lib="$RUNNER_TEMP/llama-build"
+          python3 web/stage-dictionary.py "$converter" "$RUNNER_TEMP/model-source" --llama-source "$RUNNER_TEMP/llama-source" --llama-bridge
           "$swift_root/swift-6.4.2-RELEASE-ubuntu22.04/usr/bin/swift" build -c release \
             --swift-sdks-path "$swift_root" --swift-sdk swift-6.4.2-RELEASE_wasm \
             --package-path "$RUNNER_TEMP/model-source/app" --scratch-path "$RUNNER_TEMP/model-build" \
             -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor \
             -Xlinker --export=malloc -Xlinker --export=free -Xlinker --export=zerocon_model_request \
-            -Xlinker "-L$llama_lib/src" -Xlinker "-L$llama_lib/ggml/src" \
-            -Xlinker -lggml-cpu -Xlinker -lc++ -Xlinker -lc++abi \
             -Xlinker -lwasi-emulated-signal -Xlinker -lwasi-emulated-mman -Xlinker -lwasi-emulated-process-clocks
           wasm=$(find "$RUNNER_TEMP/model-build" -name zerocon_model.wasm -type f -print -quit)
           test -n "$wasm"
@@ -210,7 +199,9 @@ jobs:
 
       - name: Assemble site, fetch latest catalog model, verify, and optimize for Cloudflare Pages
         run: |
-          cp dist/pages-cache/zerocon_completion.wasm dist/pages/
+          cp dist/pages-cache/zerocon_llama_mt.mjs dist/pages/
+          cp dist/pages-cache/zerocon_llama_mt.wasm dist/pages/
+          cp dist/pages-cache/zerocon_llama_mt.worker.* dist/pages/ 2>/dev/null || true
           cp dist/pages-cache/zerocon_model.wasm dist/pages/
           cp dist/pages-cache/dictionary.gz dist/pages/
           cp dist/pages-cache/reverse-v2.bin.gz dist/pages/
@@ -227,12 +218,12 @@ jobs:
           (cd web && npm ci --ignore-scripts --no-audit)
           cp -R web/node_modules/@bjorn3/browser_wasi_shim dist/pages/wasi
 
-          # Verify Wasm engines before Cloudflare gzip/chunking
+          # Verify multi-threaded Wasm engines before Cloudflare gzip/chunking
           node web/check-model-wasm.mjs dist/pages
           node web/check-model-assist.mjs dist/pages
           node web/check-model-learning.mjs dist/pages
 
-          # Gzip large Wasm, generate SHA-256 asset-manifest, split any >24 MiB files, and write _headers
+          # Gzip large Wasm, generate SHA-256 asset-manifest, split any >24 MiB files, and write COOP/COEP _headers
           python3 web/pack-cloudflare-assets.py dist/pages
 
       - name: Deploy to Cloudflare Pages

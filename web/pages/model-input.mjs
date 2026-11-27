@@ -130,12 +130,11 @@ function renderModelMeta(meta) {
         if (heroModelBadge) heroModelBadge.textContent = `${meta.name} 搭載 · オープンソース日本語 IME`;
     }
     if (telemetryCache) {
-        if (meta.cached) {
-            telemetryCache.textContent = 'キャッシュ起動';
-            telemetryCache.classList.add('is-fast');
-            telemetryCache.hidden = false;
-        } else if (meta.crossOriginIsolated) {
-            telemetryCache.textContent = 'COOP/COEP 有効';
+        const parts = [];
+        if (meta.threads > 1) parts.push(`${meta.threads} スレッド並列`);
+        if (meta.cached) parts.push('キャッシュ起動');
+        if (parts.length) {
+            telemetryCache.textContent = parts.join(' · ');
             telemetryCache.classList.add('is-fast');
             telemetryCache.hidden = false;
         }
