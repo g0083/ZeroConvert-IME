@@ -19,7 +19,7 @@
 | [local-installer.md](local-installer.md) | 共通配布パッケージ、試験環境適用、Inno Setup インストーラー作成の詳細 |
 | [windows-conversion-logic.md](windows-conversion-logic.md) | Windows 版の入力 → 変換 → 表示 → 確定・アシストの層別解説 |
 | [english-completion.md](english-completion.md) | 英字モードの単語補完と Windows/Android 共有学習の仕様 |
-| [model-assets.md](model-assets.md) | ZeroCon Model（Nano / Standard v4.2 4種・同梱せず取得）・バックエンド・翻訳モデル配置 |
+| [model-assets.md](model-assets.md) | ZeroCon Model（Nano / Standard v4.2b 4種・同梱せず取得）・バックエンド・翻訳モデル配置 |
 | [dictionary-assets.md](dictionary-assets.md) | 日本語辞書（azooKey標準辞書＋追加辞書）の実行時取得・配置・初回起動ゲート |
 
 ## Android・共有エンジン開発

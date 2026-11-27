@@ -406,7 +406,7 @@ fun MainScreen(
     var englishDictionaryProgress by remember { mutableStateOf<EnglishDictionaryManager.Progress?>(null) }
     var englishDictionaryError by remember { mutableStateOf<String?>(null) }
     var englishDictionaryJob by remember { mutableStateOf<Job?>(null) }
-    // 変換モデルはキャッシュに無い場合だけ取得する。Nano v4.2 IQ4_emb8 は必須で、
+    // 変換モデルはキャッシュに無い場合だけ取得する。Nano v4.2b IQ4_emb8 は必須で、
     // 無い間はかな漢字変換レベルの候補化が止まるため、英字辞書と同じく初回表示する。
     var mandatoryModelReady by remember {
         mutableStateOf(
@@ -658,7 +658,7 @@ fun MainScreen(
             ConversionModelDownloadManager.discardPart(context, spec)
             availableModels = ModelManager.getAvailableModels(context)
             if (wasSelected) {
-                // 必須モデル（Nano v4.2 IQ4_emb8）の選択へ落とす。
+                // 必須モデル（Nano v4.2b IQ4_emb8）の選択へ落とす。
                 val mandatoryFile = ConversionModelDownloadManager.modelFile(context, ModelManager.DEFAULT_MODEL_SPEC)
                 if (mandatoryFile.isFile) {
                     coroutineScope.launch {
@@ -2270,7 +2270,7 @@ fun MainScreen(
                     }
                 }
                 Text(
-                    text = "ZeroCon Model Nano v4.2 によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
+                    text = "ZeroCon Model Nano v4.2b によるかな漢字変換と、メインモデル統合のタイポ補正を搭載しています。",
                     color = palette.textMuted,
                     fontSize = 12.sp,
                     lineHeight = 17.sp
@@ -2726,8 +2726,8 @@ private fun setupRequirements(
     englishError: String?
 ): List<SetupRequirement> = listOf(
     SetupRequirement(
-        label = "変換モデル（ZeroCon Model Nano v4.2）",
-        detail = "約18.7MB · 文脈に応じた漢字選択に使います",
+        label = "変換モデル（ZeroCon Model Nano v4.2b）",
+        detail = "約15.6MB · 文脈に応じた漢字選択に使います",
         ready = mandatoryModelReady,
         progress = modelProgress?.fraction,
         error = modelError

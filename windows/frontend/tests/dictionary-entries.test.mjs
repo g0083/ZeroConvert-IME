@@ -73,9 +73,10 @@ test("load normalization accepts missing dictionaries and filters malformed rows
 });
 
 
-test("legacy entries default to proper noun and all five POS presets round-trip", () => {
+test("legacy entries default to proper noun and all shared POS presets round-trip", () => {
     assert.deepEqual(normalizeDictionaryEntries([{ reading: "よみ", word: "単語" }]), [entry()]);
-    const presets = ["proper_noun", "common_noun", "sahen_noun", "shortcut", "symbol"];
+    const presets = ["common_noun", "proper_noun", "personal_name", "family_name", "given_name",
+        "organization", "place_name", "sahen_noun", "symbol", "shortcut"];
     assert.deepEqual(Object.keys(DICTIONARY_POS), presets);
     const draft = presets.map((pos, index) => entry(`よみ${index}`, "別", pos));
     assert.deepEqual(validateDictionaryEntries(draft), { entries: draft, errors: presets.map(() => ({})) });

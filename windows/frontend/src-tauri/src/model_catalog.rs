@@ -16,32 +16,32 @@ struct Choice {
 
 const CHOICES: [Choice; 4] = [
     Choice {
-        id: "nano_v4_2_iq4_emb8",
-        name: "ZeroCon Model Nano v4.2 IQ4_emb8",
+        id: "nano_v4_2b_iq4_emb8",
+        name: "ZeroCon Model Nano v4.2b IQ4_emb8",
         filename: shared::runtime_assets::NANO_IQ4,
-        legacy: "nano-v4-cap-nam-r6-iq4nl-emb8.gguf",
-        description: "省メモリ · IQ4_NL / 入出力Q8_0 · 18.7 MiB · 強制",
+        legacy: "nano-v43-superdistill-iq4nl-emb8.gguf",
+        description: "省メモリ · IQ4_NL / 入出力Q8_0 · 15.6 MiB",
     },
     Choice {
-        id: "nano_v4_2_q8",
-        name: "ZeroCon Model Nano v4.2 Q8",
+        id: "nano_v4_2b_q8",
+        name: "ZeroCon Model Nano v4.2b Q8",
         filename: shared::runtime_assets::NANO_Q8,
-        legacy: "nano-v4-cap-nam-r6-q8_0.gguf",
-        description: "高精度 · Q8_0 · 27.7 MiB",
+        legacy: "nano-v43-superdistill-q8_0.gguf",
+        description: "高精度 · Q8_0 · 24.6 MiB",
     },
     Choice {
-        id: "standard_v4_2_iq4_emb8",
-        name: "ZeroCon Model Standard v4.2 IQ4_emb8",
+        id: "standard_v4_2b_iq4_emb8",
+        name: "ZeroCon Model Standard v4.2b IQ4_emb8",
         filename: shared::runtime_assets::STANDARD_IQ4,
-        legacy: "standard-v4-cap-nam-r6-iq4nl-emb8.gguf",
-        description: "中規模 · IQ4_NL / 入出力Q8_0 · 58.5 MiB",
+        legacy: "std-v43b-purekl-iq4nl-emb8.gguf",
+        description: "中規模 · IQ4_NL / 入出力Q8_0 · 53.9 MiB · 必須",
     },
     Choice {
-        id: "standard_v4_2_q8",
-        name: "ZeroCon Model Standard v4.2 Q8",
+        id: "standard_v4_2b_q8",
+        name: "ZeroCon Model Standard v4.2b Q8",
         filename: shared::runtime_assets::STANDARD_Q8,
-        legacy: "standard-v4-cap-nam-r6-q8_0.gguf",
-        description: "中規模 · Q8_0 · 99.0 MiB",
+        legacy: "std-v43b-purekl-q8_0.gguf",
+        description: "中規模 · Q8_0 · 94.4 MiB",
     },
 ];
 

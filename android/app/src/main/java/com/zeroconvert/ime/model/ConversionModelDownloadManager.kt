@@ -19,7 +19,7 @@ import kotlin.coroutines.coroutineContext
  * (~171 MiB total): only a verified cache in `files/models/` is used, and
  * missing files are fetched from the pinned GitHub release assets with
  * size + SHA-256 verification, mirroring the English dictionary download.
- * The mandatory Nano v4.2 IQ4_emb8 is required for conversion.
+ * The mandatory Nano v4.2b IQ4_emb8 is required for conversion.
  */
 object ConversionModelDownloadManager {
     private const val TAG = "ConversionModelDownload"

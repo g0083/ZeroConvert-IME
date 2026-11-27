@@ -85,7 +85,12 @@ def main():
     settings = json.loads((deployment / "settings.json").read_text(encoding="utf-8"))
     zenzai = settings["zenzai"]
     catalog = json.loads((deployment / "model-catalog.json").read_text(encoding="utf-8"))
-    model = next(row for row in catalog["models"] if row["id"] == zenzai["model"])
+    # Browser demo stays under the Cloudflare Pages 25 MiB asset limit by using Nano IQ4_emb8.
+    model = next(
+        row
+        for row in catalog["models"]
+        if row["id"].startswith("nano_") and row["id"].endswith("_iq4_emb8")
+    )
 
     if args.model_file:
         payload = args.model_file.read_bytes()
@@ -98,7 +103,7 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / model["filename"]).write_bytes(payload)
-    zenzai.update(backend="cpu", gpu_layers=0)
+    zenzai.update(backend="cpu", gpu_layers=0, model=model["id"])
     settings["learning"]["mode"] = "disabled"
     (output_dir / "ime-settings.json").write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
 

@@ -864,7 +864,7 @@ mod tests {
             decode_threads: 4,
             batch_threads: Some(6),
             direct_model_first: true,
-            model_id: "nano_v4_2_iq4_emb8".into(),
+            model_id: "nano_v4_2b_iq4_emb8".into(),
             topology_signature: "win32_processor_info:16:8:0=8".into(),
         });
         let with_tuning = serde_json::to_string(&restored).unwrap();

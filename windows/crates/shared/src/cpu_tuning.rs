@@ -628,22 +628,22 @@ mod tests {
     #[test]
     fn tuning_validity_requires_current_version_topology_and_canonical_model() {
         let legacy: CpuRuntimeTuningConfig = serde_json::from_str(
-            r#"{"decode_threads":4,"batch_threads":6,"direct_model_first":true,"model_id":"nano_v4_2_iq4_emb8","topology_signature":"win32_processor_info:20:14:1=6+0=8"}"#,
+            r#"{"decode_threads":4,"batch_threads":6,"direct_model_first":true,"model_id":"nano_v4_2b_iq4_emb8","topology_signature":"win32_processor_info:20:14:1=6+0=8"}"#,
         )
         .unwrap();
         assert_eq!(legacy.tuning_version, 0);
-        assert!(!legacy.is_valid_for("nano_v4_2_iq4_emb8", "win32_processor_info:20:14:1=6+0=8"));
+        assert!(!legacy.is_valid_for("nano_v4_2b_iq4_emb8", "win32_processor_info:20:14:1=6+0=8"));
 
         let current = CpuRuntimeTuningConfig {
             tuning_version: CURRENT_TUNING_VERSION,
             decode_threads: 4,
             batch_threads: Some(6),
             direct_model_first: true,
-            model_id: "standard_v4_2".into(),
+            model_id: "standard_v4_2b".into(),
             topology_signature: "win32_processor_info:20:14:1=6+0=8".into(),
         };
-        assert!(current.is_valid_for("standard_v4_2_q8", "win32_processor_info:20:14:1=6+0=8"));
-        assert!(!current.is_valid_for("nano_v4_2_iq4_emb8", "win32_processor_info:20:14:1=6+0=8"));
-        assert!(!current.is_valid_for("standard_v4_2_q8", "win32_processor_info:16:8:0=8"));
+        assert!(current.is_valid_for("standard_v4_2b_q8", "win32_processor_info:20:14:1=6+0=8"));
+        assert!(!current.is_valid_for("nano_v4_2b_iq4_emb8", "win32_processor_info:20:14:1=6+0=8"));
+        assert!(!current.is_valid_for("standard_v4_2b_q8", "win32_processor_info:16:8:0=8"));
     }
 }

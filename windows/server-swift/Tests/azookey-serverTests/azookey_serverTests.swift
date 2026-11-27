@@ -4110,7 +4110,7 @@ private func testCandidate(
     let modelURL = packageRoot
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2b-iq4nl-emb8.gguf")
     try #require(FileManager.default.fileExists(atPath: modelURL.path(percentEncoded: false)))
 
     let dictionaryURL = packageRoot.appending(path: "azooKey_dictionary_storage/Dictionary")
@@ -4158,7 +4158,7 @@ private func testCandidate(
         .deletingLastPathComponent()
     let envModel = ProcessInfo.processInfo.environment["ZEROCON_TYPO_EVALUATION_MODEL"]
         .flatMap { $0.isEmpty ? nil : URL(filePath: $0) }
-    let defaultModel = repoRoot.appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
+    let defaultModel = repoRoot.appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2b-iq4nl-emb8.gguf")
     let modelURL = [envModel, defaultModel].compactMap { $0 }.first {
         FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
     }
@@ -4224,7 +4224,7 @@ private func testCandidate(
         ("２０２６ねん", ["2026年", "２０２６年"]),
         ("3かいだて", ["3階建て", "3階建"]),
         ("2027ねんどのよさん", ["2027年度の予算"]),
-        ("3ぼんまとめてもつ", ["3本まとめて持つ"]),
+        ("3ぼんまとめてもつ", ["3本まとめて持つ", "3本まとめてもつ"]),
         ("１００えんのあめ", ["100円の飴", "１００円の飴", "100円の雨", "１００円の雨"]),
         ("3にちのよてい", ["3日の予定"]),
         ("なまえをかく", ["名前を書く"]),
@@ -4597,7 +4597,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 @MainActor @Test func zenzaiRanksDictionarySuffixWhenPrefixReviewExhaustsInference() throws {
     let package = packageRootURL()
     let model = package.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2b-iq4nl-emb8.gguf")
     try #require(FileManager.default.fileExists(atPath: model.path))
     let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
     let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
@@ -4606,8 +4606,8 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     let supplement = KanaKanjiConverter(dicdataStore: store)
 
     for (reading, context, acceptable) in [
-        ("ぬるぽんえっくすをきどうする", "架空の名称を含む。", ["ぬるぽんえっくすを起動する"]),
-        ("ぬるぽんえっくすをきどうする", "", ["ぬるぽんえっくすを起動する"]),
+        ("ぬるぽんえっくすをきどうする", "架空の名称を含む。", ["ぬるぽんえっくすを起動する", "ヌルポンXを起動する", "ヌルポンエックスを起動する"]),
+        ("ぬるぽんえっくすをきどうする", "", ["ぬるぽんえっくすを起動する", "ヌルポンXを起動する", "ヌルポンエックスを起動する"]),
         ("あぷりをきどうする", "", ["アプリを起動する"]),
         ("きょうせいしっこうのもうしたて", "", ["強制執行の申立て"]),
         ("しんらばんしょうのことわり", "宇宙空間に存在するあらゆる物質や自然現象の法則を解き明かそうと研究に没頭する。", ["森羅万象の理"]),
@@ -4640,7 +4640,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 @MainActor @Test func modelFirstAndPreparedUserDictionaryRegressionsWithRealNanoV41() throws {
     let packageRoot = packageRootURL()
     let model = packageRoot.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2b-iq4nl-emb8.gguf")
     try #require(FileManager.default.fileExists(atPath: model.path))
     let emoji = packageRoot.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
     try withDictionaryLearningState { directory, _ in
@@ -4690,7 +4690,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 @MainActor @Test func parallelModelFirstExecutionProtectsUserDictAndLearningAndFixesPercentHalfwidth() throws {
     let package = packageRootURL()
     let model = package.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-q8_0.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2b-q8_0.gguf")
     try #require(FileManager.default.fileExists(atPath: model.path))
     let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
     let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")
@@ -4884,7 +4884,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         "decode_threads": 4,
         "batch_threads": 6,
         "direct_model_first": false,
-        "model_id": "nano_v4_2_iq4_emb8",
+        "model_id": "nano_v4_2b_iq4_emb8",
         "tuning_version": 2
     }
     """.utf8)
@@ -4892,14 +4892,14 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     #expect(fullDecoded.decode_threads == 4)
     #expect(fullDecoded.batch_threads == 6)
     #expect(!fullDecoded.direct_model_first)
-    #expect(fullDecoded.model_id == "nano_v4_2_iq4_emb8")
+    #expect(fullDecoded.model_id == "nano_v4_2b_iq4_emb8")
     #expect(fullDecoded.tuning_version == 2)
 
     let omittedBatchJSON = Data("""
     {
         "decode_threads": 2,
         "direct_model_first": true,
-        "model_id": "standard_v4_2"
+        "model_id": "standard_v4_2b"
     }
     """.utf8)
     let omittedBatchDecoded = try JSONDecoder().decode(CpuRuntimeTuningSettings.self, from: omittedBatchJSON)
@@ -4907,9 +4907,10 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     #expect(omittedBatchDecoded.batch_threads == nil)
     #expect(omittedBatchDecoded.direct_model_first)
     #expect(omittedBatchDecoded.tuning_version == nil)
-    #expect(canonicalZenzaiModelId(omittedBatchDecoded.model_id) == "standard_v4_2_q8")
-    #expect(canonicalZenzaiModelId(nil) == "standard_v4_2_iq4_emb8")
-    #expect(canonicalZenzaiModelId("nano_v4_2_iq4_emb8") == "nano_v4_2_iq4_emb8")
+    #expect(canonicalZenzaiModelId(omittedBatchDecoded.model_id) == "standard_v4_2b_q8")
+    #expect(canonicalZenzaiModelId("standard_v4_2") == "standard_v4_2b_q8")
+    #expect(canonicalZenzaiModelId(nil) == "standard_v4_2b_iq4_emb8")
+    #expect(canonicalZenzaiModelId("nano_v4_2b_iq4_emb8") == "nano_v4_2b_iq4_emb8")
 
     #if os(Windows)
     let savedConfig = config
@@ -4920,12 +4921,12 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     }
 
     config["backend"] = "cpu"
-    config["model"] = "standard_v4_2_q8"
+    config["model"] = "standard_v4_2b_q8"
     config["cpuRuntimeTuning"] = CpuRuntimeTuningSettings(
         decode_threads: 4,
         batch_threads: 6,
         direct_model_first: true,
-        model_id: "standard_v4_2",
+        model_id: "standard_v4_2b",
         tuning_version: expectedWindowsCpuTuningVersion
     )
     configureEngineRuntime(zenzaiEnabled: true)
@@ -4937,7 +4938,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         decode_threads: 4,
         batch_threads: 6,
         direct_model_first: true,
-        model_id: "standard_v4_2",
+        model_id: "standard_v4_2b",
         tuning_version: nil
     )
     configureEngineRuntime(zenzaiEnabled: true)
@@ -4947,7 +4948,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         decode_threads: 4,
         batch_threads: 6,
         direct_model_first: true,
-        model_id: "standard_v4_2",
+        model_id: "standard_v4_2b",
         tuning_version: 1
     )
     configureEngineRuntime(zenzaiEnabled: true)
@@ -4957,7 +4958,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
         decode_threads: 4,
         batch_threads: 6,
         direct_model_first: true,
-        model_id: "standard_v4_2",
+        model_id: "standard_v4_2b",
         tuning_version: expectedWindowsCpuTuningVersion
     )
     config["backend"] = "vulkan"
@@ -4965,11 +4966,11 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
     #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
 
     config["backend"] = "cpu"
-    config["model"] = "nano_v4_2_iq4_emb8"
+    config["model"] = "nano_v4_2b_iq4_emb8"
     configureEngineRuntime(zenzaiEnabled: true)
     #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
 
-    config["model"] = "standard_v4_2_q8"
+    config["model"] = "standard_v4_2b_q8"
     configureEngineRuntime(zenzaiEnabled: false)
     #expect(lastAppliedWindowsCpuRuntimeTuning == nil)
     #endif
@@ -4978,7 +4979,7 @@ private func largeDictionaryFixture() -> [UserDictionaryEntry] {
 @MainActor @Test func parallelModelFirstPiggybacksAndSkipsLongPredictionContinuation() throws {
     let package = packageRootURL()
     let model = package.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2-q8_0.gguf")
+        .appending(path: "artifacts/models/zerocon/zerocon-nano-v4.2b-q8_0.gguf")
     try #require(FileManager.default.fileExists(atPath: model.path))
     let dictionary = package.appending(path: "azooKey_dictionary_storage/Dictionary")
     let emoji = package.appending(path: "azooKey_emoji_dictionary_storage/EmojiDictionary/emoji_all_E15.1.txt")

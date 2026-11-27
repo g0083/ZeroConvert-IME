@@ -61,7 +61,7 @@ CPU/Vulkanエンジン、VC++ DLL、存在すればplutilだけをコピーし�
 
 - 登録用の64/32ビットDLL、server、UI、launcher、設定UI、`keyboard-prior.exe`。
 - Swift等のランタイムDLL、辞書、絵文字辞書、逆引き辞書。
-- CPU/Vulkanエンジン（`llama_cpu/`・`llama_vulkan/`）と、`windows/deployment/model-catalog.json` に定義された `models/zerocon-nano-v4.2-iq4nl-emb8.gguf`・`zerocon-nano-v4.2-q8_0.gguf` の2モデル。CUDA・LFM・旧名モデル・翻訳モデル（設定画面からオンデマンド取得）・ルートの `zenz.gguf` は含めない。
+- CPU/Vulkanエンジン（`llama_cpu/`・`llama_vulkan/`）と、オンデマンド取得対象の `windows/deployment/model-catalog.json` に定義された ZeroCon Model v4.2b 4モデル（インストーラーへは未同梱）。CUDA・LFM・旧名モデル・翻訳モデル（設定画面からオンデマンド取得）・ルートの `zenz.gguf` は含めない。
 - `windows/deployment/` の配布スクリプト・ライセンス・初期設定。
 
 個人の `%APPDATA%/Azookey/` は読まない。入力履歴・学習データ・個人設定は含まない。バックアップ・一時ファイル・ログも梱包対象外。初期設定には `windows/deployment/settings.json` を使い、インストール先に既存設定がある場合は保持する。

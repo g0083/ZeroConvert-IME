@@ -285,8 +285,8 @@ fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
     for candidate in [
         root.join("models").join(filename),
         shared::runtime_assets::model_download_root().join(filename),
-        root.join("models/zerocon-nano-v4.2-iq4nl-emb8.gguf"),
-        root.join("models/zerocon-nano-v4.2-q8_0.gguf"),
+        root.join("models/zerocon-nano-v4.2b-iq4nl-emb8.gguf"),
+        root.join("models/zerocon-nano-v4.2b-q8_0.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -299,8 +299,8 @@ fn resolve_active_model(root: &Path, selected_id: &str) -> Option<PathBuf> {
         repo_root
             .join("ZeroConvertIME-windows/models")
             .join(filename),
-        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf"),
-        repo_root.join("artifacts/models/zerocon-nano-v4.2-iq4nl-emb8.gguf"),
+        repo_root.join("artifacts/models/zerocon/zerocon-nano-v4.2b-iq4nl-emb8.gguf"),
+        repo_root.join("artifacts/models/zerocon-nano-v4.2b-iq4nl-emb8.gguf"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
@@ -1072,50 +1072,50 @@ mod deployment_tests {
 
         let (default_model, _, _) = resolve_runtime_preferences_from_str("{}");
         assert_eq!(default_model, shared::runtime_assets::default_model());
-        assert_eq!(default_model, "standard_v4_2_iq4_emb8");
+        assert_eq!(default_model, "standard_v4_2b_iq4_emb8");
 
         let (parsed_model, parsed_backend, parsed_layers) = resolve_runtime_preferences_from_str(
-            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_2_q8"}}"#,
+            r#"{"zenzai":{"backend":"cuda","gpu_layers":16,"model":"nano_v4_2b_q8"}}"#,
         );
-        assert_eq!(parsed_model, "nano_v4_2_q8");
+        assert_eq!(parsed_model, "nano_v4_2b_q8");
         assert_eq!(parsed_backend, "vulkan");
         assert_eq!(parsed_layers, 16);
 
         let tuned_json = r#"{
             "zenzai": {
                 "backend": "cpu",
-                "model": "nano_v4_2_iq4_emb8",
+                "model": "nano_v4_2b_iq4_emb8",
                 "cpu_runtime_tuning": {
                     "tuning_version": 2,
-                    "model_id": "nano_v4_2_iq4_emb8",
+                    "model_id": "nano_v4_2b_iq4_emb8",
                     "decode_threads": 4,
                     "batch_threads": 6
                 }
             }
         }"#;
         assert_eq!(
-            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2_iq4_emb8", "cpu"),
+            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2b_iq4_emb8", "cpu"),
             (Some(4), Some(6))
         );
         assert_eq!(
-            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2_q8", "cpu"),
+            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2b_q8", "cpu"),
             (None, None)
         );
         assert_eq!(
-            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2_iq4_emb8", "vulkan"),
+            resolve_cpu_tuning_threads_from_str(tuned_json, "nano_v4_2b_iq4_emb8", "vulkan"),
             (None, None)
         );
         let legacy_json = r#"{
             "zenzai": {
                 "cpu_runtime_tuning": {
                     "tuning_version": 1,
-                    "model_id": "nano_v4_2_iq4_emb8",
+                    "model_id": "nano_v4_2b_iq4_emb8",
                     "decode_threads": 4
                 }
             }
         }"#;
         assert_eq!(
-            resolve_cpu_tuning_threads_from_str(legacy_json, "nano_v4_2_iq4_emb8", "cpu"),
+            resolve_cpu_tuning_threads_from_str(legacy_json, "nano_v4_2b_iq4_emb8", "cpu"),
             (None, None)
         );
 

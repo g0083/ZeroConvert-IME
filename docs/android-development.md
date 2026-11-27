@@ -102,7 +102,7 @@ JDK 17、上表のSDK/NDK/CMake、Gradle wrapperを使う。SDKのPC固有パス
 
 llama.cppはルートのgitlinkで固定し、独自変更は `patches/llama.cpp/` と [setupスクリプト](../scripts/setup-dependencies.ps1) で管理する。依存ソースやビルド出力を直接書き換えて済ませない。
 
-変換モデル（Nano / Standard v4.2、IQ4_emb8 / Q8 の4種）はAPKに同梱しない。設定画面で `files/models/` のキャッシュを確認し、不足分だけ GitHub リリース `models-v4.2` の固定アセット（`windows/deployment/model-catalog.json` が正本、取得コードは `model/ConversionModelDownloadManager.kt`）からダウンロードして検証する。Nano v4.2 IQ4_emb8 は強制で、初回起動時に取得を案内する（無い間は辞書変換のみ）。現在の選択肢・名前・期待サイズは [ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) を照合する。重みはGit対象外なので、新しいclone/worktreeだけではそろわない。端末で実際に選択中の取込モデルも区別する。
+変換モデル（Nano / Standard v4.2b、IQ4_emb8 / Q8 の4種）はAPKに同梱しない。設定画面で `files/models/` のキャッシュを確認し、不足分だけ GitHub リリース `models-v4.2b` の固定アセット（`windows/deployment/model-catalog.json` が正本、取得コードは `model/ConversionModelDownloadManager.kt`）からダウンロードして検証する。Nano v4.2b IQ4_emb8 は強制で、初回起動時に取得を案内する（無い間は辞書変換のみ）。現在の選択肢・名前・期待サイズは [ModelManager.kt](../android/app/src/main/java/com/zeroconvert/ime/model/ModelManager.kt) を照合する。重みはGit対象外なので、新しいclone/worktreeだけではそろわない。端末で実際に選択中の取込モデルも区別する。
 
 絵文字パレットの `assets/emoji_catalog.tsv` は、固定したUnicodeデータ `data/emoji/emoji-test-15.1.txt`（Unicode License v3、CLDR順）と、変換辞書と同じ `assets/emoji_all_E15.1.txt` の日本語キーワードから `node scripts/generate-android-emoji-catalog.mjs` が生成する。1,921件を9カテゴリに分け、肌色5段階を持つ323件は長押しで展開する。`--check` で同期を検査し、生成TSVを手編集しない。Unicodeデータを更新するときは版を上げたファイルを追加し、生成スクリプトの `SOURCE` と `UNICODE_GROUP_ORDER` を合わせて確認する。パレットの解析・検索・最近使用は `EmojiCatalog.kt`、最近使用の保存は `ime_settings` の `emoji_recent`。
 

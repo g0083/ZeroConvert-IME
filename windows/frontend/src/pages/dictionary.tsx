@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Copy, FileUp, Plus, Save, Search, Trash2 } from "lucide-react";
+import { Copy, Download, Plus, Save, Search, Trash2, Upload } from "lucide-react";
 
 import { UnsavedChangesGuard } from "@/components/unsaved-changes-guard";
 import {
@@ -12,16 +12,42 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getConfigAfterPendingUpdates, saveConfigWithToast } from "@/lib/config";
 import {
+    dictionaryFileName,
+    exportableDictionaryEntries,
+    mergeDictionaryEntries,
+    parseDictionaryFile,
+    replaceDictionaryEntries,
+    serializeDictionaryJson,
+    serializeDictionaryTsv,
+    type DictionaryExportFormat,
+    type ParsedDictionaryFile,
+} from "@/lib/dictionary-file.js";
+import {
     DICTIONARY_POS,
     MAX_ENTRIES,
     normalizeDictionaryEntries,
     validateDictionaryEntries,
     isDictionaryDirty,
     type DictionaryEntry,
-    type DictionaryPos,
 } from "@/lib/dictionary-entries.js";
+import { exportUserDictionaryFile, importUserDictionaryFile } from "@/lib/user-dictionary-file";
 
 const PAGE_SIZE = 100;
+const EXPORT_FORMAT_DESCRIPTIONS: Record<DictionaryExportFormat, string> = {
+    json: "Windows と Android の間で品詞をそのまま引き継げます。",
+    tsv: "Google 日本語入力 / Mozc の品詞名で書き出します。サ変名詞は「名詞サ変」になります。",
+    msime: "Microsoft IME の品詞名で書き出します。組織は「固有名詞」、記号・顔文字は「顔文字」になります。",
+};
+
+type ImportPreview = {
+    error: string | null;
+    parsed: ParsedDictionaryFile | null;
+    mode: "merge" | "replace";
+    resulting: DictionaryEntry[];
+    added: number;
+    duplicates: number;
+    overflow: number;
+};
 
 export const Dictionary = () => {
     const [entries, setEntries] = useState<DictionaryEntry[]>([]);
@@ -35,7 +61,12 @@ export const Dictionary = () => {
     const [searchQuery, setSearchQuery] = useState("");
     const [page, setPage] = useState(0);
     const [importOpen, setImportOpen] = useState(false);
-    const [importText, setImportText] = useState("");
+    const [importSource, setImportSource] = useState<{ name: string; text: string } | null>(null);
+    const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
+    const [isPickingFile, setIsPickingFile] = useState(false);
+    const [exportOpen, setExportOpen] = useState(false);
+    const [exportFormat, setExportFormat] = useState<DictionaryExportFormat>("json");
+    const [isExporting, setIsExporting] = useState(false);
     const [pendingFocus, setPendingFocus] = useState<{
         index: number;
         field: keyof DictionaryEntry;
@@ -64,6 +95,38 @@ export const Dictionary = () => {
     const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
     const visiblePage = Math.min(page, pageCount - 1);
     const visibleRows = filteredRows.slice(visiblePage * PAGE_SIZE, (visiblePage + 1) * PAGE_SIZE);
+    // 書き出しは保存時と同じく前後の空白を除いた行を使い、未入力の行は含めない。
+    const exportRows = useMemo(() => exportableDictionaryEntries(validation.entries, exportFormat), [validation, exportFormat]);
+    const importPreview = useMemo<ImportPreview | null>(() => {
+        if (!importSource) return null;
+        try {
+            const parsed = parseDictionaryFile(importSource.text);
+            if (importMode === "replace") {
+                const replaced = replaceDictionaryEntries(parsed.entries);
+                return {
+                    error: null, parsed, mode: "replace",
+                    resulting: replaced.entries,
+                    added: replaced.entries.length,
+                    duplicates: replaced.duplicates,
+                    overflow: replaced.overflow,
+                };
+            }
+            const merged = mergeDictionaryEntries(entries, parsed.entries);
+            return {
+                error: null, parsed, mode: "merge",
+                resulting: merged.entries,
+                added: merged.added,
+                duplicates: merged.duplicates,
+                overflow: merged.overflow,
+            };
+        } catch (error) {
+            return {
+                error: error instanceof Error ? error.message : "読み込めませんでした。",
+                parsed: null, mode: importMode,
+                resulting: [], added: 0, duplicates: 0, overflow: 0,
+            };
+        }
+    }, [importSource, importMode, entries]);
 
     const showPage = (index: number) => {
         setPage(index);
@@ -137,7 +200,7 @@ export const Dictionary = () => {
     const addEntry = () => {
         if (disabled || savingRef.current || entries.length >= MAX_ENTRIES) return;
         setSearchQuery("");
-        setEntries((prev) => [...prev, { reading: "", word: "", pos: "proper_noun" }]);
+        setEntries((prev) => [...prev, { reading: "", word: "", pos: "common_noun" }]);
         showPage(Math.floor(entries.length / PAGE_SIZE));
         setPendingFocus({ index: entries.length, field: "reading", end: true });
     };
@@ -145,7 +208,7 @@ export const Dictionary = () => {
     const copyAsTsv = async () => {
         const lines = entries
             .filter((entry) => entry.reading.trim() || entry.word.trim())
-            .map((entry) => `${entry.reading}\t${entry.word}${entry.pos === "proper_noun" ? "" : `\t${entry.pos}`}`);
+            .map((entry) => `${entry.reading}\t${entry.word}\t${entry.pos}`);
         if (lines.length === 0) {
             toast("コピーできる登録語がありません");
             return;
@@ -158,50 +221,66 @@ export const Dictionary = () => {
         }
     };
 
-    const applyTsvImport = () => {
-        const parsed = importText
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter((line) => line && !line.startsWith("#") && !line.startsWith("!"))
-            .map((line) => {
-                const tabParts = line.split("\t");
-                if (tabParts.length >= 2) {
-                    const pos = tabParts[2]?.trim() ?? "proper_noun";
-                    return { reading: tabParts[0].trim(), word: tabParts[1].trim(),
-                        pos: Object.prototype.hasOwnProperty.call(DICTIONARY_POS, pos) ? pos as DictionaryPos : "proper_noun" };
-                }
-                const spaceMatch = line.match(/^(\S+)\s+(.+)$/);
-                if (spaceMatch) {
-                    return { reading: spaceMatch[1].trim(), word: spaceMatch[2].trim(), pos: "proper_noun" as const };
-                }
-                return null;
-            })
-            .filter((item): item is DictionaryEntry => Boolean(item && item.reading && item.word));
+    const closeImportDialog = (open: boolean) => {
+        setImportOpen(open);
+        if (!open) {
+            setImportSource(null);
+            setImportMode("merge");
+        }
+    };
 
-        if (parsed.length === 0) {
-            toast("取り込める「読み<Tab>単語」の行が見つかりませんでした");
-            return;
+    const pickImportFile = async () => {
+        setIsPickingFile(true);
+        try {
+            const file = await importUserDictionaryFile();
+            if (file) setImportSource({ name: file.path, text: file.contents });
+        } catch (error) {
+            toast("ファイルを開けませんでした", { description: String(error) });
+        } finally {
+            setIsPickingFile(false);
         }
-        const existingKeys = new Set(entries.map((entry) => `${entry.reading}\t${entry.word}`));
-        const additions = parsed.filter((entry) => {
-            const key = `${entry.reading}\t${entry.word}`;
-            if (existingKeys.has(key)) return false;
-            existingKeys.add(key);
-            return true;
-        });
-        const available = Math.max(0, MAX_ENTRIES - entries.length);
-        const accepted = additions.slice(0, available);
-        if (accepted.length === 0) {
-            toast(available === 0 ? `上限（${MAX_ENTRIES}件）に達しています` : "すべて登録済みです");
-            setImportOpen(false);
-            return;
-        }
-        setEntries((prev) => [...prev, ...accepted]);
+    };
+
+    const applyImport = () => {
+        if (!importPreview || importPreview.error || importPreview.added === 0) return;
+        setEntries(importPreview.resulting);
         setSearchQuery("");
-        showPage(Math.floor(entries.length / PAGE_SIZE));
-        setImportText("");
-        setImportOpen(false);
-        toast(`${accepted.length}件を追加しました（「保存」で反映されます）`);
+        showPage(importPreview.mode === "replace" ? 0 : Math.floor(entries.length / PAGE_SIZE));
+        const message = importPreview.mode === "replace"
+            ? `${importPreview.resulting.length}件で置き換えました（「保存」で反映されます）`
+            : `${importPreview.added}件を追加しました（「保存」で反映されます）`;
+        closeImportDialog(false);
+        toast(message);
+    };
+
+    const exportDictionary = async () => {
+        if (exportRows.length === 0) return;
+        setIsExporting(true);
+        try {
+            const contents = exportFormat === "json"
+                ? serializeDictionaryJson(exportRows)
+                : serializeDictionaryTsv(exportRows, exportFormat);
+            const path = await exportUserDictionaryFile(contents, dictionaryFileName(exportFormat), exportFormat);
+            if (!path) return;
+            setExportOpen(false);
+            toast(`${exportRows.length}件を書き出しました`, { description: path, duration: 8000 });
+        } catch (error) {
+            toast("書き出しに失敗しました", { description: String(error) });
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
+    const describeImport = (preview: ImportPreview) => {
+        const read = preview.parsed?.entries.length ?? 0;
+        const skipped = preview.parsed?.skipped ?? 0;
+        const parts = [`読み取り ${read}件`];
+        parts.push(preview.mode === "replace" ? `置き換え後 ${preview.resulting.length}件` : `追加 ${preview.added}件`);
+        if (preview.duplicates > 0) parts.push(`重複 ${preview.duplicates}件を除外`);
+        if (preview.overflow > 0) parts.push(`上限超過 ${preview.overflow}件`);
+        if (skipped > 0) parts.push(`使えない行 ${skipped}件`);
+        if (preview.parsed?.mapped) parts.push(`未対応の品詞 ${preview.parsed.mapped}件は一般名詞として登録`);
+        return parts.join(" / ");
     };
 
     const removeEntry = (index: number) => {
@@ -269,27 +348,39 @@ export const Dictionary = () => {
                 </div>
                 <Button
                     type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 shrink-0 px-2 text-xs"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
                     disabled={disabled || entries.length === 0}
                     onClick={() => void copyAsTsv()}
+                    aria-label="TSV形式でクリップボードにコピー"
                     title="TSV形式でクリップボードにコピー"
                 >
                     <Copy className="h-3.5 w-3.5" />
-                    TSV出力
                 </Button>
                 <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     className="h-8 shrink-0 px-2 text-xs"
-                    disabled={disabled || entries.length >= MAX_ENTRIES}
-                    onClick={() => setImportOpen(true)}
-                    title="TSVテキストから一括追加"
+                    disabled={disabled || entries.length === 0}
+                    onClick={() => setExportOpen(true)}
+                    title="ユーザー辞書をファイルに書き出す"
                 >
-                    <FileUp className="h-3.5 w-3.5" />
-                    TSV取込
+                    <Download className="h-3.5 w-3.5" />
+                    書き出し
+                </Button>
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 px-2 text-xs"
+                    disabled={disabled}
+                    onClick={() => setImportOpen(true)}
+                    title="ユーザー辞書ファイルを読み込む"
+                >
+                    <Upload className="h-3.5 w-3.5" />
+                    読み込み
                 </Button>
             </div>
             <div ref={listRef} className="min-h-0 flex-1 overflow-auto rounded-md border">
@@ -407,41 +498,111 @@ export const Dictionary = () => {
                     </Button>
                 </div>
             </div>
-            <AlertDialog open={importOpen} onOpenChange={setImportOpen}>
+            <AlertDialog open={exportOpen} onOpenChange={setExportOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
-                        <AlertDialogTitle>TSV形式で単語を取り込む</AlertDialogTitle>
+                        <AlertDialogTitle>ユーザー辞書を書き出す</AlertDialogTitle>
                         <AlertDialogDescription>
-                            1行に1件ずつ「読み（Tabまたはスペース）単語」の形式で貼り付けてください。重複しない項目のみ追加されます。
+                            {exportRows.length.toLocaleString()}件の読み・単語・品詞を書き出します。移行先の IME に合わせて形式を選んでください。
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <div className="space-y-2 py-1">
-                        <textarea
-                            value={importText}
-                            onChange={(event) => setImportText(event.target.value)}
-                            placeholder={"ぜろこん\tZeroCon\nめーるあどれす\texample@example.com"}
-                            rows={6}
-                            className="w-full rounded-md border bg-background p-2 font-mono text-xs outline-none focus:border-ring"
-                            aria-label="TSV取り込み入力欄"
-                        />
-                        <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
-                            <span>またはファイル (.tsv / .txt) を選択…</span>
-                            <input
-                                type="file"
-                                accept=".tsv,.txt,text/tab-separated-values,text/plain"
-                                className="hidden"
-                                onChange={(event) => {
-                                    const file = event.target.files?.[0];
-                                    if (!file) return;
-                                    void file.text().then((content) => setImportText(content));
-                                    event.target.value = "";
-                                }}
-                            />
-                        </label>
+                        <label htmlFor="dictionary-export-format" className="text-xs text-muted-foreground">形式</label>
+                        <select
+                            id="dictionary-export-format"
+                            value={exportFormat}
+                            onChange={(event) => setExportFormat(event.target.value as DictionaryExportFormat)}
+                            className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                        >
+                            <option value="json">ZeroConvert JSON（品詞を保持）</option>
+                            <option value="tsv">Google 日本語入力 / Mozc（UTF-8）</option>
+                            <option value="msime">Microsoft IME（UTF-16）</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">
+                            {EXPORT_FORMAT_DESCRIPTIONS[exportFormat]}
+                        </p>
+                        {exportRows.length !== entries.length && (
+                            <p className="text-xs text-muted-foreground">
+                                この形式で表現できない行や未入力の行を {entries.length - exportRows.length} 件除外します。
+                            </p>
+                        )}
                     </div>
                     <AlertDialogFooter>
                         <AlertDialogCancel>キャンセル</AlertDialogCancel>
-                        <AlertDialogAction onClick={applyTsvImport}>追加</AlertDialogAction>
+                        <Button
+                            onClick={() => void exportDictionary()}
+                            disabled={isExporting || exportRows.length === 0}
+                        >
+                            {isExporting ? "書き出し中…" : "書き出す"}
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog open={importOpen} onOpenChange={closeImportDialog}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>ユーザー辞書を読み込む</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            ZeroConvert JSON や、Google 日本語入力 / Mozc、Microsoft IME、ATOK のテキスト辞書から、読み・単語・品詞を取り込みます。
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <div className="space-y-3 py-1">
+                        <p className="text-xs text-muted-foreground">
+                            他の IME の品詞名は ZeroConvert の品詞に変換します。対応する品詞が見つからない場合は一般名詞として扱います。「保存」で辞書に反映されます。
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void pickImportFile()}
+                                disabled={isPickingFile || isSaving}
+                            >
+                                <Upload className="h-3.5 w-3.5" />
+                                {isPickingFile ? "選択中…" : "ファイルを選択…"}
+                            </Button>
+                            {importSource && (
+                                <span className="text-xs break-all text-muted-foreground">{importSource.name}</span>
+                            )}
+                        </div>
+                        <textarea
+                            value={importSource?.text ?? ""}
+                            onChange={(event) => {
+                                const text = event.target.value;
+                                setImportSource(text ? { name: "貼り付けたテキスト", text } : null);
+                            }}
+                            placeholder={"ぜろこん\tZeroCon\nめーるあどれす\texample@example.com"}
+                            rows={4}
+                            className="w-full rounded-md border bg-background p-2 font-mono text-xs outline-none focus:border-ring"
+                            aria-label="読み込む内容"
+                        />
+                        <div className="space-y-1">
+                            <label htmlFor="dictionary-import-mode" className="text-xs text-muted-foreground">取り込み方法</label>
+                            <select
+                                id="dictionary-import-mode"
+                                value={importMode}
+                                onChange={(event) => setImportMode(event.target.value === "replace" ? "replace" : "merge")}
+                                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                            >
+                                <option value="merge">追加する（登録済みの読み・単語はスキップ）</option>
+                                <option value="replace">置き換える（現在の登録をすべて削除）</option>
+                            </select>
+                        </div>
+                        {importPreview?.error && (
+                            <p className="text-xs text-destructive" role="alert">{importPreview.error}</p>
+                        )}
+                        {importPreview && !importPreview.error && (
+                            <p className="text-xs text-muted-foreground" role="status">{describeImport(importPreview)}</p>
+                        )}
+                    </div>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>キャンセル</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={applyImport}
+                            disabled={!importPreview || Boolean(importPreview.error) || importPreview.added === 0}
+                        >
+                            {importMode === "replace" ? "置き換える" : "追加"}
+                        </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

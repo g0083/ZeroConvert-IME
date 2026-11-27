@@ -1,4 +1,5 @@
-export type DictionaryPos = "proper_noun" | "common_noun" | "sahen_noun" | "shortcut" | "symbol";
+export type DictionaryPos = "proper_noun" | "common_noun" | "personal_name" | "family_name" |
+    "given_name" | "organization" | "place_name" | "sahen_noun" | "shortcut" | "symbol";
 export type DictionaryEntry = { reading: string; word: string; pos: DictionaryPos };
 export declare const DICTIONARY_POS: Readonly<Record<DictionaryPos, string>>;
 export type DictionaryRowErrors = Partial<Record<keyof DictionaryEntry, string>>;

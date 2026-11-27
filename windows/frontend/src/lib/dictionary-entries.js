@@ -1,12 +1,12 @@
+import posCatalog from "../../../../data/user-dictionary-pos.json" with { type: "json" };
+
 export const MAX_ENTRIES = 10_000;
 
-export const DICTIONARY_POS = {
-    proper_noun: "固有名詞",
-    common_noun: "一般名詞",
-    sahen_noun: "サ変名詞",
-    shortcut: "定型文・ショートカット",
-    symbol: "記号・顔文字",
-};
+export const DICTIONARY_POS = Object.fromEntries(Object.entries(posCatalog).map(([key, { label }]) => [key, label]));
+export const dictionaryEntryKey = (reading, word) => JSON.stringify([
+    reading.trim().normalize("NFC").replace(/[ァ-ヶヽヾヿ]/g, (kana) => String.fromCharCode(kana.charCodeAt(0) - 96)),
+    word.trim().normalize("NFC"),
+]);
 
 export const normalizeDictionaryEntries = (value) =>
     Array.isArray(value)
@@ -27,7 +27,7 @@ export const validateDictionaryEntries = (draft) => {
         if (!reading) error.reading = "読みを入力してください";
         if (!word) error.word = "単語を入力してください";
         if (!Object.hasOwn(DICTIONARY_POS, pos)) error.pos = "品詞を選んでください";
-        const key = JSON.stringify([reading, word]);
+        const key = dictionaryEntryKey(reading, word);
         if (reading && word && seen.has(key)) {
             error.reading = error.word = "同じ読み・単語の組み合わせが重複しています";
         }

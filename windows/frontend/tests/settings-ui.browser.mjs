@@ -110,6 +110,16 @@ function installMock({ setup = false, resume = false, failBenchmark = false, fai
                         recommended: "cpu",
                     };
                 case "get_default_romaji_rows": return [{ input: "ka", output: "か", next_input: "" }, { input: "kk", output: "っ", next_input: "k" }];
+                case "user_dictionary_export_file": {
+                    state.dictionaryExports = state.dictionaryExports ?? [];
+                    state.dictionaryExports.push(structuredClone(args.request));
+                    return state.dictionaryExportPath === undefined
+                        ? "C:\\Users\\test\\Documents\\zeroconvert-user-dictionary.json"
+                        : state.dictionaryExportPath;
+                }
+                case "user_dictionary_import_file":
+                    state.dictionaryImportCalls = (state.dictionaryImportCalls ?? 0) + 1;
+                    return state.dictionaryImportFile ?? null;
                 case "restart_server":
                     state.restarts = (state.restarts ?? 0) + 1;
                     if (state.failRestart) throw new Error("mock restart failure");
@@ -396,6 +406,102 @@ test("settings layout, editing safety, navigation and update badge", async () =>
         await emitClose();
         await page.getByRole("button", { name: "破棄して閉じる", exact: true }).click();
         assert.equal(await page.evaluate(() => window.settingsTest.destroys), 2);
+        assert.deepEqual(runtimeErrors, []);
+    } finally {
+        await browser.close();
+        await server.close();
+    }
+});
+
+test("user dictionary exports to a file and imports JSON or TSV with merge and replace", async () => {
+    const server = await createServer({ root, configFile: path.join(root, "vite.config.ts"), server: { host: "127.0.0.1", port: 0 }, logLevel: "error" });
+    await server.listen();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+    try {
+        const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+        await context.addInitScript(installMock);
+        const page = await context.newPage();
+        const runtimeErrors = [];
+        page.on("pageerror", (error) => runtimeErrors.push(error.message));
+        await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/dictionary`);
+        await page.getByRole("textbox", { name: "25 行目の読み", exact: true }).waitFor();
+
+        // JSON書き出し: 保存済みの内容をそのままファイルへ渡す
+        await page.getByRole("button", { name: "書き出し", exact: true }).click();
+        await page.getByLabel("形式", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "書き出す", exact: true }).click();
+        await page.getByText("25件を書き出しました", { exact: true }).waitFor();
+        const jsonExport = await page.evaluate(() => window.settingsTest.dictionaryExports.at(-1));
+        assert.match(jsonExport.defaultFileName, /^zeroconvert-user-dictionary-\d{8}\.json$/);
+        const payload = JSON.parse(jsonExport.contents);
+        assert.equal(payload.format, "zeroconvert-user-dictionary");
+        assert.deepEqual(payload.entries, Array.from({ length: 25 }, (_, i) => ({ reading: `よみ${i}`, word: `単語${i}`, pos: "proper_noun" })));
+
+        // TSV書き出しはタブ区切りで、末尾に改行が付く
+        await page.getByRole("button", { name: "書き出し", exact: true }).click();
+        await page.getByLabel("形式", { exact: true }).selectOption("tsv");
+        await page.getByRole("button", { name: "書き出す", exact: true }).click();
+        await page.waitForFunction(() => window.settingsTest.dictionaryExports.length === 2);
+        const tsvExport = await page.evaluate(() => window.settingsTest.dictionaryExports.at(-1));
+        assert.equal(tsvExport.format, "tsv");
+        assert.match(tsvExport.defaultFileName, /\.txt$/);
+        assert.deepEqual(tsvExport.contents.split("\n").slice(0, 2), ["よみ0\t単語0\t固有名詞\t", "よみ1\t単語1\t固有名詞\t"]);
+        assert.equal(tsvExport.contents.trimEnd().split("\n").length, 25);
+
+        await page.getByRole("button", { name: "書き出し", exact: true }).click();
+        await page.getByLabel("形式", { exact: true }).selectOption("msime");
+        await page.getByRole("button", { name: "書き出す", exact: true }).click();
+        await page.waitForFunction(() => window.settingsTest.dictionaryExports.length === 3);
+        const msimeExport = await page.evaluate(() => window.settingsTest.dictionaryExports.at(-1));
+        assert.equal(msimeExport.format, "msime");
+        assert.match(msimeExport.contents, /^!Microsoft IME Dictionary Tool\r\n!Version:\r\n!Format:WORDLIST\r\n/);
+
+        // 読み込み（追加）: 登録済みの行はスキップし、新しい行だけを下書きへ足す
+        await page.evaluate(() => {
+            window.settingsTest.dictionaryImportFile = {
+                path: "C:\\tmp\\user-dictionary.json",
+                contents: JSON.stringify({ format: "zeroconvert-user-dictionary", version: 1, entries: [
+                    { reading: "よみ0", word: "単語0", pos: "proper_noun" },
+                    { reading: "あたらしい", word: "新しい単語", pos: "サ変名詞" },
+                ] }),
+            };
+        });
+        await page.getByRole("button", { name: "読み込み", exact: true }).click();
+        await page.getByRole("button", { name: "ファイルを選択…", exact: true }).click();
+        await page.getByText("読み取り 2件 / 追加 1件 / 重複 1件を除外", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "追加", exact: true }).click();
+        await page.getByText("1件を追加しました（「保存」で反映されます）", { exact: true }).waitFor();
+        assert.equal(await page.getByRole("textbox", { name: "26 行目の読み", exact: true }).inputValue(), "あたらしい");
+        assert.equal(await page.getByRole("combobox", { name: "26 行目の品詞", exact: true }).inputValue(), "sahen_noun");
+
+        // 読み込み（置き換え）: TSVのコメント行を読み飛ばし、現在の登録を捨てる
+        await page.evaluate(() => {
+            window.settingsTest.dictionaryImportFile = {
+                path: "C:\\tmp\\words.tsv",
+                contents: "# 読み\t単語\t品詞\nよみ0\t単語0\nぜんぶ\t全部\nことば\t言葉\tnoun\n",
+            };
+        });
+        await page.getByRole("button", { name: "読み込み", exact: true }).click();
+        await page.getByRole("button", { name: "ファイルを選択…", exact: true }).click();
+        await page.getByLabel("取り込み方法", { exact: true }).selectOption("replace");
+        await page.getByText("読み取り 3件 / 置き換え後 3件 / 未対応の品詞 1件は一般名詞として登録", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "置き換える", exact: true }).click();
+        await page.getByText("3件で置き換えました（「保存」で反映されます）", { exact: true }).waitFor();
+        assert.equal(await page.getByRole("textbox", { name: "3 行目の単語", exact: true }).inputValue(), "言葉");
+        assert.equal(await page.getByRole("combobox", { name: "3 行目の品詞", exact: true }).inputValue(), "common_noun");
+        assert.equal(await page.getByRole("textbox", { name: "4 行目の読み", exact: true }).count(), 0);
+
+        // 壊れたファイルは理由を出して取り込みを止める
+        await page.evaluate(() => {
+            window.settingsTest.dictionaryImportFile = { path: "C:\\tmp\\broken.json", contents: "{ こわれた" };
+        });
+        await page.getByRole("button", { name: "読み込み", exact: true }).click();
+        await page.getByRole("button", { name: "ファイルを選択…", exact: true }).click();
+        await page.getByRole("alert").getByText(/JSON として読み込めませんでした/).waitFor();
+        assert.ok(await page.getByRole("button", { name: "追加", exact: true }).isDisabled());
+        await page.getByRole("button", { name: "キャンセル", exact: true }).click();
+        await page.getByRole("alertdialog").waitFor({ state: "hidden" });
+        assert.equal(await page.getByRole("textbox", { name: "3 行目の単語", exact: true }).inputValue(), "言葉");
         assert.deepEqual(runtimeErrors, []);
     } finally {
         await browser.close();

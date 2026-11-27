@@ -46,7 +46,7 @@ export const About = () => {
                         </span>
                     </h2>
                     <p className="text-xs text-muted-foreground">
-                        ZeroCon Model Nano v4.2 によるかな漢字変換・先読みと、メインモデル統合による高速タイポ補正
+                        ZeroCon Model v4.2b によるかな漢字変換・先読みと、メインモデル統合による高速タイポ補正
                     </p>
                 </div>
             </div>
@@ -78,12 +78,12 @@ export const About = () => {
             </SettingsSection>
 
             <SettingsSection title="搭載モデルと動作環境">
-                <SettingsRow label="かな漢字変換・先読みモデル" description="Nano v4.2の省メモリ版IQ4_NL_emb8（18.7 MiB）と高精度版Q8_0（27.7 MiB）を使用できます。利用モデルは「変換と候補」で選べます。">
+                <SettingsRow label="かな漢字変換・先読みモデル" description="Standard v4.2b（53.9 MiB / 94.4 MiB）と Nano v4.2b（15.6 MiB / 24.6 MiB）を使用できます。利用モデルは「変換と候補」で選べます。">
                     <span className="text-xs font-mono font-medium text-foreground bg-muted/60 px-2.5 py-1 rounded-md border border-border/50">
-                        ZeroCon Model Nano v4.2 IQ4_emb8 / Q8
+                        ZeroCon Model v4.2b IQ4_emb8 / Q8
                     </span>
                 </SettingsRow>
-                <SettingsRow label="タイポ補正アーキテクチャ" description="独立Corrector常駐を撤廃し、Nano v4.2 内部で読み尤度判定・表層リランキング・漢字変換を一気通貫処理（正解率78.0% / 実質86.7%、CPU p50: 2.3ms）">
+                <SettingsRow label="タイポ補正アーキテクチャ" description="独立Corrector常駐を撤廃し、ZeroCon Model v4.2b 内部で読み尤度判定・表層リランキング・漢字変換を一気通貫処理（正解率78.0% / 実質86.7%、CPU p50: 2.3ms）">
                     <span className="text-sm font-medium text-foreground">メインモデル統合タイポ補正</span>
                 </SettingsRow>
                 <SettingsRow label="推論バックエンド" description="設定とPCの対応状況に応じて選択">

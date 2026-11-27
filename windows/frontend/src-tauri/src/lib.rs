@@ -1,6 +1,7 @@
 mod benchmark_worker;
 mod conversion_model;
 mod dictionary;
+mod dictionary_file;
 mod english_dictionary;
 mod ipc;
 mod jev_api;
@@ -783,6 +784,84 @@ fn dictionary_cancel() {
     dictionary::cancel();
 }
 
+/// ユーザー辞書の書き出し要求。内容は設定画面で組み立てる。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserDictionaryExportRequest {
+    contents: String,
+    default_file_name: String,
+    format: String,
+}
+
+/// 読み込んだユーザー辞書ファイル。
+#[derive(Serialize)]
+struct UserDictionaryFile {
+    path: String,
+    contents: String,
+}
+
+/// ユーザー辞書を書き出す。保存先はネイティブの保存ダイアログで選ぶ。
+/// 取り消した場合は `None` を返す。
+#[tauri::command]
+async fn user_dictionary_export_file(
+    window: tauri::WebviewWindow,
+    request: UserDictionaryExportRequest,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (filter_name, filter_pattern, extension, utf16) = match request.format.as_str() {
+            "tsv" => ("Google 日本語入力 / Mozc (*.txt)", "*.txt", "txt", false),
+            "msime" => ("Microsoft IME (*.txt)", "*.txt", "txt", true),
+            "json" => ("ZeroConvert IME (*.json)", "*.json", "json", false),
+            _ => return Err("未対応の書き出し形式です。".into()),
+        };
+        let contents = if utf16 {
+            std::iter::once(0xfeff)
+                .chain(request.contents.encode_utf16())
+                .flat_map(u16::to_le_bytes)
+                .collect()
+        } else {
+            request.contents.into_bytes()
+        };
+        dictionary_file::save_file(
+            window
+                .hwnd()
+                .ok()
+                .map(|handle| windows::Win32::Foundation::HWND(handle.0)),
+            &request.default_file_name,
+            filter_name,
+            filter_pattern,
+            extension,
+            &contents,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// ユーザー辞書ファイルを読み込む。読み込み元はネイティブのダイアログで選ぶ。
+/// 取り消した場合は `None` を返す。
+#[tauri::command]
+async fn user_dictionary_import_file(
+    window: tauri::WebviewWindow,
+) -> Result<Option<UserDictionaryFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = dictionary_file::read_text(
+            window
+                .hwnd()
+                .ok()
+                .map(|handle| windows::Win32::Foundation::HWND(handle.0)),
+            "ユーザー辞書 (*.json;*.tsv;*.txt)",
+            "*.json;*.tsv;*.txt",
+        )?;
+        Ok(file.map(|file| UserDictionaryFile {
+            path: file.path,
+            contents: file.contents,
+        }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// 初回起動の準備ダイアログが一度に問い合わせる3点セット。
 /// 変換モデル（必須）・日本語辞書・英字辞書を同じ判定順で返す。
 #[derive(Serialize)]
@@ -795,7 +874,7 @@ struct SetupAssets {
 #[tauri::command]
 fn setup_assets_status() -> Result<SetupAssets, String> {
     let install_dir = install_dir_from_current_exe();
-    // 必須モデルは shared の既定（Nano v4.2 IQ4_emb8）と同じ解決を使う。
+    // 必須モデルは shared の既定（Standard v4.2b IQ4_emb8）と同じ解決を使う。
     let mandatory_model = shared::runtime_assets::default_model();
     Ok(SetupAssets {
         model: conversion_model::status(&install_dir, &mandatory_model)?,
@@ -1058,6 +1137,8 @@ pub fn run() {
             dictionary_status,
             dictionary_download,
             dictionary_cancel,
+            user_dictionary_export_file,
+            user_dictionary_import_file,
             setup_assets_status,
             get_active_model,
             switch_model

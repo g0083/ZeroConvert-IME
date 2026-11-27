@@ -176,7 +176,7 @@ OPD2415への更新と基本18項目は成功。精度検査には不合格が�
 Swift開発用/未使用runtimeの除外を行う。圧縮ライブラリはAndroidがインストール時に
 展開する。APKの転送容量は減るが、展開されたライブラリ自体の保存容量が減るとは限らない。
 [Android Gradle Pluginの梱包設定](https://developer.android.com/reference/tools/gradle-api/8.3/com/android/build/api/dsl/JniLibsPackaging)。
-現行の配布モデルカタログは Nano / Standard v4.2（`IQ4_emb8` / `Q8`）であり、APK には同梱せず端末側キャッシュへオンデマンド取得する（`verifyConversionModels` 等が形式と APK 無同梱を検査、旧 4 ファイル同梱構成や独立 Corrector モデルは廃止）。
+現行の配布モデルカタログは Nano / Standard v4.2b（`IQ4_emb8` / `Q8`）であり、APK には同梱せず端末側キャッシュへオンデマンド取得する（`verifyConversionModels` 等が形式と APK 無同梱を検査、旧 4 ファイル同梱構成や独立 Corrector モデルは廃止）。
 逆引き辞書は Windows 正本から生成した 1 つを Swift/Rust/Kotlin で利用し、旧資産の重複梱包を除く。
 通常の旧 Android 辞書は、補正の辞書照合とユーザー辞書の検査に使うため保持する。
 v0.8.0 では確定後予測（`PostCompositionPrediction.swift`）、英字単語補完の共有学習（`english_learning.rs`）、`InputTypeMode.kt`、フローティング／片手／分割キーボード等も統合されている。

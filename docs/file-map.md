@@ -86,7 +86,7 @@ Windowsの中核5ファイルは [ルートガイド](../AGENTS.md) を参照。
 | 同 `FloatingKeyboard*.kt` / `QwertySplitLayout.kt` / `ImeUndoHistory.kt` | フローティング・片手・分割キーボード / Undo履歴 |
 | 同 `EnglishWordDictionary.kt` / `assist/SharedAssistPolicy.kt` / `assist/NamMasking.kt` | 英字補完・共有学習 / 共有アシストポリシー / 数値マスク |
 | 同 `translation/` | 翻訳プロンプト・モデルDL/検証・世代管理・遅延ロード（試験機能） |
-| 同 `model/ModelManager.kt` / `model/ConversionModelDownloadManager.kt` | ダウンロード対象モデル（Nano / Standard v4.2 各2種）・取込みモデル選択 / 取得・検証・再開 |
+| 同 `model/ModelManager.kt` / `model/ConversionModelDownloadManager.kt` | ダウンロード対象モデル（Nano / Standard v4.2b 各2種）・取込みモデル選択 / 取得・検証・再開 |
 | 同 `InputPolicy.kt` / `PanelTextCommit.kt` | 入力ポリシー（即確定記号・句読点正規化・数字組成・幅既定値）のAndroid側参照とフォールバック表。正本は `W/crates/shared/src/conversion_policy.rs` |
 | `tests/input-policy/cases.tsv` | 両OS共通の入力ポリシー仕様。`cargo test -p shared` と Android JVMテストが同じ行を検証する |
 | `scripts/check-input-policy-parity.ps1` | 仕様表・Rust正本・Kotlinフォールバックの一致と両OSテストをまとめて検査する |

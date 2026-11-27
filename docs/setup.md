@@ -36,7 +36,7 @@ JDK 17、Android SDK 34、NDK 27.1.12297006、CMake 3.22.1を用意する。`and
 
 AndroidのSwift依存は `engine/Package.resolved` から解決するため、WindowsのcheckoutやSwift toolchainを用意しなくても共有エンジンをステージングできる。Swift変換ライブラリは `node scripts/prepare-shared-engine.mjs` がWindowsと同じvendored converterを用意する。手順と検査コマンドは [Android新構成](android-shared-engine.md) を参照する。
 
-GGUFモデルは `scripts/prepare-android-conversion-models.ps1` で検証する（`Nano / Standard v4.2 IQ4_emb8` / `Q8`、APK には同梱しない）。候補と名前・期待サイズは `model/ModelManager.kt` が正本。モデルのないクローンをそのまま動作品質検証に使わない。
+GGUFモデルは `scripts/prepare-android-conversion-models.ps1` で検証する（`Nano / Standard v4.2b IQ4_emb8` / `Q8`、APK には同梱しない）。候補と名前・期待サイズは `model/ModelManager.kt` が正本。モデルのないクローンをそのまま動作品質検証に使わない。
 
 ## Web（ブラウザ体験版）
 

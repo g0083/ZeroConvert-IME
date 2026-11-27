@@ -1,10 +1,10 @@
 //! Asset names and locations shared by launcher and settings. No downloads here.
 use std::path::{Path, PathBuf};
 
-pub const NANO_IQ4: &str = "zerocon-nano-v4.2-iq4nl-emb8.gguf";
-pub const NANO_Q8: &str = "zerocon-nano-v4.2-q8_0.gguf";
-pub const STANDARD_IQ4: &str = "zerocon-standard-v4.2-iq4nl-emb8.gguf";
-pub const STANDARD_Q8: &str = "zerocon-standard-v4.2-q8_0.gguf";
+pub const NANO_IQ4: &str = "zerocon-nano-v4.2b-iq4nl-emb8.gguf";
+pub const NANO_Q8: &str = "zerocon-nano-v4.2b-q8_0.gguf";
+pub const STANDARD_IQ4: &str = "zerocon-standard-v4.2b-iq4nl-emb8.gguf";
+pub const STANDARD_Q8: &str = "zerocon-standard-v4.2b-q8_0.gguf";
 pub const TRANSLATION_0_8B: &str = "plamo-3-translate-0.8b-Q4_K_M.gguf";
 pub const TRANSLATION_2B: &str = "plamo-3-translate-2b-Q4_K_M.gguf";
 pub const TRANSLATION: &str = TRANSLATION_0_8B;
@@ -19,22 +19,22 @@ pub const TRANSLATION_0_8B_URL: &str = "https://huggingface.co/pfnet/plamo-3-tra
 pub const TRANSLATION_2B_URL: &str = "https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/4f672106b847200bfdc0f6af6c321cd94eba1aed/plamo-3-translate-2b-Q4_K_M.gguf";
 
 pub const NANO_IQ4_SHA256: &str =
-    "5367df4e8c3373ba918df23ffab87bba28812629b0841f821dd30099d0494348";
-pub const NANO_Q8_SHA256: &str = "7a613da590b6437be5775bf1595a27e44e1f37ef6acbb800c49c159af3f25130";
+    "ec8d8021a6a424da2103a2c89522e0af532c5d2b1477186c7e53a5726559a154";
+pub const NANO_Q8_SHA256: &str = "10060a25f24fa8b07b20e0e0b8752595639f6e1b5f3a3112ecc3c59b878c2244";
 pub const STANDARD_IQ4_SHA256: &str =
-    "bf73bf4778655baf3f1124adc50ff0869c7028a2920c4b43b4ea7f5fb6f35d1d";
+    "a3a113a8c32d28b1e9dc6d9470e9bc1b2aa490b7ff5431629ba8b97cf3099696";
 pub const STANDARD_Q8_SHA256: &str =
-    "43fcbfaee7a325a7e027c3bb5d94bfb324b39b76dcb3e58da7935e678d87a644";
+    "6db45bd1b46802a61fc8cbb9df8a00d35de50d709bbb36dc5ed73de63f8c7c55";
 
-pub const NANO_IQ4_BYTES: u64 = 19_602_048;
-pub const NANO_Q8_BYTES: u64 = 29_039_232;
-pub const STANDARD_IQ4_BYTES: u64 = 61_399_072;
-pub const STANDARD_Q8_BYTES: u64 = 103_866_400;
+pub const NANO_IQ4_BYTES: u64 = 16_338_176;
+pub const NANO_Q8_BYTES: u64 = 25_774_944;
+pub const STANDARD_IQ4_BYTES: u64 = 56_503_200;
+pub const STANDARD_Q8_BYTES: u64 = 98_970_080;
 
 /// 変換モデルは配布物に同梱せず、GitHubリリースの固定アセットから取得する。
 /// タグは `windows/deployment/model-catalog.json` の `releaseTag` と合わせる。
 pub const MODEL_RELEASE_REPOSITORY: &str = "g0083/ZeroConvert-IME";
-pub const MODEL_RELEASE_TAG: &str = "models-v4.2";
+pub const MODEL_RELEASE_TAG: &str = "models-v4.2b";
 
 pub fn model_download_url(id: &str) -> Option<String> {
     let filename = model_filename(id)?;
@@ -45,20 +45,20 @@ pub fn model_download_url(id: &str) -> Option<String> {
 
 pub fn model_sha256(id: &str) -> Option<&'static str> {
     match canonical_model_id(id)? {
-        "nano_v4_2_iq4_emb8" => Some(NANO_IQ4_SHA256),
-        "nano_v4_2_q8" => Some(NANO_Q8_SHA256),
-        "standard_v4_2_iq4_emb8" => Some(STANDARD_IQ4_SHA256),
-        "standard_v4_2_q8" => Some(STANDARD_Q8_SHA256),
+        "nano_v4_2b_iq4_emb8" => Some(NANO_IQ4_SHA256),
+        "nano_v4_2b_q8" => Some(NANO_Q8_SHA256),
+        "standard_v4_2b_iq4_emb8" => Some(STANDARD_IQ4_SHA256),
+        "standard_v4_2b_q8" => Some(STANDARD_Q8_SHA256),
         _ => None,
     }
 }
 
 pub fn model_size_bytes(id: &str) -> Option<u64> {
     match canonical_model_id(id)? {
-        "nano_v4_2_iq4_emb8" => Some(NANO_IQ4_BYTES),
-        "nano_v4_2_q8" => Some(NANO_Q8_BYTES),
-        "standard_v4_2_iq4_emb8" => Some(STANDARD_IQ4_BYTES),
-        "standard_v4_2_q8" => Some(STANDARD_Q8_BYTES),
+        "nano_v4_2b_iq4_emb8" => Some(NANO_IQ4_BYTES),
+        "nano_v4_2b_q8" => Some(NANO_Q8_BYTES),
+        "standard_v4_2b_iq4_emb8" => Some(STANDARD_IQ4_BYTES),
+        "standard_v4_2b_q8" => Some(STANDARD_Q8_BYTES),
         _ => None,
     }
 }
@@ -219,32 +219,35 @@ pub fn default_translation_model() -> &'static str {
 }
 
 pub fn default_model() -> String {
-    "standard_v4_2_iq4_emb8".into()
+    "standard_v4_2b_iq4_emb8".into()
 }
 
 pub fn canonical_model_id(id: &str) -> Option<&'static str> {
     match id {
-        "nano_v4_2_iq4_emb8" | "nano_v4_1_iq4_emb8" | "nano_v4_iq4_emb8" | "nano" | "nano_q4km" => {
-            Some("nano_v4_2_iq4_emb8")
-        }
-        "nano_v4_2_q8" | "nano_v4_1_q8" | "nano_v4_q8" | "standard" | "standard_q4km" => {
-            Some("nano_v4_2_q8")
-        }
-        "standard_v4_2_iq4_emb8" | "standard_v4_1_iq4_emb8" | "standard_v4_iq4_emb8" => {
-            Some("standard_v4_2_iq4_emb8")
-        }
-        "standard_v4_2_q8" | "standard_v4_1_q8" | "standard_v4_q8" | "standard_v4_2"
-        | "standard_v4_1" => Some("standard_v4_2_q8"),
+        "nano_v4_2b_iq4_emb8"
+        | "nano_v4_2_iq4_emb8"
+        | "nano_v4_1_iq4_emb8"
+        | "nano_v4_iq4_emb8"
+        | "nano"
+        | "nano_q4km" => Some("nano_v4_2b_iq4_emb8"),
+        "nano_v4_2b_q8" | "nano_v4_2_q8" | "nano_v4_1_q8" | "nano_v4_q8" | "standard"
+        | "standard_q4km" => Some("nano_v4_2b_q8"),
+        "standard_v4_2b_iq4_emb8"
+        | "standard_v4_2_iq4_emb8"
+        | "standard_v4_1_iq4_emb8"
+        | "standard_v4_iq4_emb8" => Some("standard_v4_2b_iq4_emb8"),
+        "standard_v4_2b_q8" | "standard_v4_2_q8" | "standard_v4_1_q8" | "standard_v4_q8"
+        | "standard_v4_2b" | "standard_v4_2" | "standard_v4_1" => Some("standard_v4_2b_q8"),
         _ => None,
     }
 }
 
 pub fn model_filename(id: &str) -> Option<&'static str> {
     match canonical_model_id(id) {
-        Some("nano_v4_2_iq4_emb8") => Some(NANO_IQ4),
-        Some("nano_v4_2_q8") => Some(NANO_Q8),
-        Some("standard_v4_2_iq4_emb8") => Some(STANDARD_IQ4),
-        Some("standard_v4_2_q8") => Some(STANDARD_Q8),
+        Some("nano_v4_2b_iq4_emb8") => Some(NANO_IQ4),
+        Some("nano_v4_2b_q8") => Some(NANO_Q8),
+        Some("standard_v4_2b_iq4_emb8") => Some(STANDARD_IQ4),
+        Some("standard_v4_2b_q8") => Some(STANDARD_Q8),
         _ => None,
     }
 }
@@ -297,30 +300,37 @@ mod tests {
         assert_eq!(model_filename("nano_v4_iq4_emb8"), Some(NANO_IQ4));
         assert_eq!(model_filename("nano_v4_1_iq4_emb8"), Some(NANO_IQ4));
         assert_eq!(model_filename("nano_v4_2_iq4_emb8"), Some(NANO_IQ4));
+        assert_eq!(model_filename("nano_v4_2b_iq4_emb8"), Some(NANO_IQ4));
         assert_eq!(model_filename("standard"), Some(NANO_Q8));
         assert_eq!(model_filename("nano_v4_q8"), Some(NANO_Q8));
         assert_eq!(model_filename("nano_v4_1_q8"), Some(NANO_Q8));
         assert_eq!(model_filename("nano_v4_2_q8"), Some(NANO_Q8));
+        assert_eq!(model_filename("nano_v4_2b_q8"), Some(NANO_Q8));
         assert_eq!(model_filename("corrector"), None);
         assert_eq!(model_filename("../arbitrary"), None);
         assert_ne!(NANO_IQ4, NANO_Q8);
     }
 
     #[test]
-    fn roles_include_standard_v4_2_and_pinned_download_metadata() {
+    fn roles_include_standard_v4_2b_and_pinned_download_metadata() {
         assert_eq!(model_filename("standard_v4_1_iq4_emb8"), Some(STANDARD_IQ4));
         assert_eq!(model_filename("standard_v4_1_q8"), Some(STANDARD_Q8));
         assert_eq!(model_filename("standard_v4_2_iq4_emb8"), Some(STANDARD_IQ4));
         assert_eq!(model_filename("standard_v4_2_q8"), Some(STANDARD_Q8));
-        assert_ne!(NANO_IQ4, STANDARD_IQ4);
-        assert_eq!(model_sha256("nano_v4_2_iq4_emb8"), Some(NANO_IQ4_SHA256));
-        assert_eq!(model_sha256("standard_v4_2_q8"), Some(STANDARD_Q8_SHA256));
         assert_eq!(
-            model_size_bytes("standard_v4_2_q8"),
+            model_filename("standard_v4_2b_iq4_emb8"),
+            Some(STANDARD_IQ4)
+        );
+        assert_eq!(model_filename("standard_v4_2b_q8"), Some(STANDARD_Q8));
+        assert_ne!(NANO_IQ4, STANDARD_IQ4);
+        assert_eq!(model_sha256("nano_v4_2b_iq4_emb8"), Some(NANO_IQ4_SHA256));
+        assert_eq!(model_sha256("standard_v4_2b_q8"), Some(STANDARD_Q8_SHA256));
+        assert_eq!(
+            model_size_bytes("standard_v4_2b_q8"),
             Some(STANDARD_Q8_BYTES)
         );
-        let url = model_download_url("nano_v4_2_iq4_emb8").unwrap();
-        assert!(url.ends_with("/zerocon-nano-v4.2-iq4nl-emb8.gguf"));
+        let url = model_download_url("nano_v4_2b_iq4_emb8").unwrap();
+        assert!(url.ends_with("/zerocon-nano-v4.2b-iq4nl-emb8.gguf"));
         assert!(url.starts_with(&format!(
             "https://github.com/{MODEL_RELEASE_REPOSITORY}/releases/download/{MODEL_RELEASE_TAG}/"
         )));
@@ -352,7 +362,7 @@ mod tests {
         );
         std::fs::remove_file(root.join("models").join(NANO_IQ4)).unwrap();
         assert_eq!(
-            converter_model(&root, "standard_v4_2_iq4_emb8"),
+            converter_model(&root, "standard_v4_2b_iq4_emb8"),
             root.join("models").join(STANDARD_IQ4)
         );
         assert!(!converter_model(&root, "nano").is_file());
@@ -362,12 +372,12 @@ mod tests {
     }
 
     #[test]
-    fn settings_without_model_load_with_standard_v4_2_iq4_default() {
+    fn settings_without_model_load_with_standard_v4_2b_iq4_default() {
         // 共有エンジンの最小クレートでも ZenzaiConfig を前提にしない。
-        assert_eq!(default_model(), "standard_v4_2_iq4_emb8");
+        assert_eq!(default_model(), "standard_v4_2b_iq4_emb8");
         assert_eq!(
             canonical_model_id(&default_model()),
-            Some("standard_v4_2_iq4_emb8")
+            Some("standard_v4_2b_iq4_emb8")
         );
         assert_eq!(
             model_filename(&default_model()),

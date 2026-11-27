@@ -20,7 +20,7 @@ function Get-TrialInputGroups {
             'windows/frontend/package.json','windows/frontend/package-lock.json','windows/frontend/src-tauri/src',
             'windows/frontend/src-tauri/build.rs','windows/frontend/src-tauri/Cargo.toml',
             'windows/frontend/src-tauri/tauri.conf.json','windows/frontend/src-tauri/capabilities','windows/frontend/src-tauri/icons',
-            'licenses/third-party.json','windows/deployment/USE-TERMS.txt','windows/deployment/LICENSE-Apache-2.0.txt',
+            'licenses/third-party.json','data/user-dictionary-pos.json','windows/deployment/USE-TERMS.txt','windows/deployment/LICENSE-Apache-2.0.txt',
             'windows/deployment/LICENSE-Swift.txt','windows/deployment/LICENSE-Unicode.txt','windows/deployment/THIRD_PARTY_LICENSES.md',
             'windows/deployment/THIRD_PARTY_RUST.md','windows/deployment/THIRD_PARTY_FRONTEND.md','data/dictionary/AdditionalDictionaryNotices')
         swift = @('windows/server-swift/Sources','windows/server-swift/Package.swift','windows/server-swift/Package.resolved')
@@ -28,7 +28,7 @@ function Get-TrialInputGroups {
             'scripts/prepare_dictionary.py','data/dictionary')
         emoji = @('windows/server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary')
         deployment = @('windows/deployment')
-        models = @('artifacts/models/zerocon/zerocon-nano-v4.2-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4.2-iq4nl-emb8.gguf')
+        models = @('artifacts/models/zerocon/zerocon-standard-v4.2b-iq4nl-emb8.gguf','artifacts/models/zerocon/zerocon-standard-v4.2b-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4.2b-q8_0.gguf','artifacts/models/zerocon/zerocon-nano-v4.2b-iq4nl-emb8.gguf')
         tooling = @('windows/scripts/build-trial.ps1','windows/scripts/incremental-trial.psm1')
     }
 }

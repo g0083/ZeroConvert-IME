@@ -20,7 +20,7 @@ import {
     type SetupAssetsStatus,
 } from "@/lib/setup-assets";
 
-const MANDATORY_MODEL_ID = "nano_v4_2_iq4_emb8";
+const MANDATORY_MODEL_ID = "standard_v4_2b_iq4_emb8";
 const PENDING_SETUP_KEY = "zerocon-setup-benchmark-pending-v1";
 
 function hasPendingSetup() {
@@ -70,7 +70,7 @@ type Requirement = {
 const requirements = (status: SetupAssetsStatus): Requirement[] => [
     {
         id: "model",
-        label: "変換モデル（ZeroCon Model Nano v4.2）",
+        label: "変換モデル（ZeroCon Model Standard v4.2b）",
         description: "文脈に応じた漢字選択に使います。",
         bytes: status.model.size_bytes,
     },

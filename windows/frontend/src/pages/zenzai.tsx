@@ -93,7 +93,7 @@ export const Zenzai = () => {
             if (!cancelled) {
                 setActiveModelId(data.active_id);
                 setModels(data.models);
-                // Nano v4.2 IQ4_emb8 は強制：無ければ表示のたびに未取得である旨を案内する。
+                // Standard v4.2b IQ4_emb8 は強制：無ければ表示のたびに未取得である旨を案内する。
                 // 自動ダウンロードはしない（通信量・テレメトリ等の同意が必要なため）。
             }
         }).catch((err) => {
@@ -243,7 +243,7 @@ export const Zenzai = () => {
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <p className="text-sm font-medium">{model.name}</p>
                                                 {model.is_active && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">使用中</span>}
-                                                {model.id === "nano_v4_2_iq4_emb8" && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">必須</span>}
+                                                {model.id === "standard_v4_2b_iq4_emb8" && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">必須</span>}
                                             </div>
                                             <p className="settings-description">
                                                 {model.available ? `${model.size_mb.toFixed(1)} MB · ${model.description}` : `${model.size_mb.toFixed(1)} MB · 未ダウンロード`}
@@ -256,7 +256,7 @@ export const Zenzai = () => {
                                             {model.available && !model.is_active && <Button id={`select-${model.id}`} variant="outline" size="sm" disabled={quickBenchmarkRunning || runtimeApplying || isSwitchingModel || downloadingModelId !== null} onClick={() => void handleModelChange(model.id)}>
                                                 {isSwitchingModel ? "切替中…" : "切替"}
                                             </Button>}
-                                            {model.available && model.id !== "nano_v4_2_iq4_emb8" && <Button variant="ghost" size="sm" disabled={downloadingModelId !== null || model.is_active || isSwitchingModel} title={model.is_active ? "使用中のモデルは削除できません" : undefined} onClick={() => void handleDeleteModel(model.id)}>
+                                            {model.available && model.id !== "standard_v4_2b_iq4_emb8" && <Button variant="ghost" size="sm" disabled={downloadingModelId !== null || model.is_active || isSwitchingModel} title={model.is_active ? "使用中のモデルは削除できません" : undefined} onClick={() => void handleDeleteModel(model.id)}>
                                                 削除
                                             </Button>}
                                         </div>

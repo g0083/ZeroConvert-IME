@@ -836,7 +836,8 @@ mod tests {
         std::fs::create_dir_all(path.join("llama_vulkan")).unwrap();
         std::fs::create_dir_all(path.join("models")).unwrap();
         std::fs::write(
-            path.join("models").join(shared::runtime_assets::NANO_IQ4),
+            path.join("models")
+                .join(shared::runtime_assets::STANDARD_IQ4),
             [],
         )
         .unwrap();
@@ -849,9 +850,15 @@ mod tests {
             std::fs::write(path.join(directory).join("llama-server.exe"), []).unwrap();
             config.zenzai.backend = backend.into();
             let spec = super::prediction_server_spec(&path, &config).unwrap();
+            // 取得済みキャッシュがあればそちらが優先される（実機と同じ解決順）。
+            let cached = shared::runtime_assets::model_download_root()
+                .join(shared::runtime_assets::STANDARD_IQ4);
+            let installed = path
+                .join("models")
+                .join(shared::runtime_assets::STANDARD_IQ4);
             assert_eq!(
                 spec.model,
-                path.join("models").join(shared::runtime_assets::NANO_IQ4)
+                if cached.is_file() { cached } else { installed }
             );
             assert_eq!(spec.backend, path.join(super::backend_dir(&config)));
             assert_eq!(spec.backend, path.join(directory));
@@ -886,7 +893,11 @@ mod tests {
                 }
             }
         }
-        std::fs::remove_file(path.join("models").join(shared::runtime_assets::NANO_IQ4)).unwrap();
+        std::fs::remove_file(
+            path.join("models")
+                .join(shared::runtime_assets::STANDARD_IQ4),
+        )
+        .unwrap();
         std::fs::remove_dir(path.join("models")).unwrap();
         for directory in ["llama_vulkan", "llama_cpu"] {
             std::fs::remove_file(path.join(directory).join("llama-server.exe")).unwrap();
@@ -1150,7 +1161,8 @@ mod tests {
         std::fs::write(root.join("llama_cpu/llama-server.exe"), []).unwrap();
         std::fs::write(root.join("llama_zerocon/llama-server.exe"), []).unwrap();
         std::fs::write(
-            root.join("models").join(shared::runtime_assets::NANO_IQ4),
+            root.join("models")
+                .join(shared::runtime_assets::STANDARD_IQ4),
             [],
         )
         .unwrap();

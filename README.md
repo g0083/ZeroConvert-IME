@@ -4,15 +4,15 @@ Windows版azooKeyを基盤に、zenz系のZeroCon Modelで変換操作を減ら�
 
 ## 📥 すぐに試す（最新リリース）
 
-最新版のWindowsインストーラー（v0.9.0）とAndroid APK（v0.9.1）は、**[GitHub Releases](https://github.com/g0083/ZeroConvert-IME/releases)** からダウンロードしてすぐにお試しいただけます。
+最新版のWindowsインストーラーとAndroid APK（**v0.9.3**）は、**[GitHub Releases](https://github.com/g0083/ZeroConvert-IME/releases)** からダウンロードしてすぐにお試しいただけます。
 
 | プラットフォーム | 配布ファイル | 説明 |
 |---|---|---|
-| **Windows 10 / 11（v0.9.0）** | [**ZeroConvert-IME-setup-v0.9.0.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.9.0/ZeroConvert-IME-setup-v0.9.0.exe) | エンジン一式を自動セットアップ（変換モデル・日本語辞書・英字辞書は初回起動時、翻訳モデルは初回ON時に別途ダウンロード） |
-| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.9.1-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.9.1/ZeroConvert-IME-v0.9.1-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK。変換モデル・日本語辞書・英字辞書は初回起動時、翻訳モデルは初回ON時に別途ダウンロード |
-| **Android (実機推奨)** | [**ZeroConvert-IME-v0.9.1-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.9.1/ZeroConvert-IME-v0.9.1-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK。変換モデル・日本語辞書・英字辞書は初回起動時、翻訳モデルは初回ON時に別途ダウンロード |
+| **Windows 10 / 11（v0.9.3）** | [**ZeroConvert-IME-setup-v0.9.3.exe**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.9.3/ZeroConvert-IME-setup-v0.9.3.exe) | エンジン一式を自動セットアップ（変換モデル・日本語辞書・英字辞書は初回起動時、翻訳モデルは初回ON時に別途ダウンロード） |
+| **Android (全CPU共通)** | [**ZeroConvert-IME-v0.9.3-universal-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.9.3/ZeroConvert-IME-v0.9.3-universal-debug.apk) | ARM64 / x86_64 両対応の共通エンジン版APK。変換モデル・日本語辞書・英字辞書は初回起動時、翻訳モデルは初回ON時に別途ダウンロード |
+| **Android (実機推奨)** | [**ZeroConvert-IME-v0.9.3-arm64-debug.apk**](https://github.com/g0083/ZeroConvert-IME/releases/download/v0.9.3/ZeroConvert-IME-v0.9.3-arm64-debug.apk) | 一般的なスマートフォン実機向け軽量APK。変換モデル・日本語辞書・英字辞書は初回起動時、翻訳モデルは初回ON時に別途ダウンロード |
 
-> v0.9.1はAndroid版のキーボード補正・UI更新です。変更内容と検証結果は [リリースノート (v0.9.1)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.9.1) をご覧ください。
+> 変更内容と検証結果は [リリースノート (v0.9.3)](https://github.com/g0083/ZeroConvert-IME/releases/tag/v0.9.3) をご覧ください。
 
 ## 🌐 翻訳入力（v0.3.0・試験機能）
 
@@ -22,22 +22,22 @@ Windowsでは `Ctrl+T` の翻訳バーから日本語→英語／英語→日本
 
 モデルはPLaMo Community Licenseで提供されます。ライセンス条件は [Androidの表示](android/THIRD_PARTY_LICENSES.md) / [Windowsの表示](windows/deployment/THIRD_PARTY_LICENSES.md) を確認してください。
 
-## 変換操作を減らす、独自のZeroCon Model Nano v4.2
+## 変換操作を減らす、独自のZeroCon Model v4.2b
 
-ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nano）から文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、数字変換、さらに追加辞書の固有名詞・専門複合語変換を強化した派生モデルです。Windows・Androidともに通常変換モデルは Nano / Standard v4.2 の量子化（IQ4_emb8 / Q8）の4種類を選択でき、インストーラー・APKには含めず設定画面でキャッシュへダウンロードします。
+ZeroCon Modelは、azooKeyの日本語変換モデル **zenz-v3.2-xsmall**（Nano）/ **zenz-v3.2-small**（Standard）から文脈に応じた漢字選択、日常チャット・口語表現の自然さ、過剰漢字抑止、数字変換、さらに追加辞書の固有名詞・専門複合語変換と長文・自動確定文脈の安定性を強化した派生モデルです。Windows・Androidともに通常変換モデルは Nano / Standard v4.2b の量子化（IQ4_emb8 / Q8）の4種類を選択でき、インストーラー・APKには含めず設定画面でキャッシュへダウンロードします。
 
 | モデル | サイズ | 特徴 |
 |---|---:|---|
-| **Standard v4.2 IQ4_emb8**（Windowsの既定・強制） | **58.5 MiB** | 中規模版の省メモリ版 |
-| **Nano v4.2 IQ4_emb8**（Androidの既定・強制） | **18.7 MiB** | 内部をIQ4_NL、入力埋め込み・出力をQ8_0にした省メモリ版 |
-| **Nano v4.2 Q8** | **27.7 MiB** | Q8_0で学習成果を保持した高精度版 |
-| **Standard v4.2 Q8** | **99.0 MiB** | 中規模版の高精度版 |
+| **Standard v4.2b IQ4_emb8**（Windowsの既定・必須） | **53.9 MiB** | 中規模版の省メモリ版（長文・AutoCommit・速度改善） |
+| **Nano v4.2b IQ4_emb8**（Androidの既定・必須） | **15.6 MiB** | 内部をIQ4_NL、入力埋め込み・共有出力をQ8_0にした軽量版 |
+| **Nano v4.2b Q8** | **24.6 MiB** | Q8_0高精度軽量版（160文自動確定 +6.3pt 改善） |
+| **Standard v4.2b Q8** | **94.4 MiB** | 中規模版の高精度版 |
 
-6層・約26.7Mパラメータの構造を保ちながら、日常会話・口語・過剰漢字抑止と数字変換、追加辞書の固有名詞・専門複合語、時間・数値単位表記を改善しました（840問評価で直接推論 `Nano Q8 836/840`・`Std Q8 835/840`・`Nano IQ4 829/840`、共通候補生成 `Std Q8 836/840`・`Nano Q8 835/840`・`Nano IQ4 827/840`）。推論時に追加の層は必要ありません。
+6層・約26.7MパラメータのNano構造を保ちながら、v4.2bでは長文・確定後左文脈・ハードネガティブを含む再学習（Nano SuperDistill / Standard Pure-KL）により160文ストリーミング自動確定の一致率とCERを改善し（model単体比較で Nano +6.3〜+6.9pt、Standard Q8 58.1% / CER 4.75%）、Weight-tied GGUF 出力で配布サイズを約 3.1〜4.9 MiB 削減しました。
 
-なお、取得元はGitHubリリース [`models-v4.2`](https://github.com/g0083/ZeroConvert-IME/releases/tag/models-v4.2) 固定で、モデル一覧には取得・進捗・中断・切替・削除を操作できます。モデルファイルの正規カタログは `windows/deployment/model-catalog.json` です。
+なお、取得元はGitHubリリース [`models-v4.2b`](https://github.com/g0083/ZeroConvert-IME/releases/tag/models-v4.2b) 固定で、モデル一覧には取得・進捗・中断・切替・削除を操作できます。モデルファイルの正規カタログは `windows/deployment/model-catalog.json` です。
 
-ZeroCon Model v4.2は、学習時にApache-2.0で公開されていたzenz-v3.2の重みを追加学習したモデルです。個別の許諾がないZeroCon独自の改変部分には製品の利用規約が適用されます。追加辞書に含まれるSudachiDictとWikidataのデータには、各出典の条件が適用されます。 [利用規約](LICENSE.md) · [モデルの来歴](docs/model-assets.md#上流ライセンス) · [共通ライセンス一覧](licenses/third-party.json)
+ZeroCon Model v4.2bは、学習時にApache-2.0で公開されていたzenz-v3.2の重みを追加学習したモデルです。個別の許諾がないZeroCon独自の改変部分には製品の利用規約が適用されます。追加辞書に含まれるSudachiDictとWikidataのデータには、各出典の条件が適用されます。 [利用規約](LICENSE.md) · [モデルの来歴](docs/model-assets.md#上流ライセンス) · [共通ライセンス一覧](licenses/third-party.json)
 
 ### ベースzenzからどこまで進んだか（Nano v4 開発評価480問の記録）
 
@@ -55,7 +55,7 @@ CPUのみ・4スレッドのi5-14500HXでは、IQ4_emb8は平均38.7ms、Q8は40
 
 ## 🎯 タイポ補正の劇的進化：メインモデル統合（v0.2.3）
 
-v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（Nano v4、現行は Nano v4.2）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
+v0.2.3 では、従来独立したサーバー（ポート `18090`）で常駐していた Corrector モデルを完全撤廃し、**メイン変換モデル（ZeroCon Model v4 系、現行は v4.2b）1本で読み候補の尤度判定・表層リランキング・漢字変換を一気通貫で行う新アーキテクチャ**へ刷新しました。
 
 これにより、**常駐 `llama-server` プロセス数を半減（2→1）** させてメモリと起動負荷を削減しながら、タイポ補正正解率は **20.8% → 78.0%（実質正解 86.7% / +57.2pt / 約4倍）** という圧倒的な進化を遂げました。
 

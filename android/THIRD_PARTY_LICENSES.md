@@ -31,9 +31,9 @@ Distributed under the same MIT terms reproduced in section 1.
 
 ---
 
-## 2. ZeroCon Model Nano v4.2 / Zenz Neural Kana-Kanji Conversion Models
-- **Modifications**: rank-64 DoRA, target-corrected dual-anchor distillation and self-copy/EOS margin training from zenz-v3.2-xsmall using a fine-tuned Standard v3 teacher, plus v4.2 conversational/anti-over-kanji, additional-dictionary vocabulary & numeral (`nam` digit-masking) refinement.
-- **Acquired variants**: `zerocon-nano-v4.2-iq4nl-emb8.gguf` / `zerocon-nano-v4.2-q8_0.gguf` (nano), `zerocon-standard-v4.2-iq4nl-emb8.gguf` / `zerocon-standard-v4.2-q8_0.gguf` (standard; IQ4_NL body with Q8_0 input/output, or Q8_0). Downloaded on demand from the pinned GitHub release and not redistributed with the APK.
+## 2. ZeroCon Model Nano v4.2b / Zenz Neural Kana-Kanji Conversion Models
+- **Modifications**: rank-64 DoRA, target-corrected dual-anchor distillation and self-copy/EOS margin training from zenz-v3.2-xsmall using a fine-tuned Standard v3 teacher, plus v4.2b long-context/SuperDistill conversational/anti-over-kanji, additional-dictionary vocabulary & numeral (`nam` digit-masking) refinement.
+- **Acquired variants**: `zerocon-nano-v4.2b-iq4nl-emb8.gguf` / `zerocon-nano-v4.2b-q8_0.gguf` (nano), `zerocon-standard-v4.2b-iq4nl-emb8.gguf` / `zerocon-standard-v4.2b-q8_0.gguf` (standard; IQ4_NL body with Q8_0 input/output, or Q8_0). Downloaded on demand from the pinned GitHub release and not redistributed with the APK.
 - **License of the upstream base used for training**: Apache License 2.0 (`app/src/main/assets/licenses/Apache-2.0.txt`). [Pinned xsmall revision](https://huggingface.co/Miwa-Keita/zenz-v3.2-xsmall-gguf/raw/4f5423f0fad41a73b1242eb96fe5c12ae4fdca83/README.md) · [Pinned small revision](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/raw/c67e03e07d215c869f591b274c1631170d3e11fe/README.md)
 - **ZeroCon modifications**: ZeroCon's terms reserve rights in its own modifications where no separate permission has been granted. Rights already granted under third-party licenses continue to apply.
 - **Author**: Miwa Keita (ensan-hcl)

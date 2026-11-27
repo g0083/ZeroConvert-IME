@@ -857,17 +857,17 @@ private func shouldOffloadZenzaiToGpu(zenzaiEnabled: Bool, backend: String?) -> 
 }
 
 func canonicalZenzaiModelId(_ raw: String?) -> String {
-    switch raw ?? "standard_v4_2_iq4_emb8" {
-    case "nano_v4_2_q8", "nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km":
-        return "nano_v4_2_q8"
-    case "nano_v4_2_iq4_emb8", "nano_v4_1_iq4_emb8", "nano_v4_iq4_emb8", "nano", "nano_q4km":
-        return "nano_v4_2_iq4_emb8"
-    case "standard_v4_2_iq4_emb8", "standard_v4_1_iq4_emb8", "standard_v4_iq4_emb8":
-        return "standard_v4_2_iq4_emb8"
-    case "standard_v4_2_q8", "standard_v4_1_q8", "standard_v4_q8", "standard_v4_2", "standard_v4_1":
-        return "standard_v4_2_q8"
+    switch raw ?? "standard_v4_2b_iq4_emb8" {
+    case "nano_v4_2b_q8", "nano_v4_2_q8", "nano_v4_1_q8", "nano_v4_q8", "standard", "standard_q4km":
+        return "nano_v4_2b_q8"
+    case "nano_v4_2b_iq4_emb8", "nano_v4_2_iq4_emb8", "nano_v4_1_iq4_emb8", "nano_v4_iq4_emb8", "nano", "nano_q4km":
+        return "nano_v4_2b_iq4_emb8"
+    case "standard_v4_2b_iq4_emb8", "standard_v4_2_iq4_emb8", "standard_v4_1_iq4_emb8", "standard_v4_iq4_emb8":
+        return "standard_v4_2b_iq4_emb8"
+    case "standard_v4_2b_q8", "standard_v4_2_q8", "standard_v4_1_q8", "standard_v4_q8", "standard_v4_2b", "standard_v4_2", "standard_v4_1":
+        return "standard_v4_2b_q8"
     default:
-        return "standard_v4_2_iq4_emb8"
+        return "standard_v4_2b_iq4_emb8"
     }
 }
 
@@ -877,14 +877,14 @@ func converterModelURL() -> URL {
     }
     let filename: String
     switch canonicalZenzaiModelId(config["model"] as? String) {
-    case "nano_v4_2_q8":
-        filename = "zerocon-nano-v4.2-q8_0.gguf"
-    case "standard_v4_2_iq4_emb8":
-        filename = "zerocon-standard-v4.2-iq4nl-emb8.gguf"
-    case "standard_v4_2_q8":
-        filename = "zerocon-standard-v4.2-q8_0.gguf"
+    case "nano_v4_2b_q8":
+        filename = "zerocon-nano-v4.2b-q8_0.gguf"
+    case "standard_v4_2b_iq4_emb8":
+        filename = "zerocon-standard-v4.2b-iq4nl-emb8.gguf"
+    case "standard_v4_2b_q8":
+        filename = "zerocon-standard-v4.2b-q8_0.gguf"
     default:
-        filename = "zerocon-nano-v4.2-iq4nl-emb8.gguf"
+        filename = "zerocon-nano-v4.2b-iq4nl-emb8.gguf"
     }
     // 取得済みキャッシュ（%LOCALAPPDATA%\ZeroConIME\models\）を優先し、
     // 旧配布物に残ったモデルがあればそのまま使う。
@@ -3841,7 +3841,7 @@ public func load_config() {
     config["profile"] = ""
     config["backend"] = "cpu"
     config["gpuLayers"] = 99
-    config["model"] = "standard_v4_2_iq4_emb8"
+    config["model"] = "standard_v4_2b_iq4_emb8"
     config["cpuRuntimeTuning"] = nil
     config["experimentalTypoCorrection"] = defaultKeyboardTypoCorrection
     config["predictiveConversion"] = defaultPredictiveConversionEnabled
@@ -3856,7 +3856,7 @@ public func load_config() {
 
         if let zenzai = settings.zenzai {
             config["gpuLayers"] = Int(resolvedGpuLayerCount(zenzai.gpu_layers))
-            config["model"] = zenzai.model ?? "standard_v4_2_iq4_emb8"
+            config["model"] = zenzai.model ?? "standard_v4_2b_iq4_emb8"
             if let enableValue = zenzai.enable {
                 config["enable"] = enableValue
             }

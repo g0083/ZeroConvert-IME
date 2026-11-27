@@ -4,7 +4,7 @@ import { trackAsset } from './load-progress.mjs';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const defaultModelName = 'zerocon-nano-v4.2-iq4nl-emb8.gguf';
+const defaultModelName = 'zerocon-nano-v4.2b-iq4nl-emb8.gguf';
 const reverseName = 'reverse-v2.bin';
 const ASSET_CACHE_NAME = 'zerocon-ime-assets-v1';
 
@@ -489,7 +489,7 @@ export async function loadModelEngine(base = import.meta.url, request = fetch, l
     send.settings = defaults;
     send.modelMeta = {
         id: manifest?.model?.id || staged?.zenzai?.model || '',
-        name: manifest?.model?.name || 'ZeroCon Model Nano v4.2',
+        name: manifest?.model?.name || 'ZeroCon Model Nano v4.2b',
         filename: modelName,
         releaseTag: manifest?.model?.releaseTag || '',
         commit: manifest?.build?.commit || '',

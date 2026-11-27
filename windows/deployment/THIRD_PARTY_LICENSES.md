@@ -40,14 +40,14 @@ SOFTWARE.
 
 ---
 
-## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model Nano v4.2)
+## 2. Zenz / zenz-v3.2 Conversion and Prediction Models (ZeroCon Model v4.2b)
 
 - **Upstream Model**: `Miwa-Keita/zenz-v3.2-xsmall` (base), with a fine-tuned `Miwa-Keita/zenz-v3.2-small` teacher
 - **Author**: Miwa Keita (ensan-hcl)
 - **License of the upstream base used for training**: Apache License 2.0 (`LICENSE-Apache-2.0.txt`). [Pinned xsmall revision](https://huggingface.co/Miwa-Keita/zenz-v3.2-xsmall-gguf/raw/4f5423f0fad41a73b1242eb96fe5c12ae4fdca83/README.md) · [Pinned small revision](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/raw/c67e03e07d215c869f591b274c1631170d3e11fe/README.md)
 - **ZeroCon modifications**: ZeroCon's terms reserve rights in its own modifications where no separate permission has been granted. Rights already granted under third-party licenses continue to apply.
 - **Notice**:
-  - `models/zerocon-nano-v4.2-iq4nl-emb8.gguf`, `models/zerocon-nano-v4.2-q8_0.gguf`, `models/zerocon-standard-v4.2-iq4nl-emb8.gguf`, `models/zerocon-standard-v4.2-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall` (nano) / `Miwa-Keita/zenz-v3.2-small` (standard), trained with rank-64 DoRA, target-corrected dual-anchor distillation, and v4.2 conversational/anti-over-kanji, additional-dictionary vocabulary & numeral robustness tuning (`nam` digit-masking compatibility). The weights are fetched on demand from the pinned GitHub release and are not redistributed with the bundled installer/APK.
+  - `models/zerocon-nano-v4.2b-iq4nl-emb8.gguf`, `models/zerocon-nano-v4.2b-q8_0.gguf`, `models/zerocon-standard-v4.2b-iq4nl-emb8.gguf`, `models/zerocon-standard-v4.2b-q8_0.gguf` are modified derivatives of `Miwa-Keita/zenz-v3.2-xsmall` (nano) / `Miwa-Keita/zenz-v3.2-small` (standard), trained with rank-64 DoRA, target-corrected dual-anchor distillation, v4.2b long-context / SuperDistill refinement, and conversational/anti-over-kanji, additional-dictionary vocabulary & numeral robustness tuning (`nam` digit-masking compatibility). The weights are fetched on demand from the pinned GitHub release and are not redistributed with the bundled installer/APK.
   - The IQ4_NL variant protects input/output tensors with Q8_0 (`IQ4_NL` body with `Q8_0` embeddings/output). The Q8_0 variant preserves full precision quantization across all tensors.
 
 ---

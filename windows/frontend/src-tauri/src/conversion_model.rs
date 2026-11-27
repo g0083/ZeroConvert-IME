@@ -1,4 +1,4 @@
-//! 変換モデル（ZeroCon Model Nano / Standard v4.2）のダウンロードと状態管理。
+//! 変換モデル（ZeroCon Model Nano / Standard v4.2b）のダウンロードと状態管理。
 //!
 //! モデルはインストーラー・APKに同梱しない。設定画面で必要に応じて
 //! GitHubリリースのピン留めアセットから取得し、`%LOCALAPPDATA%\ZeroConIME\models\`
@@ -27,12 +27,12 @@ pub fn cancel() {
     CANCEL_REQUESTED.store(true, Ordering::Release);
 }
 
-/// 取得済みキャッシュモデルを削除する。必須モデル（Nano v4.2 IQ4_emb8）は削除できない。
+/// 取得済みキャッシュモデルを削除する。既定（必須）モデルは削除できない。
 pub fn delete(install_dir: &std::path::Path, model_id: &str) -> Result<Status, String> {
     let canonical = shared::runtime_assets::canonical_model_id(model_id)
         .ok_or_else(|| format!("Unknown model_id: {model_id}"))?;
-    if canonical == "nano_v4_2_iq4_emb8" {
-        return Err("必須モデル（Nano v4.2 IQ4_emb8）は削除できません".to_string());
+    if canonical == shared::runtime_assets::default_model() {
+        return Err("必須モデル（Standard v4.2b IQ4_emb8）は削除できません".to_string());
     }
     let filename = shared::runtime_assets::model_filename(canonical)
         .ok_or_else(|| "モデルファイル名が解決できません".to_string())?;

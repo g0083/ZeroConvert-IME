@@ -229,7 +229,7 @@ object ZenzNative {
     @Volatile
     private var isDictInitialized = false
 
-    var currentModelName: String = "ZeroCon Model Nano v4.2 IQ4_emb8 (18.7 MiB)"
+    var currentModelName: String = "ZeroCon Model Nano v4.2b IQ4_emb8 (15.6 MiB)"
         private set
 
     @Synchronized

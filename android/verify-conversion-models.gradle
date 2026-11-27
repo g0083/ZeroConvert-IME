@@ -9,7 +9,7 @@ def verify = tasks.register('verifyConversionModels') {
     doLast {
         def parsed = new JsonSlurper().parse(catalog)
         def models = parsed.models
-        assert models*.id.toSet() == ['nano_v4_2_iq4_emb8', 'nano_v4_2_q8', 'standard_v4_2_iq4_emb8', 'standard_v4_2_q8'].toSet()
+        assert models*.id.toSet() == ['nano_v4_2b_iq4_emb8', 'nano_v4_2b_q8', 'standard_v4_2b_iq4_emb8', 'standard_v4_2b_q8'].toSet()
         models.each { model ->
             assert model.filename ==~ /^[a-z0-9][a-z0-9._-]*\.gguf$/ : "Invalid filename: ${model.filename}"
             assert model.bytes > 0

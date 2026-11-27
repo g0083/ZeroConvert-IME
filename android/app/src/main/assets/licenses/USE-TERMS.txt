@@ -3,7 +3,7 @@ ZeroCon Keyboard — 利用規約
 本アプリをインストール・利用される前に、この規約をお読みください。
 
 1. 定義
-「本アプリ」: ZeroCon Keyboard（ZeroConvert IME）のAndroid版を指します。「アプリ内モデル」には、アプリが追加取得する ZeroCon Model v4.2 も含みます。
+「本アプリ」: ZeroCon Keyboard（ZeroConvert IME）のAndroid版を指します。「アプリ内モデル」には、アプリが追加取得する ZeroCon Model v4.2b も含みます。
 
 2. 個人利用の許諾
 本規約の対象となる部分は、個人的・非商業的な利用に限り、現状有姿で無償で提供されます。第三者ライセンス等で許諾される部分の利用は第4条に従います。

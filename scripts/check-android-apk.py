@@ -86,7 +86,7 @@ def main():
             catalog = json.loads((ROOT / 'windows/deployment/model-catalog.json').read_text(encoding='utf-8'))
             specs = catalog['models']
             # 変換モデルはAPKに同梱しない。端末側のキャッシュへ GitHub リリースの
-            # 固定アセット（models-v4.2）から取得し、サイズ+SHA-256で検証する。
+            # 固定アセット（models-v4.2b）から取得し、サイズ+SHA-256で検証する。
             if any(name.endswith('.gguf') for name in names):
                 raise ValueError(f'{apk.name}: bundled converter model; models must be downloaded on device')
             for spec in specs:

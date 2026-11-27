@@ -273,7 +273,7 @@ ZeroCon は `EE02 + 左文脈 + EE00 + カタカナ読み` から読みの続き
 
 | 用途 | 接続先・モデル |
 |---|---|
-| Rust 補正・ZeroCon 先読み（統合） | 18091、設定で選ばれたメイン変換モデル（Nano / Standard v4.2 IQ4_emb8 / Q8）、漢字変換と共通の `zenzai.backend`（既定 Vulkan、CPU も選択可。CUDA は廃止） |
+| Rust 補正・ZeroCon 先読み（統合） | 18091、設定で選ばれたメイン変換モデル（Nano / Standard v4.2b IQ4_emb8 / Q8）、漢字変換と共通の `zenzai.backend`（既定 Vulkan、CPU も選択可。CUDA は廃止） |
 | 翻訳（試験機能） | 18092、PLaMo 3 Translate（0.8B 既定 / 2B 任意） |
 | 設定画面のベンチマーク | 標準入出力で接続する専用ワーカー |
 | （旧構成）Corrector 専用 | 18090。v0.2.3で完全撤廃され、18091のメイン変換モデルへ一本化 |
