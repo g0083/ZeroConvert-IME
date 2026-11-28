@@ -353,6 +353,9 @@ fun MainScreen(
     var isEnglishSpaceAdoptsCandidate by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false))
     }
+    var isAlwaysHalfwidthSpace by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_ALWAYS_HALFWIDTH_SPACE, false))
+    }
     var learningMode by remember { mutableStateOf(LearningMode.from(imePrefs.getString(LearningPolicy.KEY, null))) }
     var learningMenuExpanded by remember { mutableStateOf(false) }
     var autoTypoCorrectionStrength by remember {
@@ -1136,6 +1139,23 @@ fun MainScreen(
                     isEnglishSpaceAdoptsCandidate = checked
                     imePrefs.edit()
                         .putBoolean(ZeroConvertInputMethodService.KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "スペースを常に半角で入力",
+                description = if (isAlwaysHalfwidthSpace) {
+                    "入力モードにかかわらず、スペースキーで常に半角スペースを入力します。"
+                } else {
+                    "日本語モードでは全角スペース、英字・数字モードでは半角スペースを入力します。"
+                },
+                checked = isAlwaysHalfwidthSpace,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isAlwaysHalfwidthSpace = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_ALWAYS_HALFWIDTH_SPACE, checked)
                         .apply()
                 }
             )

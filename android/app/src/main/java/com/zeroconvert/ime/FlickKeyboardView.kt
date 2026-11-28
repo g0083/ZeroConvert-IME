@@ -1368,6 +1368,7 @@ fun FlickNumericPadLayout(
     onReplaceLastCommittedText: (String, Int) -> Unit = { _, _ -> },
     onDelete: () -> Unit,
     onUndo: () -> Unit = {},
+    onSpace: (() -> Unit)? = null,
     onLongPressSpace: () -> Unit = {},
     onEnter: () -> Unit,
     onSwitchMode: (FlickDirection) -> Unit,
@@ -1476,7 +1477,7 @@ fun FlickNumericPadLayout(
         },
         onSpace = {
             lastTappedKey = null
-            onCommitText(" ")
+            if (onSpace != null) onSpace() else onCommitText(" ")
         },
         onLongPressSpace = onLongPressSpace,
         onSwitchMode = { direction ->

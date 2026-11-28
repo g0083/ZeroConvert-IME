@@ -290,9 +290,20 @@ class KanaKanjiConverter {
             }
         }
 
-        com.zeroconvert.ime.engine.WindowsEngine.candidates(
-            composingText, leftContext, enableAI, profile, personalize, experimentalKeyboardCorrection,
-            predictiveConversion = predictiveConversion, continuation = continuation, touchBiases = touchBiases
-        )
+        val hasSymbolCandidates = SymbolCandidateCatalog.symbolsFor(hiragana).isNotEmpty()
+        val engineCandidates = if (hasSymbolCandidates) {
+            runCatching {
+                com.zeroconvert.ime.engine.WindowsEngine.candidates(
+                    composingText, leftContext, ai = false, profile = profile, personalize = personalize,
+                    dictionaryCorrection = false, predictiveConversion = false, continuation = null, touchBiases = emptyList()
+                )
+            }.getOrElse { emptyList() }
+        } else {
+            com.zeroconvert.ime.engine.WindowsEngine.candidates(
+                composingText, leftContext, enableAI, profile, personalize, experimentalKeyboardCorrection,
+                predictiveConversion = predictiveConversion, continuation = continuation, touchBiases = touchBiases
+            )
+        }
+        SymbolCandidateCatalog.mergeWithEngineCandidates(hiragana, engineCandidates)
     }
 }
