@@ -108,8 +108,18 @@ class ExpandedCandidateLayoutTest {
         assertEquals(CandidateBarContentMode.SELECTION_ACTIONS, selecting.mode)
         assertTrue(selecting.showSelectionCopy)
         assertTrue(selecting.showSelectionSelectAll)
-        assertFalse(selecting.showClipboardSuggestion)
+        assertTrue(selecting.showClipboardSuggestion)
         assertFalse(selecting.showKeyboardPlacementMenu)
+
+        val selectingDismissed = CandidateBarDisplayPolicy.resolve(
+            hasCandidates = false,
+            isCandidatesExpanded = false,
+            hasSelectionCount = true,
+            translationActive = false,
+            selectionTranslationActive = false,
+            clipboardSuggestionDismissed = true
+        )
+        assertFalse(selectingDismissed.showClipboardSuggestion)
 
         val idle = CandidateBarDisplayPolicy.resolve(
             hasCandidates = false,

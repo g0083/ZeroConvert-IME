@@ -812,7 +812,27 @@ private fun KeyboardTopBars(
                 ) {
                     when (barPolicy.mode) {
                         CandidateBarContentMode.SELECTION_ACTIONS -> {
-                            SelectionCountLabel(selectionCount!!, palette, Modifier.weight(1f).fillMaxHeight())
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                SelectionCountLabel(selectionCount!!, palette, Modifier.fillMaxHeight())
+                                if (hasClipboardSuggestions) {
+                                    ClipboardSuggestionStrip(
+                                        suggestions = suggestions,
+                                        chipColor = actionKeyBg.copy(alpha = 0.9f),
+                                        textColor = textColor,
+                                        palette = palette,
+                                        onSelect = { onClipboardPaste(it, true) },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                            .padding(end = 4.dp)
+                                    )
+                                }
+                            }
                         }
                         CandidateBarContentMode.CANDIDATE_STRIP -> {
                             HorizontalCandidateStrip(
