@@ -530,13 +530,14 @@ fun KeyboardRootView(
                                     rowHeight = keyboardRowHeight(keyHeight, rowCount = 4, targetRowCount = keyRowCount),
                                     isFlickOnly = imeService.isFlickOnlyState.value,
                                     onCommitText = { text ->
-                                        imeService.commitDirect(text)
+                                        imeService.handleNumericText(text)
                                     },
                                     onReplaceLastCommittedText = { text, len ->
-                                        imeService.replaceLastCommittedText(text, len)
+                                        imeService.replaceLastNumericText(text, len)
                                     },
                                     onDelete = onDeleteChar,
                                     onUndo = { imeService.handleUndo() },
+                                    onSpace = { imeService.handleSpace() },
                                     onLongPressSpace = onLongPressSpace,
                                     onEnter = onEnter,
                                     onSwitchMode = onSwitchMode,

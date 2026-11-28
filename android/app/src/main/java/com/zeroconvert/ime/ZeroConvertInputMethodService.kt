@@ -136,6 +136,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val KEY_POST_COMPOSITION_PREDICTION = "post_composition_prediction" // boolean, Android default: true
         const val DEFAULT_POST_COMPOSITION_PREDICTION = true
         const val KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE = "english_space_adopts_candidate" // boolean, default false: insert space without adopting top candidate
+        const val KEY_ALWAYS_HALFWIDTH_SPACE = "always_halfwidth_space" // boolean, default false: follow keyboard mode (fullwidth in Japanese, halfwidth in English/Numeric)
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
         const val KEY_TRANSLATION_ENABLED = "translation_enabled" // boolean, default false
         const val KEY_TRANSLATION_TARGET = "translation_target" // "auto", "en", "ja"
@@ -240,6 +241,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isPredictiveConversionState = mutableStateOf(true)
     val isPostCompositionPredictionState = mutableStateOf(DEFAULT_POST_COMPOSITION_PREDICTION)
     val isEnglishSpaceAdoptsCandidateState = mutableStateOf(false)
+    val isAlwaysHalfwidthSpaceState = mutableStateOf(false)
     val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
     val aiAssistAdoptionState = mutableStateOf(AiAssistAdoption.None)
@@ -382,7 +384,15 @@ class ZeroConvertInputMethodService : InputMethodService(),
             appendTranslationLiteral(" ")
             return
         }
-        if (composingText.isEmpty) commitDirect(" ") else confirmCurrent()
+        if (composingText.isEmpty) {
+            val space = SpaceInputPolicy.spaceText(
+                mode = keyboardModeState.value,
+                alwaysHalfwidth = isAlwaysHalfwidthSpaceState.value
+            )
+            commitDirect(space)
+        } else {
+            confirmCurrent()
+        }
     }
 
     fun commitTranslationFromUi() {
@@ -1757,6 +1767,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
             clearPostCompositionDisplay()
         }
         isEnglishSpaceAdoptsCandidateState.value = prefs.getBoolean(KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false)
+        isAlwaysHalfwidthSpaceState.value = prefs.getBoolean(KEY_ALWAYS_HALFWIDTH_SPACE, false)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
         predictiveModelState.value = "zerocon"
         clipboardSuggestionMinutesState.value = ClipboardSuggestionPolicy.normalizeMinutes(
@@ -2667,6 +2678,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
 
         if (isImmediateCommitChar(ch)) {
+            if (SymbolCandidateCatalog.shouldComposeSymbol(ch, composingText.convertTargetBeforeCursor)) {
+                handleKana(ch.toString(), touchBias)
+                return
+            }
             if (!composingText.isEmpty) {
                 confirmAsync(trailingText = ch.toString())
             } else {
@@ -3946,6 +3961,55 @@ class ZeroConvertInputMethodService : InputMethodService(),
         commitText(composingText.convertTarget, committedCandidate = null)
     }
 
+    fun handleNumericText(text: String) {
+        if (isConfirming || text.isEmpty()) return
+        if (isTranslationMode()) {
+            appendTranslationLiteral(text)
+            return
+        }
+        if (SymbolCandidateCatalog.shouldComposeSymbolText(text, composingText.convertTargetBeforeCursor)) {
+            handleKana(text)
+            return
+        }
+        if (!composingText.isEmpty) {
+            confirmAsync(trailingText = text)
+        } else {
+            commitDirect(text)
+        }
+    }
+
+    fun replaceLastNumericText(newText: String, oldLength: Int = 1) {
+        if (isConfirming || newText.isEmpty()) return
+        if (!composingText.isEmpty) {
+            if (SymbolCandidateCatalog.isSymbolOnly(newText)) {
+                replaceLastKana(newText)
+                return
+            }
+            val ic = currentInputConnection
+            if (ic != null) {
+                composingText.deleteBackwardFromCursorPosition(count = oldLength.coerceAtLeast(1))
+                val remaining = composingText.convertTarget
+                if (remaining.isEmpty()) {
+                    setManagedComposingText(ic, "", 1)
+                    clearInput()
+                    commitDirect(newText)
+                } else {
+                    confirmAsync(trailingText = newText)
+                }
+            }
+            return
+        }
+        if (SymbolCandidateCatalog.isSymbolOnly(newText)) {
+            val ic = currentInputConnection ?: return
+            if (oldLength > 0) {
+                ic.deleteSurroundingText(oldLength, 0)
+            }
+            handleKana(newText)
+            return
+        }
+        replaceLastCommittedText(newText, oldLength)
+    }
+
     fun commitDirect(text: String) {
         if (isTranslationMode() && !committingTranslation) {
             appendTranslationLiteral(text)
@@ -3998,11 +4062,21 @@ class ZeroConvertInputMethodService : InputMethodService(),
             EnglishWordDictionary.isEmailDomainContinuationChar(ch) &&
             englishComposing.length < 64
         if (isAtTrigger) {
+            if (!composingText.isEmpty) confirmCurrent()
             if (englishComposing.isNotEmpty()) commitEnglishBuffer(useTopCandidate = false)
         } else if (!ch.isLetter() && !isDomainContinuation) {
+            if (englishComposing.isEmpty() &&
+                SymbolCandidateCatalog.shouldComposeSymbol(ch, composingText.convertTargetBeforeCursor)
+            ) {
+                handleKana(ch.toString(), touchBias)
+                return
+            }
+            if (!composingText.isEmpty) confirmCurrent()
             if (englishComposing.isNotEmpty()) commitEnglishBuffer(useTopCandidate = false)
             commitDirect(ch.toString())
             return
+        } else if (!composingText.isEmpty) {
+            confirmCurrent()
         }
         if (englishComposing.isEmpty()) {
             clearPostCompositionDisplay()
@@ -4148,6 +4222,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
     fun handleEnglishSpace() {
         if (isTranslationMode()) {
             appendTranslationLiteral(" ")
+            return
+        }
+        if (!composingText.isEmpty) {
+            confirmCurrent()
             return
         }
         if (englishComposing.isNotEmpty()) {
