@@ -52,27 +52,24 @@ class InputTypeModeTest {
         )
     }
 
-    @Test fun emailSubjectVariationAsksForEnglish() {
-        assertEquals(
-            KeyboardMode.ENGLISH,
+    @Test fun emailSubjectVariationKeepsCurrentMode() {
+        assertNull(
             InputTypeMode.modeFor(
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_SUBJECT, 0
             )
         )
     }
 
-    @Test fun personNameVariationAsksForEnglish() {
-        assertEquals(
-            KeyboardMode.ENGLISH,
+    @Test fun personNameVariationKeepsCurrentMode() {
+        assertNull(
             InputTypeMode.modeFor(
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PERSON_NAME, 0
             )
         )
     }
 
-    @Test fun postalAddressVariationAsksForEnglish() {
-        assertEquals(
-            KeyboardMode.ENGLISH,
+    @Test fun postalAddressVariationKeepsCurrentMode() {
+        assertNull(
             InputTypeMode.modeFor(
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS, 0
             )

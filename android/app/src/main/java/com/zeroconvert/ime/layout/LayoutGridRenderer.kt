@@ -101,7 +101,8 @@ object LayoutGridRenderer {
                     isModifier = true,
                     palette = palette,
                     onBeforePress = callbacks.onBeforeAction,
-                    hapticOnPress = false
+                    hapticOnPress = false,
+                    enableSwipeDelete = true
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Backspace,

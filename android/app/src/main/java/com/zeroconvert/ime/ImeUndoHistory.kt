@@ -20,7 +20,8 @@ internal sealed interface ImeUndoEntry {
         val previousEnglish: String = "",
         val previousLeftContext: String = "",
         val japaneseTouchBiases: List<TouchKeyBias> = emptyList(),
-        val englishTouchBiases: List<TouchKeyBias> = emptyList()
+        val englishTouchBiases: List<TouchKeyBias> = emptyList(),
+        val cursorOffsetFromEnd: Int = 0
     ) : ImeUndoEntry
 
     data class DeletedText(
@@ -34,7 +35,7 @@ internal sealed interface ImeUndoEntry {
 }
 
 /**
- * Bounded stack of recent IME edits used by the 12-key Undo key (↶).
+ * Bounded stack of recent IME edits used by the 12-key Undo key.
  */
 internal class ImeUndoHistory(
     private val maxEntries: Int = 32
