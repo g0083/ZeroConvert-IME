@@ -356,6 +356,15 @@ fun MainScreen(
     var isAlwaysHalfwidthSpace by remember {
         mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_ALWAYS_HALFWIDTH_SPACE, false))
     }
+    var isBracketCursorInside by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_BRACKET_CURSOR_INSIDE, true))
+    }
+    var isBackspaceSwipeDelete by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_BACKSPACE_SWIPE_DELETE, true))
+    }
+    var isQwertyLongPressSymbols by remember {
+        mutableStateOf(imePrefs.getBoolean(ZeroConvertInputMethodService.KEY_QWERTY_LONG_PRESS_SYMBOLS, true))
+    }
     var learningMode by remember { mutableStateOf(LearningMode.from(imePrefs.getString(LearningPolicy.KEY, null))) }
     var learningMenuExpanded by remember { mutableStateOf(false) }
     var autoTypoCorrectionStrength by remember {
@@ -1156,6 +1165,45 @@ fun MainScreen(
                     isAlwaysHalfwidthSpace = checked
                     imePrefs.edit()
                         .putBoolean(ZeroConvertInputMethodService.KEY_ALWAYS_HALFWIDTH_SPACE, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "括弧ペア確定時にカーソルを内側へ移動",
+                description = "「」や（）などの括弧ペアを確定したあと、自動で括弧の内側へカーソルを移動します。",
+                checked = isBracketCursorInside,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isBracketCursorInside = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_BRACKET_CURSOR_INSIDE, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "削除キーの左スワイプでまとめて削除",
+                description = "削除キーを左にスワイプして単語や未確定文字を一括削除します（元に戻すで復元できます）。",
+                checked = isBackspaceSwipeDelete,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isBackspaceSwipeDelete = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_BACKSPACE_SWIPE_DELETE, checked)
+                        .apply()
+                }
+            )
+            SettingsDivider(palette)
+            SettingsSwitchRow(
+                title = "QWERTYキーの長押し・上フリックで記号入力",
+                description = "QWERTY配列の全段キーに記号ヒントを表示し、長押しまたは上フリックで記号を入力できます。",
+                checked = isQwertyLongPressSymbols,
+                palette = palette,
+                onCheckedChange = { checked ->
+                    isQwertyLongPressSymbols = checked
+                    imePrefs.edit()
+                        .putBoolean(ZeroConvertInputMethodService.KEY_QWERTY_LONG_PRESS_SYMBOLS, checked)
                         .apply()
                 }
             )

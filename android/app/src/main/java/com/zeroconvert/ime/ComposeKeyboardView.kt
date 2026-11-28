@@ -2,6 +2,7 @@ package com.zeroconvert.ime
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -47,6 +48,10 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
@@ -176,6 +181,18 @@ fun KeyboardRootView(
     val showsQwertyNumberRow = imeService.isQwertyNumberRowState.value && isQwertyMain
     val keyRowCount = if (showsQwertyNumberRow) 5 else 4
     val bottomPaddingDp = if (isFloating) 0.dp else imeService.keyboardBottomPaddingDpState.value.dp
+    val backspaceSwipeCallbacks = remember(imeService, imeService.isBackspaceSwipeDeleteState.value) {
+        if (imeService.isBackspaceSwipeDeleteState.value) {
+            BackspaceSwipeDeleteCallbacks(
+                onStart = { imeService.beginBackspaceSwipeDelete() },
+                onStep = { steps -> imeService.updateBackspaceSwipeDelete(steps) },
+                onCommit = { steps -> imeService.commitBackspaceSwipeDelete(steps) },
+                onCancel = { imeService.cancelBackspaceSwipeDelete() }
+            )
+        } else {
+            null
+        }
+    }
     ProvideKeyboardErgonomicsLocals(
         palette = palette,
         onKeyPressHaptic = { imeService.vibrateOnKeyPress() },
@@ -183,6 +200,9 @@ fun KeyboardRootView(
         flickThresholdDp = imeService.flickSensitivityDpState.value.dp,
         keyBordersEnabled = imeService.isKeyBordersEnabledState.value,
         dynamicTouchAssistEnabled = imeService.isDynamicTouchAssistEnabledState.value,
+        qwertyLongPressSymbolsEnabled = imeService.isQwertyLongPressSymbolsState.value,
+        backspaceSwipeDelete = backspaceSwipeCallbacks,
+        onCommitQuickSymbol = { text -> imeService.commitQuickSymbol(text) },
         keyboardTheme = keyboardTheme
     ) {
         Column(modifier = Modifier.fillMaxWidth().then(if (isFloating) Modifier.fillMaxHeight() else Modifier)) {
@@ -409,6 +429,10 @@ fun KeyboardRootView(
                                             imeService.handleChar(shiftState.characterFor(ch))
                                             shiftState = shiftState.afterCharacter()
                                         },
+                                        onKeyPressLiteral = { ch ->
+                                            imeService.handleChar(ch)
+                                            shiftState = shiftState.afterCharacter()
+                                        },
                                         onShiftToggle = onShiftToggle,
                                         onDelete = onDeleteChar,
                                         onSpace = {
@@ -490,6 +514,10 @@ fun KeyboardRootView(
                                         palette = palette,
                                         onCommitChar = { ch ->
                                             imeService.handleEnglishChar(shiftState.characterFor(ch))
+                                            shiftState = shiftState.afterCharacter()
+                                        },
+                                        onCommitLiteralChar = { ch ->
+                                            imeService.handleEnglishChar(ch)
                                             shiftState = shiftState.afterCharacter()
                                         },
                                         onShiftToggle = onShiftToggle,
@@ -613,11 +641,13 @@ fun KeyboardRootView(
                     }
                     KeyboardTab.SYMBOLS -> {
                         SymbolsPanel(
+                            recent = if (privateMode) emptyList() else imeService.recentSymbolState.value,
                             keyBgColor = keyBgColor,
                             actionKeyBg = actionKeyBg,
                             textColor = textColor,
                             palette = palette,
                             onSelect = { sym ->
+                                imeService.recordRecentSymbol(sym)
                                 onCommitText(sym)
                             },
                             onBackToQwerty = {
@@ -1445,20 +1475,24 @@ fun RepeatingIconButton(
     palette: ZeroConPalette = LocalZeroConPalette.current,
     onBeforePress: () -> Unit = {},
     hapticOnPress: Boolean = true,
+    enableSwipeDelete: Boolean = false,
     contentDescription: String? = null,
     content: @Composable () -> Unit
 ) {
     val currentOnClick by rememberUpdatedState(onClick)
     val currentOnBeforePress by rememberUpdatedState(onBeforePress)
     val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
+    val swipeDeleteCallbacks by rememberUpdatedState(if (enableSwipeDelete) LocalBackspaceSwipeDelete.current else null)
     val bordersEnabled = LocalKeyBordersEnabled.current
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     var isPressed by remember { mutableStateOf(false) }
 
-    DisposableEffect(isPressed) {
+    val useSwipeDelete = enableSwipeDelete && swipeDeleteCallbacks != null
+
+    DisposableEffect(isPressed, useSwipeDelete) {
         var job: Job? = null
-        if (isPressed) {
+        if (isPressed && !useSwipeDelete) {
             job = coroutineScope.launch {
                 currentOnClick()
                 delay(initialDelayMs)
@@ -1487,23 +1521,89 @@ fun RepeatingIconButton(
                 true
             }
         }
-        .pointerInput(hapticOnPress) {
+        .pointerInput(hapticOnPress, useSwipeDelete) {
             val forgivenessPx = with(density) { 12.dp.toPx() }
+            val activationPx = with(density) { 24.dp.toPx() }
+            val stepPx = with(density) { 18.dp.toPx() }
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 down.consume()
                 currentOnBeforePress()
                 if (hapticOnPress) haptic()
                 isPressed = true
-                try {
-                    awaitPointerReleaseInBounds(
-                        pointerId = down.id,
-                        widthPx = size.width.toFloat(),
-                        heightPx = size.height.toFloat(),
-                        slopForgivenessPx = forgivenessPx
+                if (!useSwipeDelete) {
+                    try {
+                        awaitPointerReleaseInBounds(
+                            pointerId = down.id,
+                            widthPx = size.width.toFloat(),
+                            heightPx = size.height.toFloat(),
+                            slopForgivenessPx = forgivenessPx
+                        )
+                    } finally {
+                        isPressed = false
+                    }
+                } else {
+                    val callbacks = swipeDeleteCallbacks
+                    val tracker = BackspaceSwipeDeleteTracker(
+                        originX = down.position.x,
+                        activationThresholdPx = activationPx,
+                        stepPx = stepPx
                     )
-                } finally {
-                    isPressed = false
+                    var repeatStarted = false
+                    var swipeStarted = false
+                    val repeatJob = coroutineScope.launch {
+                        delay(initialDelayMs)
+                        if (!tracker.isActive) {
+                            repeatStarted = true
+                            currentOnClick()
+                            var repeatCount = 0
+                            while (isActive && !tracker.isActive) {
+                                delay(computeRepeatIntervalMs(repeatCount, repeatIntervalMs))
+                                if (!tracker.isActive) {
+                                    currentOnClick()
+                                    repeatCount++
+                                }
+                            }
+                        }
+                    }
+                    var releasedNormally = false
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                releasedNormally = !change.isConsumed
+                                change.consume()
+                                break
+                            }
+                            if (!repeatStarted && callbacks != null) {
+                                val nextSteps = tracker.move(change.position.x)
+                                if (nextSteps != null) {
+                                    if (!swipeStarted) {
+                                        swipeStarted = true
+                                        repeatJob.cancel()
+                                        callbacks.onStart()
+                                    }
+                                    callbacks.onStep(nextSteps)
+                                }
+                                if (tracker.isActive) {
+                                    change.consume()
+                                }
+                            }
+                        }
+                    } finally {
+                        repeatJob.cancel()
+                        isPressed = false
+                    }
+                    if (swipeStarted && callbacks != null) {
+                        if (releasedNormally) {
+                            callbacks.onCommit(tracker.steps)
+                        } else {
+                            callbacks.onCancel()
+                        }
+                    } else if (!repeatStarted && releasedNormally) {
+                        currentOnClick()
+                    }
                 }
             }
         }
@@ -1710,13 +1810,14 @@ private class QwertyTouchHost(
 
     fun flushAll(
         onCommitChar: (Char) -> Unit,
-        onCommitWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+        onCommitWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+        onCommitLiteralChar: ((Char) -> Unit)? = null
     ) {
         val commits = tracker.flushAllPending()
         if (commits.isNotEmpty()) {
             cancelAllLongPressJobs()
             for (commit in commits) {
-                dispatchCommit(commit, onCommitChar, onCommitWithBias)
+                dispatchCommit(commit, onCommitChar, onCommitWithBias, onCommitLiteralChar)
             }
             visualState = tracker.visualState
         }
@@ -1725,19 +1826,18 @@ private class QwertyTouchHost(
     fun dispatchCommit(
         commit: QwertyTouchEffect.CommitKey,
         onCommitChar: (Char) -> Unit,
-        onCommitWithBias: ((Char, TouchKeyBias?) -> Unit)? = null
+        onCommitWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+        onCommitLiteralChar: ((Char) -> Unit)? = null
     ) {
         val spec = specsById[commit.keyId] ?: return
         val shifted = commit.shiftState.isShifted
-        val ch = if (commit.upFlick) {
-            spec.upFlickFor(shifted) ?: spec.charFor(shifted)
-        } else {
-            spec.charFor(shifted)
-        }
-        if (onCommitWithBias != null && !commit.upFlick && !commit.longPress) {
-            onCommitWithBias(ch, commit.touchBias)
-        } else {
-            onCommitChar(ch)
+        val isSecondary = commit.upFlick || commit.longPress
+        val secondaryChar = if (isSecondary) spec.upFlickFor(shifted) else null
+        val ch = secondaryChar ?: spec.charFor(shifted)
+        when {
+            secondaryChar != null && onCommitLiteralChar != null -> onCommitLiteralChar(ch)
+            onCommitWithBias != null && !isSecondary -> onCommitWithBias(ch, commit.touchBias)
+            else -> onCommitChar(ch)
         }
     }
 }
@@ -1934,6 +2034,7 @@ private fun SharedQwertyLayout(
     duplicateMiddleKeys: Boolean,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
     onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+    onCommitLiteralChar: ((Char) -> Unit)? = null,
     nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null,
     onToggleJpEn: () -> Unit = {},
     onOpenSymbols: () -> Unit = {},
@@ -1961,18 +2062,22 @@ private fun SharedQwertyLayout(
     val currentShowNumberRow by rememberUpdatedState(showNumberRow)
     val currentOnCommitChar by rememberUpdatedState(onCommitChar)
     val currentOnCommitWithBias by rememberUpdatedState(onCommitCharWithBias)
+    val currentOnCommitLiteralChar by rememberUpdatedState(onCommitLiteralChar)
     val currentThresholdDp by rememberUpdatedState(LocalFlickThresholdDp.current)
     val currentHaptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
     val currentDynamicTouchAssistEnabled by rememberUpdatedState(LocalDynamicTouchAssistEnabled.current)
     val currentNextKeyWeights by rememberUpdatedState(nextKeyWeights)
     val currentNextKeyWeightsProvider by rememberUpdatedState(nextKeyWeightsProvider)
     val keyPreviewEnabled = LocalKeyPreviewEnabled.current
+    val qwertyLongPressSymbolsEnabled = LocalQwertyLongPressSymbolsEnabled.current
+    val commitQuickSymbol = LocalCommitQuickSymbol.current
+    var periodPopupState by remember(isJapanese) { mutableStateOf<PeriodPopupOverlayState?>(null) }
 
     DisposableEffect(host) {
         onDispose { host.clearAndCancelAll() }
     }
 
-    val flushBeforeAction = { host.flushAll(currentOnCommitChar, currentOnCommitWithBias) }
+    val flushBeforeAction = { host.flushAll(currentOnCommitChar, currentOnCommitWithBias, currentOnCommitLiteralChar) }
 
     val keySurface = LocalKeyboardTheme.current.keySurface
     val spaceBaseColor = keySurface.spaceKeyFill.toComposeColor()
@@ -1994,7 +2099,7 @@ private fun SharedQwertyLayout(
     fun startLongPressIfNeeded(pointerId: Long, keyId: String) {
         host.cancelLongPressJob(pointerId)
         val spec = host.specsById[keyId] ?: return
-        val supportsUpFlick = !currentShowNumberRow && spec.normalUpFlickChar != null
+        val supportsUpFlick = host.supportsUpFlickById[keyId] == true && spec.normalUpFlickChar != null
         if (!supportsUpFlick) return
         host.longPressJobs[pointerId] = scope.launch {
             delay(longPressTimeoutMillis)
@@ -2048,7 +2153,7 @@ private fun SharedQwertyLayout(
                                         when (effect) {
                                             is QwertyTouchEffect.CommitKey -> {
                                                 host.cancelAllLongPressJobs()
-                                                host.dispatchCommit(effect, currentOnCommitChar, currentOnCommitWithBias)
+                                                host.dispatchCommit(effect, currentOnCommitChar, currentOnCommitWithBias, currentOnCommitLiteralChar)
                                             }
                                             is QwertyTouchEffect.HapticTick -> currentHaptic()
                                         }
@@ -2066,7 +2171,7 @@ private fun SharedQwertyLayout(
                                             val effects = host.tracker.onPointerUp(pointerId)
                                             for (effect in effects) {
                                                 if (effect is QwertyTouchEffect.CommitKey) {
-                                                    host.dispatchCommit(effect, currentOnCommitChar, currentOnCommitWithBias)
+                                                    host.dispatchCommit(effect, currentOnCommitChar, currentOnCommitWithBias, currentOnCommitLiteralChar)
                                                 }
                                             }
                                         } else {
@@ -2136,18 +2241,32 @@ private fun SharedQwertyLayout(
             // Row 1: q - p
             QwertyCharacterRow(rowModifier, cutWidth, row1.size) { i, _ ->
                 val ch = row1[i]
+                val secNormal = QwertySymbolHints.secondarySymbolFor(
+                    key = ch,
+                    isJapanese = isJapanese,
+                    showNumberRow = showNumberRow,
+                    longPressSymbolsEnabled = qwertyLongPressSymbolsEnabled,
+                    shifted = false
+                )
+                val secShifted = QwertySymbolHints.secondarySymbolFor(
+                    key = ch,
+                    isJapanese = isJapanese,
+                    showNumberRow = showNumberRow,
+                    longPressSymbolsEnabled = qwertyLongPressSymbolsEnabled,
+                    shifted = true
+                )
                 val spec = QwertyCharKeySpec(
                     id = "r1_$ch",
                     normalChar = ch,
                     shiftedChar = ch.uppercaseChar(),
-                    normalUpFlickChar = QwertyNumberRow.digitFor(ch),
-                    shiftedUpFlickChar = QwertyNumberRow.shiftedSymbolFor(ch),
+                    normalUpFlickChar = secNormal,
+                    shiftedUpFlickChar = secShifted,
                     baseColor = keyBgColor
                 )
                 QwertyCharacterKeySlot(
                     spec = spec,
                     isShifted = isShifted,
-                    supportsUpFlick = !showNumberRow,
+                    supportsUpFlick = secNormal != null,
                     visualPadding = qwertyRowPadding(!showNumberRow, false, i == 0, i == row1.lastIndex),
                     textColor = textColor,
                     palette = palette,
@@ -2161,10 +2280,18 @@ private fun SharedQwertyLayout(
                 val ch = row2[i]
                 val isStaggerLeft = row2Staggered && i == 0
                 val isStaggerRight = row2Staggered && i == row2.lastIndex
+                val secRow2 = QwertySymbolHints.secondarySymbolFor(
+                    key = ch,
+                    isJapanese = isJapanese,
+                    showNumberRow = showNumberRow,
+                    longPressSymbolsEnabled = qwertyLongPressSymbolsEnabled
+                )
                 val spec = QwertyCharKeySpec(
                     id = "r2_${ch}_$rightHalf",
                     normalChar = ch,
                     shiftedChar = if (ch == 'ー') 'ー' else ch.uppercaseChar(),
+                    normalUpFlickChar = secRow2,
+                    shiftedUpFlickChar = secRow2,
                     keyWeight = if (isStaggerLeft || isStaggerRight) 1.5f else 1f,
                     baseColor = keyBgColor,
                     visualStartSpacerWeight = if (isStaggerLeft) 0.5f else 0f,
@@ -2178,7 +2305,7 @@ private fun SharedQwertyLayout(
                 QwertyCharacterKeySlot(
                     spec = spec,
                     isShifted = isShifted,
-                    supportsUpFlick = false,
+                    supportsUpFlick = secRow2 != null,
                     visualPadding = visualPad,
                     textColor = textColor,
                     palette = palette,
@@ -2215,7 +2342,8 @@ private fun SharedQwertyLayout(
                         isModifier = true,
                         palette = palette,
                         onBeforePress = flushBeforeAction,
-                        hapticOnPress = false
+                        hapticOnPress = false,
+                        enableSwipeDelete = true
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Backspace,
@@ -2227,16 +2355,24 @@ private fun SharedQwertyLayout(
                 }
             ) { i, rightHalf ->
                 val ch = row3[i]
+                val secRow3 = QwertySymbolHints.secondarySymbolFor(
+                    key = ch,
+                    isJapanese = isJapanese,
+                    showNumberRow = showNumberRow,
+                    longPressSymbolsEnabled = qwertyLongPressSymbolsEnabled
+                )
                 val spec = QwertyCharKeySpec(
                     id = "r3_${ch}_$rightHalf",
                     normalChar = ch,
                     shiftedChar = ch.uppercaseChar(),
+                    normalUpFlickChar = secRow3,
+                    shiftedUpFlickChar = secRow3,
                     baseColor = keyBgColor
                 )
                 QwertyCharacterKeySlot(
                     spec = spec,
                     isShifted = isShifted,
-                    supportsUpFlick = false,
+                    supportsUpFlick = secRow3 != null,
                     visualPadding = qwertyRowPadding(false, false, isFirst = false, isLast = false),
                     textColor = textColor,
                     palette = palette,
@@ -2335,7 +2471,30 @@ private fun SharedQwertyLayout(
                             isLast = idx == qwertySpec.bottomRight.lastIndex
                         )
                         val action = slot.action
-                        if (action is KeyAction.CommitChar) {
+                        if (action is KeyAction.CommitChar && slot.id == "r4_period") {
+                            QwertyPeriodPopupKey(
+                                primaryChar = if (isShifted) action.shifted else action.normal,
+                                popupSymbols = QwertySymbolHints.periodPopupSymbols(isJapanese),
+                                modifier = Modifier.weight(slot.weight).fillMaxHeight(),
+                                visualPadding = pad,
+                                baseColor = actionKeyBg,
+                                textColor = textColor,
+                                palette = palette,
+                                getRootCoords = { host.rootCoordinates },
+                                onBeforePress = flushBeforeAction,
+                                onTapCommit = { currentOnCommitChar(if (isShifted) action.shifted else action.normal) },
+                                onPopupCommit = { selected ->
+                                    if (selected.length == 1 && commitQuickSymbol == null) {
+                                        currentOnCommitChar(selected[0])
+                                    } else if (commitQuickSymbol != null) {
+                                        commitQuickSymbol(selected)
+                                    } else {
+                                        selected.forEach { currentOnCommitChar(it) }
+                                    }
+                                },
+                                onPopupStateChange = { periodPopupState = it }
+                            )
+                        } else if (action is KeyAction.CommitChar) {
                             QwertyCharacterKeySlot(
                                 spec = QwertyCharKeySpec(
                                     id = slot.id,
@@ -2377,7 +2536,11 @@ private fun SharedQwertyLayout(
             val spec = host.specsById[preview.keyId] ?: continue
             val rect = host.visualRects[preview.keyId] ?: host.hitRects[preview.keyId] ?: continue
             val charLabel = spec.charFor(preview.isShifted).toString()
-            val upLabel = if (!showNumberRow) spec.upFlickFor(preview.isShifted)?.toString() else null
+            val upLabel = if (host.supportsUpFlickById[preview.keyId] == true) {
+                spec.upFlickFor(preview.isShifted)?.toString()
+            } else {
+                null
+            }
             if (keyPreviewEnabled || (preview.guideExpanded && upLabel != null)) {
                 QwertyKeyPreviewBubble(
                     label = charLabel,
@@ -2386,8 +2549,263 @@ private fun SharedQwertyLayout(
                     rootHeightPx = rootHeightPx,
                     palette = palette,
                     upLabel = upLabel,
-                    flickDirection = preview.flickDirection
+                    flickDirection = preview.flickDirection,
+                    isLongPressSelected = preview.guideExpanded && preview.flickDirection == FlickDirection.CENTER
                 )
+            }
+        }
+
+        periodPopupState?.let { popup ->
+            QwertyPeriodSymbolPopupOverlay(
+                state = popup,
+                rootWidthPx = rootWidthPx,
+                rootHeightPx = rootHeightPx,
+                palette = palette
+            )
+        }
+    }
+}
+
+private data class PeriodPopupOverlayState(
+    val symbols: List<String>,
+    val selectedIndex: Int,
+    val anchorRect: KeyRect
+)
+
+@Composable
+private fun QwertyPeriodPopupKey(
+    primaryChar: Char,
+    popupSymbols: List<String>,
+    modifier: Modifier,
+    visualPadding: PaddingValues,
+    baseColor: Color,
+    textColor: Color,
+    palette: ZeroConPalette,
+    getRootCoords: () -> LayoutCoordinates?,
+    onBeforePress: () -> Unit,
+    onTapCommit: () -> Unit,
+    onPopupCommit: (String) -> Unit,
+    onPopupStateChange: (PeriodPopupOverlayState?) -> Unit
+) {
+    val currentOnTapCommit by rememberUpdatedState(onTapCommit)
+    val currentOnPopupCommit by rememberUpdatedState(onPopupCommit)
+    val currentOnBeforePress by rememberUpdatedState(onBeforePress)
+    val currentGetRootCoords by rememberUpdatedState(getRootCoords)
+    val currentPopupSymbols by rememberUpdatedState(popupSymbols)
+    val currentOnPopupStateChange by rememberUpdatedState(onPopupStateChange)
+    val haptic by rememberUpdatedState(LocalOnKeyPressHaptic.current)
+    val bordersEnabled = LocalKeyBordersEnabled.current
+    val longPressTimeoutMs = LocalViewConfiguration.current.longPressTimeoutMillis
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var isPressed by remember { mutableStateOf(false) }
+    var keyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    val typography = LocalKeyboardTheme.current.typography
+    val textShadow = typography.textShadowOrNull()
+
+    KeyCapFrame(
+        modifier = modifier
+            .onGloballyPositioned { keyCoords = it }
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                contentDescription = "${primaryChar}を入力、長押しで記号一覧"
+                onClick {
+                    currentOnBeforePress()
+                    currentOnTapCommit()
+                    true
+                }
+            }
+            .pointerInput(Unit) {
+                val cellWidthPx = with(density) { 36.dp.toPx() }
+                val forgivenessPx = with(density) { 12.dp.toPx() }
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    currentOnBeforePress()
+                    haptic()
+                    isPressed = true
+
+                    val symbols = currentPopupSymbols
+                    var popupActive = false
+                    var selectedIndex = 0
+                    var anchorRect = KeyRect(0f, 0f, size.width.toFloat(), size.height.toFloat())
+                    val root = currentGetRootCoords()
+                    val selfCoords = keyCoords
+                    if (root != null && selfCoords != null && root.isAttached && selfCoords.isAttached) {
+                        val posInRoot = root.localPositionOf(selfCoords, Offset.Zero)
+                        anchorRect = KeyRect(
+                            left = posInRoot.x,
+                            top = posInRoot.y,
+                            right = posInRoot.x + selfCoords.size.width,
+                            bottom = posInRoot.y + selfCoords.size.height
+                        )
+                    }
+                    val rootWidthPx = root?.size?.width?.toFloat() ?: 0f
+                    val popupWidthPx = (symbols.size * cellWidthPx + with(density) { 12.dp.toPx() })
+                    val marginPx = with(density) { 4.dp.toPx() }
+                    val popupLeftPx = if (rootWidthPx > 0f) {
+                        (anchorRect.centerX - popupWidthPx / 2f)
+                            .coerceIn(marginPx, (rootWidthPx - popupWidthPx - marginPx).coerceAtLeast(marginPx))
+                    } else {
+                        anchorRect.left
+                    }
+
+                    val longPressJob = scope.launch {
+                        delay(longPressTimeoutMs)
+                        if (symbols.isNotEmpty()) {
+                            popupActive = true
+                            selectedIndex = 0
+                            haptic()
+                            currentOnPopupStateChange(
+                                PeriodPopupOverlayState(
+                                    symbols = symbols,
+                                    selectedIndex = selectedIndex,
+                                    anchorRect = anchorRect
+                                )
+                            )
+                        }
+                    }
+
+                    var releasedNormally = false
+                    var releasedInside = true
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                releasedNormally = !change.isConsumed
+                                val pos = change.position
+                                releasedInside = pos.x >= -forgivenessPx && pos.x <= size.width + forgivenessPx &&
+                                    pos.y >= -forgivenessPx && pos.y <= size.height + forgivenessPx
+                                change.consume()
+                                break
+                            }
+                            if (popupActive && symbols.isNotEmpty()) {
+                                val pointerRootX = anchorRect.left + change.position.x
+                                val relX = pointerRootX - popupLeftPx - with(density) { 6.dp.toPx() }
+                                val nextIdx = (relX / cellWidthPx).toInt().coerceIn(0, symbols.lastIndex)
+                                if (nextIdx != selectedIndex) {
+                                    selectedIndex = nextIdx
+                                    haptic()
+                                    currentOnPopupStateChange(
+                                        PeriodPopupOverlayState(
+                                            symbols = symbols,
+                                            selectedIndex = selectedIndex,
+                                            anchorRect = anchorRect
+                                        )
+                                    )
+                                }
+                                change.consume()
+                            }
+                        }
+                    } finally {
+                        longPressJob.cancel()
+                        isPressed = false
+                        currentOnPopupStateChange(null)
+                    }
+
+                    if (releasedNormally) {
+                        if (popupActive && symbols.isNotEmpty()) {
+                            currentOnPopupCommit(symbols[selectedIndex.coerceIn(0, symbols.lastIndex)])
+                        } else if (releasedInside) {
+                            currentOnTapCommit()
+                        }
+                    }
+                }
+            },
+        visualPadding = visualPadding,
+        baseColor = baseColor,
+        isPressed = isPressed,
+        isModifier = true,
+        bordersEnabled = bordersEnabled,
+        palette = palette
+    ) {
+        Text(
+            text = primaryChar.toString(),
+            color = textColor,
+            fontSize = 20.sp * typography.labelScale,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            style = androidx.compose.ui.text.TextStyle(shadow = textShadow)
+        )
+        Text(
+            text = "…",
+            color = typography.hintTextColor.toComposeColor().copy(alpha = 0.65f),
+            fontSize = 8.sp,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 1.dp, end = 3.dp)
+        )
+    }
+}
+
+@Composable
+private fun QwertyPeriodSymbolPopupOverlay(
+    state: PeriodPopupOverlayState,
+    rootWidthPx: Float,
+    rootHeightPx: Float,
+    palette: ZeroConPalette
+) {
+    val density = LocalDensity.current
+    val cellWidthDp = 36.dp
+    val popupHeightDp = 44.dp
+    val horizontalPadDp = 6.dp
+    val popupWidthDp = cellWidthDp * state.symbols.size + horizontalPadDp * 2
+    val popupWidthPx = with(density) { popupWidthDp.toPx() }
+    val popupHeightPx = with(density) { popupHeightDp.toPx() }
+    val gapPx = with(density) { 8.dp.toPx() }
+    val marginPx = with(density) { 4.dp.toPx() }
+
+    val leftPx = if (rootWidthPx > 0f) {
+        (state.anchorRect.centerX - popupWidthPx / 2f)
+            .coerceIn(marginPx, (rootWidthPx - popupWidthPx - marginPx).coerceAtLeast(marginPx))
+    } else {
+        state.anchorRect.left
+    }
+    val topPx = (state.anchorRect.top - popupHeightPx - gapPx)
+        .coerceIn(marginPx, (rootHeightPx - popupHeightPx - marginPx).coerceAtLeast(marginPx))
+
+    val popupStyle = LocalKeyboardTheme.current.popup
+    val popupBg = popupStyle.backgroundColor.toComposeColor()
+    val popupAccent = popupStyle.accentColor.toComposeColor()
+    val popupText = popupStyle.textColor.toComposeColor()
+    val popupOnAccent = popupStyle.onAccentColor.toComposeColor()
+    val popupBorder = popupStyle.borderColor.toComposeColor()
+    val shape = RoundedCornerShape(popupStyle.cornerRadiusDp.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(99f)
+    ) {
+        Row(
+            modifier = Modifier
+                .offset { IntOffset(leftPx.roundToInt(), topPx.roundToInt()) }
+                .height(popupHeightDp)
+                .shadow(elevation = 8.dp, shape = shape, clip = false)
+                .clip(shape)
+                .background(popupBg)
+                .border(1.dp, popupBorder.copy(alpha = 0.8f), shape)
+                .padding(horizontal = horizontalPadDp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            state.symbols.forEachIndexed { idx, sym ->
+                val isSelected = idx == state.selectedIndex
+                Box(
+                    modifier = Modifier
+                        .width(cellWidthDp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(if (isSelected) popupAccent else Color.Transparent),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = sym,
+                        color = if (isSelected) popupOnAccent else popupText,
+                        fontSize = if (sym.length > 1) 14.sp else 17.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }
@@ -2415,6 +2833,7 @@ fun JapaneseQwertyLayout(
     showNumberRow: Boolean = true,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
     onKeyPressWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+    onKeyPressLiteral: ((Char) -> Unit)? = null,
     nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null,
     splitGap: Dp = 0.dp,
     duplicateMiddleKeys: Boolean = QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS,
@@ -2446,6 +2865,7 @@ fun JapaneseQwertyLayout(
         duplicateMiddleKeys = duplicateMiddleKeys,
         nextKeyWeights = nextKeyWeights,
         onCommitCharWithBias = onKeyPressWithBias,
+        onCommitLiteralChar = onKeyPressLiteral,
         nextKeyWeightsProvider = nextKeyWeightsProvider,
         onToggleJpEn = onToggleJpEn,
         onOpenSymbols = onOpenSymbols,
@@ -2475,6 +2895,7 @@ fun EnglishQwertyLayout(
     showNumberRow: Boolean = true,
     nextKeyWeights: Map<Char, Float> = emptyMap(),
     onCommitCharWithBias: ((Char, TouchKeyBias?) -> Unit)? = null,
+    onCommitLiteralChar: ((Char) -> Unit)? = null,
     nextKeyWeightsProvider: (() -> Map<Char, Float>)? = null,
     splitGap: Dp = 0.dp,
     duplicateMiddleKeys: Boolean = QwertySplitLayout.DEFAULT_DUPLICATE_MIDDLE_KEYS,
@@ -2506,6 +2927,7 @@ fun EnglishQwertyLayout(
         duplicateMiddleKeys = duplicateMiddleKeys,
         nextKeyWeights = nextKeyWeights,
         onCommitCharWithBias = onCommitCharWithBias,
+        onCommitLiteralChar = onCommitLiteralChar,
         nextKeyWeightsProvider = nextKeyWeightsProvider,
         onToggleJpEn = onToggleJpEn,
         onOpenSymbols = onOpenSymbols,
@@ -3063,7 +3485,8 @@ private fun PanelBottomControlBar(
             baseColor = actionKeyBg,
             isModifier = true,
             palette = palette,
-            hapticOnPress = false
+            hapticOnPress = false,
+            enableSwipeDelete = true
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Backspace,
@@ -3803,6 +4226,7 @@ val symbolCategories = listOf(
 
 @Composable
 fun SymbolsPanel(
+    recent: List<String> = emptyList(),
     keyBgColor: Color,
     actionKeyBg: Color,
     textColor: Color,
@@ -3819,8 +4243,16 @@ fun SymbolsPanel(
     onModeFlick: ((FlickDirection) -> Unit)? = null,
     onOpenEmoji: (() -> Unit)? = null
 ) {
-    var selectedCategoryIndex by remember { mutableStateOf(0) }
-    val currentSymbols = symbolCategories[selectedCategoryIndex].symbols
+    val allCategories = remember(recent) {
+        if (recent.isNotEmpty()) {
+            listOf(SymbolCategory(title = RecentSymbolHistory.RECENT_CATEGORY_TITLE, symbols = recent)) + symbolCategories
+        } else {
+            symbolCategories
+        }
+    }
+    var selectedCategoryTitle by remember { mutableStateOf(allCategories.first().title) }
+    val selectedCategory = allCategories.firstOrNull { it.title == selectedCategoryTitle } ?: allCategories.first()
+    val currentSymbols = selectedCategory.symbols
     val keySurface = LocalKeyboardTheme.current.keySurface
     val symbolCornerRadius = keySurface.cornerRadiusDp.coerceAtMost(8f).dp
 
@@ -3852,7 +4284,7 @@ fun SymbolsPanel(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = symbolCategories[selectedCategoryIndex].title,
+                    text = selectedCategory.title,
                     color = palette.textMuted,
                     fontSize = 11.5.sp,
                     maxLines = 1
@@ -3895,15 +4327,15 @@ fun SymbolsPanel(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            items(symbolCategories.size) { idx ->
-                val cat = symbolCategories[idx]
-                val isSelected = (idx == selectedCategoryIndex)
+            items(allCategories.size) { idx ->
+                val cat = allCategories[idx]
+                val isSelected = (cat.title == selectedCategory.title)
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (isSelected) palette.primaryAccent else actionKeyBg.copy(alpha = 0.72f))
-                        .clickable { selectedCategoryIndex = idx }
+                        .clickable { selectedCategoryTitle = cat.title }
                         .padding(horizontal = 12.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -3952,7 +4384,7 @@ fun SymbolsPanel(
             onCursorLeft = onCursorLeft,
             onCursorRight = onCursorRight,
             onSpace = {
-                val fullwidthSpace = SymbolsPanelPolicy.spaceCommitText(symbolCategories[selectedCategoryIndex].title)
+                val fullwidthSpace = SymbolsPanelPolicy.spaceCommitText(selectedCategory.title)
                 if (fullwidthSpace != null) {
                     onSelect(fullwidthSpace)
                 } else {

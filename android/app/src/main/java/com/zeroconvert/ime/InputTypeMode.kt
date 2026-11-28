@@ -9,7 +9,8 @@ import com.zeroconvert.ime.assist.InputPrivacy
  *
  * Android never declares "Japanese" or "English", so only the cases the platform
  * actually distinguishes are mapped. `null` means "no opinion": keep whatever mode
- * the user currently has, which is also the answer for every ordinary text field.
+ * the user currently has, which is also the answer for every ordinary text field
+ * (including Japanese-friendly fields such as email subjects, person names, and postal addresses).
  *
  * Only `InputType` / `EditorInfo` constants are used, so this stays a pure function
  * that JVM unit tests can exercise without the Android framework.
@@ -31,12 +32,10 @@ object InputTypeMode {
             InputType.TYPE_CLASS_TEXT -> when (variation) {
                 InputType.TYPE_TEXT_VARIATION_URI,
                 InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
-                InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
-                InputType.TYPE_TEXT_VARIATION_EMAIL_SUBJECT,
-                InputType.TYPE_TEXT_VARIATION_PERSON_NAME,
-                InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS -> KeyboardMode.ENGLISH
+                InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS -> KeyboardMode.ENGLISH
 
-                // Normal text, FILTER, PHONETIC and the rest keep the current mode.
+                // Normal text, email subject, person name, postal address, FILTER, PHONETIC, etc.
+                // keep the current mode so Japanese users are not forced into English.
                 else -> null
             }
 

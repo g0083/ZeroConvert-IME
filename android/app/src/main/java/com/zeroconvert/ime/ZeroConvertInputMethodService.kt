@@ -137,6 +137,10 @@ class ZeroConvertInputMethodService : InputMethodService(),
         const val DEFAULT_POST_COMPOSITION_PREDICTION = true
         const val KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE = "english_space_adopts_candidate" // boolean, default false: insert space without adopting top candidate
         const val KEY_ALWAYS_HALFWIDTH_SPACE = "always_halfwidth_space" // boolean, default false: follow keyboard mode (fullwidth in Japanese, halfwidth in English/Numeric)
+        const val KEY_BRACKET_CURSOR_INSIDE = "bracket_cursor_inside" // boolean, default true: place cursor inside committed bracket pairs
+        const val KEY_BACKSPACE_SWIPE_DELETE = "backspace_swipe_delete" // boolean, default true: swipe left on Backspace to batch-delete words
+        const val KEY_QWERTY_LONG_PRESS_SYMBOLS = "qwerty_long_press_symbols" // boolean, default true: show/input symbols via long-press or up-flick across all QWERTY rows
+        const val KEY_SYMBOL_RECENT = "symbol_recent" // newline separated, most recent first
         const val KEY_PREDICTIVE_MODEL = "experimental_predictive_model" // retired; retained for compatibility
         const val KEY_TRANSLATION_ENABLED = "translation_enabled" // boolean, default false
         const val KEY_TRANSLATION_TARGET = "translation_target" // "auto", "en", "ja"
@@ -242,6 +246,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val isPostCompositionPredictionState = mutableStateOf(DEFAULT_POST_COMPOSITION_PREDICTION)
     val isEnglishSpaceAdoptsCandidateState = mutableStateOf(false)
     val isAlwaysHalfwidthSpaceState = mutableStateOf(false)
+    val isBracketCursorInsideState = mutableStateOf(true)
+    val isBackspaceSwipeDeleteState = mutableStateOf(true)
+    val isQwertyLongPressSymbolsState = mutableStateOf(true)
     val predictiveModelState = mutableStateOf("zerocon")
     val aiAssistResultState = mutableStateOf<com.zeroconvert.ime.assist.AiAssistResult?>(null)
     val aiAssistAdoptionState = mutableStateOf(AiAssistAdoption.None)
@@ -1495,6 +1502,22 @@ class ZeroConvertInputMethodService : InputMethodService(),
             .putString(KEY_EMOJI_RECENT, updated.joinToString("\n")).apply()
     }
 
+    private fun loadRecentSymbols() {
+        val stored = getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+            .getString(KEY_SYMBOL_RECENT, null)
+        recentSymbolState.value = RecentSymbolHistory.parseStored(stored)
+    }
+
+    /** Records a committed symbol so the Symbols panel can offer it under "履歴". */
+    fun recordRecentSymbol(symbol: String) {
+        if (isSensitiveInput()) return
+        val updated = RecentSymbolHistory.pushRecent(recentSymbolState.value, symbol)
+        if (updated == recentSymbolState.value) return
+        recentSymbolState.value = updated
+        getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_SYMBOL_RECENT, RecentSymbolHistory.serialize(updated)).apply()
+    }
+
     fun pasteClipboard(entry: ClipboardEntry, fromSuggestion: Boolean = false) {
         if (isPrivateMode) return
         if (!composingText.isEmpty || englishComposing.isNotEmpty()) {
@@ -1768,6 +1791,9 @@ class ZeroConvertInputMethodService : InputMethodService(),
         }
         isEnglishSpaceAdoptsCandidateState.value = prefs.getBoolean(KEY_ENGLISH_SPACE_ADOPTS_CANDIDATE, false)
         isAlwaysHalfwidthSpaceState.value = prefs.getBoolean(KEY_ALWAYS_HALFWIDTH_SPACE, false)
+        isBracketCursorInsideState.value = prefs.getBoolean(KEY_BRACKET_CURSOR_INSIDE, true)
+        isBackspaceSwipeDeleteState.value = prefs.getBoolean(KEY_BACKSPACE_SWIPE_DELETE, true)
+        isQwertyLongPressSymbolsState.value = prefs.getBoolean(KEY_QWERTY_LONG_PRESS_SYMBOLS, true)
         LearningPolicy.mode = LearningMode.from(prefs.getString(LearningPolicy.KEY, null))
         predictiveModelState.value = "zerocon"
         clipboardSuggestionMinutesState.value = ClipboardSuggestionPolicy.normalizeMinutes(
@@ -1876,6 +1902,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
     val clipboardSuggestionMinutesState = mutableStateOf(ClipboardSuggestionPolicy.DEFAULT_MINUTES)
     val emojiCategoriesState = mutableStateOf<List<EmojiCategory>>(emptyList())
     val recentEmojiState = mutableStateOf<List<String>>(emptyList())
+    val recentSymbolState = mutableStateOf<List<String>>(emptyList())
 
     // English (alphabet) composing buffer for predictive completion
     var englishComposing: String = ""
@@ -2472,6 +2499,7 @@ class ZeroConvertInputMethodService : InputMethodService(),
         serviceScope.launch(Dispatchers.IO) { EnglishWordDictionary.ensureLoaded(applicationContext) }
 
         loadRecentEmoji()
+        loadRecentSymbols()
         loadEmojiCatalog()
 
         // Init clipboard
@@ -3406,15 +3434,24 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 if (hasSelectionInEditor || englishComposing.isNotEmpty()) return false
                 val ic = currentInputConnection ?: return false
                 if (composingText.isEmpty) {
+                    val afterLen = entry.cursorOffsetFromEnd.coerceIn(0, entry.committedText.length)
+                    val beforeLen = (entry.committedText.length - afterLen).coerceAtLeast(0)
                     val before = try {
-                        ic.getTextBeforeCursor(entry.committedText.length, 0)?.toString()
+                        if (beforeLen > 0) ic.getTextBeforeCursor(beforeLen, 0)?.toString() else ""
                     } catch (_: RuntimeException) {
                         null
                     }
-                    if (before != entry.committedText) return false
+                    val after = try {
+                        if (afterLen > 0) ic.getTextAfterCursor(afterLen, 0)?.toString() else ""
+                    } catch (_: RuntimeException) {
+                        null
+                    }
+                    if (before != entry.committedText.take(beforeLen) ||
+                        after != entry.committedText.takeLast(afterLen)
+                    ) return false
                     ic.beginBatchEdit()
                     try {
-                        if (!ic.deleteSurroundingText(entry.committedText.length, 0)) return false
+                        if (!ic.deleteSurroundingText(beforeLen, afterLen)) return false
                         if (entry.previousComposing != null && !entry.previousComposing.isEmpty) {
                             composingText.restoreFrom(entry.previousComposing)
                             cachedLeftContext = entry.previousLeftContext
@@ -3530,6 +3567,201 @@ class ZeroConvertInputMethodService : InputMethodService(),
             triggerDebouncedConversion(restoredSurface)
         }
         return true
+    }
+
+    private data class BackspaceSwipeSession(
+        val isComposingJapanese: Boolean,
+        val isComposingEnglish: Boolean,
+        val textBeforeCursor: String,
+        val anchorEnd: Int,
+        var lastSteps: Int = 0
+    )
+
+    private var backspaceSwipeSession: BackspaceSwipeSession? = null
+
+    fun beginBackspaceSwipeDelete() {
+        if (isConfirming) return
+        cancelPendingInference()
+        val isJp = !composingText.isEmpty
+        val isEn = !isJp && englishComposing.isNotEmpty()
+        val ic = currentInputConnection
+        var textBefore = ""
+        var anchorEnd = -1
+        if (!isJp && !isEn && ic != null) {
+            textBefore = try {
+                ic.getTextBeforeCursor(400, 0)?.toString().orEmpty()
+            } catch (_: RuntimeException) {
+                ""
+            }
+            anchorEnd = try {
+                val extracted = ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
+                if (extracted != null && extracted.selectionEnd >= 0 && extracted.selectionStart == extracted.selectionEnd) {
+                    extracted.selectionEnd
+                } else {
+                    -1
+                }
+            } catch (_: RuntimeException) {
+                -1
+            }
+        }
+        backspaceSwipeSession = BackspaceSwipeSession(
+            isComposingJapanese = isJp,
+            isComposingEnglish = isEn,
+            textBeforeCursor = textBefore,
+            anchorEnd = anchorEnd
+        )
+    }
+
+    fun updateBackspaceSwipeDelete(steps: Int) {
+        val session = backspaceSwipeSession ?: return
+        if (steps == session.lastSteps) return
+        session.lastSteps = steps
+        val ic = currentInputConnection ?: return
+        when {
+            session.isComposingJapanese -> {
+                if (steps >= 1) {
+                    setManagedComposingText(ic, "", 0)
+                } else {
+                    val surface = composingText.convertTargetBeforeCursor
+                    val inline = isRealtimeInlineEnabled()
+                    val prefix = tentativeInlineDisplay(surface, inline)
+                    val preview = ConversionRangeSession.preview(composingText, prefix, inline)
+                    setComposingPreview(ic, preview)
+                }
+                vibrateOnKeyPress()
+            }
+            session.isComposingEnglish -> {
+                if (steps >= 1) {
+                    setManagedComposingText(ic, "", 0)
+                } else {
+                    setEnglishComposingText(ic)
+                }
+                vibrateOnKeyPress()
+            }
+            else -> {
+                val deleteLen = WordDeleteSegmenter.deletionLengthForSteps(session.textBeforeCursor, steps)
+                if (session.anchorEnd >= 0) {
+                    val start = (session.anchorEnd - deleteLen).coerceAtLeast(0)
+                    selfIssuedCursorMoveAt = System.currentTimeMillis()
+                    ic.setSelection(start, session.anchorEnd)
+                }
+                if (deleteLen > 0 || steps == 0) {
+                    vibrateOnKeyPress()
+                }
+            }
+        }
+    }
+
+    fun commitBackspaceSwipeDelete(steps: Int) {
+        val session = backspaceSwipeSession ?: return
+        backspaceSwipeSession = null
+        if (steps <= 0) {
+            restoreAfterCanceledSwipeDelete(session)
+            return
+        }
+        val ic = currentInputConnection ?: return
+        canRewindOnNextBackspace = false
+        lastAutoCommitRewind = null
+        clearPostCompositionDisplay()
+        when {
+            session.isComposingJapanese -> {
+                if (!composingText.isEmpty) {
+                    recordJapaneseComposingUndo()
+                    setManagedComposingText(ic, "", 0)
+                    ic.finishComposingText()
+                    clearInput()
+                }
+            }
+            session.isComposingEnglish -> {
+                if (englishComposing.isNotEmpty()) {
+                    if (!isSensitiveInput()) {
+                        undoHistory.push(ImeUndoEntry.EnglishComposing(englishComposing, englishTouchBiases.toList()))
+                    }
+                    setManagedComposingText(ic, "", 0)
+                    ic.finishComposingText()
+                    clearEnglishInput()
+                }
+            }
+            else -> {
+                val deleteLen = WordDeleteSegmenter.deletionLengthForSteps(session.textBeforeCursor, steps)
+                if (deleteLen <= 0) return
+                val deletedText = session.textBeforeCursor.takeLast(deleteLen)
+                ic.beginBatchEdit()
+                try {
+                    val deleted = if (session.anchorEnd >= 0) {
+                        val start = (session.anchorEnd - deleteLen).coerceAtLeast(0)
+                        ic.setSelection(start, session.anchorEnd)
+                        ic.commitText("", 1)
+                    } else {
+                        ic.deleteSurroundingText(deleteLen, 0)
+                    }
+                    if (deleted && deletedText.isNotEmpty() && deletedText.length <= 200 && !isSensitiveInput()) {
+                        undoHistory.push(ImeUndoEntry.DeletedText(deletedText))
+                    }
+                } finally {
+                    ic.endBatchEdit()
+                }
+            }
+        }
+    }
+
+    fun cancelBackspaceSwipeDelete() {
+        val session = backspaceSwipeSession ?: return
+        backspaceSwipeSession = null
+        restoreAfterCanceledSwipeDelete(session)
+    }
+
+    private fun restoreAfterCanceledSwipeDelete(session: BackspaceSwipeSession) {
+        val ic = currentInputConnection ?: return
+        when {
+            session.isComposingJapanese -> {
+                val surface = composingText.convertTargetBeforeCursor
+                val inline = isRealtimeInlineEnabled()
+                val prefix = tentativeInlineDisplay(surface, inline)
+                val preview = ConversionRangeSession.preview(composingText, prefix, inline)
+                setComposingPreview(ic, preview)
+            }
+            session.isComposingEnglish -> {
+                setEnglishComposingText(ic)
+            }
+            else -> {
+                if (session.anchorEnd >= 0) {
+                    selfIssuedCursorMoveAt = System.currentTimeMillis()
+                    ic.setSelection(session.anchorEnd, session.anchorEnd)
+                }
+            }
+        }
+    }
+
+    fun commitQuickSymbol(text: String) {
+        if (isConfirming || text.isEmpty()) return
+        if (isTranslationMode()) {
+            appendTranslationLiteral(text)
+            return
+        }
+        val moveCursorInside = BracketCursorPolicy.shouldMoveCursorInside(
+            committedText = text,
+            trailingText = "",
+            enabled = isBracketCursorInsideState.value
+        )
+        if (!composingText.isEmpty || englishComposing.isNotEmpty()) {
+            confirmCurrent()
+        }
+        val ic = currentInputConnection ?: return
+        clearPostCompositionDisplay()
+        if (!ic.commitText(text, 1)) return
+        if (!isSensitiveInput()) {
+            undoHistory.push(
+                ImeUndoEntry.CommittedText(
+                    committedText = text,
+                    cursorOffsetFromEnd = if (moveCursorInside) 1 else 0
+                )
+            )
+        }
+        if (moveCursorInside) {
+            selfIssuedCursorMoveAt = System.currentTimeMillis()
+            sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+        }
     }
 
     fun handleDelete() {
@@ -4368,6 +4600,14 @@ class ZeroConvertInputMethodService : InputMethodService(),
         val undoLeftContext = cachedLeftContext
         val undoJpBiases = if (!wasEnglish && !isSensitiveInput()) japaneseTouchBiases.toList() else emptyList()
         val undoEnBiases = if (wasEnglish && !isSensitiveInput()) englishTouchBiases.toList() else emptyList()
+        val moveCursorInsideBracket = surfaceAfter.isEmpty() &&
+            !wasEnglish &&
+            !isTranslationMode() &&
+            BracketCursorPolicy.shouldMoveCursorInside(
+                committedText = text,
+                trailingText = trailingText,
+                enabled = isBracketCursorInsideState.value
+            )
         var committedTerminalComposition = false
         cancelPendingInference(edited = false)
         connection.beginBatchEdit()
@@ -4381,7 +4621,8 @@ class ZeroConvertInputMethodService : InputMethodService(),
                         previousEnglish = undoEnglish,
                         previousLeftContext = undoLeftContext,
                         japaneseTouchBiases = undoJpBiases,
-                        englishTouchBiases = undoEnBiases
+                        englishTouchBiases = undoEnBiases,
+                        cursorOffsetFromEnd = if (moveCursorInsideBracket) 1 else 0
                     )
                 )
             }
@@ -4444,7 +4685,11 @@ class ZeroConvertInputMethodService : InputMethodService(),
                 committedTerminalComposition = true
             }
         } finally { connection.endBatchEdit() }
-        if (committedTerminalComposition && shouldPredictPostComposition) {
+        if (moveCursorInsideBracket) {
+            selfIssuedCursorMoveAt = System.currentTimeMillis()
+            sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+        }
+        if (committedTerminalComposition && shouldPredictPostComposition && !moveCursorInsideBracket) {
             triggerPostCompositionPredictions(
                 connection = connection,
                 candidateId = postCompCandidateId,

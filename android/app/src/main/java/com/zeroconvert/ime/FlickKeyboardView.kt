@@ -818,7 +818,8 @@ private fun FlickSideBackspaceButton(
         baseColor = actionKeyBg,
         isModifier = true,
         palette = palette,
-        hapticOnPress = false
+        hapticOnPress = false,
+        enableSwipeDelete = true
     ) {
         Icon(
             imageVector = Icons.AutoMirrored.Filled.Backspace,

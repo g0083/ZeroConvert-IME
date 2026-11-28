@@ -86,6 +86,22 @@ val LocalKeyBordersEnabled = staticCompositionLocalOf { true }
 /** Controls dynamic next-key hit expansion and spatial touch-coordinate typo correction. */
 val LocalDynamicTouchAssistEnabled = staticCompositionLocalOf { true }
 
+/** Controls Gboard-style long-press / up-flick secondary symbols across all QWERTY rows. */
+val LocalQwertyLongPressSymbolsEnabled = staticCompositionLocalOf { true }
+
+/** Callbacks for Backspace swipe-left batch deletion; null disables swipe-delete. */
+data class BackspaceSwipeDeleteCallbacks(
+    val onStart: () -> Unit,
+    val onStep: (Int) -> Unit,
+    val onCommit: (Int) -> Unit,
+    val onCancel: () -> Unit
+)
+
+val LocalBackspaceSwipeDelete = staticCompositionLocalOf<BackspaceSwipeDeleteCallbacks?> { null }
+
+/** Optional direct-commit handler for multi-character quick symbols (e.g. `「」` from period popup). */
+val LocalCommitQuickSymbol = staticCompositionLocalOf<((String) -> Unit)?> { null }
+
 /** Current theme palette exposed to shared keyboard controls without forcing parameter churn. */
 val LocalZeroConPalette = staticCompositionLocalOf { ZeroConGraphitePalette }
 
@@ -609,11 +625,12 @@ fun QwertyKeyPreviewBubble(
     rootHeightPx: Float,
     palette: ZeroConPalette,
     upLabel: String? = null,
-    flickDirection: FlickDirection = FlickDirection.CENTER
+    flickDirection: FlickDirection = FlickDirection.CENTER,
+    isLongPressSelected: Boolean = false
 ) {
     val density = LocalDensity.current
     val resolvedUpLabel = upLabel?.takeIf { it.isNotEmpty() }
-    val isUpSelected = resolvedUpLabel != null && flickDirection == FlickDirection.UP
+    val isUpSelected = resolvedUpLabel != null && (flickDirection == FlickDirection.UP || isLongPressSelected)
     val bubbleWidthDp = with(density) { max(targetRect.width + 10.dp.toPx(), 46.dp.toPx()).toDp() }
     val bubbleHeightDp = if (resolvedUpLabel != null) 66.dp else 50.dp
     val gapPx = with(density) { 6.dp.toPx() }
@@ -742,6 +759,9 @@ fun ProvideKeyboardErgonomicsLocals(
     flickThresholdDp: Dp,
     keyBordersEnabled: Boolean,
     dynamicTouchAssistEnabled: Boolean = true,
+    qwertyLongPressSymbolsEnabled: Boolean = true,
+    backspaceSwipeDelete: BackspaceSwipeDeleteCallbacks? = null,
+    onCommitQuickSymbol: ((String) -> Unit)? = null,
     keyboardTheme: KeyboardThemeSpec = KeyboardThemeCatalog.defaultDark,
     content: @Composable () -> Unit
 ) {
@@ -753,6 +773,9 @@ fun ProvideKeyboardErgonomicsLocals(
         LocalFlickThresholdDp provides flickThresholdDp,
         LocalKeyBordersEnabled provides keyBordersEnabled,
         LocalDynamicTouchAssistEnabled provides dynamicTouchAssistEnabled,
+        LocalQwertyLongPressSymbolsEnabled provides qwertyLongPressSymbolsEnabled,
+        LocalBackspaceSwipeDelete provides backspaceSwipeDelete,
+        LocalCommitQuickSymbol provides onCommitQuickSymbol,
         content = content
     )
 }
