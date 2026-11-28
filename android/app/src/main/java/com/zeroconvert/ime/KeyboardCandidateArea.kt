@@ -685,7 +685,8 @@ internal data class CandidateBarDisplayPolicy(
                 hasCandidates && !isCandidatesExpanded -> CandidateBarContentMode.CANDIDATE_STRIP
                 else -> CandidateBarContentMode.IDLE_TOOLBAR
             }
-            val showClipboardSuggestion = mode == CandidateBarContentMode.IDLE_TOOLBAR &&
+            val showClipboardSuggestion = (mode == CandidateBarContentMode.IDLE_TOOLBAR ||
+                mode == CandidateBarContentMode.SELECTION_ACTIONS) &&
                 !clipboardSuggestionDismissed
             val showCandidateToggle = hasCandidates &&
                 (mode == CandidateBarContentMode.CANDIDATE_STRIP || mode == CandidateBarContentMode.IDLE_TOOLBAR)
